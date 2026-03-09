@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <title>РефГо</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+            margin-top: 50px;
+        }
+
+        button {
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+        }
+
+        button:hover {
+            background-color: #0056b3;
+        }
+
+        /* Оверлей загрузки */
+        #loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(255, 255, 255, 0.8);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+            z-index: 1000;
+        }
+
+        #loading-overlay img {
+            width: 1000px;
+            height: 1000px;
+        }
+
+        #loading-overlay p {
+            margin-top: 20px;
+            font-size: 18px;
+            color: #333;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Здарова, бедолаги</h1>
+    <form action="/sync" method="post" id="sync-form">
+        <button type="submit">РефГо</button>
+    </form>
+
+    <!-- Оверлей, показывается во время загрузки -->
+    <div id="loading-overlay">
+        <!-- Вставляй сюда: путь к GIF-файлу -->
+        <img src="/static/loading.gif" alt="Загрузка...">
+        <p>Очень заняты, вертим РефГо на хую</p>
+    </div>
+
+    <script>
+        const form = document.getElementById('sync-form');
+        const overlay = document.getElementById('loading-overlay');
+
+        form.addEventListener('submit', function () {
+            overlay.style.display = 'flex'; // показываем оверлей
+        });
+    </script>
+</body>
+
+</html>

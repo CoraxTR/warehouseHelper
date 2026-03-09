@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Результат выгрузки</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+        }
+
+        h1 {
+            color: #333;
+        }
+
+        .section {
+            margin-bottom: 30px;
+        }
+
+        .download {
+            margin: 20px 0;
+        }
+
+        .download a {
+            padding: 10px 20px;
+            background: #007bff;
+            color: white;
+            text-decoration: none;
+            border-radius: 4px;
+        }
+
+        .download a:hover {
+            background: #0056b3;
+        }
+
+        ul {
+            list-style-type: none;
+            padding-left: 0;
+        }
+
+        li {
+            margin-bottom: 5px;
+        }
+
+        .comment {
+            font-style: italic;
+            color: #555;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Выгрузка выполнена</h1>
+    <div class="download">
+        <a href="/download?file={{.FileName}}">Скачать Excel-файл</a>
+    </div>
+
+    <div class="section">
+        <h2>Общая информация</h2>
+        <p>Выгружено заказов: {{.TotalOrders}}, из них в СПБ: {{len .SpbOrders}}</p>
+    </div>
+
+    {{if .MoscowPayByCard}}
+    <div class="section">
+        <h2>Заявлена оплата по терминалу (МСК):</h2>
+        <ul>
+            {{range .MoscowPayByCard}}
+            <li>{{.}}</li>
+            {{end}}
+        </ul>
+    </div>
+    {{end}}
+
+    {{if .Comments}}
+    <div class="section">
+        <h2>Комментарии (МСК):</h2>
+        <ul>
+            {{range $num, $comment := .Comments}}
+            <li><strong>{{$num}}:</strong> <span class="comment">{{$comment}}</span></li>
+            {{end}}
+        </ul>
+    </div>
+    {{end}}
+
+    <div class="section">
+        <h2>Сегодня передаём {{len .SpbOrders}} заказов в СПБ</h2>
+    </div>
+
+    {{if .SpbOrdersByCard}}
+    <div class="section">
+        <h2>Заявлена оплата по терминалу (СПБ):</h2>
+        <ul>
+            {{range .SpbOrdersByCard}}
+            <li>{{.}}</li>
+            {{end}}
+        </ul>
+    </div>
+    {{end}}
+
+    {{if .SpbComments}}
+    <div class="section">
+        <h2>Комментарии (СПБ):</h2>
+        <ul>
+            {{range $num, $comment := .SpbComments}}
+            <li><strong>{{$num}}:</strong> <span class="comment">{{$comment}}</span></li>
+            {{end}}
+        </ul>
+    </div>
+    {{end}}
+
+    <p><a href="/orders">Вернуться к списку заказов</a></p>
+</body>
+
+</html>

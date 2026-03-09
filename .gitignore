@@ -1,0 +1,4 @@
+.env
+.golangci.yaml
+!.env.example
+.vscode
