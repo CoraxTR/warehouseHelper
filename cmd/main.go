@@ -31,7 +31,7 @@ func main() {
 		DBClient:    db,
 		Config:      cfg.RefGoConfig,
 	}
-	ordersUC := usecase.NewOrdersUseCase(db)
+	ordersUC := usecase.NewOrdersUseCase(db, msAPIClient, msAPIConverter)
 	exportUC := usecase.NewExportToExcelUseCase(exporter, ordersUC, msAPIClient)
 
 	handler := myhttp.NewHandler(&syncUC, ordersUC, exportUC)
@@ -44,6 +44,7 @@ func main() {
 	mux.HandleFunc("/export", handler.ExportToExcel)
 	mux.HandleFunc("/orders/update", handler.UpdateOrders) // POST
 	mux.HandleFunc("/download", handler.DownloadFile)
+	mux.HandleFunc("/update-from-ms", handler.UpdateFromMS) // POST
 
 	log.Println("Сервер запущен на http://localhost:8080")
 	err := http.ListenAndServe(":8080", mux)

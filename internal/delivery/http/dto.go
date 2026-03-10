@@ -19,3 +19,7 @@ type UpdateOrderRequest struct {
 	FrozenBoxes           uint64  `json:"frozenBoxes"`
 	ChilledBoxes          uint64  `json:"chilledBoxes"`
 }
+
+type UpdateFromMSRequest struct {
+	Href string `json:"href"`
+}

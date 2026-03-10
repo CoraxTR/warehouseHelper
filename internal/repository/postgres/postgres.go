@@ -78,7 +78,7 @@ INSERT INTO refgoOrders (
     $1, $2, $3, $4, $5, $6,
     $7, $8, $9, $10, $11, $12,
     $13, $14, $15, $16, $17, $18
-)`
+) ON CONFLICT (href) DO NOTHING`
 
 	tx, err := pg.Pool.Begin(ctx)
 	if err != nil {
@@ -146,6 +146,9 @@ func (pg *PGClient) GetAllOrders(ctx context.Context) ([]*domain.InternalOrder, 
 	tomorrow := now.AddDate(0, 0, 1).Format("02.01.2006")
 	dayAfterTomorrow := now.AddDate(0, 0, 2).Format("02.01.2006")
 
+	// Для отладки можно раскомментировать:
+	// log.Printf("GetAllOrders: tomorrow=%s, dayAfterTomorrow=%s", tomorrow, dayAfterTomorrow)
+
 	rows, err := pg.Pool.Query(ctx, `
         SELECT 
             href, name, receiver_name, receiver_phone_number, description,
@@ -155,15 +158,15 @@ func (pg *PGClient) GetAllOrders(ctx context.Context) ([]*domain.InternalOrder, 
         FROM refgoOrders
         WHERE (delivery_planned_date = $1 AND (delivery_region = 'МСК' OR delivery_region IS NULL))
            OR (delivery_planned_date = $2 AND delivery_region = 'СПБ')
-        ORDER BY refgo_number::integer ASC
+        ORDER BY refgo_number ASC
     `, tomorrow, dayAfterTomorrow)
 	if err != nil {
+		log.Printf("GetAllOrders query error: %v", err)
 		return nil, err
 	}
 	defer rows.Close()
 
 	var orders []*domain.InternalOrder
-
 	for rows.Next() {
 		var (
 			href, name, receiverName, description, deliveryPlannedDate,
@@ -182,6 +185,7 @@ func (pg *PGClient) GetAllOrders(ctx context.Context) ([]*domain.InternalOrder, 
 			&errorsJSON,
 		)
 		if err != nil {
+			log.Printf("GetAllOrders scan error: %v", err)
 			return nil, err
 		}
 
@@ -206,18 +210,22 @@ func (pg *PGClient) GetAllOrders(ctx context.Context) ([]*domain.InternalOrder, 
 
 		if len(errorsJSON) > 0 {
 			var errs map[string]string
-
-			err := json.Unmarshal(errorsJSON, &errs)
-			if err != nil {
+			if err := json.Unmarshal(errorsJSON, &errs); err != nil {
+				log.Printf("GetAllOrders unmarshal errors error: %v", err)
 				return nil, err
 			}
-
 			order.SetErrors(errs)
 		}
 
 		orders = append(orders, order)
 	}
 
+	if err = rows.Err(); err != nil {
+		log.Printf("GetAllOrders rows error: %v", err)
+		return nil, err
+	}
+
+	// log.Printf("GetAllOrders found %d orders", len(orders))
 	return orders, nil
 }
 

@@ -98,7 +98,9 @@ func processPaymentMethod(msOrder *MSOrder) string {
 func processWeights(msOrder *MSOrder) (chilledWeight, frozenWeight, anyWeight float64) {
 	for _, position := range msOrder.PositionsWInfo {
 		if position.PositionCode == "" {
+			anyWeight += (position.Quantity * position.PositionWeight * gramsInKG)
 			log.Printf("Позиция %s пропущена из-за отсутствия кода", position.Meta.HREF)
+			continue
 		}
 
 		runedCode := []rune(position.PositionCode)

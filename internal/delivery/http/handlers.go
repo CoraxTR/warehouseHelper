@@ -58,11 +58,12 @@ func (h *Handler) Orders(w http.ResponseWriter, r *http.Request) {
 
 	orders, err := h.ordersUC.GetAllOrders(r.Context())
 	if err != nil {
+		log.Printf("GetAllOrders error: %v", err) // добавьте логирование
 		http.Error(w, "Failed to load orders: "+err.Error(), http.StatusInternalServerError)
 
 		return
 	}
-
+	log.Printf("Orders handler loaded %d orders", len(orders))
 	for _, o := range orders {
 		log.Printf("Order %s errors: %v", o.GetName(), o.GetErrors())
 	}
@@ -144,4 +145,32 @@ func (h *Handler) DownloadFile(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", "attachment; filename="+fileName)
 	w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 	http.ServeFile(w, r, filePath)
+}
+
+func (h *Handler) UpdateFromMS(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req UpdateFromMSRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	if req.Href == "" {
+		http.Error(w, "href is required", http.StatusBadRequest)
+		return
+	}
+
+	err := h.ordersUC.UpdateOrderFromMS(r.Context(), req.Href)
+	if err != nil {
+		log.Printf("UpdateFromMS error: %v", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("OK"))
 }

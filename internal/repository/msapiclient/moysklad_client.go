@@ -370,6 +370,85 @@ func (msac *MoySkladAPIClient) FetchDeliverableOrders(parentctx context.Context)
 	return msOrders
 }
 
+func (msac *MoySkladAPIClient) GetOrderByHREF(parentctx context.Context, href string) (*MSOrder, error) {
+	ctx, cancel := context.WithTimeout(parentctx, 300*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, href, http.NoBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Authorization", msac.msConfig.AuthHeader+" "+msac.msConfig.APIKEY)
+	req.Header.Set("Accept-Encoding", msac.msConfig.EncodeHeader)
+	msac.ratelimiter.Wait()
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+			return nil, err
+		}
+	}
+	defer resp.Body.Close()
+
+	var reader io.Reader = resp.Body
+	if resp.Header.Get("Content-Encoding") == msEncoding {
+		gzReader, err := gzip.NewReader(resp.Body)
+		if err != nil {
+			return nil, err
+		}
+		defer gzReader.Close()
+		reader = gzReader
+	}
+
+	body, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("API returned %s: %s", resp.Status, string(body))
+	}
+
+	var order MSOrder
+	if err := json.Unmarshal(body, &order); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal order: %w", err)
+	}
+
+	if err := unmarshalMSOrderAttributes(&order); err != nil {
+		return nil, err
+	}
+
+	agentName, agentPhone, err := msac.FetchOrderAgentByHREF(ctx, &order)
+	if err != nil {
+		log.Printf("failed to fetch agent for order %s: %v", order.HREF, err)
+	} else {
+		order.AgentName = agentName
+		order.AgentPhone = agentPhone
+	}
+
+	positions, err := msac.FetchOrderPositionsByHREF(ctx, &order)
+	if err != nil {
+		log.Printf("failed to fetch positions for order %s: %v", order.HREF, err)
+	} else {
+		order.PositionsWInfo = positions
+		for i := range order.PositionsWInfo {
+			code, weight, err := msac.FetchPositionSubInfoByHREF(ctx, order.PositionsWInfo[i])
+			if err != nil {
+				log.Printf("failed to fetch subinfo for position %v: %v", order.PositionsWInfo[i].Assortment.Meta.HREF, err)
+				continue
+			}
+			order.PositionsWInfo[i].PositionCode = code
+			order.PositionsWInfo[i].PositionWeight = weight
+		}
+	}
+
+	return &order, nil
+}
+
 type FullOrderUpdate struct {
 	State      *State        `json:"state,omitempty"`
 	Attributes []interface{} `json:"attributes,omitempty"`

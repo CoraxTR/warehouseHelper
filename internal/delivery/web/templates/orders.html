@@ -171,6 +171,8 @@
                 <td class="action-buttons">
                     <button class="print-form-btn" data-href="{{.GetHREF}}">Бланк</button>
                     <button class="print-barcode-btn" data-href="{{.GetHREF}}">Штрих-код</button>
+                    <!-- Класс исправлен на update-from-ms-btn -->
+                    <button class="update-from-ms-btn" data-href="{{.GetHREF}}">Обновить до МС</button>
                 </td>
             </tr>
             {{end}}
@@ -196,22 +198,20 @@
     <a href="/">Назад</a>
 
     <script>
-        // Завершение редактирования по нажатию Enter
-        document.addEventListener('keydown', function (event) {
-            const activeElement = document.activeElement;
-            if (activeElement && activeElement.hasAttribute('contenteditable') && event.key === 'Enter') {
-                event.preventDefault();
-                activeElement.blur();
-            }
-        });
+        document.addEventListener('DOMContentLoaded', function () {
+            // Завершение редактирования по нажатию Enter
+            document.addEventListener('keydown', function (event) {
+                const activeElement = document.activeElement;
+                if (activeElement && activeElement.hasAttribute('contenteditable') && event.key === 'Enter') {
+                    event.preventDefault();
+                    activeElement.blur();
+                }
+            });
 
-        // Логика отслеживания изменений и отправки данных
-        (function () {
+            // Логика отслеживания изменений и отправки данных
             const saveButton = document.getElementById('save-all-changes');
             const exportButton = document.getElementById('export-to-ref');
             const rows = document.querySelectorAll('.order-row');
-
-            // Флаг наличия изменений
             let hasChanges = false;
 
             // При изменении любой ячейки помечаем строку и включаем режим сохранения
@@ -236,13 +236,10 @@
                 rows.forEach(row => {
                     if (row.dataset.modified === 'true') {
                         const cells = row.querySelectorAll('td[contenteditable="true"]');
-                        // Индексы ячеек в порядке следования (пропускаем первый столбец с чекбоксом)
-                        // Индексы: 0-15 соответствуют полям от Name до ChilledBoxes
                         const rowData = {
                             href: row.dataset.href,
                             name: cells[0].innerText.trim(),
                             receiverName: cells[1].innerText.trim(),
-                            // Преобразуем строки в числа для числовых полей
                             receiverPhoneNumber: Number(cells[2].innerText.replace(/\s+/g, '')) || 0,
                             description: cells[3].innerText.trim(),
                             deliveryPlannedDate: cells[4].innerText.trim(),
@@ -291,11 +288,39 @@
                     e.preventDefault();
                     alert('Сначала сохраните изменения');
                 } else {
-                    // если нет изменений, отправляем на /export
                     window.location.href = '/export';
                 }
             });
-        })();
+
+            // Обработка кнопок "Обновить до МС"
+            document.querySelectorAll('.update-from-ms-btn').forEach(btn => {
+                btn.addEventListener('click', function (e) {
+                    e.preventDefault();
+                    const href = this.dataset.href;
+                    const originalText = this.innerText;
+                    this.disabled = true;
+                    this.innerText = 'Обновление...';
+
+                    fetch('/update-from-ms', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ href: href })
+                    })
+                        .then(response => {
+                            if (!response.ok) {
+                                return response.text().then(text => { throw new Error(text); });
+                            }
+                            window.location.reload();
+                        })
+                        .catch(err => {
+                            console.error(err);
+                            alert('Ошибка обновления: ' + err.message);
+                            this.disabled = false;
+                            this.innerText = originalText;
+                        });
+                });
+            });
+        });
     </script>
 </body>
 
