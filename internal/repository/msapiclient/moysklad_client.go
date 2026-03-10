@@ -356,14 +356,14 @@ func (msac *MoySkladAPIClient) FetchDeliverableOrders(parentctx context.Context)
 		for i := range o.PositionsWInfo {
 			code, weight, err := msac.FetchPositionSubInfoByHREF(ctx, o.PositionsWInfo[i])
 			if err != nil {
-				//
+
 				log.Printf("error fetching subinfo: %v", err)
 			}
 
 			o.PositionsWInfo[i].PositionCode = code
 			o.PositionsWInfo[i].PositionWeight = weight
-			//
-			log.Println(code, weight, o.PositionsWInfo[i].PositionCode, o.PositionsWInfo[i].PositionWeight) // теперь правильно
+
+			log.Println(code, weight, o.PositionsWInfo[i].PositionCode, o.PositionsWInfo[i].PositionWeight)
 		}
 	}
 
@@ -554,6 +554,28 @@ func (msac *MoySkladAPIClient) SetOrderAsShippedToRefGo(ctx context.Context, hre
 	return msac.sendPutRequest(ctx, href, update)
 }
 
+func (msac *MoySkladAPIClient) SetRefGoNumberOnly(ctx context.Context, href, refGoNumber string) error {
+	update := struct {
+		Attributes []StringedAttribute `json:"attributes"`
+	}{
+		Attributes: []StringedAttribute{
+			{
+				Meta: Meta{
+					Href:      msac.msConfig.Hrefs.RefGoNumberhref,
+					Type:      "attributemetadata",
+					MediaType: "application/json",
+				},
+				ID:    msac.msConfig.RefGoNumberID,
+				Name:  "Номер в Реф",
+				Type:  "string",
+				Value: refGoNumber,
+			},
+		},
+	}
+
+	return msac.sendPatchRequest(ctx, href, update)
+}
+
 func (msac *MoySkladAPIClient) sendPutRequest(ctx context.Context, url string, body interface{}) error {
 	jsonBody, err := json.Marshal(body)
 	if err != nil {
@@ -585,6 +607,37 @@ func (msac *MoySkladAPIClient) sendPutRequest(ctx context.Context, url string, b
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("API returned status %d", resp.StatusCode)
+	}
+
+	return nil
+}
+
+func (msac *MoySkladAPIClient) sendPatchRequest(ctx context.Context, url string, body interface{}) error {
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("failed to marshal request body: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, url, bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+msac.msConfig.APIKEY)
+	req.Header.Set("Accept-Encoding", "gzip")
+	req.Header.Set("Content-Type", "application/json")
+
+	msac.ratelimiter.Wait()
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(bodyBytes))
 	}
 
 	return nil

@@ -261,6 +261,9 @@ func (c *MoySkladConverter) ToDomain(msOrder *MSOrder) *domain.InternalOrder {
 	o.SetDeliveryIntervalUntil(until)
 	o.SetDeliveryRegion(processDeliveryRegion(msOrder))
 	o.SetPaymentMethod(processPaymentMethod(msOrder))
+	if refGoNumber, ok := msOrder.AttributesMap["Номер в РЕФ"].(string); ok {
+		o.SetRefGoNumber(refGoNumber)
+	}
 	o.SetSum(msOrder.Sum / copecksInRuble)
 	boxWeightInfo := processBoxesAndWeights(msOrder)
 	o.SetChilledBoxes(boxWeightInfo.chilledBoxes)

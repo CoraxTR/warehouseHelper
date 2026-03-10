@@ -40,10 +40,16 @@ func (uc *SyncUseCase) SyncDeliverableOrders(ctx context.Context) {
 
 	for _, o := range suitableOrders {
 		internalOrder := uc.Converter.ToDomain(o)
-		internalOrder.SetRefGoNumber(strconv.Itoa(refGoCounter))
+
+		if internalOrder.GetRefGoNumber() == "" {
+			uc.MSAPIClinet.SetRefGoNumberOnly(ctx, internalOrder.GetHREF(), strconv.Itoa(refGoCounter))
+
+			log.Printf("Assigned RefGoNumber: %v to order: %s", refGoCounter, internalOrder.GetName())
+			refGoCounter++
+		}
+
 		internalOrder.Validate()
 		internalOrders = append(internalOrders, internalOrder)
-		refGoCounter++
 	}
 
 	err := uc.DBClient.InsertOrders(ctx, internalOrders)
