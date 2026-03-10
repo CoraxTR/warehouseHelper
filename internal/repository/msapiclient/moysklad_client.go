@@ -333,7 +333,7 @@ func (msac *MoySkladAPIClient) FetchDeliverableOrders(parentctx context.Context)
 	if err != nil {
 		log.Println(err)
 	}
-
+	log.Printf("FetchDeliverableOrders fetched %v orders", len(unmFOR.Rows))
 	msOrders := make([]*MSOrder, len(unmFOR.Rows))
 	for k := range unmFOR.Rows {
 		msOrders[k] = &unmFOR.Rows[k]

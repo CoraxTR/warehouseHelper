@@ -50,7 +50,7 @@ func (uc *SyncUseCase) SyncDeliverableOrders(ctx context.Context) {
 	if err != nil {
 		log.Printf("Failed to insert orders into database: %v", err)
 	}
-
+	log.Println(refGoCounter)
 	err = config.ChangeRefGoLatest(refGoCounter)
 	if err != nil {
 		log.Printf("Failed to update RefGoLatest to %d: %v", refGoCounter, err)
