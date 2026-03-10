@@ -13,8 +13,9 @@
         th,
         td {
             border: 1px solid #ddd;
-            padding: 8px;
+            padding: 2px;
             text-align: left;
+            font-size: 16px;
         }
 
         tr:nth-child(even) {
@@ -97,12 +98,12 @@
         <thead>
             <tr>
                 <th><input type="checkbox" class="select-all" id="select-all"></th>
-                <th>Название</th>
+                <th>Номер заказа</th>
                 <th>Получатель</th>
                 <th>Телефон</th>
-                <th>Описание</th>
-                <th>Дата доставки</th>
                 <th>Адрес доставки</th>
+                <th>Дата доставки</th>
+                <th>Комментарий</th>
                 <th>Интервал с</th>
                 <th>Интервал до</th>
                 <th>Регион</th>
@@ -122,9 +123,9 @@
             {{$nameKey := "name"}}
             {{$recieverNameKey := "recieverName"}}
             {{$recieverPhoneNumberKey := "recieverPhoneNumber"}}
-            {{$descriptionKey := "description"}}
-            {{$deliveryPlannedDateKey := "deliveryPlannedDate"}}
             {{$shipmentAddressKey := "shipmentAddress"}}
+            {{$deliveryPlannedDateKey := "deliveryPlannedDate"}}
+            {{$descriptionKey := "description"}}
             {{$deliveryIntervalFromKey := "deliveryIntervalFrom"}}
             {{$deliveryIntervalUntilKey := "deliveryIntervalUntil"}}
             {{$deliveryRegionKey := "deliveryRegion"}}
@@ -140,9 +141,9 @@
                 <td class="{{if index $err $nameKey}}error-cell{{end}}" contenteditable="true">{{.GetName}}</td>
                 <td class="{{if index $err $recieverNameKey}}error-cell{{end}}" contenteditable="true">{{.GetRecieverName}}</td>
                 <td class="{{if index $err $recieverPhoneNumberKey}}error-cell{{end}}" contenteditable="true">{{.GetRecieverPhoneNumber}}</td>
-                <td class="{{if index $err $descriptionKey}}error-cell{{end}}" contenteditable="true">{{.GetDescription}}</td>
-                <td class="{{if index $err $deliveryPlannedDateKey}}error-cell{{end}}" contenteditable="true">{{.GetDeliveryPlannedDate}}</td>
                 <td class="{{if index $err $shipmentAddressKey}}error-cell{{end}}" contenteditable="true">{{.GetShipmentAddress}}</td>
+                <td class="{{if index $err $deliveryPlannedDateKey}}error-cell{{end}}" contenteditable="true">{{.GetDeliveryPlannedDate}}</td>
+                <td class="{{if index $err $descriptionKey}}error-cell{{end}}" contenteditable="true">{{.GetDescription}}</td>
                 <td class="{{if index $err $deliveryIntervalFromKey}}error-cell{{end}}" contenteditable="true">{{.GetDeliveryIntervalFrom}}</td>
                 <td class="{{if index $err $deliveryIntervalUntilKey}}error-cell{{end}}" contenteditable="true">{{.GetDeliveryIntervalUntil}}</td>
                 <td class="{{if index $err $deliveryRegionKey}}error-cell{{end}}" contenteditable="true">{{.GetDeliveryRegion}}</td>
