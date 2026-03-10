@@ -64,7 +64,6 @@
             background-color: #0056b3;
         }
 
-        /* стиль для отключённой кнопки */
         .bottom-actions button:disabled,
         .bottom-actions a.disabled {
             background-color: #cccccc;
@@ -139,39 +138,24 @@
             <tr data-href="{{.GetHREF}}" data-order-id="{{.GetHREF}}" class="order-row" data-modified="false">
                 <td><input type="checkbox" class="order-checkbox"></td>
                 <td class="{{if index $err $nameKey}}error-cell{{end}}" contenteditable="true">{{.GetName}}</td>
-                <td class="{{if index $err $recieverNameKey}}error-cell{{end}}" contenteditable="true">
-                    {{.GetRecieverName}}</td>
-                <td class="{{if index $err $recieverPhoneNumberKey}}error-cell{{end}}" contenteditable="true">
-                    {{.GetRecieverPhoneNumber}}</td>
-                <td class="{{if index $err $descriptionKey}}error-cell{{end}}" contenteditable="true">
-                    {{.GetDescription}}</td>
-                <td class="{{if index $err $deliveryPlannedDateKey}}error-cell{{end}}" contenteditable="true">
-                    {{.GetDeliveryPlannedDate}}</td>
-                <td class="{{if index $err $shipmentAddressKey}}error-cell{{end}}" contenteditable="true">
-                    {{.GetShipmentAddress}}</td>
-                <td class="{{if index $err $deliveryIntervalFromKey}}error-cell{{end}}" contenteditable="true">
-                    {{.GetDeliveryIntervalFrom}}</td>
-                <td class="{{if index $err $deliveryIntervalUntilKey}}error-cell{{end}}" contenteditable="true">
-                    {{.GetDeliveryIntervalUntil}}</td>
-                <td class="{{if index $err $deliveryRegionKey}}error-cell{{end}}" contenteditable="true">
-                    {{.GetDeliveryRegion}}</td>
-                <td class="{{if index $err $paymentMethodKey}}error-cell{{end}}" contenteditable="true">
-                    {{.GetPaymentMethod}}</td>
-                <td class="{{if index $err $refGoNumberKey}}error-cell{{end}}" contenteditable="true">
-                    {{.GetRefGoNumber}}</td>
+                <td class="{{if index $err $recieverNameKey}}error-cell{{end}}" contenteditable="true">{{.GetRecieverName}}</td>
+                <td class="{{if index $err $recieverPhoneNumberKey}}error-cell{{end}}" contenteditable="true">{{.GetRecieverPhoneNumber}}</td>
+                <td class="{{if index $err $descriptionKey}}error-cell{{end}}" contenteditable="true">{{.GetDescription}}</td>
+                <td class="{{if index $err $deliveryPlannedDateKey}}error-cell{{end}}" contenteditable="true">{{.GetDeliveryPlannedDate}}</td>
+                <td class="{{if index $err $shipmentAddressKey}}error-cell{{end}}" contenteditable="true">{{.GetShipmentAddress}}</td>
+                <td class="{{if index $err $deliveryIntervalFromKey}}error-cell{{end}}" contenteditable="true">{{.GetDeliveryIntervalFrom}}</td>
+                <td class="{{if index $err $deliveryIntervalUntilKey}}error-cell{{end}}" contenteditable="true">{{.GetDeliveryIntervalUntil}}</td>
+                <td class="{{if index $err $deliveryRegionKey}}error-cell{{end}}" contenteditable="true">{{.GetDeliveryRegion}}</td>
+                <td class="{{if index $err $paymentMethodKey}}error-cell{{end}}" contenteditable="true">{{.GetPaymentMethod}}</td>
+                <td class="{{if index $err $refGoNumberKey}}error-cell{{end}}" contenteditable="true">{{.GetRefGoNumber}}</td>
                 <td class="{{if index $err $sumKey}}error-cell{{end}}" contenteditable="true">{{.GetSum}}</td>
-                <td class="{{if index $err $chilledWeightKey}}error-cell{{end}}" contenteditable="true">
-                    {{.GetChilledWeight}}</td>
-                <td class="{{if index $err $frozenWeightKey}}error-cell{{end}}" contenteditable="true">
-                    {{.GetFrozenWeight}}</td>
-                <td class="{{if index $err $frozenBoxesKey}}error-cell{{end}}" contenteditable="true">
-                    {{.GetFrozenBoxes}}</td>
-                <td class="{{if index $err $chilledBoxesKey}}error-cell{{end}}" contenteditable="true">
-                    {{.GetChilledBoxes}}</td>
+                <td class="{{if index $err $chilledWeightKey}}error-cell{{end}}" contenteditable="true">{{.GetChilledWeight}}</td>
+                <td class="{{if index $err $frozenWeightKey}}error-cell{{end}}" contenteditable="true">{{.GetFrozenWeight}}</td>
+                <td class="{{if index $err $frozenBoxesKey}}error-cell{{end}}" contenteditable="true">{{.GetFrozenBoxes}}</td>
+                <td class="{{if index $err $chilledBoxesKey}}error-cell{{end}}" contenteditable="true">{{.GetChilledBoxes}}</td>
                 <td class="action-buttons">
                     <button class="print-form-btn" data-href="{{.GetHREF}}">Бланк</button>
                     <button class="print-barcode-btn" data-href="{{.GetHREF}}">Штрих-код</button>
-                    <!-- Класс исправлен на update-from-ms-btn -->
                     <button class="update-from-ms-btn" data-href="{{.GetHREF}}">Обновить до МС</button>
                 </td>
             </tr>
@@ -192,6 +176,9 @@
 
         <!-- Кнопка выгрузки в Реф (всегда видна) -->
         <button id="export-to-ref">Выгрузить в Реф</button>
+
+        <!-- Кнопка довыгрузки (всегда видна) -->
+        <button id="resync">Довыгрузить</button>
     </div>
 
     <br>
@@ -214,7 +201,6 @@
             const rows = document.querySelectorAll('.order-row');
             let hasChanges = false;
 
-            // При изменении любой ячейки помечаем строку и включаем режим сохранения
             rows.forEach(row => {
                 const cells = row.querySelectorAll('td[contenteditable="true"]');
                 cells.forEach(cell => {
@@ -230,7 +216,6 @@
                 });
             });
 
-            // Обработка нажатия на кнопку сохранения
             saveButton.addEventListener('click', function () {
                 const modifiedRows = [];
                 rows.forEach(row => {
@@ -282,7 +267,6 @@
                     });
             });
 
-            // Защита от клика по экспорту при наличии изменений
             exportButton.addEventListener('click', function (e) {
                 if (hasChanges) {
                     e.preventDefault();
@@ -319,6 +303,33 @@
                             this.innerText = originalText;
                         });
                 });
+            });
+
+            // Обработка кнопки "Довыгрузить"
+            const resyncButton = document.getElementById('resync');
+            resyncButton.addEventListener('click', function (e) {
+                e.preventDefault();
+                const originalText = this.innerText;
+                this.disabled = true;
+                this.innerText = 'Синхронизация...';
+
+                fetch('/sync', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                })
+                    .then(response => {
+                        if (!response.ok) {
+                            return response.text().then(text => { throw new Error(text); });
+                        }
+                        // После успешной синхронизации перезагружаем страницу
+                        window.location.reload();
+                    })
+                    .catch(err => {
+                        console.error(err);
+                        alert('Ошибка синхронизации: ' + err.message);
+                        this.disabled = false;
+                        this.innerText = originalText;
+                    });
             });
         });
     </script>

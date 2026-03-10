@@ -258,14 +258,13 @@ func (pg *PGClient) UpdateOrders(ctx context.Context, orders []*domain.InternalO
             delivery_interval_until = $8,
             delivery_region = $9,
             payment_method = $10,
-            refgo_number = $11,
-            sum = $12,
-            chilled_weight = $13,
-            frozen_weight = $14,
-            frozen_boxes = $15,
-            chilled_boxes = $16,
-            errors = $17
-        WHERE href = $18
+            sum = $11,
+            chilled_weight = $12,
+            frozen_weight = $13,
+            frozen_boxes = $14,
+            chilled_boxes = $15,
+            errors = $16
+        WHERE href = $17
     `
 
 	for _, o := range orders {
@@ -285,7 +284,6 @@ func (pg *PGClient) UpdateOrders(ctx context.Context, orders []*domain.InternalO
 			o.GetDeliveryIntervalUntil(),
 			o.GetDeliveryRegion(),
 			o.GetPaymentMethod(),
-			o.GetRefGoNumber(),
 			o.GetSum(),
 			o.GetChilledWeight(),
 			o.GetFrozenWeight(),

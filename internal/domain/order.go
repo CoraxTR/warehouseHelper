@@ -167,10 +167,6 @@ func (o *InternalOrder) GetErrors() map[string]string {
 
 func (o *InternalOrder) Validate() {
 	o.errors = make(map[string]string)
-	if o.refGoNumber == "" {
-		o.errors["refGoNumber"] = "Нет номера РефГо"
-	}
-
 	if o.receiverName == "" {
 		o.errors["recieverName"] = "Не указано имя получателя"
 	}
