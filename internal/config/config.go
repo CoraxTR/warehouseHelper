@@ -213,7 +213,7 @@ func loadRefGoConfig() *RefGoConfig {
 	}
 }
 
-func ChangeRefGoLatest(latestOrder int) error {
+func (rgc *RefGoConfig) ChangeRefGoLatest(latestOrder int) error {
 	envFile := "../.env"
 
 	content, err := os.ReadFile(envFile)
@@ -241,6 +241,8 @@ func ChangeRefGoLatest(latestOrder int) error {
 	if err != nil {
 		return fmt.Errorf("ошибка записи файла: %w", err)
 	}
+
+	rgc.RGNextOrder = latestOrder
 
 	return nil
 }

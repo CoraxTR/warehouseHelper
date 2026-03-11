@@ -517,18 +517,6 @@ func (msac *MoySkladAPIClient) SetOrderAsShippedToRefGo(ctx context.Context, hre
 					Name: "Прочие",
 				},
 			},
-			// 2. Номер в Реф (строковый атрибут)
-			StringedAttribute{
-				Meta: Meta{
-					Href:      msac.msConfig.Hrefs.RefGoNumberhref,
-					Type:      "attributemetadata",
-					MediaType: "application/json",
-				},
-				ID:    msac.msConfig.RefGoNumberID,
-				Name:  "Номер в Реф",
-				Type:  "string",
-				Value: refGoNumber,
-			},
 			// 3. Курьер = "РефГо"
 			Attribute{
 				Meta: Meta{
@@ -566,14 +554,14 @@ func (msac *MoySkladAPIClient) SetRefGoNumberOnly(ctx context.Context, href, ref
 					MediaType: "application/json",
 				},
 				ID:    msac.msConfig.RefGoNumberID,
-				Name:  "Номер в Реф",
+				Name:  "Номер в РЕФ",
 				Type:  "string",
 				Value: refGoNumber,
 			},
 		},
 	}
 
-	return msac.sendPatchRequest(ctx, href, update)
+	return msac.sendPutRequest(ctx, href, update)
 }
 
 func (msac *MoySkladAPIClient) sendPutRequest(ctx context.Context, url string, body interface{}) error {
