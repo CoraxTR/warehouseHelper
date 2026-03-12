@@ -306,6 +306,16 @@
                 });
             });
 
+            document.querySelectorAll('.print-form-btn').forEach(btn => {
+                btn.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    const href = this.dataset.href;
+                        if (href) {
+                            window.location.href = '/print-form?href=' + encodeURIComponent(href);
+                        }
+                });
+            });
+            
             // Обработка кнопки "Довыгрузить"
             const resyncButton = document.getElementById('resync');
             resyncButton.addEventListener('click', function (e) {

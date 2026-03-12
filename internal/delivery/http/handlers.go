@@ -17,13 +17,15 @@ type Handler struct {
 	syncUC   *usecase.SyncUseCase
 	ordersUC *usecase.OrdersUseCase
 	exportUC *usecase.ExportToExcelUseCase
+	pdfUC    *usecase.ExportOrderPDFUseCase
 }
 
-func NewHandler(syncUC *usecase.SyncUseCase, ordersUC *usecase.OrdersUseCase, exportUC *usecase.ExportToExcelUseCase) *Handler {
+func NewHandler(syncUC *usecase.SyncUseCase, ordersUC *usecase.OrdersUseCase, exportUC *usecase.ExportToExcelUseCase, pdfUC *usecase.ExportOrderPDFUseCase) *Handler {
 	return &Handler{
 		syncUC:   syncUC,
 		ordersUC: ordersUC,
 		exportUC: exportUC,
+		pdfUC:    pdfUC,
 	}
 }
 
@@ -173,4 +175,29 @@ func (h *Handler) UpdateFromMS(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("OK"))
+}
+
+func (h *Handler) PrintForm(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	href := r.URL.Query().Get("href")
+	if href == "" {
+		http.Error(w, "href parameter required", http.StatusBadRequest)
+		return
+	}
+
+	filePath, err := h.pdfUC.GetOrderPDF(r.Context(), href)
+	if err != nil {
+		log.Printf("Error getting PDF: %v", err)
+		http.Error(w, "Failed to get PDF: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Disposition", "attachment; filename=order_form.pdf")
+	w.Header().Set("Content-Type", "application/pdf")
+
+	log.Println(filePath)
+	http.ServeFile(w, r, filePath)
 }

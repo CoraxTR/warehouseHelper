@@ -133,6 +133,7 @@ type MoySkladhrefs struct {
 	RefGoNumberhref   string
 	Courierhref       string
 	RefGoCourierhref  string
+	Printtemplatehref string
 }
 
 func loadMoySkladhrefs() *MoySkladhrefs {
@@ -181,6 +182,11 @@ func loadMoySkladhrefs() *MoySkladhrefs {
 		panic("RefGoCourierhref does not exist")
 	}
 
+	printtemplatehref := os.Getenv("MSAPI_PRINTTEMPLATEHREF")
+	if refgocourierhref == "" {
+		panic("Printtemplatehreg does not exist")
+	}
+
 	return &MoySkladhrefs{
 		Readystatehref:    readystatehref,
 		Shipedstatehref:   shipedstatehref,
@@ -191,6 +197,7 @@ func loadMoySkladhrefs() *MoySkladhrefs {
 		RefGoNumberhref:   refgonumberhref,
 		Courierhref:       courierhref,
 		RefGoCourierhref:  refgocourierhref,
+		Printtemplatehref: printtemplatehref,
 	}
 }
 
