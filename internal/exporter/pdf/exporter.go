@@ -31,5 +31,6 @@ func (e *PDFExporter) ExportOrderPDF(data []byte) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return outFile.Name(), nil // путь относительный
+	// На данный момент сохраняем в cmd, позже переделаем в отдельную папку
+	return outFile.Name(), nil
 }

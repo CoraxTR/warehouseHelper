@@ -446,7 +446,7 @@ func (e *ExcelExporter) ExportOrdersToExcel(orders []*domain.InternalOrder) (sav
 	if err != nil {
 		log.Printf("Failed to set cell value for overall boxes: %v", err)
 	}
-
+	// На данный момент сохраняем в корень, позже переделаем в отдельную папку
 	err = uploadFile.SaveAs(savepath)
 	if err != nil {
 		log.Printf("Failed to save Excel file: %v", err)
