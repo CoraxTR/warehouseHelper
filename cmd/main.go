@@ -52,7 +52,7 @@ func main() {
 	mux.HandleFunc("/print-multiple-forms", handler.PrintMultipleForms) // POST
 
 	log.Println("Сервер запущен на http://localhost:8080")
-	err := http.ListenAndServe(":8082", mux)
+	err := http.ListenAndServe(":8080", mux)
 	if err != nil {
 		log.Fatal("Ошибка запуска сервера:", err)
 	}
