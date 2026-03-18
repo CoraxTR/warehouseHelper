@@ -630,3 +630,73 @@ func (msac *MoySkladAPIClient) sendPatchRequest(ctx context.Context, url string,
 
 	return nil
 }
+
+type PDFExportRequest struct {
+	Template  exportTemplate `json:"template"`
+	Extension string         `json:"extension"`
+}
+
+type exportTemplate struct {
+	Meta Meta `json:"meta"`
+}
+
+func (msac *MoySkladAPIClient) FetchOrderPDF(parentctx context.Context, href string) (pdf []byte, err error) {
+	ctx, cancel := context.WithTimeout(parentctx, 300*time.Second)
+	defer cancel()
+
+	url := href + "/export/"
+
+	reqBody := PDFExportRequest{
+		Template: exportTemplate{
+			Meta: Meta{
+				Href:      msac.msConfig.Hrefs.Printtemplatehref,
+				Type:      "customtemplate",
+				MediaType: "application/json",
+			},
+		},
+		Extension: "pdf",
+	}
+
+	jsonBody, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(jsonBody))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Authorization", "Bearer "+msac.msConfig.APIKEY)
+	req.Header.Set("Accept-Encoding", "gzip")
+	req.Header.Set("Content-Type", "application/json")
+	msac.ratelimiter.Wait()
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var reader io.Reader = resp.Body
+	if resp.Header.Get("Content-Encoding") == "gzip" {
+		gzReader, err := gzip.NewReader(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create gzip reader: %w", err)
+		}
+		defer gzReader.Close()
+		reader = gzReader
+	}
+
+	pdf, err = io.ReadAll(reader)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	return pdf, nil
+}

@@ -23,3 +23,7 @@ type UpdateOrderRequest struct {
 type UpdateFromMSRequest struct {
 	Href string `json:"href"`
 }
+
+type PrintMultipleRequest struct {
+	Hrefs []string `json:"hrefs"`
+}
