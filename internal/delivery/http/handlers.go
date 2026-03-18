@@ -201,3 +201,32 @@ func (h *Handler) PrintForm(w http.ResponseWriter, r *http.Request) {
 	log.Println(filePath)
 	http.ServeFile(w, r, filePath)
 }
+
+func (h *Handler) PrintMultipleForms(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req PrintMultipleRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if len(req.Hrefs) == 0 {
+		http.Error(w, "No hrefs provided", http.StatusBadRequest)
+		return
+	}
+
+	filePath, err := h.pdfUC.GetMultipleOrdersPDF(r.Context(), req.Hrefs)
+	if err != nil {
+		log.Printf("Error merging PDFs: %v", err)
+		http.Error(w, "Failed to merge PDFs: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Disposition", "attachment; filename=merged_forms.pdf")
+	w.Header().Set("Content-Type", "application/pdf")
+	http.ServeFile(w, r, filePath)
+}

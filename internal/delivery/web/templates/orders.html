@@ -136,7 +136,7 @@
             {{$frozenWeightKey := "frozenWeight"}}
             {{$frozenBoxesKey := "frozenBoxes"}}
             {{$chilledBoxesKey := "chilledBoxes"}}
-            <tr data-href="{{.GetHREF}}" data-order-id="{{.GetHREF}}" class="order-row" data-modified="false">
+            <tr data-href="{{.GetHREF}}" data-refgonumber="{{.GetRefGoNumber}}" data-order-id="{{.GetHREF}}" class="order-row" data-modified="false">
                 <td><input type="checkbox" class="order-checkbox"></td>
                 <td class="{{if index $err $nameKey}}error-cell{{end}}" contenteditable="true">{{.GetName}}</td>
                 <td class="{{if index $err $recieverNameKey}}error-cell{{end}}" contenteditable="true">{{.GetRecieverName}}</td>
@@ -196,7 +196,82 @@
                 }
             });
 
-            // Логика отслеживания изменений и отправки данных
+            // ---- Логика выделения и массовых действий ----
+            const bulkActions = document.getElementById('bulk-actions');
+            const selectAllCheckbox = document.getElementById('select-all');
+            const orderCheckboxes = document.querySelectorAll('.order-checkbox');
+
+            function updateBulkActionsVisibility() {
+                const checked = document.querySelectorAll('.order-checkbox:checked').length;
+                if (checked > 0) {
+                    bulkActions.classList.remove('hidden');
+                } else {
+                    bulkActions.classList.add('hidden');
+                }
+            }
+
+            orderCheckboxes.forEach(cb => {
+                cb.addEventListener('change', updateBulkActionsVisibility);
+            });
+
+            selectAllCheckbox.addEventListener('change', function(e) {
+                orderCheckboxes.forEach(cb => cb.checked = e.target.checked);
+                updateBulkActionsVisibility();
+            });
+
+            // ---- Обработка массовой печати бланков ----
+            document.getElementById('print-forms-bulk').addEventListener('click', function(e) {
+                e.preventDefault();
+                const selectedRows = Array.from(document.querySelectorAll('.order-checkbox:checked')).map(cb => cb.closest('tr'));
+                if (selectedRows.length === 0) return;
+
+                // Собираем href и refGoNumber
+                const orders = selectedRows.map(row => ({
+                    href: row.dataset.href,
+                    refGoNumber: parseInt(row.dataset.refgonumber) || 0
+                }));
+
+                // Сортируем по возрастанию номера РефГо
+                orders.sort((a, b) => a.refGoNumber - b.refGoNumber);
+
+                const hrefs = orders.map(o => o.href);
+
+                const originalText = this.innerText;
+                this.disabled = true;
+                this.innerText = 'Подготовка...';
+
+                fetch('/print-multiple-forms', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ hrefs: hrefs })
+                })
+                .then(response => {
+                    if (!response.ok) {
+                        return response.text().then(text => { throw new Error(text); });
+                    }
+                    return response.blob();
+                })
+                .then(blob => {
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'merged_forms.pdf';
+                    document.body.appendChild(a);
+                    a.click();
+                    a.remove();
+                    window.URL.revokeObjectURL(url);
+                    this.disabled = false;
+                    this.innerText = originalText;
+                })
+                .catch(err => {
+                    console.error(err);
+                    alert('Ошибка печати: ' + err.message);
+                    this.disabled = false;
+                    this.innerText = originalText;
+                });
+            });
+
+            // ---- Остальная логика (без изменений) ----
             const saveButton = document.getElementById('save-all-changes');
             const exportButton = document.getElementById('export-to-ref');
             const rows = document.querySelectorAll('.order-row');
@@ -277,7 +352,6 @@
                 }
             });
 
-            // Обработка кнопок "Обновить до МС"
             document.querySelectorAll('.update-from-ms-btn').forEach(btn => {
                 btn.addEventListener('click', function (e) {
                     e.preventDefault();
@@ -310,13 +384,12 @@
                 btn.addEventListener('click', function(e) {
                     e.preventDefault();
                     const href = this.dataset.href;
-                        if (href) {
-                            window.location.href = '/print-form?href=' + encodeURIComponent(href);
-                        }
+                    if (href) {
+                        window.location.href = '/print-form?href=' + encodeURIComponent(href);
+                    }
                 });
             });
-            
-            // Обработка кнопки "Довыгрузить"
+
             const resyncButton = document.getElementById('resync');
             resyncButton.addEventListener('click', function (e) {
                 e.preventDefault();
@@ -332,7 +405,6 @@
                         if (!response.ok) {
                             return response.text().then(text => { throw new Error(text); });
                         }
-                        // После успешной синхронизации перезагружаем страницу
                         window.location.reload();
                     })
                     .catch(err => {

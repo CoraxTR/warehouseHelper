@@ -11,6 +11,7 @@ type PDFFetcher interface {
 
 type PDFExporter interface {
 	ExportOrderPDF(data []byte) (string, error)
+	ExportMergedPDF(data [][]byte) (string, error)
 }
 
 type ExportOrderPDFUseCase struct {
@@ -33,6 +34,22 @@ func (uc *ExportOrderPDFUseCase) GetOrderPDF(ctx context.Context, href string) (
 	savePath, err := uc.exporter.ExportOrderPDF(pdfData)
 	if err != nil {
 		return "", fmt.Errorf("failed to export PDF: %w", err)
+	}
+	return savePath, nil
+}
+
+func (uc *ExportOrderPDFUseCase) GetMultipleOrdersPDF(ctx context.Context, hrefs []string) (string, error) {
+	pdfData := make([][]byte, len(hrefs))
+	for i, href := range hrefs {
+		data, err := uc.fetcher.FetchOrderPDF(ctx, href)
+		if err != nil {
+			return "", fmt.Errorf("failed to fetch PDF for %s: %w", href, err)
+		}
+		pdfData[i] = data
+	}
+	savePath, err := uc.exporter.ExportMergedPDF(pdfData)
+	if err != nil {
+		return "", fmt.Errorf("failed to export merged PDF: %w", err)
 	}
 	return savePath, nil
 }
