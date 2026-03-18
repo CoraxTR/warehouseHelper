@@ -2,3 +2,4 @@
 .golangci.yaml
 !.env.example
 .vscode
+.exe
