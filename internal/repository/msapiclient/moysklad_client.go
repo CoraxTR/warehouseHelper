@@ -697,6 +697,5 @@ func (msac *MoySkladAPIClient) FetchOrderPDF(parentctx context.Context, href str
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
-
 	return pdf, nil
 }

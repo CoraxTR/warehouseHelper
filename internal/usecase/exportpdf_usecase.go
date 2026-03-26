@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"fmt"
+	"log"
 )
 
 type PDFFetcher interface {
@@ -45,6 +46,7 @@ func (uc *ExportOrderPDFUseCase) GetMultipleOrdersPDF(ctx context.Context, hrefs
 		if err != nil {
 			return "", fmt.Errorf("failed to fetch PDF for %s: %w", href, err)
 		}
+		log.Printf("Fetched Order PDF %v/%v", i, len(hrefs))
 		pdfData[i] = data
 	}
 	savePath, err := uc.exporter.ExportMergedPDF(pdfData)
