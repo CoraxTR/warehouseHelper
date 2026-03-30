@@ -136,28 +136,44 @@
             {{$frozenWeightKey := "frozenWeight"}}
             {{$frozenBoxesKey := "frozenBoxes"}}
             {{$chilledBoxesKey := "chilledBoxes"}}
-            <tr data-href="{{.GetHREF}}" data-refgonumber="{{.GetRefGoNumber}}" data-order-id="{{.GetHREF}}" class="order-row" data-modified="false">
+            <tr data-href="{{.GetHREF}}" data-refgonumber="{{.GetRefGoNumber}}" data-order-id="{{.GetHREF}}"
+                class="order-row" data-modified="false">
                 <td><input type="checkbox" class="order-checkbox"></td>
                 <td class="{{if index $err $nameKey}}error-cell{{end}}" contenteditable="true">{{.GetName}}</td>
-                <td class="{{if index $err $recieverNameKey}}error-cell{{end}}" contenteditable="true">{{.GetRecieverName}}</td>
-                <td class="{{if index $err $recieverPhoneNumberKey}}error-cell{{end}}" contenteditable="true">{{.GetRecieverPhoneNumber}}</td>
-                <td class="{{if index $err $shipmentAddressKey}}error-cell{{end}}" contenteditable="true">{{.GetShipmentAddress}}</td>
-                <td class="{{if index $err $deliveryPlannedDateKey}}error-cell{{end}}" contenteditable="true">{{.GetDeliveryPlannedDate}}</td>
-                <td class="{{if index $err $descriptionKey}}error-cell{{end}}" contenteditable="true">{{.GetDescription}}</td>
-                <td class="{{if index $err $deliveryIntervalFromKey}}error-cell{{end}}" contenteditable="true">{{.GetDeliveryIntervalFrom}}</td>
-                <td class="{{if index $err $deliveryIntervalUntilKey}}error-cell{{end}}" contenteditable="true">{{.GetDeliveryIntervalUntil}}</td>
-                <td class="{{if index $err $deliveryRegionKey}}error-cell{{end}}" contenteditable="true">{{.GetDeliveryRegion}}</td>
-                <td class="{{if index $err $paymentMethodKey}}error-cell{{end}}" contenteditable="true">{{.GetPaymentMethod}}</td>
-                <td class="{{if index $err $refGoNumberKey}}error-cell{{end}}" contenteditable="true">{{.GetRefGoNumber}}</td>
+                <td class="{{if index $err $recieverNameKey}}error-cell{{end}}" contenteditable="true">
+                    {{.GetRecieverName}}</td>
+                <td class="{{if index $err $recieverPhoneNumberKey}}error-cell{{end}}" contenteditable="true">
+                    {{.GetRecieverPhoneNumber}}</td>
+                <td class="{{if index $err $shipmentAddressKey}}error-cell{{end}}" contenteditable="true">
+                    {{.GetShipmentAddress}}</td>
+                <td class="{{if index $err $deliveryPlannedDateKey}}error-cell{{end}}" contenteditable="true">
+                    {{.GetDeliveryPlannedDate}}</td>
+                <td class="{{if index $err $descriptionKey}}error-cell{{end}}" contenteditable="true">
+                    {{.GetDescription}}</td>
+                <td class="{{if index $err $deliveryIntervalFromKey}}error-cell{{end}}" contenteditable="true">
+                    {{.GetDeliveryIntervalFrom}}</td>
+                <td class="{{if index $err $deliveryIntervalUntilKey}}error-cell{{end}}" contenteditable="true">
+                    {{.GetDeliveryIntervalUntil}}</td>
+                <td class="{{if index $err $deliveryRegionKey}}error-cell{{end}}" contenteditable="true">
+                    {{.GetDeliveryRegion}}</td>
+                <td class="{{if index $err $paymentMethodKey}}error-cell{{end}}" contenteditable="true">
+                    {{.GetPaymentMethod}}</td>
+                <td class="{{if index $err $refGoNumberKey}}error-cell{{end}}" contenteditable="true">
+                    {{.GetRefGoNumber}}</td>
                 <td class="{{if index $err $sumKey}}error-cell{{end}}" contenteditable="true">{{.GetSum}}</td>
-                <td class="{{if index $err $chilledWeightKey}}error-cell{{end}}" contenteditable="true">{{.GetChilledWeight}}</td>
-                <td class="{{if index $err $frozenWeightKey}}error-cell{{end}}" contenteditable="true">{{.GetFrozenWeight}}</td>
-                <td class="{{if index $err $frozenBoxesKey}}error-cell{{end}}" contenteditable="true">{{.GetFrozenBoxes}}</td>
-                <td class="{{if index $err $chilledBoxesKey}}error-cell{{end}}" contenteditable="true">{{.GetChilledBoxes}}</td>
+                <td class="{{if index $err $chilledWeightKey}}error-cell{{end}}" contenteditable="true">
+                    {{.GetChilledWeight}}</td>
+                <td class="{{if index $err $frozenWeightKey}}error-cell{{end}}" contenteditable="true">
+                    {{.GetFrozenWeight}}</td>
+                <td class="{{if index $err $frozenBoxesKey}}error-cell{{end}}" contenteditable="true">
+                    {{.GetFrozenBoxes}}</td>
+                <td class="{{if index $err $chilledBoxesKey}}error-cell{{end}}" contenteditable="true">
+                    {{.GetChilledBoxes}}</td>
                 <td class="action-buttons">
                     <button class="print-form-btn" data-href="{{.GetHREF}}">Бланк</button>
                     <button class="print-barcode-btn" data-href="{{.GetHREF}}">Штрих-код</button>
                     <button class="update-from-ms-btn" data-href="{{.GetHREF}}">Обновить до МС</button>
+                    <button class="delete-order-btn" data-href="{{.GetHREF}}">Удалить</button>
                 </td>
             </tr>
             {{end}}
@@ -214,13 +230,13 @@
                 cb.addEventListener('change', updateBulkActionsVisibility);
             });
 
-            selectAllCheckbox.addEventListener('change', function(e) {
+            selectAllCheckbox.addEventListener('change', function (e) {
                 orderCheckboxes.forEach(cb => cb.checked = e.target.checked);
                 updateBulkActionsVisibility();
             });
 
             // ---- Обработка массовой печати бланков ----
-            document.getElementById('print-forms-bulk').addEventListener('click', function(e) {
+            document.getElementById('print-forms-bulk').addEventListener('click', function (e) {
                 e.preventDefault();
                 const selectedRows = Array.from(document.querySelectorAll('.order-checkbox:checked')).map(cb => cb.closest('tr'));
                 if (selectedRows.length === 0) return;
@@ -245,30 +261,30 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ hrefs: hrefs })
                 })
-                .then(response => {
-                    if (!response.ok) {
-                        return response.text().then(text => { throw new Error(text); });
-                    }
-                    return response.blob();
-                })
-                .then(blob => {
-                    const url = window.URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = 'merged_forms.pdf';
-                    document.body.appendChild(a);
-                    a.click();
-                    a.remove();
-                    window.URL.revokeObjectURL(url);
-                    this.disabled = false;
-                    this.innerText = originalText;
-                })
-                .catch(err => {
-                    console.error(err);
-                    alert('Ошибка печати: ' + err.message);
-                    this.disabled = false;
-                    this.innerText = originalText;
-                });
+                    .then(response => {
+                        if (!response.ok) {
+                            return response.text().then(text => { throw new Error(text); });
+                        }
+                        return response.blob();
+                    })
+                    .then(blob => {
+                        const url = window.URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = 'merged_forms.pdf';
+                        document.body.appendChild(a);
+                        a.click();
+                        a.remove();
+                        window.URL.revokeObjectURL(url);
+                        this.disabled = false;
+                        this.innerText = originalText;
+                    })
+                    .catch(err => {
+                        console.error(err);
+                        alert('Ошибка печати: ' + err.message);
+                        this.disabled = false;
+                        this.innerText = originalText;
+                    });
             });
 
             // ---- Остальная логика (без изменений) ----
@@ -380,8 +396,32 @@
                 });
             });
 
+            document.querySelectorAll('.delete-order-btn').forEach(btn => {
+                btn.addEventListener('click', function (e) {
+                    e.preventDefault();
+                    if (!confirm('Удалить заказ?')) return;
+
+                    const href = this.dataset.href;
+                    this.disabled = true;
+
+                    fetch('/orders/delete?' + new URLSearchParams({ href }), {
+                        method: 'DELETE'
+                    })
+                        .then(response => {
+                            if (!response.ok) {
+                                return response.text().then(text => { throw new Error(text); });
+                            }
+                            window.location.reload();
+                        })
+                        .catch(err => {
+                            alert('Ошибка удаления: ' + err.message);
+                            this.disabled = false;
+                        });
+                });
+            });
+
             document.querySelectorAll('.print-form-btn').forEach(btn => {
-                btn.addEventListener('click', function(e) {
+                btn.addEventListener('click', function (e) {
                     e.preventDefault();
                     const href = this.dataset.href;
                     if (href) {

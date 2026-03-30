@@ -11,6 +11,7 @@ import (
 type OrderRepository interface {
 	GetAllOrders(ctx context.Context) ([]*domain.InternalOrder, error)
 	UpdateOrders(ctx context.Context, orders []*domain.InternalOrder) error
+	DeleteOrder(ctx context.Context, href string) error
 }
 
 type OrdersUseCase struct {
@@ -62,4 +63,8 @@ func (uc *OrdersUseCase) UpdateOrderFromMS(ctx context.Context, href string) err
 	}
 
 	return nil
+}
+
+func (uc *OrdersUseCase) DeleteOrder(ctx context.Context, href string) error {
+	return uc.repo.DeleteOrder(ctx, href)
 }

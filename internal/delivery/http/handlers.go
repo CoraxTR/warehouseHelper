@@ -230,3 +230,24 @@ func (h *Handler) PrintMultipleForms(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/pdf")
 	http.ServeFile(w, r, filePath)
 }
+
+func (h *Handler) DeleteOrder(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	href := r.URL.Query().Get("href")
+	if href == "" {
+		http.Error(w, "href is required", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.ordersUC.DeleteOrder(r.Context(), href); err != nil {
+		log.Printf("DeleteOrder error: %v", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+}

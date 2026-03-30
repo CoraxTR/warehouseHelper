@@ -299,3 +299,8 @@ func (pg *PGClient) UpdateOrders(ctx context.Context, orders []*domain.InternalO
 
 	return tx.Commit(ctx)
 }
+
+func (pg *PGClient) DeleteOrder(ctx context.Context, href string) error {
+	_, err := pg.Pool.Exec(ctx, `DELETE FROM refgoOrders WHERE href = $1`, href)
+	return err
+}

@@ -50,9 +50,10 @@ func main() {
 	mux.HandleFunc("/update-from-ms", handler.UpdateFromMS) // POST
 	mux.HandleFunc("/print-form", handler.PrintForm)
 	mux.HandleFunc("/print-multiple-forms", handler.PrintMultipleForms) // POST
+	mux.HandleFunc("/orders/delete", handler.DeleteOrder)               // DELETE
 
 	log.Println("Сервер запущен на http://localhost:8080")
-	err := http.ListenAndServe(":8082", mux)
+	err := http.ListenAndServe(":8080", mux)
 	if err != nil {
 		log.Fatal("Ошибка запуска сервера:", err)
 	}
