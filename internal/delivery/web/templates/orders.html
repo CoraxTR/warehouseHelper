@@ -112,8 +112,8 @@
                 <th>Сумма</th>
                 <th>Вес охл.</th>
                 <th>Вес зам.</th>
-                <th>Коробки охл.</th>
                 <th>Коробки зам.</th>
+                <th>Коробки охл.</th>
                 <th>Действия</th>
             </tr>
         </thead>
@@ -235,6 +235,52 @@
                 updateBulkActionsVisibility();
             });
 
+        document.getElementById('print-barcodes-bulk').addEventListener('click', function (e) {
+    e.preventDefault();
+    const selectedRows = Array.from(document.querySelectorAll('.order-checkbox:checked')).map(cb => cb.closest('tr'));
+    if (selectedRows.length === 0) return;
+
+    const orders = selectedRows.map(row => ({
+        href: row.dataset.href,
+        refGoNumber: parseInt(row.dataset.refgonumber) || 0
+    }));
+    orders.sort((a, b) => a.refGoNumber - b.refGoNumber);
+    const hrefs = orders.map(o => o.href);
+
+    const originalText = this.innerText;
+    this.disabled = true;
+    this.innerText = 'Подготовка...';
+
+    fetch('/print-barcodes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ hrefs: hrefs })
+    })
+        .then(response => {
+            if (!response.ok) {
+                return response.text().then(text => { throw new Error(text); });
+            }
+            return response.blob();
+        })
+        .then(blob => {
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'barcodes.xlsx';
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            window.URL.revokeObjectURL(url);
+            this.disabled = false;
+            this.innerText = originalText;
+        })
+        .catch(err => {
+            console.error(err);
+            alert('Ошибка печати штрих-кодов: ' + err.message);
+            this.disabled = false;
+            this.innerText = originalText;
+        });
+});
             // ---- Обработка массовой печати бланков ----
             document.getElementById('print-forms-bulk').addEventListener('click', function (e) {
                 e.preventDefault();
@@ -455,6 +501,47 @@
                     });
             });
         });
+        document.querySelectorAll('.print-barcode-btn').forEach(btn => {
+    btn.addEventListener('click', function (e) {
+        e.preventDefault();
+        const href = this.dataset.href;
+        if (!href) return;
+
+        const originalText = this.innerText;
+        this.disabled = true;
+        this.innerText = 'Подготовка...';
+
+        fetch('/print-barcodes', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ hrefs: [href] })
+        })
+            .then(response => {
+                if (!response.ok) {
+                    return response.text().then(text => { throw new Error(text); });
+                }
+                return response.blob();
+            })
+            .then(blob => {
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'barcodes.xlsx';
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                window.URL.revokeObjectURL(url);
+                this.disabled = false;
+                this.innerText = originalText;
+            })
+            .catch(err => {
+                console.error(err);
+                alert('Ошибка: ' + err.message);
+                this.disabled = false;
+                this.innerText = originalText;
+            });
+    });
+});
     </script>
 </body>
 

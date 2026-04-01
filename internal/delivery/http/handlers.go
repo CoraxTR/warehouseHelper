@@ -14,18 +14,20 @@ import (
 )
 
 type Handler struct {
-	syncUC   *usecase.SyncUseCase
-	ordersUC *usecase.OrdersUseCase
-	exportUC *usecase.ExportToExcelUseCase
-	pdfUC    *usecase.ExportOrderPDFUseCase
+	syncUC    *usecase.SyncUseCase
+	ordersUC  *usecase.OrdersUseCase
+	exportUC  *usecase.ExportToExcelUseCase
+	pdfUC     *usecase.ExportOrderPDFUseCase
+	barcodeUC *usecase.ExportBarcodesToExcelUseCase
 }
 
-func NewHandler(syncUC *usecase.SyncUseCase, ordersUC *usecase.OrdersUseCase, exportUC *usecase.ExportToExcelUseCase, pdfUC *usecase.ExportOrderPDFUseCase) *Handler {
+func NewHandler(syncUC *usecase.SyncUseCase, ordersUC *usecase.OrdersUseCase, exportUC *usecase.ExportToExcelUseCase, pdfUC *usecase.ExportOrderPDFUseCase, barcodeUC *usecase.ExportBarcodesToExcelUseCase) *Handler {
 	return &Handler{
-		syncUC:   syncUC,
-		ordersUC: ordersUC,
-		exportUC: exportUC,
-		pdfUC:    pdfUC,
+		syncUC:    syncUC,
+		ordersUC:  ordersUC,
+		exportUC:  exportUC,
+		pdfUC:     pdfUC,
+		barcodeUC: barcodeUC,
 	}
 }
 
@@ -250,4 +252,34 @@ func (h *Handler) DeleteOrder(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusOK)
+}
+
+func (h *Handler) PrintBarcodes(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req PrintMultipleRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if len(req.Hrefs) == 0 {
+		http.Error(w, "No hrefs provided", http.StatusBadRequest)
+		return
+	}
+
+	filePath, err := h.barcodeUC.GetMultipleOrdersBarcodes(r.Context(), req.Hrefs)
+	if err != nil {
+		log.Printf("Error exporting barcodes: %v", err)
+		http.Error(w, "Failed to export barcodes: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	fileName := filepath.Base(filePath)
+	w.Header().Set("Content-Disposition", "attachment; filename="+fileName)
+	w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+	http.ServeFile(w, r, filePath)
 }
