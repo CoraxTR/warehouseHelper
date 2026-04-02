@@ -1,11 +1,16 @@
 package excel
 
 import (
+	"bytes"
+	"fmt"
+	"image/png"
 	"log"
 	"strconv"
 	"time"
 	"warehouseHelper/internal/domain"
 
+	"github.com/boombuler/barcode"
+	"github.com/boombuler/barcode/code128"
 	"github.com/xuri/excelize/v2"
 )
 
@@ -453,4 +458,333 @@ func (e *ExcelExporter) ExportOrdersToExcel(orders []*domain.InternalOrder) (sav
 	}
 
 	return today + ".xlsx", nil
+}
+
+func generateBarcodePNG(data string, width, height int) ([]byte, error) {
+	bc, err := code128.Encode(data)
+	if err != nil {
+		return nil, err
+	}
+	scaled, err := barcode.Scale(bc, width, height)
+	if err != nil {
+		return nil, err
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, scaled); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+func fillSingularBarcode(f *excelize.File, o *domain.InternalOrder, boxState string, boxnumber int, totalboxes uint64, rowNumber int, header int, regular int, toTheRight int) error {
+	innerCounter := rowNumber
+	err := f.SetRowHeight("Sheet1", innerCounter, 62)
+	if err != nil {
+		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
+	}
+
+	err = f.SetCellValue("Sheet1", fmt.Sprintf("A%d", innerCounter), o.GetRefGoNumber())
+	if err != nil {
+		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
+	}
+
+	err = f.MergeCell("Sheet1", fmt.Sprintf("A%d", innerCounter), fmt.Sprintf("B%d", innerCounter))
+	if err != nil {
+		log.Printf("failed to merge cells")
+	}
+
+	err = f.SetCellStyle("Sheet1", fmt.Sprintf("A%d", innerCounter), fmt.Sprintf("B%d", innerCounter), header)
+	if err != nil {
+		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
+	}
+
+	pngBytes, err := generateBarcodePNG(o.GetRefGoNumber(), 140, 55)
+	if err != nil {
+		log.Printf("Ошибка генерации: %v\n", err)
+	}
+
+	err = f.AddPictureFromBytes("Sheet1",
+		fmt.Sprintf("A%d", innerCounter),
+		&excelize.Picture{
+			Extension: ".png",
+			File:      pngBytes,
+			Format: &excelize.GraphicOptions{
+				ScaleX:      1.0,
+				ScaleY:      1.0,
+				OffsetY:     3,
+				OffsetX:     100,
+				Positioning: "oneCell",
+			},
+		})
+	if err != nil {
+		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
+	}
+	innerCounter++
+
+	err = f.SetRowHeight("Sheet1", innerCounter, 20)
+	if err != nil {
+		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
+	}
+
+	if boxState == "Охл" {
+		err = f.SetCellValue("Sheet1", fmt.Sprintf("A%d", innerCounter), "Среднетемпературный режим (+2+6)")
+		if err != nil {
+			log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
+		}
+	} else {
+		err = f.SetCellValue("Sheet1", fmt.Sprintf("A%d", innerCounter), "Низкотемпературный (-18)")
+		if err != nil {
+			log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
+		}
+	}
+
+	err = f.MergeCell("Sheet1", fmt.Sprintf("A%d", innerCounter), fmt.Sprintf("B%d", innerCounter))
+	if err != nil {
+		log.Printf("failed to merge cells")
+	}
+
+	err = f.SetCellStyle("Sheet1", fmt.Sprintf("A%d", innerCounter), fmt.Sprintf("B%d", innerCounter), header)
+	if err != nil {
+		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
+	}
+
+	innerCounter++
+
+	err = f.SetRowHeight("Sheet1", innerCounter, 12)
+	if err != nil {
+		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
+	}
+
+	err = f.SetCellValue("Sheet1", fmt.Sprintf("A%d", innerCounter), "Наименование:")
+	if err != nil {
+		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
+	}
+
+	if boxState == "Охл" {
+		err = f.SetCellValue("Sheet1", fmt.Sprintf("B%d", innerCounter), "Охлаждённая продукция")
+		if err != nil {
+			log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
+		}
+	} else {
+		err = f.SetCellValue("Sheet1", fmt.Sprintf("B%d", innerCounter), "Замороженная продукция")
+		if err != nil {
+			log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
+		}
+	}
+
+	err = f.SetCellStyle("Sheet1", fmt.Sprintf("A%d", innerCounter), fmt.Sprintf("B%d", innerCounter), regular)
+	if err != nil {
+		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
+	}
+
+	innerCounter++
+
+	err = f.SetRowHeight("Sheet1", innerCounter, 12)
+	if err != nil {
+		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
+	}
+
+	err = f.SetCellValue("Sheet1", fmt.Sprintf("A%d", innerCounter), "Заказчик:")
+	if err != nil {
+		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
+	}
+
+	err = f.SetCellValue("Sheet1", fmt.Sprintf("B%d", innerCounter), "STEAK HOME")
+	if err != nil {
+		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
+	}
+
+	err = f.SetCellStyle("Sheet1", fmt.Sprintf("A%d", innerCounter), fmt.Sprintf("B%d", innerCounter), regular)
+	if err != nil {
+		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
+	}
+
+	innerCounter++
+
+	err = f.SetRowHeight("Sheet1", innerCounter, 12)
+	if err != nil {
+		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
+	}
+
+	err = f.SetCellValue("Sheet1", fmt.Sprintf("A%d", innerCounter), "Получатель:")
+	if err != nil {
+		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
+	}
+
+	err = f.SetCellValue("Sheet1", fmt.Sprintf("B%d", innerCounter), o.GetRecieverName())
+	if err != nil {
+		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
+	}
+
+	err = f.SetCellStyle("Sheet1", fmt.Sprintf("A%d", innerCounter), fmt.Sprintf("B%d", innerCounter), regular)
+	if err != nil {
+		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
+	}
+
+	innerCounter++
+
+	err = f.SetRowHeight("Sheet1", innerCounter, 12)
+	if err != nil {
+		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
+	}
+
+	err = f.SetCellValue("Sheet1", fmt.Sprintf("A%d", innerCounter), "Вх. накладная:")
+	if err != nil {
+		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
+	}
+
+	err = f.SetCellValue("Sheet1", fmt.Sprintf("B%d", innerCounter), o.GetRefGoNumber())
+	if err != nil {
+		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
+	}
+
+	err = f.SetCellStyle("Sheet1", fmt.Sprintf("A%d", innerCounter), fmt.Sprintf("A%d", innerCounter), regular)
+	if err != nil {
+		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
+	}
+
+	err = f.SetCellStyle("Sheet1", fmt.Sprintf("B%d", innerCounter), fmt.Sprintf("B%d", innerCounter), toTheRight)
+	if err != nil {
+		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
+	}
+
+	innerCounter++
+
+	err = f.SetRowHeight("Sheet1", innerCounter, -1)
+	if err != nil {
+		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
+	}
+
+	err = f.SetCellValue("Sheet1", fmt.Sprintf("A%d", innerCounter), "Адрес доставки:")
+	if err != nil {
+		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
+	}
+
+	err = f.SetCellValue("Sheet1", fmt.Sprintf("B%d", innerCounter), o.GetShipmentAddress())
+	if err != nil {
+		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
+	}
+
+	err = f.SetCellStyle("Sheet1", fmt.Sprintf("A%d", innerCounter), fmt.Sprintf("B%d", innerCounter), regular)
+	if err != nil {
+		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
+	}
+
+	innerCounter++
+
+	err = f.SetRowHeight("Sheet1", innerCounter, 12)
+	if err != nil {
+		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
+	}
+
+	err = f.SetCellValue("Sheet1", fmt.Sprintf("B%d", innerCounter), fmt.Sprintf("(%d из %d)", boxnumber, totalboxes))
+	if err != nil {
+		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
+	}
+
+	err = f.SetCellStyle("Sheet1", fmt.Sprintf("B%d", innerCounter), fmt.Sprintf("B%d", innerCounter), toTheRight)
+	if err != nil {
+		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
+	}
+
+	return nil
+}
+
+func (e *ExcelExporter) ExportOrdersBarcodesToExcel(orders []*domain.InternalOrder) (savepath string, err error) {
+	f := excelize.NewFile()
+	regularCellWrapStyle, err := f.NewStyle(&excelize.Style{
+		Font: &excelize.Font{
+			Size:   8,
+			Bold:   true,
+			Family: "Arial",
+		},
+		Alignment: &excelize.Alignment{
+			WrapText: true,
+		},
+	})
+	if err != nil {
+		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
+	}
+
+	regularToTheRightCellWrapStyle, err := f.NewStyle(&excelize.Style{
+		Font: &excelize.Font{
+			Size:   8,
+			Bold:   true,
+			Family: "Arial",
+		},
+		Alignment: &excelize.Alignment{
+			WrapText:   true,
+			Horizontal: "right",
+		},
+	})
+	if err != nil {
+		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
+	}
+
+	headerCellWrapStyle, err := f.NewStyle(&excelize.Style{
+		Font: &excelize.Font{
+			Size:   14,
+			Bold:   true,
+			Family: "Arial",
+		},
+		Alignment: &excelize.Alignment{
+			Horizontal: "center",
+			Vertical:   "bottom",
+			WrapText:   true,
+		},
+	})
+	if err != nil {
+		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
+	}
+
+	f.SetColWidth("Sheet1", "A", "A", 14)
+	f.SetColWidth("Sheet1", "B", "B", 36.7)
+
+	counter := 1
+
+	for _, o := range orders {
+		totalboxes := o.GetChilledBoxes() + o.GetFrozenBoxes()
+		totalcount := 1
+		if o.GetChilledBoxes() > 0 {
+			for i := 1; i <= int(o.GetChilledBoxes()); i++ {
+				fillSingularBarcode(f, o, "Охл", totalcount, totalboxes, counter, headerCellWrapStyle, regularCellWrapStyle, regularToTheRightCellWrapStyle)
+				totalcount++
+				counter += 8
+			}
+		}
+		if o.GetFrozenBoxes() > 0 {
+			for i := 1; i <= int(o.GetChilledBoxes()); i++ {
+				fillSingularBarcode(f, o, "Зам", totalcount, totalboxes, counter, headerCellWrapStyle, regularCellWrapStyle, regularToTheRightCellWrapStyle)
+				totalcount++
+				counter += 8
+			}
+		}
+	}
+
+	printArea := fmt.Sprintf("Sheet1!$A$1:$B$%d", counter-1)
+	err = f.SetDefinedName(&excelize.DefinedName{
+		Name:     "_xlnm.Print_Area",
+		RefersTo: printArea,
+		Scope:    "Sheet1",
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	for row := 9; row <= counter; row += 8 {
+		cell := fmt.Sprintf("A%d", row)
+		if err := f.InsertPageBreak("Sheet1", cell); err != nil {
+			panic(err)
+		}
+	}
+
+	temptoday := time.Now()
+	today := temptoday.Format("02.01.2006")
+	savepath = "../" + today + ".xlsx"
+	if err = f.SaveAs(savepath); err != nil {
+		fmt.Println("Ошибка сохранения:", err)
+		return
+	}
+
+	return savepath, nil
 }

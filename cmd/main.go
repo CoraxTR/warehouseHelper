@@ -36,8 +36,9 @@ func main() {
 	ordersUC := usecase.NewOrdersUseCase(db, msAPIClient, msAPIConverter)
 	excelExportUC := usecase.NewExportToExcelUseCase(excelExporter, ordersUC, msAPIClient)
 	pdfExportUC := usecase.NewExportOrderPDFUseCase(msAPIClient, pdfExporter)
+	barcodeExportUC := usecase.NewExportBarcodeBarcodesToExcelUseCase(excelExporter, db)
 
-	handler := myhttp.NewHandler(&syncUC, ordersUC, excelExportUC, pdfExportUC)
+	handler := myhttp.NewHandler(&syncUC, ordersUC, excelExportUC, pdfExportUC, barcodeExportUC)
 
 	mux := http.NewServeMux()
 	mux.Handle("/static/", http.StripPrefix("/static/", fs))
@@ -51,9 +52,10 @@ func main() {
 	mux.HandleFunc("/print-form", handler.PrintForm)
 	mux.HandleFunc("/print-multiple-forms", handler.PrintMultipleForms) // POST
 	mux.HandleFunc("/orders/delete", handler.DeleteOrder)               // DELETE
+	mux.HandleFunc("/print-barcodes", handler.PrintBarcodes)            // POST
 
 	log.Println("Сервер запущен на http://localhost:8080")
-	err := http.ListenAndServe(":8080", mux)
+	err := http.ListenAndServe(":8085", mux)
 	if err != nil {
 		log.Fatal("Ошибка запуска сервера:", err)
 	}

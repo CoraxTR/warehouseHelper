@@ -2,11 +2,16 @@ package usecase
 
 import (
 	"context"
+	"log"
 	"warehouseHelper/internal/domain"
 )
 
 type ExcelExporter interface {
 	ExportOrdersToExcel(orders []*domain.InternalOrder) (savepath string, err error)
+}
+
+type ExcelBarcodesExporter interface {
+	ExportOrdersBarcodesToExcel(orders []*domain.InternalOrder) (savepath string, err error)
 }
 
 type OrdersShipper interface {
@@ -68,4 +73,30 @@ func (uc *ExportToExcelUseCase) ExportOrders(ctx context.Context) (summary *Expo
 	}
 
 	return summary, nil
+}
+
+type ExportBarcodesToExcelUseCase struct {
+	exporter   ExcelBarcodesExporter
+	repository OrderRepository
+}
+
+func NewExportBarcodeBarcodesToExcelUseCase(exporter ExcelBarcodesExporter, repository OrderRepository) *ExportBarcodesToExcelUseCase {
+	return &ExportBarcodesToExcelUseCase{
+		exporter:   exporter,
+		repository: repository,
+	}
+}
+
+func (uc *ExportBarcodesToExcelUseCase) GetMultipleOrdersBarcodes(ctx context.Context, hrefs []string) (string, error) {
+	orders, err := uc.repository.GetAllOrders(ctx)
+	if err != nil {
+		log.Printf("getMultipleOrdersBarcodes could not get orders from repository: %s", err)
+	}
+
+	savepath, err := uc.exporter.ExportOrdersBarcodesToExcel(orders)
+	if err != nil {
+		log.Printf("getMultipleOrdersBarcodes could not create barcodes: %s", err)
+	}
+
+	return savepath, nil
 }

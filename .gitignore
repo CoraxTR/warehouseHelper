@@ -2,4 +2,8 @@
 .golangci.yaml
 !.env.example
 .vscode
+!blankimport.xlsx
+.xlsx
 .exe
+.pdf
+.gif
