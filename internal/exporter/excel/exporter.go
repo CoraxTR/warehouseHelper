@@ -476,9 +476,9 @@ func generateBarcodePNG(data string, width, height int) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func fillSingularBarcode(f *excelize.File, o *domain.InternalOrder, boxState string, boxnumber int, totalboxes uint64, rowNumber int, header int, regular int) error {
+func fillSingularBarcode(f *excelize.File, o *domain.InternalOrder, boxState string, boxnumber int, totalboxes uint64, rowNumber int, header int, regular int, toTheRight int) error {
 	innerCounter := rowNumber
-	err := f.SetRowHeight("Sheet1", innerCounter, 55)
+	err := f.SetRowHeight("Sheet1", innerCounter, 62)
 	if err != nil {
 		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
 	}
@@ -511,7 +511,7 @@ func fillSingularBarcode(f *excelize.File, o *domain.InternalOrder, boxState str
 			Format: &excelize.GraphicOptions{
 				ScaleX:      1.0,
 				ScaleY:      1.0,
-				OffsetY:     5,
+				OffsetY:     3,
 				OffsetX:     100,
 				Positioning: "oneCell",
 			},
@@ -520,7 +520,8 @@ func fillSingularBarcode(f *excelize.File, o *domain.InternalOrder, boxState str
 		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
 	}
 	innerCounter++
-	err = f.SetRowHeight("Sheet1", innerCounter, 55)
+
+	err = f.SetRowHeight("Sheet1", innerCounter, 20)
 	if err != nil {
 		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
 	}
@@ -549,6 +550,11 @@ func fillSingularBarcode(f *excelize.File, o *domain.InternalOrder, boxState str
 
 	innerCounter++
 
+	err = f.SetRowHeight("Sheet1", innerCounter, 12)
+	if err != nil {
+		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
+	}
+
 	err = f.SetCellValue("Sheet1", fmt.Sprintf("A%d", innerCounter), "Наименование:")
 	if err != nil {
 		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
@@ -573,6 +579,11 @@ func fillSingularBarcode(f *excelize.File, o *domain.InternalOrder, boxState str
 
 	innerCounter++
 
+	err = f.SetRowHeight("Sheet1", innerCounter, 12)
+	if err != nil {
+		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
+	}
+
 	err = f.SetCellValue("Sheet1", fmt.Sprintf("A%d", innerCounter), "Заказчик:")
 	if err != nil {
 		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
@@ -589,6 +600,11 @@ func fillSingularBarcode(f *excelize.File, o *domain.InternalOrder, boxState str
 	}
 
 	innerCounter++
+
+	err = f.SetRowHeight("Sheet1", innerCounter, 12)
+	if err != nil {
+		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
+	}
 
 	err = f.SetCellValue("Sheet1", fmt.Sprintf("A%d", innerCounter), "Получатель:")
 	if err != nil {
@@ -607,6 +623,11 @@ func fillSingularBarcode(f *excelize.File, o *domain.InternalOrder, boxState str
 
 	innerCounter++
 
+	err = f.SetRowHeight("Sheet1", innerCounter, 12)
+	if err != nil {
+		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
+	}
+
 	err = f.SetCellValue("Sheet1", fmt.Sprintf("A%d", innerCounter), "Вх. накладная:")
 	if err != nil {
 		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
@@ -617,12 +638,22 @@ func fillSingularBarcode(f *excelize.File, o *domain.InternalOrder, boxState str
 		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
 	}
 
-	err = f.SetCellStyle("Sheet1", fmt.Sprintf("A%d", innerCounter), fmt.Sprintf("B%d", innerCounter), regular)
+	err = f.SetCellStyle("Sheet1", fmt.Sprintf("A%d", innerCounter), fmt.Sprintf("A%d", innerCounter), regular)
+	if err != nil {
+		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
+	}
+
+	err = f.SetCellStyle("Sheet1", fmt.Sprintf("B%d", innerCounter), fmt.Sprintf("B%d", innerCounter), toTheRight)
 	if err != nil {
 		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
 	}
 
 	innerCounter++
+
+	err = f.SetRowHeight("Sheet1", innerCounter, -1)
+	if err != nil {
+		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
+	}
 
 	err = f.SetCellValue("Sheet1", fmt.Sprintf("A%d", innerCounter), "Адрес доставки:")
 	if err != nil {
@@ -641,12 +672,17 @@ func fillSingularBarcode(f *excelize.File, o *domain.InternalOrder, boxState str
 
 	innerCounter++
 
+	err = f.SetRowHeight("Sheet1", innerCounter, 12)
+	if err != nil {
+		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
+	}
+
 	err = f.SetCellValue("Sheet1", fmt.Sprintf("B%d", innerCounter), fmt.Sprintf("(%d из %d)", boxnumber, totalboxes))
 	if err != nil {
 		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
 	}
 
-	err = f.SetCellStyle("Sheet1", fmt.Sprintf("B%d", innerCounter), fmt.Sprintf("B%d", innerCounter), regular)
+	err = f.SetCellStyle("Sheet1", fmt.Sprintf("B%d", innerCounter), fmt.Sprintf("B%d", innerCounter), toTheRight)
 	if err != nil {
 		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
 	}
@@ -670,6 +706,21 @@ func (e *ExcelExporter) ExportOrdersBarcodesToExcel(orders []*domain.InternalOrd
 		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
 	}
 
+	regularToTheRightCellWrapStyle, err := f.NewStyle(&excelize.Style{
+		Font: &excelize.Font{
+			Size:   8,
+			Bold:   true,
+			Family: "Arial",
+		},
+		Alignment: &excelize.Alignment{
+			WrapText:   true,
+			Horizontal: "right",
+		},
+	})
+	if err != nil {
+		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
+	}
+
 	headerCellWrapStyle, err := f.NewStyle(&excelize.Style{
 		Font: &excelize.Font{
 			Size:   14,
@@ -686,23 +737,26 @@ func (e *ExcelExporter) ExportOrdersBarcodesToExcel(orders []*domain.InternalOrd
 		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
 	}
 
-	f.SetColWidth("Sheet1", "A", "A", 16)
-	f.SetColWidth("Sheet1", "B", "B", 41)
+	f.SetColWidth("Sheet1", "A", "A", 14)
+	f.SetColWidth("Sheet1", "B", "B", 36.7)
 
 	counter := 1
 
 	for _, o := range orders {
 		totalboxes := o.GetChilledBoxes() + o.GetFrozenBoxes()
+		totalcount := 1
 		if o.GetChilledBoxes() > 0 {
 			for i := 1; i <= int(o.GetChilledBoxes()); i++ {
-				fillSingularBarcode(f, o, "Охл", i, totalboxes, counter, headerCellWrapStyle, regularCellWrapStyle)
-				counter += 9
+				fillSingularBarcode(f, o, "Охл", totalcount, totalboxes, counter, headerCellWrapStyle, regularCellWrapStyle, regularToTheRightCellWrapStyle)
+				totalcount++
+				counter += 8
 			}
 		}
 		if o.GetFrozenBoxes() > 0 {
 			for i := 1; i <= int(o.GetChilledBoxes()); i++ {
-				fillSingularBarcode(f, o, "Зам", i, totalboxes, counter, headerCellWrapStyle, regularCellWrapStyle)
-				counter += 9
+				fillSingularBarcode(f, o, "Зам", totalcount, totalboxes, counter, headerCellWrapStyle, regularCellWrapStyle, regularToTheRightCellWrapStyle)
+				totalcount++
+				counter += 8
 			}
 		}
 	}
@@ -717,8 +771,8 @@ func (e *ExcelExporter) ExportOrdersBarcodesToExcel(orders []*domain.InternalOrd
 		panic(err)
 	}
 
-	for row := 9; row <= counter; row += 9 {
-		cell := fmt.Sprintf("B%d", row)
+	for row := 9; row <= counter; row += 8 {
+		cell := fmt.Sprintf("A%d", row)
 		if err := f.InsertPageBreak("Sheet1", cell); err != nil {
 			panic(err)
 		}
