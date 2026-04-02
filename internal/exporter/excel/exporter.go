@@ -753,7 +753,7 @@ func (e *ExcelExporter) ExportOrdersBarcodesToExcel(orders []*domain.InternalOrd
 			}
 		}
 		if o.GetFrozenBoxes() > 0 {
-			for i := 1; i <= int(o.GetChilledBoxes()); i++ {
+			for i := 1; i <= int(o.GetFrozenBoxes()); i++ {
 				fillSingularBarcode(f, o, "Зам", totalcount, totalboxes, counter, headerCellWrapStyle, regularCellWrapStyle, regularToTheRightCellWrapStyle)
 				totalcount++
 				counter += 8
