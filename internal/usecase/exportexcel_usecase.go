@@ -88,7 +88,7 @@ func NewExportBarcodeBarcodesToExcelUseCase(exporter ExcelBarcodesExporter, repo
 }
 
 func (uc *ExportBarcodesToExcelUseCase) GetMultipleOrdersBarcodes(ctx context.Context, hrefs []string) (string, error) {
-	orders, err := uc.repository.GetAllOrders(ctx)
+	orders, err := uc.repository.GetOrdersByHREFs(ctx, hrefs)
 	if err != nil {
 		log.Printf("getMultipleOrdersBarcodes could not get orders from repository: %s", err)
 	}

@@ -12,6 +12,7 @@ type OrderRepository interface {
 	GetAllOrders(ctx context.Context) ([]*domain.InternalOrder, error)
 	UpdateOrders(ctx context.Context, orders []*domain.InternalOrder) error
 	DeleteOrder(ctx context.Context, href string) error
+	GetOrdersByHREFs(ctx context.Context, hrefs []string) ([]*domain.InternalOrder, error)
 }
 
 type OrdersUseCase struct {

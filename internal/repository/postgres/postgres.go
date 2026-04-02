@@ -304,3 +304,85 @@ func (pg *PGClient) DeleteOrder(ctx context.Context, href string) error {
 	_, err := pg.Pool.Exec(ctx, `DELETE FROM refgoOrders WHERE href = $1`, href)
 	return err
 }
+
+func (pg *PGClient) GetOrdersByHREFs(ctx context.Context, hrefs []string) ([]*domain.InternalOrder, error) {
+	if len(hrefs) == 0 {
+		return nil, nil
+	}
+	rows, err := pg.Pool.Query(ctx, `
+        SELECT 
+            href, name, receiver_name, receiver_phone_number, description,
+            delivery_planned_date, shipment_address, delivery_interval_from,
+            delivery_interval_until, delivery_region, payment_method, refgo_number,
+            sum, chilled_weight, frozen_weight, frozen_boxes, chilled_boxes, errors
+        FROM refgoOrders
+        WHERE href = ANY($1)
+        ORDER BY refgo_number::integer ASC
+    `, hrefs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var orders []*domain.InternalOrder
+	for rows.Next() {
+		var (
+			href, name, receiverName, description, deliveryPlannedDate,
+			shipmentAddress, deliveryIntervalFrom, deliveryIntervalUntil,
+			deliveryRegion, paymentMethod, refgoNumber string
+			receiverPhoneNumber, frozenBoxes, chilledBoxes uint64
+			sum, chilledWeight, frozenWeight               float64
+			errorsJSON                                     []byte
+		)
+
+		err := rows.Scan(
+			&href, &name, &receiverName, &receiverPhoneNumber, &description,
+			&deliveryPlannedDate, &shipmentAddress, &deliveryIntervalFrom,
+			&deliveryIntervalUntil, &deliveryRegion, &paymentMethod, &refgoNumber,
+			&sum, &chilledWeight, &frozenWeight, &frozenBoxes, &chilledBoxes,
+			&errorsJSON,
+		)
+		if err != nil {
+			log.Printf("GetAllOrders scan error: %v", err)
+			return nil, err
+		}
+
+		order := &domain.InternalOrder{}
+		order.SetHREF(href)
+		order.SetName(name)
+		order.SetRecieverName(receiverName)
+		order.SetRecieverPhoneNumber(receiverPhoneNumber)
+		order.SetDescription(description)
+		order.SetDeliveryPlannedDate(deliveryPlannedDate)
+		order.SetShipmentAddress(shipmentAddress)
+		order.SetDeliveryIntervalFrom(deliveryIntervalFrom)
+		order.SetDeliveryIntervalUntil(deliveryIntervalUntil)
+		order.SetDeliveryRegion(deliveryRegion)
+		order.SetPaymentMethod(paymentMethod)
+		order.SetRefGoNumber(refgoNumber)
+		order.SetSum(sum)
+		order.SetChilledWeight(chilledWeight)
+		order.SetFrozenWeight(frozenWeight)
+		order.SetFrozenBoxes(frozenBoxes)
+		order.SetChilledBoxes(chilledBoxes)
+
+		if len(errorsJSON) > 0 {
+			var errs map[string]string
+			if err := json.Unmarshal(errorsJSON, &errs); err != nil {
+				log.Printf("GetAllOrders unmarshal errors error: %v", err)
+				return nil, err
+			}
+			order.SetErrors(errs)
+		}
+
+		orders = append(orders, order)
+	}
+
+	if err = rows.Err(); err != nil {
+		log.Printf("GetAllOrders rows error: %v", err)
+		return nil, err
+	}
+
+	// log.Printf("GetAllOrders found %d orders", len(orders))
+	return orders, nil
+}

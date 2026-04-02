@@ -55,7 +55,7 @@ func main() {
 	mux.HandleFunc("/print-barcodes", handler.PrintBarcodes)            // POST
 
 	log.Println("Сервер запущен на http://localhost:8080")
-	err := http.ListenAndServe(":8085", mux)
+	err := http.ListenAndServe(":8080", mux)
 	if err != nil {
 		log.Fatal("Ошибка запуска сервера:", err)
 	}
