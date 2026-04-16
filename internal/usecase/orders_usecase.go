@@ -59,7 +59,8 @@ func (uc *OrdersUseCase) UpdateOrderFromMS(ctx context.Context, href string) err
 
 	domainOrder.Validate()
 
-	if err := uc.repo.UpdateOrders(ctx, []*domain.InternalOrder{domainOrder}); err != nil {
+	err = uc.repo.UpdateOrders(ctx, []*domain.InternalOrder{domainOrder})
+	if err != nil {
 		return fmt.Errorf("failed to update order in DB: %w", err)
 	}
 

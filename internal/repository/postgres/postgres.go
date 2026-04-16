@@ -162,11 +162,13 @@ func (pg *PGClient) GetAllOrders(ctx context.Context) ([]*domain.InternalOrder, 
     `, tomorrow, dayAfterTomorrow)
 	if err != nil {
 		log.Printf("GetAllOrders query error: %v", err)
+
 		return nil, err
 	}
 	defer rows.Close()
 
 	var orders []*domain.InternalOrder
+
 	for rows.Next() {
 		var (
 			href, name, receiverName, description, deliveryPlannedDate,
@@ -186,6 +188,7 @@ func (pg *PGClient) GetAllOrders(ctx context.Context) ([]*domain.InternalOrder, 
 		)
 		if err != nil {
 			log.Printf("GetAllOrders scan error: %v", err)
+
 			return nil, err
 		}
 
@@ -210,22 +213,27 @@ func (pg *PGClient) GetAllOrders(ctx context.Context) ([]*domain.InternalOrder, 
 
 		if len(errorsJSON) > 0 {
 			var errs map[string]string
-			if err := json.Unmarshal(errorsJSON, &errs); err != nil {
+
+			err = json.Unmarshal(errorsJSON, &errs)
+			if err != nil {
 				log.Printf("GetAllOrders unmarshal errors error: %v", err)
+
 				return nil, err
 			}
+
 			order.SetErrors(errs)
 		}
 
 		orders = append(orders, order)
 	}
 
-	if err = rows.Err(); err != nil {
+	err = rows.Err()
+	if err != nil {
 		log.Printf("GetAllOrders rows error: %v", err)
+
 		return nil, err
 	}
 
-	// log.Printf("GetAllOrders found %d orders", len(orders))
 	return orders, nil
 }
 
@@ -302,6 +310,7 @@ func (pg *PGClient) UpdateOrders(ctx context.Context, orders []*domain.InternalO
 
 func (pg *PGClient) DeleteOrder(ctx context.Context, href string) error {
 	_, err := pg.Pool.Exec(ctx, `DELETE FROM refgoOrders WHERE href = $1`, href)
+
 	return err
 }
 
@@ -309,6 +318,7 @@ func (pg *PGClient) GetOrdersByHREFs(ctx context.Context, hrefs []string) ([]*do
 	if len(hrefs) == 0 {
 		return nil, nil
 	}
+
 	rows, err := pg.Pool.Query(ctx, `
         SELECT 
             href, name, receiver_name, receiver_phone_number, description,
@@ -325,6 +335,7 @@ func (pg *PGClient) GetOrdersByHREFs(ctx context.Context, hrefs []string) ([]*do
 	defer rows.Close()
 
 	var orders []*domain.InternalOrder
+
 	for rows.Next() {
 		var (
 			href, name, receiverName, description, deliveryPlannedDate,
@@ -344,6 +355,7 @@ func (pg *PGClient) GetOrdersByHREFs(ctx context.Context, hrefs []string) ([]*do
 		)
 		if err != nil {
 			log.Printf("GetAllOrders scan error: %v", err)
+
 			return nil, err
 		}
 
@@ -368,21 +380,26 @@ func (pg *PGClient) GetOrdersByHREFs(ctx context.Context, hrefs []string) ([]*do
 
 		if len(errorsJSON) > 0 {
 			var errs map[string]string
-			if err := json.Unmarshal(errorsJSON, &errs); err != nil {
+
+			err := json.Unmarshal(errorsJSON, &errs)
+			if err != nil {
 				log.Printf("GetAllOrders unmarshal errors error: %v", err)
+
 				return nil, err
 			}
+
 			order.SetErrors(errs)
 		}
 
 		orders = append(orders, order)
 	}
 
-	if err = rows.Err(); err != nil {
+	err = rows.Err()
+	if err != nil {
 		log.Printf("GetAllOrders rows error: %v", err)
+
 		return nil, err
 	}
 
-	// log.Printf("GetAllOrders found %d orders", len(orders))
 	return orders, nil
 }

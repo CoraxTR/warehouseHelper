@@ -55,6 +55,7 @@ func main() {
 	mux.HandleFunc("/print-barcodes", handler.PrintBarcodes)            // POST
 
 	log.Println("Сервер запущен на http://localhost:8080")
+	// TODO: Добавить конфиг для сервера, обозначить таймауты
 	err := http.ListenAndServe(":8080", mux)
 	if err != nil {
 		log.Fatal("Ошибка запуска сервера:", err)

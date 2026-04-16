@@ -67,7 +67,9 @@ func (h *Handler) Orders(w http.ResponseWriter, r *http.Request) {
 
 		return
 	}
+
 	log.Printf("Orders handler loaded %d orders", len(orders))
+
 	for _, o := range orders {
 		log.Printf("Order %s errors: %v", o.GetName(), o.GetErrors())
 	}
@@ -85,16 +87,24 @@ func (h *Handler) Orders(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) ExportToExcel(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+
 		return
 	}
+
 	summary, err := h.exportUC.ExportOrders(r.Context())
 	if err != nil {
 		http.Error(w, "Export failed: "+err.Error(), http.StatusInternalServerError)
+
 		return
 	}
+
 	tmpl := template.Must(template.ParseFiles("../internal/delivery/web/templates/summary.html"))
-	if err := tmpl.Execute(w, summary); err != nil {
+
+	err = tmpl.Execute(w, summary)
+	if err != nil {
 		http.Error(w, "Failed to render summary: "+err.Error(), http.StatusInternalServerError)
+
+		return
 	}
 }
 
@@ -154,39 +164,54 @@ func (h *Handler) DownloadFile(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) UpdateFromMS(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+
 		return
 	}
 
 	var req UpdateFromMSRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+
+	err := json.NewDecoder(r.Body).Decode(&req)
+	if err != nil {
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+
 		return
 	}
 
 	if req.Href == "" {
 		http.Error(w, "href is required", http.StatusBadRequest)
+
 		return
 	}
 
-	err := h.ordersUC.UpdateOrderFromMS(r.Context(), req.Href)
+	err = h.ordersUC.UpdateOrderFromMS(r.Context(), req.Href)
 	if err != nil {
 		log.Printf("UpdateFromMS error: %v", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
+
 		return
 	}
 
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("OK"))
+
+	_, err = w.Write([]byte("OK"))
+	if err != nil {
+		log.Printf("Error writing response: %v", err)
+
+		return
+	}
 }
 
 func (h *Handler) PrintForm(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+
 		return
 	}
+
 	href := r.URL.Query().Get("href")
 	if href == "" {
 		http.Error(w, "href parameter required", http.StatusBadRequest)
+
 		return
 	}
 
@@ -194,6 +219,7 @@ func (h *Handler) PrintForm(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Printf("Error getting PDF: %v", err)
 		http.Error(w, "Failed to get PDF: "+err.Error(), http.StatusInternalServerError)
+
 		return
 	}
 
@@ -207,17 +233,22 @@ func (h *Handler) PrintForm(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) PrintMultipleForms(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+
 		return
 	}
 
 	var req PrintMultipleRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+
+	err := json.NewDecoder(r.Body).Decode(&req)
+	if err != nil {
 		http.Error(w, "Invalid JSON: "+err.Error(), http.StatusBadRequest)
+
 		return
 	}
 
 	if len(req.Hrefs) == 0 {
 		http.Error(w, "No hrefs provided", http.StatusBadRequest)
+
 		return
 	}
 
@@ -225,6 +256,7 @@ func (h *Handler) PrintMultipleForms(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Printf("Error merging PDFs: %v", err)
 		http.Error(w, "Failed to merge PDFs: "+err.Error(), http.StatusInternalServerError)
+
 		return
 	}
 
@@ -236,18 +268,22 @@ func (h *Handler) PrintMultipleForms(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) DeleteOrder(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodDelete {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+
 		return
 	}
 
 	href := r.URL.Query().Get("href")
 	if href == "" {
 		http.Error(w, "href is required", http.StatusBadRequest)
+
 		return
 	}
 
-	if err := h.ordersUC.DeleteOrder(r.Context(), href); err != nil {
+	err := h.ordersUC.DeleteOrder(r.Context(), href)
+	if err != nil {
 		log.Printf("DeleteOrder error: %v", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
+
 		return
 	}
 
@@ -257,17 +293,22 @@ func (h *Handler) DeleteOrder(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) PrintBarcodes(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+
 		return
 	}
 
 	var req PrintMultipleRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+
+	err := json.NewDecoder(r.Body).Decode(&req)
+	if err != nil {
 		http.Error(w, "Invalid JSON: "+err.Error(), http.StatusBadRequest)
+
 		return
 	}
 
 	if len(req.Hrefs) == 0 {
 		http.Error(w, "No hrefs provided", http.StatusBadRequest)
+
 		return
 	}
 
@@ -275,6 +316,7 @@ func (h *Handler) PrintBarcodes(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Printf("Error exporting barcodes: %v", err)
 		http.Error(w, "Failed to export barcodes: "+err.Error(), http.StatusInternalServerError)
+
 		return
 	}
 

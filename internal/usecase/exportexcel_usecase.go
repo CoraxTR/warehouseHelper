@@ -15,7 +15,7 @@ type ExcelBarcodesExporter interface {
 }
 
 type OrdersShipper interface {
-	SetOrderAsShippedToRefGo(ctx context.Context, href string, refGoNumber string) error
+	SetOrderAsShippedToRefGo(ctx context.Context, href string) error
 }
 
 type ExportToExcelUseCase struct {
@@ -66,7 +66,7 @@ func (uc *ExportToExcelUseCase) ExportOrders(ctx context.Context) (summary *Expo
 	}
 
 	for _, order := range orders {
-		err := uc.shipper.SetOrderAsShippedToRefGo(ctx, order.GetHREF(), order.GetRefGoNumber())
+		err := uc.shipper.SetOrderAsShippedToRefGo(ctx, order.GetHREF())
 		if err != nil {
 			return nil, err
 		}

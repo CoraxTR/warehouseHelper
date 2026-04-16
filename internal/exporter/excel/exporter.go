@@ -2,6 +2,7 @@ package excel
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"image/png"
 	"log"
@@ -14,49 +15,345 @@ import (
 	"github.com/xuri/excelize/v2"
 )
 
+const cashPaymentMethod = "Наличные"
+const cardPaymentMethod = "Терминал"
+const wirePaymentMethod = "расч. счет"
+
 type ExcelExporter struct{}
 
 func NewExcelExporter() *ExcelExporter {
 	return &ExcelExporter{}
 }
 
-func IncrementStringCounter(counter string) (string, error) {
+func incrementStringCounterByInt(counter string, increment int) (string, error) {
 	counterInt, err := strconv.Atoi(counter)
 	if err != nil {
 		return "", err
 	}
 
-	counterInt++
+	counterInt += increment
 
 	return strconv.Itoa(counterInt), nil
 }
 
-func SetIntValueofString(file *excelize.File, sheet, cell, value string) error {
-	intValue, err := strconv.Atoi(value)
-	if err != nil {
-		return err
+func setPaymentInformation(f *excelize.File, sheet, paymentMethod, row string, sum float64) error {
+	result := make([]error, 0)
+
+	switch paymentMethod {
+	case cashPaymentMethod, cardPaymentMethod:
+		err := f.SetCellFloat(sheet, "M"+row, sum, -1, 64)
+		if err != nil {
+			result = append(result, err)
+		}
+
+		err = f.SetCellFloat(sheet, "N"+row, sum, -1, 64)
+		if err != nil {
+			result = append(result, err)
+		}
+
+		err = f.SetCellValue(sheet, "Q"+row, "Нет")
+		if err != nil {
+			result = append(result, err)
+		}
+	case wirePaymentMethod:
+		err := f.SetCellFloat(sheet, "M"+row, 0, -1, 64)
+		if err != nil {
+			result = append(result, err)
+		}
+
+		err = f.SetCellFloat(sheet, "N"+row, 0, -1, 64)
+		if err != nil {
+			result = append(result, err)
+		}
+
+		err = f.SetCellValue(sheet, "Q"+row, "Да")
+		if err != nil {
+			result = append(result, err)
+		}
+	default:
+		err := f.SetCellFloat(sheet, "M"+row, 0, -1, 64)
+		if err != nil {
+			result = append(result, err)
+		}
+
+		err = f.SetCellFloat(sheet, "N"+row, 0, -1, 64)
+		if err != nil {
+			result = append(result, err)
+		}
+
+		err = f.SetCellValue(sheet, "Q"+row, "Нет")
+		if err != nil {
+			result = append(result, err)
+		}
 	}
 
-	err = file.SetCellInt(sheet, cell, int64(intValue))
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return errors.Join(result...)
 }
 
-func SetFloatValueofString(file *excelize.File, sheet, cell, value string) error {
-	floatValue, err := strconv.ParseFloat(value, 64)
+func setOrderMainInformation(f *excelize.File, sheet, row string, refGoNumber int, o *domain.InternalOrder) {
+	err := f.SetCellValue(sheet, "A"+row, refGoNumber)
 	if err != nil {
-		return err
+		log.Printf("Failed to set cell value for order %d: %v", refGoNumber, err)
 	}
 
-	err = file.SetCellFloat(sheet, cell, floatValue, -1, 64)
+	err = f.SetCellValue(sheet, "B"+row, refGoNumber)
 	if err != nil {
-		return err
+		log.Printf("Failed to set cell value for order %d: %v", refGoNumber, err)
 	}
 
-	return nil
+	err = f.SetCellValue(sheet, "C"+row, o.GetRecieverName())
+	if err != nil {
+		log.Printf("Failed to set cell value for order %d: %v", refGoNumber, err)
+	}
+
+	err = f.SetCellValue(sheet, "D"+row, o.GetRecieverPhoneNumber())
+	if err != nil {
+		log.Printf("Failed to set cell value for order %d: %v", refGoNumber, err)
+	}
+
+	err = f.SetCellValue(sheet, "E"+row, o.GetShipmentAddress())
+	if err != nil {
+		log.Printf("Failed to set cell value for order %d: %v", refGoNumber, err)
+	}
+
+	err = f.SetCellValue(sheet, "F"+row, o.GetDeliveryPlannedDate())
+	if err != nil {
+		log.Printf("Failed to set cell value for order %d: %v", refGoNumber, err)
+	}
+
+	err = f.SetCellValue(sheet, "G"+row, o.GetDeliveryIntervalFrom())
+	if err != nil {
+		log.Printf("Failed to set cell value for order %d: %v", refGoNumber, err)
+	}
+
+	err = f.SetCellValue(sheet, "H"+row, o.GetDeliveryIntervalUntil())
+	if err != nil {
+		log.Printf("Failed to set cell value for order %d: %v", refGoNumber, err)
+	}
+
+	err = f.SetCellValue(sheet, "I"+row, o.GetDescription())
+	if err != nil {
+		log.Printf("Failed to set cell value for order %d: %v", refGoNumber, err)
+	}
+}
+
+func setChilledAsMainLine(f *excelize.File, sheet, row string, info *repeatableOrderInfo, o *domain.InternalOrder) {
+	err := f.SetCellValue(sheet, "J"+row, "Охлаждённая продукция")
+	if err != nil {
+		log.Printf("Failed to set cell value for order %d: %v", info.refgonumber, err)
+	}
+
+	err = f.SetCellValue(sheet, "K"+row, info.refgonumber)
+	if err != nil {
+		log.Printf("Failed to set cell value for order %d: %v", info.refgonumber, err)
+	}
+
+	err = f.SetCellValue(sheet, "L"+row, info.chilledBoxes)
+	if err != nil {
+		log.Printf("Failed to set cell value for order %d: %v", info.refgonumber, err)
+	}
+
+	err = setPaymentInformation(f, sheet, info.paymentMethod, row, info.sum)
+	if err != nil {
+		log.Printf("Failed to set payment information for order %d: %v", info.refgonumber, err)
+	}
+
+	err = f.SetCellValue(sheet, "O"+row, o.GetChilledWeight())
+	if err != nil {
+		log.Printf("Failed to set cell value for order %d: %v", info.refgonumber, err)
+	}
+
+	err = f.SetCellValue(sheet, "P"+row, "Средние температуры (+2+6)")
+	if err != nil {
+		log.Printf("Failed to set cell value for order %d: %v", info.refgonumber, err)
+	}
+
+	err = f.SetCellValue(sheet, "R"+row, info.region)
+	if err != nil {
+		log.Printf("Failed to set cell value for order %d: %v", info.refgonumber, err)
+	}
+
+	err = f.SetCellValue(sheet, "S"+row, info.chilledBoxes)
+	if err != nil {
+		log.Printf("Failed to set cell value for order %d: %v", info.refgonumber, err)
+	}
+}
+
+func setFrozenAsSecondaryLine(f *excelize.File, sheet, row string, info *repeatableOrderInfo, o *domain.InternalOrder) {
+	err := f.SetCellValue(sheet, "J"+row, "Замороженная продукция")
+	if err != nil {
+		log.Printf("Failed to set cell value for order %d: %v", info.refgonumber, err)
+	}
+
+	err = f.SetCellValue(sheet, "K"+row, info.refgonumber)
+	if err != nil {
+		log.Printf("Failed to set cell value for order %d: %v", info.refgonumber, err)
+	}
+
+	err = f.SetCellValue(sheet, "L"+row, info.frozenBoxes)
+	if err != nil {
+		log.Printf("Failed to set cell value for order %d: %v", info.refgonumber, err)
+	}
+
+	err = f.SetCellFloat(sheet, "M"+row, 0, -1, 64)
+	if err != nil {
+		log.Printf("Failed to set cell value for order %d: %v", info.refgonumber, err)
+	}
+
+	err = f.SetCellFloat(sheet, "N"+row, 0, -1, 64)
+	if err != nil {
+		log.Printf("Failed to set cell value for order %d: %v", info.refgonumber, err)
+	}
+
+	err = f.SetCellValue(sheet, "O"+row, o.GetFrozenWeight())
+	if err != nil {
+		log.Printf("Failed to set cell value for order %d: %v", info.refgonumber, err)
+	}
+
+	err = f.SetCellValue(sheet, "P"+row, "Низкие температуры (-18)")
+	if err != nil {
+		log.Printf("Failed to set cell value for order %d: %v", info.refgonumber, err)
+	}
+
+	if info.paymentMethod == wirePaymentMethod {
+		err = f.SetCellValue(sheet, "Q"+row, "Да")
+		if err != nil {
+			log.Printf("Failed to set cell value for order %d: %v", info.refgonumber, err)
+		}
+	} else {
+		err = f.SetCellValue(sheet, "Q"+row, "Нет")
+		if err != nil {
+			log.Printf("Failed to set cell value for order %d: %v", info.refgonumber, err)
+		}
+	}
+
+	err = f.SetCellValue(sheet, "R"+row, info.region)
+	if err != nil {
+		log.Printf("Failed to set cell value for order %d: %v", info.refgonumber, err)
+	}
+
+	err = f.SetCellValue(sheet, "S"+row, info.frozenBoxes)
+	if err != nil {
+		log.Printf("Failed to set cell value for order %d: %v", info.refgonumber, err)
+	}
+}
+
+func setOnlyLine(f *excelize.File, sheet, row string, info *repeatableOrderInfo, o *domain.InternalOrder) {
+	err := f.SetCellValue(sheet, "K"+row, info.refgonumber)
+	if err != nil {
+		log.Printf("Failed to set cell value for order %d: %v", info.refgonumber, err)
+	}
+
+	err = f.SetCellValue(sheet, "L"+row, info.chilledBoxes+info.frozenBoxes)
+	if err != nil {
+		log.Printf("Failed to set cell value for order %d: %v", info.refgonumber, err)
+	}
+
+	err = setPaymentInformation(f, sheet, info.paymentMethod, row, info.sum)
+	if err != nil {
+		log.Printf("Failed to set payment information for order %d: %v", info.refgonumber, err)
+	}
+
+	err = f.SetCellValue(sheet, "O"+row, o.GetChilledWeight()+o.GetFrozenWeight())
+	if err != nil {
+		log.Printf("Failed to set cell value for order %d: %v", info.refgonumber, err)
+	}
+
+	err = f.SetCellValue(sheet, "R"+row, info.region)
+	if err != nil {
+		log.Printf("Failed to set cell value for order %d: %v", info.refgonumber, err)
+	}
+
+	err = f.SetCellValue(sheet, "S"+row, info.chilledBoxes+info.frozenBoxes)
+	if err != nil {
+		log.Printf("Failed to set cell value for order %d: %v", info.refgonumber, err)
+	}
+}
+
+func addOrderToSummary(f *excelize.File, sheet, row string, info *repeatableOrderInfo) {
+	err := f.SetCellValue(sheet, "L"+row, info.refgonumber)
+	if err != nil {
+		log.Printf("Failed to set cell value for order %d: %v", info.refgonumber, err)
+	}
+
+	err = f.SetCellValue(sheet, "M"+row, info.chilledBoxes+info.frozenBoxes)
+	if err != nil {
+		log.Printf("Failed to set cell value for order %d: %v", info.refgonumber, err)
+	}
+
+	err = f.SetCellValue(sheet, "N"+row, info.sum)
+	if err != nil {
+		log.Printf("Failed to set cell value for order %d: %v", info.refgonumber, err)
+	}
+}
+
+func fillSummarySheet(f *excelize.File, sheet string, ordersCount int, boxesCount uint64) {
+	err := f.SetCellValue(sheet, "C15", ordersCount)
+	if err != nil {
+		log.Printf("Failed to set cell value for total orders: %v", err)
+	}
+
+	err = f.SetCellValue(sheet, "F15", boxesCount)
+	if err != nil {
+		log.Printf("Failed to set cell value for overall boxes: %v", err)
+	}
+}
+
+func setOrderBoxesInformation(f *excelize.File, sheet, row string, info *repeatableOrderInfo, order *domain.InternalOrder) int {
+	incrementCounter := 0
+
+	switch {
+	case info.chilledBoxes > 0 && info.frozenBoxes > 0:
+		setChilledAsMainLine(f, sheet, row, info, order)
+
+		incrementCounter++
+
+		setFrozenAsSecondaryLine(f, sheet, row, info, order)
+
+		incrementCounter++
+
+	case info.chilledBoxes > 0 && info.frozenBoxes == 0:
+		err := f.SetCellValue(sheet, "J"+row, "Охлаждённая продукция")
+		if err != nil {
+			log.Printf("Failed to set cell value for order %d: %v", info.refgonumber, err)
+		}
+
+		setOnlyLine(f, sheet, row, info, order)
+
+		err = f.SetCellValue(sheet, "P"+row, "Средние температуры (+2+6)")
+		if err != nil {
+			log.Printf("Failed to set cell value for order %d: %v", info.refgonumber, err)
+		}
+
+		incrementCounter++
+	case info.chilledBoxes == 0 && info.frozenBoxes > 0:
+		err := f.SetCellValue(sheet, "J"+row, "Замороженная продукция")
+		if err != nil {
+			log.Printf("Failed to set cell value for order %d: %v", info.refgonumber, err)
+		}
+
+		setOnlyLine(f, sheet, row, info, order)
+
+		err = f.SetCellValue(sheet, "P"+row, "Низкие температуры (-18)")
+		if err != nil {
+			log.Printf("Failed to set cell value for order %d: %v", info.refgonumber, err)
+		}
+
+		incrementCounter++
+	default:
+		log.Printf("Order %d has no boxes, skipping import", info.refgonumber)
+	}
+
+	return incrementCounter
+}
+
+type repeatableOrderInfo struct {
+	refgonumber   int
+	chilledBoxes  uint64
+	frozenBoxes   uint64
+	paymentMethod string
+	region        string
+	sum           float64
 }
 
 func (e *ExcelExporter) ExportOrdersToExcel(orders []*domain.InternalOrder) (savepath string, err error) {
@@ -81,360 +378,32 @@ func (e *ExcelExporter) ExportOrdersToExcel(orders []*domain.InternalOrder) (sav
 	summaryRowNumber = "7"
 
 	for _, order := range orders {
-		err = SetIntValueofString(uploadFile, importSheet, "A"+importRowNumber, order.GetRefGoNumber())
+		refgonumber, err := strconv.Atoi(order.GetRefGoNumber())
 		if err != nil {
-			log.Printf("Failed to set cell value for order %s: %v", order.GetRefGoNumber(), err)
+			log.Printf("Failed to convert RefGoNumber for order %d: %v", refgonumber, err)
+
+			continue
 		}
 
-		err = SetIntValueofString(uploadFile, importSheet, "B"+importRowNumber, order.GetRefGoNumber())
+		info := &repeatableOrderInfo{
+			refgonumber:   refgonumber,
+			chilledBoxes:  order.GetChilledBoxes(),
+			frozenBoxes:   order.GetFrozenBoxes(),
+			paymentMethod: order.GetPaymentMethod(),
+			region:        order.GetDeliveryRegion(),
+			sum:           order.GetSum(),
+		}
+
+		setOrderMainInformation(uploadFile, importSheet, importRowNumber, info.refgonumber, order)
+		incrementCounter := setOrderBoxesInformation(uploadFile, importSheet, importRowNumber, info, order)
+		addOrderToSummary(uploadFile, summarySheet, summaryRowNumber, info)
+
+		importRowNumber, err = incrementStringCounterByInt(importRowNumber, incrementCounter)
 		if err != nil {
-			log.Printf("Failed to set cell value for order %s: %v", order.GetRefGoNumber(), err)
+			log.Printf("Failed to increment import row number: %v", err)
 		}
 
-		err = uploadFile.SetCellValue(importSheet, "C"+importRowNumber, order.GetRecieverName())
-		if err != nil {
-			log.Printf("Failed to set cell value for order %s: %v", order.GetRefGoNumber(), err)
-		}
-
-		err = uploadFile.SetCellValue(importSheet, "D"+importRowNumber, order.GetRecieverPhoneNumber())
-		if err != nil {
-			log.Printf("Failed to set cell value for order %s: %v", order.GetRefGoNumber(), err)
-		}
-
-		err = uploadFile.SetCellValue(importSheet, "E"+importRowNumber, order.GetShipmentAddress())
-		if err != nil {
-			log.Printf("Failed to set cell value for order %s: %v", order.GetRefGoNumber(), err)
-		}
-
-		err = uploadFile.SetCellValue(importSheet, "F"+importRowNumber, order.GetDeliveryPlannedDate())
-		if err != nil {
-			log.Printf("Failed to set cell value for order %s: %v", order.GetRefGoNumber(), err)
-		}
-
-		err = uploadFile.SetCellValue(importSheet, "G"+importRowNumber, order.GetDeliveryIntervalFrom())
-		if err != nil {
-			log.Printf("Failed to set cell value for order %s: %v", order.GetRefGoNumber(), err)
-		}
-
-		err = uploadFile.SetCellValue(importSheet, "H"+importRowNumber, order.GetDeliveryIntervalUntil())
-		if err != nil {
-			log.Printf("Failed to set cell value for order %s: %v", order.GetRefGoNumber(), err)
-		}
-
-		err = uploadFile.SetCellValue(importSheet, "I"+importRowNumber, order.GetDescription())
-		if err != nil {
-			log.Printf("Failed to set cell value for order %s: %v", order.GetRefGoNumber(), err)
-		}
-
-		chilledBoxes := order.GetChilledBoxes()
-
-		frozenBoxes := order.GetFrozenBoxes()
-
-		switch {
-		case chilledBoxes > 0 && frozenBoxes > 0:
-			err = uploadFile.SetCellValue(importSheet, "J"+importRowNumber, "Охлаждённая продукция")
-			if err != nil {
-				log.Printf("Failed to set cell value for order %s: %v", order.GetRefGoNumber(), err)
-			}
-
-			err = SetIntValueofString(uploadFile, importSheet, "K"+importRowNumber, order.GetRefGoNumber())
-			if err != nil {
-				log.Printf("Failed to set cell value for order %s: %v", order.GetRefGoNumber(), err)
-			}
-
-			err = uploadFile.SetCellValue(importSheet, "L"+importRowNumber, order.GetChilledBoxes())
-			if err != nil {
-				log.Printf("Failed to set cell value for order %s: %v", order.GetRefGoNumber(), err)
-			}
-
-			if order.GetPaymentMethod() == "Наличные" || order.GetPaymentMethod() == "Терминал" {
-				err = uploadFile.SetCellFloat(importSheet, "M"+importRowNumber, order.GetSum(), -1, 64)
-				if err != nil {
-					log.Printf("Failed to set cell value for order %s: %v", order.GetRefGoNumber(), err)
-				}
-
-				err = uploadFile.SetCellFloat(importSheet, "N"+importRowNumber, order.GetSum(), -1, 64)
-				if err != nil {
-					log.Printf("Failed to set cell value for order %s: %v", order.GetRefGoNumber(), err)
-				}
-			} else {
-				err = uploadFile.SetCellFloat(importSheet, "M"+importRowNumber, 0, -1, 64)
-				if err != nil {
-					log.Printf("Failed to set cell value for order %s: %v", order.GetRefGoNumber(), err)
-				}
-
-				err = uploadFile.SetCellFloat(importSheet, "N"+importRowNumber, 0, -1, 64)
-				if err != nil {
-					log.Printf("Failed to set cell value for order %s: %v", order.GetRefGoNumber(), err)
-				}
-			}
-
-			err = uploadFile.SetCellValue(importSheet, "O"+importRowNumber, order.GetChilledWeight())
-			if err != nil {
-				log.Printf("Failed to set cell value for order %s: %v", order.GetRefGoNumber(), err)
-			}
-
-			err = uploadFile.SetCellValue(importSheet, "P"+importRowNumber, "Средние температуры (+2+6)")
-			if err != nil {
-				log.Printf("Failed to set cell value for order %s: %v", order.GetRefGoNumber(), err)
-			}
-
-			if order.GetPaymentMethod() == "расч. счет" {
-				err = uploadFile.SetCellValue(importSheet, "Q"+importRowNumber, "Да")
-				if err != nil {
-					log.Printf("Failed to set cell value for order %s: %v", order.GetRefGoNumber(), err)
-				}
-			} else {
-				err = uploadFile.SetCellValue(importSheet, "Q"+importRowNumber, "Нет")
-				if err != nil {
-					log.Printf("Failed to set cell value for order %s: %v", order.GetRefGoNumber(), err)
-				}
-			}
-
-			err = uploadFile.SetCellValue(importSheet, "R"+importRowNumber, order.GetDeliveryRegion())
-			if err != nil {
-				log.Printf("Failed to set cell value for order %s: %v", order.GetRefGoNumber(), err)
-			}
-
-			err = uploadFile.SetCellValue(importSheet, "S"+importRowNumber, order.GetChilledBoxes())
-			if err != nil {
-				log.Printf("Failed to set cell value for order %s: %v", order.GetRefGoNumber(), err)
-			}
-
-			importRowNumber, err = IncrementStringCounter(importRowNumber)
-			if err != nil {
-				log.Printf("Failed to increment summary row number: %v", err)
-			}
-
-			err = uploadFile.SetCellValue(importSheet, "J"+importRowNumber, "Замороженная продукция")
-			if err != nil {
-				log.Printf("Failed to set cell value for order %s: %v", order.GetRefGoNumber(), err)
-			}
-
-			err = SetIntValueofString(uploadFile, importSheet, "K"+importRowNumber, order.GetRefGoNumber())
-			if err != nil {
-				log.Printf("Failed to set cell value for order %s: %v", order.GetRefGoNumber(), err)
-			}
-
-			err = uploadFile.SetCellValue(importSheet, "L"+importRowNumber, order.GetFrozenBoxes())
-			if err != nil {
-				log.Printf("Failed to set cell value for order %s: %v", order.GetRefGoNumber(), err)
-			}
-
-			err = uploadFile.SetCellFloat(importSheet, "M"+importRowNumber, 0, -1, 64)
-			if err != nil {
-				log.Printf("Failed to set cell value for order %s: %v", order.GetRefGoNumber(), err)
-			}
-
-			err = uploadFile.SetCellFloat(importSheet, "N"+importRowNumber, 0, -1, 64)
-			if err != nil {
-				log.Printf("Failed to set cell value for order %s: %v", order.GetRefGoNumber(), err)
-			}
-
-			err = uploadFile.SetCellValue(importSheet, "O"+importRowNumber, order.GetFrozenWeight())
-			if err != nil {
-				log.Printf("Failed to set cell value for order %s: %v", order.GetRefGoNumber(), err)
-			}
-
-			err = uploadFile.SetCellValue(importSheet, "P"+importRowNumber, "Низкие температуры (-18)")
-			if err != nil {
-				log.Printf("Failed to set cell value for order %s: %v", order.GetRefGoNumber(), err)
-			}
-
-			if order.GetPaymentMethod() == "расч. счет" {
-				err = uploadFile.SetCellValue(importSheet, "Q"+importRowNumber, "Да")
-				if err != nil {
-					log.Printf("Failed to set cell value for order %s: %v", order.GetRefGoNumber(), err)
-				}
-			} else {
-				err = uploadFile.SetCellValue(importSheet, "Q"+importRowNumber, "Нет")
-				if err != nil {
-					log.Printf("Failed to set cell value for order %s: %v", order.GetRefGoNumber(), err)
-				}
-			}
-
-			err = uploadFile.SetCellValue(importSheet, "R"+importRowNumber, order.GetDeliveryRegion())
-			if err != nil {
-				log.Printf("Failed to set cell value for order %s: %v", order.GetRefGoNumber(), err)
-			}
-
-			err = uploadFile.SetCellValue(importSheet, "S"+importRowNumber, order.GetFrozenBoxes())
-			if err != nil {
-				log.Printf("Failed to set cell value for order %s: %v", order.GetRefGoNumber(), err)
-			}
-
-			importRowNumber, err = IncrementStringCounter(importRowNumber)
-			if err != nil {
-				log.Printf("Failed to increment summary row number: %v", err)
-			}
-		case chilledBoxes > 0 && frozenBoxes == 0:
-			err = uploadFile.SetCellValue(importSheet, "J"+importRowNumber, "Охлаждённая продукция")
-			if err != nil {
-				log.Printf("Failed to set cell value for order %s: %v", order.GetRefGoNumber(), err)
-			}
-
-			err = SetIntValueofString(uploadFile, importSheet, "K"+importRowNumber, order.GetRefGoNumber())
-			if err != nil {
-				log.Printf("Failed to set cell value for order %s: %v", order.GetRefGoNumber(), err)
-			}
-
-			err = uploadFile.SetCellValue(importSheet, "L"+importRowNumber, order.GetChilledBoxes())
-			if err != nil {
-				log.Printf("Failed to set cell value for order %s: %v", order.GetRefGoNumber(), err)
-			}
-
-			if order.GetPaymentMethod() == "Наличные" || order.GetPaymentMethod() == "Терминал" {
-				err = uploadFile.SetCellFloat(importSheet, "M"+importRowNumber, order.GetSum(), -1, 64)
-				if err != nil {
-					log.Printf("Failed to set cell value for order %s: %v", order.GetRefGoNumber(), err)
-				}
-
-				err = uploadFile.SetCellFloat(importSheet, "N"+importRowNumber, order.GetSum(), -1, 64)
-				if err != nil {
-					log.Printf("Failed to set cell value for order %s: %v", order.GetRefGoNumber(), err)
-				}
-			} else {
-				err = uploadFile.SetCellFloat(importSheet, "M"+importRowNumber, 0, -1, 64)
-				if err != nil {
-					log.Printf("Failed to set cell value for order %s: %v", order.GetRefGoNumber(), err)
-				}
-
-				err = uploadFile.SetCellFloat(importSheet, "N"+importRowNumber, 0, -1, 64)
-				if err != nil {
-					log.Printf("Failed to set cell value for order %s: %v", order.GetRefGoNumber(), err)
-				}
-			}
-
-			err = uploadFile.SetCellValue(importSheet, "O"+importRowNumber, order.GetChilledWeight()+order.GetFrozenWeight())
-			if err != nil {
-				log.Printf("Failed to set cell value for order %s: %v", order.GetRefGoNumber(), err)
-			}
-
-			err = uploadFile.SetCellValue(importSheet, "P"+importRowNumber, "Средние температуры (+2+6)")
-			if err != nil {
-				log.Printf("Failed to set cell value for order %s: %v", order.GetRefGoNumber(), err)
-			}
-
-			if order.GetPaymentMethod() == "расч. счет" {
-				err = uploadFile.SetCellValue(importSheet, "Q"+importRowNumber, "Да")
-				if err != nil {
-					log.Printf("Failed to set cell value for order %s: %v", order.GetRefGoNumber(), err)
-				}
-			} else {
-				err = uploadFile.SetCellValue(importSheet, "Q"+importRowNumber, "Нет")
-				if err != nil {
-					log.Printf("Failed to set cell value for order %s: %v", order.GetRefGoNumber(), err)
-				}
-			}
-
-			err = uploadFile.SetCellValue(importSheet, "R"+importRowNumber, order.GetDeliveryRegion())
-			if err != nil {
-				log.Printf("Failed to set cell value for order %s: %v", order.GetRefGoNumber(), err)
-			}
-
-			err = uploadFile.SetCellValue(importSheet, "S"+importRowNumber, order.GetChilledBoxes())
-			if err != nil {
-				log.Printf("Failed to set cell value for order %s: %v", order.GetRefGoNumber(), err)
-			}
-
-			importRowNumber, err = IncrementStringCounter(importRowNumber)
-			if err != nil {
-				log.Printf("Failed to increment summary row number: %v", err)
-			}
-		case chilledBoxes == 0 && frozenBoxes > 0:
-			err = uploadFile.SetCellValue(importSheet, "J"+importRowNumber, "Замороженная продукция")
-			if err != nil {
-				log.Printf("Failed to set cell value for order %s: %v", order.GetRefGoNumber(), err)
-			}
-
-			err = SetIntValueofString(uploadFile, importSheet, "K"+importRowNumber, order.GetRefGoNumber())
-			if err != nil {
-				log.Printf("Failed to set cell value for order %s: %v", order.GetRefGoNumber(), err)
-			}
-
-			err = uploadFile.SetCellValue(importSheet, "L"+importRowNumber, order.GetFrozenBoxes())
-			if err != nil {
-				log.Printf("Failed to set cell value for order %s: %v", order.GetRefGoNumber(), err)
-			}
-
-			if order.GetPaymentMethod() == "Наличные" || order.GetPaymentMethod() == "Терминал" {
-				err = uploadFile.SetCellFloat(importSheet, "M"+importRowNumber, order.GetSum(), -1, 64)
-				if err != nil {
-					log.Printf("Failed to set cell value for order %s: %v", order.GetRefGoNumber(), err)
-				}
-
-				err = uploadFile.SetCellFloat(importSheet, "N"+importRowNumber, order.GetSum(), -1, 64)
-				if err != nil {
-					log.Printf("Failed to set cell value for order %s: %v", order.GetRefGoNumber(), err)
-				}
-			} else {
-				err = uploadFile.SetCellFloat(importSheet, "M"+importRowNumber, 0, -1, 64)
-				if err != nil {
-					log.Printf("Failed to set cell value for order %s: %v", order.GetRefGoNumber(), err)
-				}
-
-				err = uploadFile.SetCellFloat(importSheet, "N"+importRowNumber, 0, -1, 64)
-				if err != nil {
-					log.Printf("Failed to set cell value for order %s: %v", order.GetRefGoNumber(), err)
-				}
-			}
-
-			err = uploadFile.SetCellValue(importSheet, "O"+importRowNumber, order.GetChilledWeight()+order.GetFrozenWeight())
-			if err != nil {
-				log.Printf("Failed to set cell value for order %s: %v", order.GetRefGoNumber(), err)
-			}
-
-			err = uploadFile.SetCellValue(importSheet, "P"+importRowNumber, "Низкие температуры (-18)")
-			if err != nil {
-				log.Printf("Failed to set cell value for order %s: %v", order.GetRefGoNumber(), err)
-			}
-
-			if order.GetPaymentMethod() == "расч. счет" {
-				err = uploadFile.SetCellValue(importSheet, "Q"+importRowNumber, "Да")
-				if err != nil {
-					log.Printf("Failed to set cell value for order %s: %v", order.GetRefGoNumber(), err)
-				}
-			} else {
-				err = uploadFile.SetCellValue(importSheet, "Q"+importRowNumber, "Нет")
-				if err != nil {
-					log.Printf("Failed to set cell value for order %s: %v", order.GetRefGoNumber(), err)
-				}
-			}
-
-			err = uploadFile.SetCellValue(importSheet, "R"+importRowNumber, order.GetDeliveryRegion())
-			if err != nil {
-				log.Printf("Failed to set cell value for order %s: %v", order.GetRefGoNumber(), err)
-			}
-
-			err = uploadFile.SetCellValue(importSheet, "S"+importRowNumber, order.GetFrozenBoxes())
-			if err != nil {
-				log.Printf("Failed to set cell value for order %s: %v", order.GetRefGoNumber(), err)
-			}
-
-			importRowNumber, err = IncrementStringCounter(importRowNumber)
-			if err != nil {
-				log.Printf("Failed to increment import row number: %v", err)
-			}
-		default:
-			log.Printf("Order %s has no boxes, skipping import", order.GetRefGoNumber())
-		}
-
-		err = SetIntValueofString(uploadFile, summarySheet, "L"+summaryRowNumber, order.GetRefGoNumber())
-		if err != nil {
-			log.Printf("Failed to set cell value for order %s: %v", order.GetRefGoNumber(), err)
-		}
-
-		err = uploadFile.SetCellValue(summarySheet, "M"+summaryRowNumber, order.GetFrozenBoxes()+order.GetChilledBoxes())
-		if err != nil {
-			log.Printf("Failed to set cell value for order %s: %v", order.GetRefGoNumber(), err)
-		}
-
-		err = uploadFile.SetCellValue(summarySheet, "N"+summaryRowNumber, order.GetSum())
-		if err != nil {
-			log.Printf("Failed to set cell value for order %s: %v", order.GetRefGoNumber(), err)
-		}
-
-		summaryRowNumber, err = IncrementStringCounter(summaryRowNumber)
+		summaryRowNumber, err = incrementStringCounterByInt(summaryRowNumber, 1)
 		if err != nil {
 			log.Printf("Failed to increment summary row number: %v", err)
 		}
@@ -442,16 +411,9 @@ func (e *ExcelExporter) ExportOrdersToExcel(orders []*domain.InternalOrder) (sav
 		overallBoxes += order.GetChilledBoxes() + order.GetFrozenBoxes()
 	}
 
-	err = uploadFile.SetCellValue(summarySheet, "C15", len(orders))
-	if err != nil {
-		log.Printf("Failed to set cell value for total orders: %v", err)
-	}
+	fillSummarySheet(uploadFile, summarySheet, len(orders), overallBoxes)
 
-	err = uploadFile.SetCellValue(summarySheet, "F15", overallBoxes)
-	if err != nil {
-		log.Printf("Failed to set cell value for overall boxes: %v", err)
-	}
-	// На данный момент сохраняем в корень, позже переделаем в отдельную папку
+	// TODO: Перекинуть сохранение в темп файл для скачивания
 	err = uploadFile.SaveAs(savepath)
 	if err != nil {
 		log.Printf("Failed to save Excel file: %v", err)
@@ -465,46 +427,113 @@ func generateBarcodePNG(data string, width, height int) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	scaled, err := barcode.Scale(bc, width, height)
 	if err != nil {
 		return nil, err
 	}
+
 	var buf bytes.Buffer
-	if err := png.Encode(&buf, scaled); err != nil {
+
+	err = png.Encode(&buf, scaled)
+	if err != nil {
 		return nil, err
 	}
+
 	return buf.Bytes(), nil
 }
 
-func fillSingularBarcode(f *excelize.File, o *domain.InternalOrder, boxState string, boxnumber int, totalboxes uint64, rowNumber int, header int, regular int, toTheRight int) error {
-	innerCounter := rowNumber
-	err := f.SetRowHeight("Sheet1", innerCounter, 62)
+func setCellsStyle(f *excelize.File, sheet string, startRow, header, regular, toTheRight int) error {
+	innerCounter := startRow
+
+	err := f.SetRowHeight(sheet, innerCounter, 62)
 	if err != nil {
-		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
+		return err
 	}
 
-	err = f.SetCellValue("Sheet1", fmt.Sprintf("A%d", innerCounter), o.GetRefGoNumber())
+	err = f.MergeCell(sheet, fmt.Sprintf("A%d", innerCounter), fmt.Sprintf("B%d", innerCounter))
 	if err != nil {
-		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
+		return err
 	}
 
-	err = f.MergeCell("Sheet1", fmt.Sprintf("A%d", innerCounter), fmt.Sprintf("B%d", innerCounter))
+	err = f.SetCellStyle(sheet, fmt.Sprintf("A%d", innerCounter), fmt.Sprintf("B%d", innerCounter), header)
 	if err != nil {
-		log.Printf("failed to merge cells")
+		return err
 	}
 
-	err = f.SetCellStyle("Sheet1", fmt.Sprintf("A%d", innerCounter), fmt.Sprintf("B%d", innerCounter), header)
+	innerCounter++
+
+	err = f.SetRowHeight(sheet, innerCounter, 20)
 	if err != nil {
-		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
+		return err
 	}
 
-	pngBytes, err := generateBarcodePNG(o.GetRefGoNumber(), 140, 55)
+	err = f.MergeCell(sheet, fmt.Sprintf("A%d", innerCounter), fmt.Sprintf("B%d", innerCounter))
+	if err != nil {
+		return err
+	}
+
+	err = f.SetCellStyle(sheet, fmt.Sprintf("A%d", innerCounter), fmt.Sprintf("B%d", innerCounter), header)
+	if err != nil {
+		return err
+	}
+
+	innerCounter++
+
+	for i := 0; i < 4; i++ {
+		err = f.SetRowHeight(sheet, innerCounter+i, 12)
+		if err != nil {
+			return err
+		}
+
+		err = f.SetCellStyle(sheet, fmt.Sprintf("A%d", innerCounter), fmt.Sprintf("B%d", innerCounter), regular)
+		if err != nil {
+			return err
+		}
+
+		innerCounter++
+	}
+
+	err = f.SetCellStyle(sheet, fmt.Sprintf("B%d", innerCounter), fmt.Sprintf("B%d", innerCounter), toTheRight)
+	if err != nil {
+		return err
+	}
+
+	innerCounter++
+
+	err = f.SetRowHeight(sheet, innerCounter, -1)
+	if err != nil {
+		return err
+	}
+
+	err = f.SetCellStyle(sheet, fmt.Sprintf("A%d", innerCounter), fmt.Sprintf("B%d", innerCounter), regular)
+	if err != nil {
+		return err
+	}
+
+	innerCounter++
+
+	err = f.SetRowHeight(sheet, innerCounter, 12)
+	if err != nil {
+		return err
+	}
+
+	err = f.SetCellStyle(sheet, fmt.Sprintf("B%d", innerCounter), fmt.Sprintf("B%d", innerCounter), toTheRight)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func insertBarcodeIntoCell(f *excelize.File, sheet, refGoNumber string, cellNumber int) error {
+	pngBytes, err := generateBarcodePNG(refGoNumber, 140, 55)
 	if err != nil {
 		log.Printf("Ошибка генерации: %v\n", err)
 	}
 
-	err = f.AddPictureFromBytes("Sheet1",
-		fmt.Sprintf("A%d", innerCounter),
+	err = f.AddPictureFromBytes(sheet,
+		fmt.Sprintf("A%d", cellNumber),
 		&excelize.Picture{
 			Extension: ".png",
 			File:      pngBytes,
@@ -517,182 +546,133 @@ func fillSingularBarcode(f *excelize.File, o *domain.InternalOrder, boxState str
 			},
 		})
 	if err != nil {
-		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
-	}
-	innerCounter++
-
-	err = f.SetRowHeight("Sheet1", innerCounter, 20)
-	if err != nil {
-		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
-	}
-
-	if boxState == "Охл" {
-		err = f.SetCellValue("Sheet1", fmt.Sprintf("A%d", innerCounter), "Среднетемпературный режим (+2+6)")
-		if err != nil {
-			log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
-		}
-	} else {
-		err = f.SetCellValue("Sheet1", fmt.Sprintf("A%d", innerCounter), "Низкотемпературный (-18)")
-		if err != nil {
-			log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
-		}
-	}
-
-	err = f.MergeCell("Sheet1", fmt.Sprintf("A%d", innerCounter), fmt.Sprintf("B%d", innerCounter))
-	if err != nil {
-		log.Printf("failed to merge cells")
-	}
-
-	err = f.SetCellStyle("Sheet1", fmt.Sprintf("A%d", innerCounter), fmt.Sprintf("B%d", innerCounter), header)
-	if err != nil {
-		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
-	}
-
-	innerCounter++
-
-	err = f.SetRowHeight("Sheet1", innerCounter, 12)
-	if err != nil {
-		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
-	}
-
-	err = f.SetCellValue("Sheet1", fmt.Sprintf("A%d", innerCounter), "Наименование:")
-	if err != nil {
-		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
-	}
-
-	if boxState == "Охл" {
-		err = f.SetCellValue("Sheet1", fmt.Sprintf("B%d", innerCounter), "Охлаждённая продукция")
-		if err != nil {
-			log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
-		}
-	} else {
-		err = f.SetCellValue("Sheet1", fmt.Sprintf("B%d", innerCounter), "Замороженная продукция")
-		if err != nil {
-			log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
-		}
-	}
-
-	err = f.SetCellStyle("Sheet1", fmt.Sprintf("A%d", innerCounter), fmt.Sprintf("B%d", innerCounter), regular)
-	if err != nil {
-		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
-	}
-
-	innerCounter++
-
-	err = f.SetRowHeight("Sheet1", innerCounter, 12)
-	if err != nil {
-		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
-	}
-
-	err = f.SetCellValue("Sheet1", fmt.Sprintf("A%d", innerCounter), "Заказчик:")
-	if err != nil {
-		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
-	}
-
-	err = f.SetCellValue("Sheet1", fmt.Sprintf("B%d", innerCounter), "STEAK HOME")
-	if err != nil {
-		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
-	}
-
-	err = f.SetCellStyle("Sheet1", fmt.Sprintf("A%d", innerCounter), fmt.Sprintf("B%d", innerCounter), regular)
-	if err != nil {
-		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
-	}
-
-	innerCounter++
-
-	err = f.SetRowHeight("Sheet1", innerCounter, 12)
-	if err != nil {
-		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
-	}
-
-	err = f.SetCellValue("Sheet1", fmt.Sprintf("A%d", innerCounter), "Получатель:")
-	if err != nil {
-		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
-	}
-
-	err = f.SetCellValue("Sheet1", fmt.Sprintf("B%d", innerCounter), o.GetRecieverName())
-	if err != nil {
-		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
-	}
-
-	err = f.SetCellStyle("Sheet1", fmt.Sprintf("A%d", innerCounter), fmt.Sprintf("B%d", innerCounter), regular)
-	if err != nil {
-		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
-	}
-
-	innerCounter++
-
-	err = f.SetRowHeight("Sheet1", innerCounter, 12)
-	if err != nil {
-		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
-	}
-
-	err = f.SetCellValue("Sheet1", fmt.Sprintf("A%d", innerCounter), "Вх. накладная:")
-	if err != nil {
-		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
-	}
-
-	err = f.SetCellValue("Sheet1", fmt.Sprintf("B%d", innerCounter), o.GetRefGoNumber())
-	if err != nil {
-		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
-	}
-
-	err = f.SetCellStyle("Sheet1", fmt.Sprintf("A%d", innerCounter), fmt.Sprintf("A%d", innerCounter), regular)
-	if err != nil {
-		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
-	}
-
-	err = f.SetCellStyle("Sheet1", fmt.Sprintf("B%d", innerCounter), fmt.Sprintf("B%d", innerCounter), toTheRight)
-	if err != nil {
-		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
-	}
-
-	innerCounter++
-
-	err = f.SetRowHeight("Sheet1", innerCounter, -1)
-	if err != nil {
-		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
-	}
-
-	err = f.SetCellValue("Sheet1", fmt.Sprintf("A%d", innerCounter), "Адрес доставки:")
-	if err != nil {
-		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
-	}
-
-	err = f.SetCellValue("Sheet1", fmt.Sprintf("B%d", innerCounter), o.GetShipmentAddress())
-	if err != nil {
-		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
-	}
-
-	err = f.SetCellStyle("Sheet1", fmt.Sprintf("A%d", innerCounter), fmt.Sprintf("B%d", innerCounter), regular)
-	if err != nil {
-		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
-	}
-
-	innerCounter++
-
-	err = f.SetRowHeight("Sheet1", innerCounter, 12)
-	if err != nil {
-		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
-	}
-
-	err = f.SetCellValue("Sheet1", fmt.Sprintf("B%d", innerCounter), fmt.Sprintf("(%d из %d)", boxnumber, totalboxes))
-	if err != nil {
-		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
-	}
-
-	err = f.SetCellStyle("Sheet1", fmt.Sprintf("B%d", innerCounter), fmt.Sprintf("B%d", innerCounter), toTheRight)
-	if err != nil {
-		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
+		return err
 	}
 
 	return nil
 }
 
-func (e *ExcelExporter) ExportOrdersBarcodesToExcel(orders []*domain.InternalOrder) (savepath string, err error) {
-	f := excelize.NewFile()
-	regularCellWrapStyle, err := f.NewStyle(&excelize.Style{
+func fillStaticCells(f *excelize.File, sheet string, rowNumber int) {
+	innerCounter := rowNumber
+
+	err := f.SetCellValue(sheet, fmt.Sprintf("A%d", innerCounter), "Наименование:")
+	if err != nil {
+		log.Printf("%s occurred in ExportOrdersBarcodesToExcel", err)
+	}
+
+	innerCounter++
+
+	err = f.SetCellValue(sheet, fmt.Sprintf("A%d", innerCounter), "Заказчик:")
+	if err != nil {
+		log.Printf("%s occurred in ExportOrdersBarcodesToExcel", err)
+	}
+
+	err = f.SetCellValue(sheet, fmt.Sprintf("B%d", innerCounter), "STEAK HOME")
+	if err != nil {
+		log.Printf("%s occurred in ExportOrdersBarcodesToExcel", err)
+	}
+
+	innerCounter++
+
+	err = f.SetCellValue(sheet, fmt.Sprintf("A%d", innerCounter), "Получатель:")
+	if err != nil {
+		log.Printf("%s occurred in ExportOrdersBarcodesToExcel", err)
+	}
+
+	innerCounter++
+
+	err = f.SetCellValue(sheet, fmt.Sprintf("A%d", innerCounter), "Вх. накладная:")
+	if err != nil {
+		log.Printf("%s occurred in ExportOrdersBarcodesToExcel", err)
+	}
+
+	innerCounter++
+
+	err = f.SetCellValue(sheet, fmt.Sprintf("A%d", innerCounter), "Адрес доставки:")
+	if err != nil {
+		log.Printf("%s occurred in ExportOrdersBarcodesToExcel", err)
+	}
+}
+
+func fillSingularBarcode(f *excelize.File, o *domain.InternalOrder, boxState string, boxnumber int, totalboxes uint64, rowNumber, header, regular, toTheRight int) {
+	innerCounter := rowNumber
+	workSheet := "Sheet1"
+	refGoNumber := o.GetRefGoNumber()
+
+	err := f.SetCellValue(workSheet, fmt.Sprintf("A%d", innerCounter), refGoNumber)
+	if err != nil {
+		log.Printf("%s occurred in ExportOrdersBarcodesToExcel", err)
+	}
+
+	err = insertBarcodeIntoCell(f, workSheet, refGoNumber, innerCounter)
+	if err != nil {
+		log.Printf("%s occurred in ExportOrdersBarcodesToExcel while inserting PNG", err)
+	}
+
+	innerCounter++
+
+	if boxState == "Охл" {
+		err = f.SetCellValue(workSheet, fmt.Sprintf("A%d", innerCounter), "Среднетемпературный режим (+2+6)")
+		if err != nil {
+			log.Printf("%s occurred in ExportOrdersBarcodesToExcel", err)
+		}
+
+		err = f.SetCellValue(workSheet, fmt.Sprintf("B%d", innerCounter+1), "Охлаждённая продукция")
+		if err != nil {
+			log.Printf("%s occurred in ExportOrdersBarcodesToExcel", err)
+		}
+	} else {
+		err = f.SetCellValue(workSheet, fmt.Sprintf("A%d", innerCounter), "Низкотемпературный (-18)")
+		if err != nil {
+			log.Printf("%s occurred in ExportOrdersBarcodesToExcel", err)
+		}
+
+		err = f.SetCellValue(workSheet, fmt.Sprintf("B%d", innerCounter+1), "Замороженная продукция")
+		if err != nil {
+			log.Printf("%s occurred in ExportOrdersBarcodesToExcel", err)
+		}
+	}
+
+	innerCounter++
+
+	fillStaticCells(f, workSheet, innerCounter)
+
+	innerCounter += 2
+
+	err = f.SetCellValue(workSheet, fmt.Sprintf("B%d", innerCounter), o.GetRecieverName())
+	if err != nil {
+		log.Printf("%s occurred in ExportOrdersBarcodesToExcel", err)
+	}
+
+	innerCounter++
+
+	err = f.SetCellValue(workSheet, fmt.Sprintf("B%d", innerCounter), refGoNumber)
+	if err != nil {
+		log.Printf("%s occurred in ExportOrdersBarcodesToExcel", err)
+	}
+
+	innerCounter++
+
+	err = f.SetCellValue(workSheet, fmt.Sprintf("B%d", innerCounter), o.GetShipmentAddress())
+	if err != nil {
+		log.Printf("%s occurred in ExportOrdersBarcodesToExcel", err)
+	}
+
+	innerCounter++
+
+	err = f.SetCellValue(workSheet, fmt.Sprintf("B%d", innerCounter), fmt.Sprintf("(%d из %d)", boxnumber, totalboxes))
+	if err != nil {
+		log.Printf("%s occurred in ExportOrdersBarcodesToExcel", err)
+	}
+
+	err = setCellsStyle(f, workSheet, rowNumber, header, regular, toTheRight)
+	if err != nil {
+		log.Printf("%s occurred in ExportOrdersBarcodesToExcel while setting cell styles", err)
+	}
+}
+
+func createxlsxStyles(f *excelize.File) (regular, right, header int) {
+	regular, err := f.NewStyle(&excelize.Style{
 		Font: &excelize.Font{
 			Size:   8,
 			Bold:   true,
@@ -703,10 +683,10 @@ func (e *ExcelExporter) ExportOrdersBarcodesToExcel(orders []*domain.InternalOrd
 		},
 	})
 	if err != nil {
-		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
+		log.Printf("err: %s occurred creating regular style", err)
 	}
 
-	regularToTheRightCellWrapStyle, err := f.NewStyle(&excelize.Style{
+	right, err = f.NewStyle(&excelize.Style{
 		Font: &excelize.Font{
 			Size:   8,
 			Bold:   true,
@@ -718,10 +698,10 @@ func (e *ExcelExporter) ExportOrdersBarcodesToExcel(orders []*domain.InternalOrd
 		},
 	})
 	if err != nil {
-		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
+		log.Printf("err: %s occurred creating rightCell style", err)
 	}
 
-	headerCellWrapStyle, err := f.NewStyle(&excelize.Style{
+	header, err = f.NewStyle(&excelize.Style{
 		Font: &excelize.Font{
 			Size:   14,
 			Bold:   true,
@@ -734,27 +714,48 @@ func (e *ExcelExporter) ExportOrdersBarcodesToExcel(orders []*domain.InternalOrd
 		},
 	})
 	if err != nil {
-		log.Printf("%s occured in ExportOrdersBarcodesToExcel", err)
+		log.Printf("err: %s occurred creating header style", err)
 	}
 
-	f.SetColWidth("Sheet1", "A", "A", 14)
-	f.SetColWidth("Sheet1", "B", "B", 36.7)
+	return regular, right, header
+}
+
+func (e *ExcelExporter) ExportOrdersBarcodesToExcel(orders []*domain.InternalOrder) (savepath string, err error) {
+	f := excelize.NewFile()
+
+	regular, right, header := createxlsxStyles(f)
+
+	err = f.SetColWidth("Sheet1", "A", "A", 14)
+	if err != nil {
+		log.Printf("%s occurred in ExportOrdersBarcodesToExcel", err)
+	}
+
+	err = f.SetColWidth("Sheet1", "B", "B", 36.7)
+	if err != nil {
+		log.Printf("%s occurred in ExportOrdersBarcodesToExcel", err)
+	}
 
 	counter := 1
 
 	for _, o := range orders {
 		totalboxes := o.GetChilledBoxes() + o.GetFrozenBoxes()
 		totalcount := 1
+
+		var i uint64
+
 		if o.GetChilledBoxes() > 0 {
-			for i := 1; i <= int(o.GetChilledBoxes()); i++ {
-				fillSingularBarcode(f, o, "Охл", totalcount, totalboxes, counter, headerCellWrapStyle, regularCellWrapStyle, regularToTheRightCellWrapStyle)
+			for i = 1; i <= o.GetChilledBoxes(); i++ {
+				fillSingularBarcode(f, o, "Охл", totalcount, totalboxes, counter, header, regular, right)
+
 				totalcount++
 				counter += 8
 			}
 		}
+
 		if o.GetFrozenBoxes() > 0 {
-			for i := 1; i <= int(o.GetFrozenBoxes()); i++ {
-				fillSingularBarcode(f, o, "Зам", totalcount, totalboxes, counter, headerCellWrapStyle, regularCellWrapStyle, regularToTheRightCellWrapStyle)
+			for i = 1; i <= o.GetFrozenBoxes(); i++ {
+				fillSingularBarcode(f, o, "Зам", totalcount, totalboxes, counter, header, regular, right)
+
 				totalcount++
 				counter += 8
 			}
@@ -762,6 +763,7 @@ func (e *ExcelExporter) ExportOrdersBarcodesToExcel(orders []*domain.InternalOrd
 	}
 
 	printArea := fmt.Sprintf("Sheet1!$A$1:$B$%d", counter-1)
+
 	err = f.SetDefinedName(&excelize.DefinedName{
 		Name:     "_xlnm.Print_Area",
 		RefersTo: printArea,
@@ -773,17 +775,23 @@ func (e *ExcelExporter) ExportOrdersBarcodesToExcel(orders []*domain.InternalOrd
 
 	for row := 9; row <= counter; row += 8 {
 		cell := fmt.Sprintf("A%d", row)
-		if err := f.InsertPageBreak("Sheet1", cell); err != nil {
-			panic(err)
+
+		err := f.InsertPageBreak("Sheet1", cell)
+		if err != nil {
+			log.Printf("%s occurred in ExportOrdersBarcodesToExcel while inserting page break", err)
 		}
 	}
 
 	temptoday := time.Now()
 	today := temptoday.Format("02.01.2006")
+
 	savepath = "../" + today + ".xlsx"
-	if err = f.SaveAs(savepath); err != nil {
-		fmt.Println("Ошибка сохранения:", err)
-		return
+
+	err = f.SaveAs(savepath)
+	if err != nil {
+		log.Printf("%s occurred in ExportOrdersBarcodesToExcel while saving file", err)
+
+		return "", err
 	}
 
 	return savepath, nil

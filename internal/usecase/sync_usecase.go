@@ -42,7 +42,13 @@ func (uc *SyncUseCase) SyncDeliverableOrders(ctx context.Context) {
 		internalOrder := uc.Converter.ToDomain(o)
 
 		if internalOrder.GetRefGoNumber() == "" {
-			uc.MSAPIClinet.SetRefGoNumberOnly(ctx, internalOrder.GetHREF(), strconv.Itoa(refGoCounter))
+			err := uc.MSAPIClinet.SetRefGoNumberOnly(ctx, internalOrder.GetHREF(), strconv.Itoa(refGoCounter))
+			if err != nil {
+				log.Printf("Failed to set RefGoNumber for order %s: %v", internalOrder.GetName(), err)
+
+				continue
+			}
+
 			internalOrder.SetRefGoNumber(strconv.Itoa(refGoCounter))
 			log.Printf("Assigned RefGoNumber: %v to order: %s", refGoCounter, internalOrder.GetName())
 
@@ -57,7 +63,7 @@ func (uc *SyncUseCase) SyncDeliverableOrders(ctx context.Context) {
 	if err != nil {
 		log.Printf("Failed to insert orders into database: %v", err)
 	}
-	log.Println(refGoCounter)
+
 	err = uc.Config.ChangeRefGoLatest(refGoCounter)
 	if err != nil {
 		log.Printf("Failed to update RefGoLatest to %d: %v", refGoCounter, err)

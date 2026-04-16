@@ -3,6 +3,7 @@ module warehouseHelper
 go 1.25.5
 
 require (
+	github.com/boombuler/barcode v1.1.0
 	github.com/jackc/pgx/v5 v5.8.0
 	github.com/joho/godotenv v1.5.1
 	github.com/pdfcpu/pdfcpu v0.11.1
@@ -10,7 +11,6 @@ require (
 )
 
 require (
-	github.com/boombuler/barcode v1.1.0 // indirect
 	github.com/clipperhouse/uax29/v2 v2.2.0 // indirect
 	github.com/hhrutter/lzw v1.0.0 // indirect
 	github.com/hhrutter/pkcs7 v0.2.0 // indirect

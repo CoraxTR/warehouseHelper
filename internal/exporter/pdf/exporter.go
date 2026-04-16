@@ -20,15 +20,23 @@ func NewPDFExporter() *PDFExporter {
 
 func (e *PDFExporter) ExportOrderPDF(data []byte) (string, error) {
 	conf := model.NewDefaultConfiguration()
+
 	validated, err := api.ReadAndValidate(bytes.NewReader(data), conf)
 	if err != nil {
 		log.Printf("couldn't validate, %v", err)
 	}
+
 	outFile, err := os.Create("exported.pdf")
 	if err != nil {
 		return "", err
 	}
-	defer outFile.Close()
+
+	defer func() {
+		err := outFile.Close()
+		if err != nil {
+			log.Printf("Failed to close file: %v", err)
+		}
+	}()
 
 	err = api.Write(validated, outFile, conf)
 	if err != nil {
@@ -54,7 +62,13 @@ func (e *PDFExporter) ExportMergedPDF(data [][]byte) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer file.Close()
+
+	defer func() {
+		err := file.Close()
+		if err != nil {
+			log.Printf("Failed to close file: %v", err)
+		}
+	}()
 
 	err = api.MergeRaw(readers, file, false, conf)
 	if err != nil {
