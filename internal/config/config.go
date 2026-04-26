@@ -184,8 +184,8 @@ func loadMoySkladhrefs() *MoySkladhrefs {
 
 	printtemplatehref := os.Getenv("MSAPI_PRINTTEMPLATEHREF")
 
-	if refgocourierhref == "" {
-		panic("Printtemplatehreg does not exist")
+	if printtemplatehref == "" {
+		panic("Printtemplatehref does not exist")
 	}
 
 	return &MoySkladhrefs{

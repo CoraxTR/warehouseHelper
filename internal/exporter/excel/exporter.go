@@ -413,7 +413,6 @@ func (e *ExcelExporter) ExportOrdersToExcel(orders []*domain.InternalOrder) (sav
 
 	fillSummarySheet(uploadFile, summarySheet, len(orders), overallBoxes)
 
-	// TODO: Перекинуть сохранение в темп файл для скачивания
 	err = uploadFile.SaveAs(savepath)
 	if err != nil {
 		log.Printf("Failed to save Excel file: %v", err)
@@ -480,8 +479,8 @@ func setCellsStyle(f *excelize.File, sheet string, startRow, header, regular, to
 
 	innerCounter++
 
-	for i := 0; i < 4; i++ {
-		err = f.SetRowHeight(sheet, innerCounter+i, 12)
+	for range 4 {
+		err = f.SetRowHeight(sheet, innerCounter, 12)
 		if err != nil {
 			return err
 		}
@@ -493,13 +492,6 @@ func setCellsStyle(f *excelize.File, sheet string, startRow, header, regular, to
 
 		innerCounter++
 	}
-
-	err = f.SetCellStyle(sheet, fmt.Sprintf("B%d", innerCounter), fmt.Sprintf("B%d", innerCounter), toTheRight)
-	if err != nil {
-		return err
-	}
-
-	innerCounter++
 
 	err = f.SetRowHeight(sheet, innerCounter, -1)
 	if err != nil {
