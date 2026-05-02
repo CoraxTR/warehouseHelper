@@ -13,25 +13,26 @@ import (
 	"path"
 	"time"
 	"warehouseHelper/internal/config"
+	"warehouseHelper/internal/msratelimiter"
 )
 
 const msEncoding = "gzip"
 
-type MoySkladAPIClient struct {
-	ratelimiter moySkladOutRateLimiter
+type MSAPIClient struct {
+	ratelimiter *msratelimiter.MoySkladOutRateLimiter
 	msConfig    *config.MoySkladConfig
 	rgConfig    *config.RefGoConfig
 }
 
-func NewMoySkladAPIClient(c *config.Config) *MoySkladAPIClient {
-	return &MoySkladAPIClient{
-		*NewMoySkladOutRateLimiter(c.RequestCap, c.TimeSpan),
-		c.MoySkladConfig,
-		c.RefGoConfig,
+func NewMSAPIClient(c *config.Config, rl *msratelimiter.MoySkladOutRateLimiter) *MSAPIClient {
+	return &MSAPIClient{
+		ratelimiter: rl,
+		msConfig:    c.MoySkladConfig,
+		rgConfig:    c.RefGoConfig,
 	}
 }
 
-func (msac *MoySkladAPIClient) FetchOrderAgentByHREF(parentctx context.Context, o *MSOrder) (name, phone string, err error) {
+func (msac *MSAPIClient) FetchOrderAgentByHREF(parentctx context.Context, o *MSOrder) (name, phone string, err error) {
 	ctx, cancel := context.WithTimeout(parentctx, 300*time.Second)
 	defer cancel()
 
@@ -64,7 +65,7 @@ func (msac *MoySkladAPIClient) FetchOrderAgentByHREF(parentctx context.Context, 
 	return agentinfo.Name, agentinfo.Phone, nil
 }
 
-func (msac *MoySkladAPIClient) FetchOrderPositionsByHREF(parentctx context.Context, o *MSOrder) ([]MSPosition, error) {
+func (msac *MSAPIClient) FetchOrderPositionsByHREF(parentctx context.Context, o *MSOrder) ([]MSPosition, error) {
 	ctx, cancel := context.WithTimeout(parentctx, 300*time.Second)
 	defer cancel()
 
@@ -97,7 +98,7 @@ func (msac *MoySkladAPIClient) FetchOrderPositionsByHREF(parentctx context.Conte
 	return positions.Rows, nil
 }
 
-func (msac *MoySkladAPIClient) FetchPositionSubInfoByHREF(parentctx context.Context, p MSPosition) (code string, weight float64, err error) {
+func (msac *MSAPIClient) FetchPositionSubInfoByHREF(parentctx context.Context, p MSPosition) (code string, weight float64, err error) {
 	ctx, cancel := context.WithTimeout(parentctx, 300*time.Second)
 	defer cancel()
 
@@ -130,7 +131,7 @@ func (msac *MoySkladAPIClient) FetchPositionSubInfoByHREF(parentctx context.Cont
 	return position.Code, position.Weight, nil
 }
 
-func (msac *MoySkladAPIClient) FetchDeliverableOrders(parentctx context.Context) []*MSOrder {
+func (msac *MSAPIClient) FetchDeliverableOrders(parentctx context.Context) []*MSOrder {
 	ctx, cancel := context.WithTimeout(parentctx, 300*time.Second)
 	defer cancel()
 
@@ -199,7 +200,7 @@ func (msac *MoySkladAPIClient) FetchDeliverableOrders(parentctx context.Context)
 	return msOrders
 }
 
-func (msac *MoySkladAPIClient) GetOrderByHREF(parentctx context.Context, href string) (*MSOrder, error) {
+func (msac *MSAPIClient) GetOrderByHREF(parentctx context.Context, href string) (*MSOrder, error) {
 	ctx, cancel := context.WithTimeout(parentctx, 300*time.Second)
 	defer cancel()
 
@@ -277,7 +278,7 @@ type Meta struct {
 	MediaType string `json:"mediaType"`
 }
 
-func (msac *MoySkladAPIClient) SetOrderAsShippedToRefGo(ctx context.Context, href string) error {
+func (msac *MSAPIClient) SetOrderAsShippedToRefGo(ctx context.Context, href string) error {
 	update := FullOrderUpdate{
 		// Статус
 		State: &State{
@@ -333,7 +334,7 @@ func (msac *MoySkladAPIClient) SetOrderAsShippedToRefGo(ctx context.Context, hre
 	return msac.sendPutRequest(ctx, href, update)
 }
 
-func (msac *MoySkladAPIClient) SetRefGoNumberOnly(ctx context.Context, href, refGoNumber string) error {
+func (msac *MSAPIClient) SetRefGoNumberOnly(ctx context.Context, href, refGoNumber string) error {
 	update := struct {
 		Attributes []StringedAttribute `json:"attributes"`
 	}{
@@ -355,7 +356,7 @@ func (msac *MoySkladAPIClient) SetRefGoNumberOnly(ctx context.Context, href, ref
 	return msac.sendPutRequest(ctx, href, update)
 }
 
-func (msac *MoySkladAPIClient) sendPutRequest(ctx context.Context, url string, body interface{}) error {
+func (msac *MSAPIClient) sendPutRequest(ctx context.Context, url string, body interface{}) error {
 	jsonBody, err := json.Marshal(body)
 	if err != nil {
 		return fmt.Errorf("failed to marshal request body: %w", err)
@@ -380,7 +381,7 @@ func (msac *MoySkladAPIClient) sendPutRequest(ctx context.Context, url string, b
 	return nil
 }
 
-func (msac *MoySkladAPIClient) sendPatchRequest(ctx context.Context, url string, body interface{}) error {
+func (msac *MSAPIClient) sendPatchRequest(ctx context.Context, url string, body interface{}) error {
 	jsonBody, err := json.Marshal(body)
 	if err != nil {
 		return fmt.Errorf("failed to marshal request body: %w", err)
@@ -414,7 +415,7 @@ type exportTemplate struct {
 	Meta Meta `json:"meta"`
 }
 
-func (msac *MoySkladAPIClient) FetchOrderPDF(parentctx context.Context, href string) ([]byte, error) {
+func (msac *MSAPIClient) FetchOrderPDF(parentctx context.Context, href string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(parentctx, 300*time.Second)
 	defer cancel()
 
@@ -455,7 +456,7 @@ func (msac *MoySkladAPIClient) FetchOrderPDF(parentctx context.Context, href str
 	return body, nil
 }
 
-func (msac *MoySkladAPIClient) enrichOrder(ctx context.Context, order *MSOrder) {
+func (msac *MSAPIClient) enrichOrder(ctx context.Context, order *MSOrder) {
 	name, phone, err := msac.FetchOrderAgentByHREF(ctx, order)
 	if err != nil {
 		log.Printf("failed to fetch agent for order %s: %v", order.HREF, err)
@@ -486,7 +487,7 @@ func (msac *MoySkladAPIClient) enrichOrder(ctx context.Context, order *MSOrder) 
 	}
 }
 
-func (msac *MoySkladAPIClient) doRequest(ctx context.Context, method, url string, body io.Reader) ([]byte, *http.Response, error) {
+func (msac *MSAPIClient) doRequest(ctx context.Context, method, url string, body io.Reader) ([]byte, *http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, method, url, body)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create request: %w", err)

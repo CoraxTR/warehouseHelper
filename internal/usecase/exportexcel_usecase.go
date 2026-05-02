@@ -80,7 +80,7 @@ type ExportBarcodesToExcelUseCase struct {
 	repository OrderRepository
 }
 
-func NewExportBarcodeBarcodesToExcelUseCase(exporter ExcelBarcodesExporter, repository OrderRepository) *ExportBarcodesToExcelUseCase {
+func NewExportBarcodesToExcelUseCase(exporter ExcelBarcodesExporter, repository OrderRepository) *ExportBarcodesToExcelUseCase {
 	return &ExportBarcodesToExcelUseCase{
 		exporter:   exporter,
 		repository: repository,

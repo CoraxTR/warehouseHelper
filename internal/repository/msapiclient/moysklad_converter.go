@@ -15,7 +15,11 @@ const (
 	copecksInRuble = 100
 )
 
-type MoySkladConverter struct{}
+type MSConverter struct{}
+
+func NewMSConverter() *MSConverter {
+	return &MSConverter{}
+}
 
 type BoxWeightInfo struct {
 	chilledBoxes  uint64
@@ -219,7 +223,7 @@ func processBoxesAndWeights(msOrder *MSOrder) BoxWeightInfo {
 	}
 }
 
-func (c *MoySkladConverter) ToDomain(msOrder *MSOrder) *domain.InternalOrder {
+func (c *MSConverter) ToDomain(msOrder *MSOrder) *domain.InternalOrder {
 	o := new(domain.InternalOrder)
 	o.SetHREF(msOrder.Meta.HREF)
 	o.SetName(msOrder.Name)

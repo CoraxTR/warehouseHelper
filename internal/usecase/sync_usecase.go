@@ -9,19 +9,24 @@ import (
 	"warehouseHelper/internal/repository/msapiclient"
 )
 
-type DB interface {
+type OrdersRepository interface {
 	InsertOrders(ctx context.Context, orders []*domain.InternalOrder) error
 }
 
 type SyncUseCase struct {
-	MSAPIClinet *msapiclient.MoySkladAPIClient
-	DBClient    DB
-	Converter   *msapiclient.MoySkladConverter
+	MSAPIClinet *msapiclient.MSAPIClient
+	DBClient    OrdersRepository
+	Converter   *msapiclient.MSConverter
 	Config      *config.RefGoConfig
 }
 
-func NewSyncUsecase() {
-
+func NewSyncUsecase(client *msapiclient.MSAPIClient, repo OrdersRepository, converter *msapiclient.MSConverter, cfg *config.RefGoConfig) *SyncUseCase {
+	return &SyncUseCase{
+		MSAPIClinet: client,
+		DBClient:    repo,
+		Converter:   converter,
+		Config:      cfg,
+	}
 }
 
 func (uc *SyncUseCase) SyncDeliverableOrders(ctx context.Context) {

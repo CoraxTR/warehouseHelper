@@ -11,17 +11,19 @@ import (
 )
 
 type Config struct {
+	*AppConfig
 	*MoySkladConfig
 	*RefGoConfig
 	*PGConfig
 }
 
-func LoadConfig() *Config {
+func NewConfig() *Config {
 	err := godotenv.Load("../.env")
 	if err != nil {
 		panic("Cannot read config file")
 	}
 
+	apc := loadAppconfig()
 	msc := loadMoySkladConfig()
 	rfc := loadRefGoConfig()
 	pfc := loadPGConfig()
@@ -31,9 +33,25 @@ func LoadConfig() *Config {
 	}
 
 	return &Config{
+		AppConfig:      apc,
 		MoySkladConfig: msc,
 		RefGoConfig:    rfc,
 		PGConfig:       pfc,
+	}
+}
+
+type AppConfig struct {
+	HTTPAddress string
+}
+
+func loadAppconfig() *AppConfig {
+	httpAddress := os.Getenv("APP_HTTPADDRESS")
+	if httpAddress == "" {
+		os.Exit(1)
+	}
+
+	return &AppConfig{
+		HTTPAddress: httpAddress,
 	}
 }
 
@@ -57,54 +75,54 @@ func loadMoySkladConfig() *MoySkladConfig {
 
 	apiKey := os.Getenv("MSAPI_KEY")
 	if apiKey == "" {
-		panic("API KEY does not exist")
+		os.Exit(1)
 	}
 
 	tspnint, err := strconv.Atoi(os.Getenv("MSAPI_REQUESTCAPTIMESPAN"))
 	if err != nil {
-		panic("Timespan does not exist")
+		os.Exit(1)
 	}
 
 	tspn := time.Duration(int64(tspnint)) * time.Second
 
 	rqcap, err := strconv.Atoi(os.Getenv("MSAPI_REQUESTCAP"))
 	if err != nil {
-		panic("Requestcap does not exist")
+		os.Exit(1)
 	}
 
 	selltypeID := os.Getenv("MSAPI_SELLTYPEID")
 	if selltypeID == "" {
-		panic("SelltypeID does not exist")
+		os.Exit(1)
 	}
 
 	refgonumberid := os.Getenv("MSAPI_REFGONUMBERID")
 	if refgonumberid == "" {
-		panic("RefGoNumberID does not exist")
+		os.Exit(1)
 	}
 
 	courierid := os.Getenv("MSAPI_COURIERID")
 	if courierid == "" {
-		panic("CourierID does not exist")
+		os.Exit(1)
 	}
 
 	timeFormat := os.Getenv("MSAPI_TIMEFORMAT")
 	if timeFormat == "" {
-		panic("Timeformat does not exist")
+		os.Exit(1)
 	}
 
 	urlstart := os.Getenv("MSAPI_URLSTART")
 	if urlstart == "" {
-		panic("URLstart does not exist")
+		os.Exit(1)
 	}
 
 	authheader := os.Getenv("MSAPI_AUTHHEADER")
 	if authheader == "" {
-		panic("AuthHeader does not exist")
+		os.Exit(1)
 	}
 
 	encodeheader := os.Getenv("MSAPI_ENCODEHEADER")
 	if encodeheader == "" {
-		panic("AuthHeader does not exist")
+		os.Exit(1)
 	}
 
 	return &MoySkladConfig{
@@ -139,53 +157,53 @@ type MoySkladhrefs struct {
 func loadMoySkladhrefs() *MoySkladhrefs {
 	readystatehref := os.Getenv("MSAPI_READYSTATEHREF")
 	if readystatehref == "" {
-		panic("Statehref does not exist")
+		os.Exit(1)
 	}
 
 	shipedstatehref := os.Getenv("MSAPI_SHIPEDSTATEHREF")
 	if shipedstatehref == "" {
-		panic("Shipedstatehref does not exist")
+		os.Exit(1)
 	}
 
 	selltypehref := os.Getenv("MSAPI_SELLTYPEHREF")
 	if selltypehref == "" {
-		panic("Selltype does not exist")
+		os.Exit(1)
 	}
 
 	selltypeOtherhref := os.Getenv("MSAPI_SELLTYPEOTHERHREF")
 	if selltypeOtherhref == "" {
-		panic("OtherSelltype does not exist")
+		os.Exit(1)
 	}
 
 	storehref := os.Getenv("MSAPI_STOREHREF")
 	if storehref == "" {
-		panic("Storehref does not exist")
+		os.Exit(1)
 	}
 
 	orghref := os.Getenv("MSAPI_ORGHREF")
 	if orghref == "" {
-		panic("Orghref does not exist")
+		os.Exit(1)
 	}
 
 	refgonumberhref := os.Getenv("MSAPI_REFGONUMBERHREF")
 	if refgonumberhref == "" {
-		panic("RefGoNumberhref does not exist")
+		os.Exit(1)
 	}
 
 	courierhref := os.Getenv("MSAPI_COURIERHREF")
 	if courierhref == "" {
-		panic("Courierhref does not exist")
+		os.Exit(1)
 	}
 
 	refgocourierhref := os.Getenv("MSAPI_REFGOCOURIERHREF")
 	if refgocourierhref == "" {
-		panic("RefGoCourierhref does not exist")
+		os.Exit(1)
 	}
 
 	printtemplatehref := os.Getenv("MSAPI_PRINTTEMPLATEHREF")
 
 	if printtemplatehref == "" {
-		panic("Printtemplatehref does not exist")
+		os.Exit(1)
 	}
 
 	return &MoySkladhrefs{
@@ -208,12 +226,12 @@ type RefGoConfig struct {
 
 func loadRefGoConfig() *RefGoConfig {
 	if os.Getenv("RG_LATESTORDER") == "" {
-		panic("RG_LATESTORDER does not exist")
+		os.Exit(1)
 	}
 
 	latestorder, err := strconv.Atoi(strings.Trim(os.Getenv("RG_LATESTORDER"), `"`))
 	if err != nil {
-		panic("Invalid RG_LATESTORDER")
+		os.Exit(1)
 	}
 
 	return &RefGoConfig{
@@ -266,27 +284,27 @@ type PGConfig struct {
 func loadPGConfig() *PGConfig {
 	pgHost := os.Getenv("PG_HOST")
 	if pgHost == "" {
-		panic("PG_HOST does not exist")
+		os.Exit(1)
 	}
 
 	pgPort := os.Getenv("PG_PORT")
 	if pgPort == "" {
-		panic("PG_PORT does not exist")
+		os.Exit(1)
 	}
 
 	pgUser := os.Getenv("PG_USER")
 	if pgUser == "" {
-		panic("PG_USER does not exist")
+		os.Exit(1)
 	}
 
 	pgPassword := os.Getenv("PG_PASSWORD")
 	if pgPassword == "" {
-		panic("PG_PASSWORD does not exist")
+		os.Exit(1)
 	}
 
 	pgDatabase := os.Getenv("PG_DATABASE")
 	if pgDatabase == "" {
-		panic("PG_DATABASE does not exist")
+		os.Exit(1)
 	}
 
 	return &PGConfig{

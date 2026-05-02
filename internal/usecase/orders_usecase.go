@@ -18,14 +18,14 @@ type OrderRepository interface {
 type OrdersUseCase struct {
 	repo      OrderRepository
 	msClient  MoySkladClient
-	converter *msapiclient.MoySkladConverter
+	converter *msapiclient.MSConverter
 }
 
 type MoySkladClient interface {
 	GetOrderByHREF(ctx context.Context, href string) (*msapiclient.MSOrder, error)
 }
 
-func NewOrdersUseCase(repo OrderRepository, msClient MoySkladClient, converter *msapiclient.MoySkladConverter) *OrdersUseCase {
+func NewOrdersUseCase(repo OrderRepository, msClient MoySkladClient, converter *msapiclient.MSConverter) *OrdersUseCase {
 	return &OrdersUseCase{
 		repo:      repo,
 		msClient:  msClient,
