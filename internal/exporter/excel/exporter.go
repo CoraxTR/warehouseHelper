@@ -479,7 +479,7 @@ func setCellsStyle(f *excelize.File, sheet string, startRow, header, regular, to
 
 	innerCounter++
 
-	for range 4 {
+	for range 3 {
 		err = f.SetRowHeight(sheet, innerCounter, 12)
 		if err != nil {
 			return err
@@ -492,6 +492,23 @@ func setCellsStyle(f *excelize.File, sheet string, startRow, header, regular, to
 
 		innerCounter++
 	}
+
+	err = f.SetRowHeight(sheet, innerCounter, 12)
+	if err != nil {
+		return err
+	}
+
+	err = f.SetCellStyle(sheet, fmt.Sprintf("A%d", innerCounter), fmt.Sprintf("A%d", innerCounter), regular)
+	if err != nil {
+		return err
+	}
+
+	err = f.SetCellStyle(sheet, fmt.Sprintf("B%d", innerCounter), fmt.Sprintf("B%d", innerCounter), toTheRight)
+	if err != nil {
+		return err
+	}
+
+	innerCounter++
 
 	err = f.SetRowHeight(sheet, innerCounter, -1)
 	if err != nil {
@@ -672,6 +689,7 @@ func createxlsxStyles(f *excelize.File) (regular, right, header int) {
 		},
 		Alignment: &excelize.Alignment{
 			WrapText: true,
+			Vertical: "center",
 		},
 	})
 	if err != nil {
@@ -687,6 +705,7 @@ func createxlsxStyles(f *excelize.File) (regular, right, header int) {
 		Alignment: &excelize.Alignment{
 			WrapText:   true,
 			Horizontal: "right",
+			Vertical:   "center",
 		},
 	})
 	if err != nil {

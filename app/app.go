@@ -40,8 +40,5 @@ func (a *App) initHTTPServer() {
 		Addr:              config.NewConfig().HTTPAddress,
 		Handler:           a.di.MUX(),
 		ReadHeaderTimeout: 2 * time.Second,
-		ReadTimeout:       5 * time.Second,
-		WriteTimeout:      10 * time.Second,
-		IdleTimeout:       120 * time.Second,
 	}
 }

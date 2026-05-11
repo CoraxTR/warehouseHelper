@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sync"
 )
 
 type PDFFetcher interface {
@@ -42,16 +43,28 @@ func (uc *ExportOrderPDFUseCase) GetOrderPDF(ctx context.Context, href string) (
 }
 
 func (uc *ExportOrderPDFUseCase) GetMultipleOrdersPDF(ctx context.Context, hrefs []string) (string, error) {
+	log.Print(hrefs)
 	pdfData := make([][]byte, len(hrefs))
-	for i, href := range hrefs {
-		data, err := uc.fetcher.FetchOrderPDF(ctx, href)
-		if err != nil {
-			return "", fmt.Errorf("failed to fetch PDF for %s: %w", href, err)
-		}
+	wg := sync.WaitGroup{}
 
-		log.Printf("Fetched Order PDF %v/%v", i+1, len(hrefs))
-		pdfData[i] = data
+	for i, href := range hrefs {
+		wg.Add(1)
+		go func() (string, error) {
+			defer wg.Done()
+
+			data, err := uc.fetcher.FetchOrderPDF(ctx, href)
+			if err != nil {
+				return "", fmt.Errorf("failed to fetch PDF for %s: %w", href, err)
+			}
+
+			log.Printf("Fetched Order PDF %v/%v", i+1, len(hrefs))
+			pdfData[i] = data
+
+			return "", nil
+		}()
 	}
+
+	wg.Wait()
 
 	savePath, err := uc.exporter.ExportMergedPDF(pdfData)
 	if err != nil {

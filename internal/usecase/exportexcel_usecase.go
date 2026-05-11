@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"log"
+	"sync"
 	"warehouseHelper/internal/domain"
 )
 
@@ -65,12 +66,18 @@ func (uc *ExportToExcelUseCase) ExportOrders(ctx context.Context) (summary *Expo
 		FileName:        savepath,
 	}
 
+	wg := sync.WaitGroup{}
+
 	for _, order := range orders {
-		err := uc.shipper.SetOrderAsShippedToRefGo(ctx, order.GetHREF())
-		if err != nil {
-			return nil, err
-		}
+		wg.Go(func() {
+			err := uc.shipper.SetOrderAsShippedToRefGo(ctx, order.GetHREF())
+			if err != nil {
+				log.Printf("Error setting order as shipped: %s", err)
+			}
+		})
 	}
+
+	wg.Wait()
 
 	return summary, nil
 }

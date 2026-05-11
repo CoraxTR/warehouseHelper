@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"strconv"
+	"sync"
 	"warehouseHelper/internal/config"
 	"warehouseHelper/internal/domain"
 	"warehouseHelper/internal/repository/msapiclient"
@@ -32,7 +33,12 @@ func NewSyncUsecase(client *msapiclient.MSAPIClient, repo OrdersRepository, conv
 func (uc *SyncUseCase) SyncDeliverableOrders(ctx context.Context) {
 	refGoCounter := uc.Config.RGNextOrder
 
-	orders := uc.MSAPIClinet.FetchDeliverableOrders(ctx)
+	orders, err := uc.MSAPIClinet.FetchDeliverableOrders(ctx)
+	if err != nil {
+		log.Printf("Failed to fetch deliverable orders: %v", err)
+
+		return
+	}
 
 	suitableOrders := make([]*msapiclient.MSOrder, 0, len(orders)/2)
 	for _, o := range orders {
@@ -41,30 +47,50 @@ func (uc *SyncUseCase) SyncDeliverableOrders(ctx context.Context) {
 		}
 	}
 
+	wg := sync.WaitGroup{}
+	countermu := sync.Mutex{}
+	appendmu := sync.Mutex{}
+
 	internalOrders := make([]*domain.InternalOrder, 0, len(suitableOrders))
 
 	for _, o := range suitableOrders {
-		internalOrder := uc.Converter.ToDomain(o)
+		wg.Add(1)
 
-		if internalOrder.GetRefGoNumber() == "" {
-			err := uc.MSAPIClinet.SetRefGoNumberOnly(ctx, internalOrder.GetHREF(), strconv.Itoa(refGoCounter))
-			if err != nil {
-				log.Printf("Failed to set RefGoNumber for order %s: %v", internalOrder.GetName(), err)
+		go func(order *msapiclient.MSOrder, ctx context.Context) {
+			defer wg.Done()
 
-				continue
+			internalOrder := uc.Converter.ToDomain(order)
+
+			if internalOrder.GetRefGoNumber() == "" {
+				countermu.Lock()
+
+				currentRefNumber := refGoCounter
+				refGoCounter++
+
+				countermu.Unlock()
+
+				err := uc.MSAPIClinet.SetRefGoNumberOnly(ctx, internalOrder.GetHREF(), strconv.Itoa(int(currentRefNumber)))
+				if err != nil {
+					log.Printf("Failed to set RefGoNumber for order %s: %v", internalOrder.GetName(), err)
+				}
+
+				internalOrder.SetRefGoNumber(strconv.Itoa(int(currentRefNumber)))
+				log.Printf("Assigned RefGoNumber: %v to order: %s", currentRefNumber, internalOrder.GetName())
 			}
 
-			internalOrder.SetRefGoNumber(strconv.Itoa(refGoCounter))
-			log.Printf("Assigned RefGoNumber: %v to order: %s", refGoCounter, internalOrder.GetName())
+			internalOrder.Validate()
 
-			refGoCounter++
-		}
+			appendmu.Lock()
 
-		internalOrder.Validate()
-		internalOrders = append(internalOrders, internalOrder)
+			internalOrders = append(internalOrders, internalOrder)
+
+			appendmu.Unlock()
+		}(o, ctx)
 	}
 
-	err := uc.DBClient.InsertOrders(ctx, internalOrders)
+	wg.Wait()
+
+	err = uc.DBClient.InsertOrders(ctx, internalOrders)
 	if err != nil {
 		log.Printf("Failed to insert orders into database: %v", err)
 	}

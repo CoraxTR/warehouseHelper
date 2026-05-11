@@ -12,7 +12,7 @@ import (
 
 type Config struct {
 	*AppConfig
-	*MoySkladConfig
+	*MSConfig
 	*RefGoConfig
 	*PGConfig
 }
@@ -24,7 +24,7 @@ func NewConfig() *Config {
 	}
 
 	apc := loadAppconfig()
-	msc := loadMoySkladConfig()
+	msc := loadMSConfig()
 	rfc := loadRefGoConfig()
 	pfc := loadPGConfig()
 
@@ -33,10 +33,10 @@ func NewConfig() *Config {
 	}
 
 	return &Config{
-		AppConfig:      apc,
-		MoySkladConfig: msc,
-		RefGoConfig:    rfc,
-		PGConfig:       pfc,
+		AppConfig:   apc,
+		MSConfig:    msc,
+		RefGoConfig: rfc,
+		PGConfig:    pfc,
 	}
 }
 
@@ -55,26 +55,31 @@ func loadAppconfig() *AppConfig {
 	}
 }
 
-type MoySkladConfig struct {
-	Hrefs *MoySkladhrefs
+type MSConfig struct {
+	Hrefs *MShrefs
 
-	APIKEY        string
-	TimeSpan      time.Duration
-	RequestCap    int
-	SellTypeID    string
-	RefGoNumberID string
-	CourierID     string
-	TimeFormat    string
-	URLstart      string
-	AuthHeader    string
-	EncodeHeader  string
+	WarehouseAPIKEYS []string
+	OthersAPIKEYS    []string
+	TimeSpan         time.Duration
+	RequestCap       int
+	SellTypeID       string
+	RefGoNumberID    string
+	CourierID        string
+	TimeFormat       string
+	URLstart         string
+	AuthHeader       string
+	EncodeHeader     string
 }
 
-func loadMoySkladConfig() *MoySkladConfig {
-	mshrf := loadMoySkladhrefs()
+func loadMSConfig() *MSConfig {
+	mshrf := loadMShrefs()
 
-	apiKey := os.Getenv("MSAPI_KEY")
-	if apiKey == "" {
+	wrhsakeysStr := os.Getenv("MSAPI_KEYS_WAREHOUSE")
+	wrhsakeys := strings.Split(wrhsakeysStr, ",")
+	othrsakeysStr := os.Getenv("MSAPI_KEYS_OTHERS")
+
+	othrsakeys := strings.Split(othrsakeysStr, ",")
+	if len(wrhsakeys) == 0 && len(othrsakeys) == 0 {
 		os.Exit(1)
 	}
 
@@ -125,23 +130,24 @@ func loadMoySkladConfig() *MoySkladConfig {
 		os.Exit(1)
 	}
 
-	return &MoySkladConfig{
+	return &MSConfig{
 		Hrefs: mshrf,
 
-		APIKEY:        apiKey,
-		TimeSpan:      tspn,
-		RequestCap:    rqcap,
-		SellTypeID:    selltypeID,
-		RefGoNumberID: refgonumberid,
-		CourierID:     courierid,
-		TimeFormat:    timeFormat,
-		URLstart:      urlstart,
-		AuthHeader:    authheader,
-		EncodeHeader:  encodeheader,
+		WarehouseAPIKEYS: wrhsakeys,
+		OthersAPIKEYS:    othrsakeys,
+		TimeSpan:         tspn,
+		RequestCap:       rqcap,
+		SellTypeID:       selltypeID,
+		RefGoNumberID:    refgonumberid,
+		CourierID:        courierid,
+		TimeFormat:       timeFormat,
+		URLstart:         urlstart,
+		AuthHeader:       authheader,
+		EncodeHeader:     encodeheader,
 	}
 }
 
-type MoySkladhrefs struct {
+type MShrefs struct {
 	Readystatehref    string
 	Shipedstatehref   string
 	SellTypehref      string
@@ -154,7 +160,7 @@ type MoySkladhrefs struct {
 	Printtemplatehref string
 }
 
-func loadMoySkladhrefs() *MoySkladhrefs {
+func loadMShrefs() *MShrefs {
 	readystatehref := os.Getenv("MSAPI_READYSTATEHREF")
 	if readystatehref == "" {
 		os.Exit(1)
@@ -206,7 +212,7 @@ func loadMoySkladhrefs() *MoySkladhrefs {
 		os.Exit(1)
 	}
 
-	return &MoySkladhrefs{
+	return &MShrefs{
 		Readystatehref:    readystatehref,
 		Shipedstatehref:   shipedstatehref,
 		SellTypehref:      selltypehref,
@@ -221,7 +227,7 @@ func loadMoySkladhrefs() *MoySkladhrefs {
 }
 
 type RefGoConfig struct {
-	RGNextOrder int
+	RGNextOrder int64
 }
 
 func loadRefGoConfig() *RefGoConfig {
@@ -235,11 +241,11 @@ func loadRefGoConfig() *RefGoConfig {
 	}
 
 	return &RefGoConfig{
-		RGNextOrder: latestorder,
+		RGNextOrder: int64(latestorder),
 	}
 }
 
-func (rgc *RefGoConfig) ChangeRefGoLatest(latestOrder int) error {
+func (rgc *RefGoConfig) ChangeRefGoLatest(latestOrder int64) error {
 	envFile := "../.env"
 
 	content, err := os.ReadFile(envFile)

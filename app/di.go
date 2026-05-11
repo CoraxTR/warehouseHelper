@@ -6,7 +6,7 @@ import (
 	myhttp "warehouseHelper/internal/delivery/http"
 	"warehouseHelper/internal/exporter/excel"
 	"warehouseHelper/internal/exporter/pdf"
-	"warehouseHelper/internal/msratelimiter"
+	"warehouseHelper/internal/ms_workerpool"
 	"warehouseHelper/internal/repository/msapiclient"
 	"warehouseHelper/internal/repository/postgres"
 	"warehouseHelper/internal/usecase"
@@ -15,7 +15,8 @@ import (
 type DIContainer struct {
 	// Инфраструктура
 	config      *config.Config
-	msrl        *msratelimiter.MoySkladOutRateLimiter
+	msrl        *ms_workerpool.MSOutRateLimiter
+	wp          *ms_workerpool.MSWorkerPool
 	msc         *msapiclient.MSAPIClient
 	orepo       *postgres.PGClient
 	msconv      *msapiclient.MSConverter
@@ -45,17 +46,25 @@ func (d *DIContainer) Config() *config.Config {
 
 	return d.config
 }
-func (d *DIContainer) MSRateLimiter() *msratelimiter.MoySkladOutRateLimiter {
+func (d *DIContainer) MSRateLimiter() *ms_workerpool.MSOutRateLimiter {
 	if d.msrl == nil {
-		d.msrl = msratelimiter.NewMoySkladOutRateLimiter(d.Config().MoySkladConfig)
+		d.msrl = ms_workerpool.NewMSOutRateLimiter(d.Config().MSConfig)
 	}
 
 	return d.msrl
 }
 
+func (d *DIContainer) MSWorkerPool() *ms_workerpool.MSWorkerPool {
+	if d.wp == nil {
+		d.wp = ms_workerpool.NewMSWorkerPool(d.Config().MSConfig)
+	}
+
+	return d.wp
+}
+
 func (d *DIContainer) MSClient() *msapiclient.MSAPIClient {
 	if d.msc == nil {
-		d.msc = msapiclient.NewMSAPIClient(d.Config(), d.MSRateLimiter())
+		d.msc = msapiclient.NewMSAPIClient(d.Config(), d.MSWorkerPool())
 	}
 
 	return d.msc
