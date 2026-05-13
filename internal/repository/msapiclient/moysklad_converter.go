@@ -109,7 +109,7 @@ func processWeights(msOrder *MSOrder) (chilledWeight, frozenWeight, anyWeight fl
 		}
 
 		runedCode := []rune(position.PositionCode)
-		switch runedCode[1] {
+		switch runedCode[0] {
 		case '0':
 			frozenWeight += (position.Quantity * position.PositionWeight * gramsInKG)
 		case '1':
