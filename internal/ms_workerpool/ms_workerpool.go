@@ -2,6 +2,8 @@ package ms_workerpool
 
 import (
 	"context"
+	"log"
+	"net/http"
 	"sync"
 	"warehouseHelper/internal/config"
 )
@@ -31,12 +33,43 @@ type MSWorkerPool struct {
 
 type MSWarehouseWorker struct {
 	APIKey      string
+	Name        string
 	rateLimiter *MSOutRateLimiter
 }
 
 type MSOtherWorker struct {
 	APIKey      string
+	Name        string
 	rateLimiter *MSOutRateLimiter
+}
+
+func validateKey(ctx context.Context, config *config.MSConfig, apikey string) bool {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, config.Hrefs.Orghref, http.NoBody)
+	if err != nil {
+		log.Printf("failed to create request: %s", err)
+
+		return false
+	}
+
+	req.Header.Set("Authorization", config.AuthHeader+" "+apikey)
+	req.Header.Set("Accept-Encoding", "gzip")
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		log.Printf("failed to make request: %s", err)
+
+		return false
+	}
+
+	defer func() {
+		err := resp.Body.Close()
+		if err != nil {
+			log.Printf("failed to close response body: %s", err)
+		}
+	}()
+
+	return resp.StatusCode == http.StatusOK
 }
 
 func NewMSWorkerPool(config *config.MSConfig) *MSWorkerPool {
@@ -53,7 +86,14 @@ func NewMSWorkerPool(config *config.MSConfig) *MSWorkerPool {
 	}
 
 	for _, v := range config.WarehouseAPIKEYS {
-		w := &MSWarehouseWorker{APIKey: v, rateLimiter: NewMSOutRateLimiter(config)}
+		w := &MSWarehouseWorker{APIKey: v.APIKey, Name: v.Name, rateLimiter: NewMSOutRateLimiter(config)}
+		ok := validateKey(ctx, config, v.APIKey)
+		if !ok {
+			log.Printf("%s: Мне дали неправильный API-ключ!", v.Name)
+
+			continue
+		}
+		log.Printf("%s: API-ключ прошёл проверку, мне можно давать задачи", v.Name)
 		pool.WarehouseWorkers = append(pool.WarehouseWorkers, w)
 		pool.wg.Add(1)
 
@@ -61,7 +101,14 @@ func NewMSWorkerPool(config *config.MSConfig) *MSWorkerPool {
 	}
 
 	for _, v := range config.OthersAPIKEYS {
-		w := &MSOtherWorker{APIKey: v, rateLimiter: NewMSOutRateLimiter(config)}
+		w := &MSOtherWorker{APIKey: v.APIKey, Name: v.Name, rateLimiter: NewMSOutRateLimiter(config)}
+		ok := validateKey(ctx, config, v.APIKey)
+		if !ok {
+			log.Printf("%s: Мне дали неправильный API-ключ!", v.Name)
+
+			continue
+		}
+		log.Printf("%s: API-ключ прошёл проверку, мне можно давать задачи", v.Name)
 		pool.OtherWorkers = append(pool.OtherWorkers, w)
 		pool.wg.Add(1)
 

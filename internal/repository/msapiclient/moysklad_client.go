@@ -109,7 +109,9 @@ func (msac *MSAPIClient) FetchOrderPositionsByHREF(parentCtx context.Context, o 
 			}
 		}()
 
-		log.Printf("FetchOrderPositionsByHREF got a response with status %v", resp.Status)
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("API returned %s", resp.Status)
+		}
 
 		positions, err := unmarshalPositions(body)
 		if err != nil {

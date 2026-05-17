@@ -55,11 +55,16 @@ func loadAppconfig() *AppConfig {
 	}
 }
 
+type MSWorker struct {
+	APIKey string
+	Name   string
+}
+
 type MSConfig struct {
 	Hrefs *MShrefs
 
-	WarehouseAPIKEYS []string
-	OthersAPIKEYS    []string
+	WarehouseAPIKEYS []MSWorker
+	OthersAPIKEYS    []MSWorker
 	TimeSpan         time.Duration
 	RequestCap       int
 	SellTypeID       string
@@ -76,10 +81,25 @@ func loadMSConfig() *MSConfig {
 
 	wrhsakeysStr := os.Getenv("MSAPI_KEYS_WAREHOUSE")
 	wrhsakeys := strings.Split(wrhsakeysStr, ",")
-	othrsakeysStr := os.Getenv("MSAPI_KEYS_OTHERS")
+	wrhworkers := make([]MSWorker, 0, len(wrhsakeys))
 
+	for _, key := range wrhsakeys {
+		parts := strings.Split(key, "-")
+		if len(parts) == 2 {
+			wrhworkers = append(wrhworkers, MSWorker{APIKey: parts[0], Name: parts[1]})
+		}
+	}
+
+	othrsakeysStr := os.Getenv("MSAPI_KEYS_OTHERS")
 	othrsakeys := strings.Split(othrsakeysStr, ",")
-	if len(wrhsakeys) == 0 && len(othrsakeys) == 0 {
+	othrworkers := make([]MSWorker, 0, len(othrsakeys))
+	for _, key := range othrsakeys {
+		parts := strings.Split(key, "-")
+		if len(parts) == 2 {
+			othrworkers = append(othrworkers, MSWorker{APIKey: parts[0], Name: parts[1]})
+		}
+	}
+	if len(wrhworkers) == 0 && len(othrworkers) == 0 {
 		os.Exit(1)
 	}
 
@@ -133,8 +153,8 @@ func loadMSConfig() *MSConfig {
 	return &MSConfig{
 		Hrefs: mshrf,
 
-		WarehouseAPIKEYS: wrhsakeys,
-		OthersAPIKEYS:    othrsakeys,
+		WarehouseAPIKEYS: wrhworkers,
+		OthersAPIKEYS:    othrworkers,
 		TimeSpan:         tspn,
 		RequestCap:       rqcap,
 		SellTypeID:       selltypeID,
