@@ -21,7 +21,8 @@ type SyncUseCase struct {
 	Config      *config.RefGoConfig
 }
 
-func NewSyncUsecase(client *msapiclient.MSAPIClient, repo OrdersRepository, converter *msapiclient.MSConverter, cfg *config.RefGoConfig) *SyncUseCase {
+func NewSyncUsecase(client *msapiclient.MSAPIClient, repo OrdersRepository, converter *msapiclient.MSConverter,
+	cfg *config.RefGoConfig) *SyncUseCase {
 	return &SyncUseCase{
 		MSAPIClinet: client,
 		DBClient:    repo,
@@ -54,6 +55,7 @@ func (uc *SyncUseCase) SyncDeliverableOrders(ctx context.Context) {
 	internalOrders := make([]*domain.InternalOrder, 0, len(suitableOrders))
 
 	for _, o := range suitableOrders {
+		//nolint:revive //false positive, we can't use wg.Go for goroutines with variables
 		wg.Add(1)
 
 		go func(order *msapiclient.MSOrder, ctx context.Context) {
@@ -89,6 +91,8 @@ func (uc *SyncUseCase) SyncDeliverableOrders(ctx context.Context) {
 	}
 
 	wg.Wait()
+
+	uc.MSAPIClinet.Cache.AddOrdersToCache(internalOrders)
 
 	err = uc.DBClient.InsertOrders(ctx, internalOrders)
 	if err != nil {

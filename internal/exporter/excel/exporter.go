@@ -307,6 +307,7 @@ func setOrderBoxesInformation(f *excelize.File, sheet, row string, info *repeata
 		setChilledAsMainLine(f, sheet, row, info, order)
 
 		incrementCounter++
+
 		newRow, err := incrementStringCounterByInt(row, 1)
 		if err != nil {
 			log.Print(err)

@@ -14,22 +14,30 @@ import (
 	"path"
 	"time"
 	"warehouseHelper/internal/config"
+	"warehouseHelper/internal/domain"
 	"warehouseHelper/internal/ms_workerpool"
 )
 
 const msEncoding = "gzip"
 
+type OrderCache interface {
+	AddOrdersToCache(orders []*domain.InternalOrder)
+	CheckOrderInCache(s string) bool
+}
+
 type MSAPIClient struct {
 	workerpool *ms_workerpool.MSWorkerPool
 	msConfig   *config.MSConfig
 	rgConfig   *config.RefGoConfig
+	Cache      OrderCache
 }
 
-func NewMSAPIClient(c *config.Config, wp *ms_workerpool.MSWorkerPool) *MSAPIClient {
+func NewMSAPIClient(c *config.Config, wp *ms_workerpool.MSWorkerPool, cache OrderCache) *MSAPIClient {
 	return &MSAPIClient{
 		workerpool: wp,
 		msConfig:   c.MSConfig,
 		rgConfig:   c.RefGoConfig,
+		Cache:      cache,
 	}
 }
 
@@ -171,8 +179,6 @@ func (msac *MSAPIClient) FetchPositionSubInfoByHREF(parentctx context.Context, p
 			}
 		}()
 
-		log.Printf("FetchPositionSubInfoByHREF got a response with status %v", resp.Status)
-
 		position, err := unmarshalPositionSubInfo(body)
 		if err != nil {
 			return nil, err
@@ -255,8 +261,6 @@ func (msac *MSAPIClient) FetchDeliverableOrders(parentctx context.Context) ([]*M
 			}
 		}()
 
-		log.Printf("FetchDeliverableOrders got a response with status %v", resp.Status)
-
 		unmFOR, err := unmarshalMSFetchOrdersResponse(body)
 		if err != nil {
 			log.Println(err)
@@ -266,16 +270,19 @@ func (msac *MSAPIClient) FetchDeliverableOrders(parentctx context.Context) ([]*M
 
 		log.Printf("FetchDeliverableOrders fetched %v orders", len(unmFOR.Rows))
 
-		msOrders := make([]*MSOrder, len(unmFOR.Rows))
-		for k := range unmFOR.Rows {
-			msOrders[k] = &unmFOR.Rows[k]
+		newOrders := make([]*MSOrder, 0, len(unmFOR.Rows)/2)
+		for _, o := range unmFOR.Rows {
+			if !msac.Cache.CheckOrderInCache(o.Meta.HREF) {
+				newOrders = append(newOrders, &o)
+			}
 		}
 
-		for _, o := range msOrders {
+		for _, o := range newOrders {
+			log.Printf("Enriching order with ID: %s", o.Name)
 			msac.enrichOrder(ctx, o)
 		}
 
-		return msOrders, nil
+		return newOrders, nil
 	}
 
 	resCh := msac.workerpool.SubmitOther(job)

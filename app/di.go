@@ -8,20 +8,22 @@ import (
 	"warehouseHelper/internal/exporter/pdf"
 	"warehouseHelper/internal/ms_workerpool"
 	"warehouseHelper/internal/repository/msapiclient"
+	orderscache "warehouseHelper/internal/repository/ordercache"
 	"warehouseHelper/internal/repository/postgres"
 	"warehouseHelper/internal/usecase"
 )
 
 type DIContainer struct {
 	// Инфраструктура
-	config      *config.Config
-	msrl        *ms_workerpool.MSOutRateLimiter
-	wp          *ms_workerpool.MSWorkerPool
-	msc         *msapiclient.MSAPIClient
-	orepo       *postgres.PGClient
-	msconv      *msapiclient.MSConverter
-	xlexporter  *excel.ExcelExporter
-	pdfexporter *pdf.PDFExporter
+	config       *config.Config
+	msrl         *ms_workerpool.MSOutRateLimiter
+	wp           *ms_workerpool.MSWorkerPool
+	msc          *msapiclient.MSAPIClient
+	orepo        *postgres.PGClient
+	msconv       *msapiclient.MSConverter
+	xlxsexporter *excel.ExcelExporter
+	pdfexporter  *pdf.PDFExporter
+	ordercache   *orderscache.OrderCache
 
 	// Юзкейсы
 	syncUC          *usecase.SyncUseCase
@@ -64,7 +66,7 @@ func (d *DIContainer) MSWorkerPool() *ms_workerpool.MSWorkerPool {
 
 func (d *DIContainer) MSClient() *msapiclient.MSAPIClient {
 	if d.msc == nil {
-		d.msc = msapiclient.NewMSAPIClient(d.Config(), d.MSWorkerPool())
+		d.msc = msapiclient.NewMSAPIClient(d.Config(), d.MSWorkerPool(), d.OrderCache())
 	}
 
 	return d.msc
@@ -86,9 +88,18 @@ func (d *DIContainer) MSConverter() *msapiclient.MSConverter {
 	return d.msconv
 }
 
+func (d *DIContainer) OrderCache() *orderscache.OrderCache {
+	if d.ordercache == nil {
+		d.ordercache = orderscache.NewOrderCache()
+	}
+
+	return d.ordercache
+}
+
 func (d *DIContainer) SyncUC() *usecase.SyncUseCase {
 	if d.syncUC == nil {
-		d.syncUC = usecase.NewSyncUsecase(d.MSClient(), d.OrdersRepository(), d.MSConverter(), d.Config().RefGoConfig)
+		d.syncUC = usecase.NewSyncUsecase(d.MSClient(), d.OrdersRepository(), d.MSConverter(),
+			d.Config().RefGoConfig)
 	}
 
 	return d.syncUC
@@ -102,19 +113,19 @@ func (d *DIContainer) OrdersUC() *usecase.OrdersUseCase {
 }
 
 func (d *DIContainer) ExcelExporter() usecase.ExcelExporter {
-	if d.xlexporter == nil {
-		d.xlexporter = excel.NewExcelExporter()
+	if d.xlxsexporter == nil {
+		d.xlxsexporter = excel.NewExcelExporter()
 	}
 
-	return d.xlexporter
+	return d.xlxsexporter
 }
 
 func (d *DIContainer) ExcelBarcodeExporter() usecase.ExcelBarcodesExporter {
-	if d.xlexporter == nil {
-		d.xlexporter = excel.NewExcelExporter()
+	if d.xlxsexporter == nil {
+		d.xlxsexporter = excel.NewExcelExporter()
 	}
 
-	return d.xlexporter
+	return d.xlxsexporter
 }
 
 func (d *DIContainer) ExcelExportUC() *usecase.ExportToExcelUseCase {

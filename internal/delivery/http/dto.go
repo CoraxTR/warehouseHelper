@@ -1,4 +1,4 @@
-package http
+package http //nolint:revive //i do what i have to do
 
 type UpdateOrderRequest struct {
 	HREF                  string  `json:"href"`

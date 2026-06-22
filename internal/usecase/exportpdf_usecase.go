@@ -48,20 +48,15 @@ func (uc *ExportOrderPDFUseCase) GetMultipleOrdersPDF(ctx context.Context, hrefs
 	wg := sync.WaitGroup{}
 
 	for i, href := range hrefs {
-		wg.Add(1)
-		go func() (string, error) {
-			defer wg.Done()
-
+		wg.Go(func() {
 			data, err := uc.fetcher.FetchOrderPDF(ctx, href)
 			if err != nil {
-				return "", fmt.Errorf("failed to fetch PDF for %s: %w", href, err)
+				log.Printf("failed to fetch PDF for %s: %s", href, err)
 			}
 
 			log.Printf("Fetched Order PDF %v/%v", i+1, len(hrefs))
 			pdfData[i] = data
-
-			return "", nil
-		}()
+		})
 	}
 
 	wg.Wait()

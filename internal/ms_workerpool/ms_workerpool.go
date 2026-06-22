@@ -87,13 +87,16 @@ func NewMSWorkerPool(config *config.MSConfig) *MSWorkerPool {
 
 	for _, v := range config.WarehouseAPIKEYS {
 		w := &MSWarehouseWorker{APIKey: v.APIKey, Name: v.Name, rateLimiter: NewMSOutRateLimiter(config)}
+
 		ok := validateKey(ctx, config, v.APIKey)
 		if !ok {
 			log.Printf("%s: Мне дали неправильный API-ключ!", v.Name)
 
 			continue
 		}
+
 		log.Printf("%s: API-ключ прошёл проверку, мне можно давать задачи", v.Name)
+
 		pool.WarehouseWorkers = append(pool.WarehouseWorkers, w)
 		pool.wg.Add(1)
 
@@ -102,13 +105,16 @@ func NewMSWorkerPool(config *config.MSConfig) *MSWorkerPool {
 
 	for _, v := range config.OthersAPIKEYS {
 		w := &MSOtherWorker{APIKey: v.APIKey, Name: v.Name, rateLimiter: NewMSOutRateLimiter(config)}
+
 		ok := validateKey(ctx, config, v.APIKey)
 		if !ok {
 			log.Printf("%s: Мне дали неправильный API-ключ!", v.Name)
 
 			continue
 		}
+
 		log.Printf("%s: API-ключ прошёл проверку, мне можно давать задачи", v.Name)
+
 		pool.OtherWorkers = append(pool.OtherWorkers, w)
 		pool.wg.Add(1)
 

@@ -1,7 +1,7 @@
+//nolint:revive //i do what i have to do
 package ms_workerpool
 
 import (
-	"log"
 	"time"
 	"warehouseHelper/internal/config"
 )
@@ -26,7 +26,6 @@ func (r *MSOutRateLimiter) Chan() <-chan struct{} {
 }
 
 func (r *MSOutRateLimiter) Wait() {
-	log.Println("Waiting for Ratelimiter")
 	<-r.ch
 }
 

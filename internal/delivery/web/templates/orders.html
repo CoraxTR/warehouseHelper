@@ -180,6 +180,8 @@
         </tbody>
     </table>
 
+    <p style="margin: 10px 0; font-weight: bold;">Всего заказов: {{len .}}</p>
+
     <!-- Нижние кнопки -->
     <div class="bottom-actions">
         <!-- Блок массовых действий (появляется при выборе чекбоксов) -->
@@ -194,8 +196,10 @@
         <!-- Кнопка выгрузки в Реф (всегда видна) -->
         <button id="export-to-ref">Выгрузить в Реф</button>
 
-        <!-- Кнопка довыгрузки (всегда видна) -->
-        <button id="resync">Довыгрузить</button>
+        <!-- Кнопка довыгрузки (всегда видна) – теперь форма -->
+        <form action="/sync" method="post" style="display: inline;">
+            <button id="resync" type="submit">Довыгрузить</button>
+        </form>
     </div>
 
     <br>
@@ -235,67 +239,65 @@
                 updateBulkActionsVisibility();
             });
 
-        document.getElementById('print-barcodes-bulk').addEventListener('click', function (e) {
-    e.preventDefault();
-    const selectedRows = Array.from(document.querySelectorAll('.order-checkbox:checked')).map(cb => cb.closest('tr'));
-    if (selectedRows.length === 0) return;
+            document.getElementById('print-barcodes-bulk').addEventListener('click', function (e) {
+                e.preventDefault();
+                const selectedRows = Array.from(document.querySelectorAll('.order-checkbox:checked')).map(cb => cb.closest('tr'));
+                if (selectedRows.length === 0) return;
 
-    const orders = selectedRows.map(row => ({
-        href: row.dataset.href,
-        refGoNumber: parseInt(row.dataset.refgonumber) || 0
-    }));
-    orders.sort((a, b) => a.refGoNumber - b.refGoNumber);
-    const hrefs = orders.map(o => o.href);
+                const orders = selectedRows.map(row => ({
+                    href: row.dataset.href,
+                    refGoNumber: parseInt(row.dataset.refgonumber) || 0
+                }));
+                orders.sort((a, b) => a.refGoNumber - b.refGoNumber);
+                const hrefs = orders.map(o => o.href);
 
-    const originalText = this.innerText;
-    this.disabled = true;
-    this.innerText = 'Подготовка...';
+                const originalText = this.innerText;
+                this.disabled = true;
+                this.innerText = 'Подготовка...';
 
-    fetch('/print-barcodes', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ hrefs: hrefs })
-    })
-        .then(response => {
-            if (!response.ok) {
-                return response.text().then(text => { throw new Error(text); });
-            }
-            return response.blob();
-        })
-        .then(blob => {
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = 'barcodes.xlsx';
-            document.body.appendChild(a);
-            a.click();
-            a.remove();
-            window.URL.revokeObjectURL(url);
-            this.disabled = false;
-            this.innerText = originalText;
-        })
-        .catch(err => {
-            console.error(err);
-            alert('Ошибка печати штрих-кодов: ' + err.message);
-            this.disabled = false;
-            this.innerText = originalText;
-        });
-});
+                fetch('/print-barcodes', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ hrefs: hrefs })
+                })
+                    .then(response => {
+                        if (!response.ok) {
+                            return response.text().then(text => { throw new Error(text); });
+                        }
+                        return response.blob();
+                    })
+                    .then(blob => {
+                        const url = window.URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = 'barcodes.xlsx';
+                        document.body.appendChild(a);
+                        a.click();
+                        a.remove();
+                        window.URL.revokeObjectURL(url);
+                        this.disabled = false;
+                        this.innerText = originalText;
+                    })
+                    .catch(err => {
+                        console.error(err);
+                        alert('Ошибка печати штрих-кодов: ' + err.message);
+                        this.disabled = false;
+                        this.innerText = originalText;
+                    });
+            });
+
             // ---- Обработка массовой печати бланков ----
             document.getElementById('print-forms-bulk').addEventListener('click', function (e) {
                 e.preventDefault();
                 const selectedRows = Array.from(document.querySelectorAll('.order-checkbox:checked')).map(cb => cb.closest('tr'));
                 if (selectedRows.length === 0) return;
 
-                // Собираем href и refGoNumber
                 const orders = selectedRows.map(row => ({
                     href: row.dataset.href,
                     refGoNumber: parseInt(row.dataset.refgonumber) || 0
                 }));
 
-                // Сортируем по возрастанию номера РефГо
                 orders.sort((a, b) => a.refGoNumber - b.refGoNumber);
-
                 const hrefs = orders.map(o => o.href);
 
                 const originalText = this.innerText;
@@ -333,7 +335,7 @@
                     });
             });
 
-            // ---- Остальная логика (без изменений) ----
+            // ---- Остальная логика (сохранение изменений, экспорт, обновление до МС, удаление, печать одного бланка) ----
             const saveButton = document.getElementById('save-all-changes');
             const exportButton = document.getElementById('export-to-ref');
             const rows = document.querySelectorAll('.order-row');
@@ -476,72 +478,49 @@
                 });
             });
 
-            const resyncButton = document.getElementById('resync');
-            resyncButton.addEventListener('click', function (e) {
-                e.preventDefault();
-                const originalText = this.innerText;
-                this.disabled = true;
-                this.innerText = 'Синхронизация...';
+            // Обработка кнопок "Штрих-код" (одиночный)
+            document.querySelectorAll('.print-barcode-btn').forEach(btn => {
+                btn.addEventListener('click', function (e) {
+                    e.preventDefault();
+                    const href = this.dataset.href;
+                    if (!href) return;
 
-                fetch('/sync', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' }
-                })
-                    .then(response => {
-                        if (!response.ok) {
-                            return response.text().then(text => { throw new Error(text); });
-                        }
-                        window.location.reload();
+                    const originalText = this.innerText;
+                    this.disabled = true;
+                    this.innerText = 'Подготовка...';
+
+                    fetch('/print-barcodes', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ hrefs: [href] })
                     })
-                    .catch(err => {
-                        console.error(err);
-                        alert('Ошибка синхронизации: ' + err.message);
-                        this.disabled = false;
-                        this.innerText = originalText;
-                    });
+                        .then(response => {
+                            if (!response.ok) {
+                                return response.text().then(text => { throw new Error(text); });
+                            }
+                            return response.blob();
+                        })
+                        .then(blob => {
+                            const url = window.URL.createObjectURL(blob);
+                            const a = document.createElement('a');
+                            a.href = url;
+                            a.download = 'barcodes.xlsx';
+                            document.body.appendChild(a);
+                            a.click();
+                            a.remove();
+                            window.URL.revokeObjectURL(url);
+                            this.disabled = false;
+                            this.innerText = originalText;
+                        })
+                        .catch(err => {
+                            console.error(err);
+                            alert('Ошибка: ' + err.message);
+                            this.disabled = false;
+                            this.innerText = originalText;
+                        });
+                });
             });
         });
-        document.querySelectorAll('.print-barcode-btn').forEach(btn => {
-    btn.addEventListener('click', function (e) {
-        e.preventDefault();
-        const href = this.dataset.href;
-        if (!href) return;
-
-        const originalText = this.innerText;
-        this.disabled = true;
-        this.innerText = 'Подготовка...';
-
-        fetch('/print-barcodes', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ hrefs: [href] })
-        })
-            .then(response => {
-                if (!response.ok) {
-                    return response.text().then(text => { throw new Error(text); });
-                }
-                return response.blob();
-            })
-            .then(blob => {
-                const url = window.URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = 'barcodes.xlsx';
-                document.body.appendChild(a);
-                a.click();
-                a.remove();
-                window.URL.revokeObjectURL(url);
-                this.disabled = false;
-                this.innerText = originalText;
-            })
-            .catch(err => {
-                console.error(err);
-                alert('Ошибка: ' + err.message);
-                this.disabled = false;
-                this.innerText = originalText;
-            });
-    });
-});
     </script>
 </body>
 

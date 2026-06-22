@@ -92,6 +92,7 @@ func loadMSConfig() *MSConfig {
 
 	othrsakeysStr := os.Getenv("MSAPI_KEYS_OTHERS")
 	othrsakeys := strings.Split(othrsakeysStr, ",")
+
 	othrworkers := make([]MSWorker, 0, len(othrsakeys))
 	for _, key := range othrsakeys {
 		parts := strings.Split(key, "-")
@@ -99,6 +100,7 @@ func loadMSConfig() *MSConfig {
 			othrworkers = append(othrworkers, MSWorker{APIKey: parts[0], Name: parts[1]})
 		}
 	}
+
 	if len(wrhworkers) == 0 && len(othrworkers) == 0 {
 		os.Exit(1)
 	}
