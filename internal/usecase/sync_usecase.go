@@ -8,6 +8,7 @@ import (
 	"warehouseHelper/internal/config"
 	"warehouseHelper/internal/domain"
 	"warehouseHelper/internal/repository/msapiclient"
+	"warehouseHelper/internal/repository/pdfpreloader"
 )
 
 type OrdersRepository interface {
@@ -15,19 +16,21 @@ type OrdersRepository interface {
 }
 
 type SyncUseCase struct {
-	MSAPIClinet *msapiclient.MSAPIClient
-	DBClient    OrdersRepository
-	Converter   *msapiclient.MSConverter
-	Config      *config.RefGoConfig
+	MSAPIClinet  *msapiclient.MSAPIClient
+	DBClient     OrdersRepository
+	Converter    *msapiclient.MSConverter
+	Config       *config.RefGoConfig
+	PDFPreloader *pdfpreloader.PDFPreloader
 }
 
 func NewSyncUsecase(client *msapiclient.MSAPIClient, repo OrdersRepository, converter *msapiclient.MSConverter,
-	cfg *config.RefGoConfig) *SyncUseCase {
+	cfg *config.RefGoConfig, pdf *pdfpreloader.PDFPreloader) *SyncUseCase {
 	return &SyncUseCase{
-		MSAPIClinet: client,
-		DBClient:    repo,
-		Converter:   converter,
-		Config:      cfg,
+		MSAPIClinet:  client,
+		DBClient:     repo,
+		Converter:    converter,
+		Config:       cfg,
+		PDFPreloader: pdf,
 	}
 }
 
@@ -93,6 +96,7 @@ func (uc *SyncUseCase) SyncDeliverableOrders(ctx context.Context) {
 	wg.Wait()
 
 	uc.MSAPIClinet.Cache.AddOrdersToCache(internalOrders)
+	uc.PDFPreloader.StartPreloading(internalOrders) //nolint:contextcheck //we have ctx cancellation by PDFPreloader.StopPreloading
 
 	err = uc.DBClient.InsertOrders(ctx, internalOrders)
 	if err != nil {

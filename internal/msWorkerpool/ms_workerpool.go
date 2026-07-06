@@ -1,4 +1,4 @@
-package ms_workerpool
+package msWorkerpool
 
 import (
 	"context"
@@ -26,7 +26,7 @@ type MSWorkerPool struct {
 	warehouseTasks   chan task
 	otherTasks       chan task
 	wg               sync.WaitGroup
-	ctx              context.Context
+	ctx              context.Context //nolint:containedctx //we need to cancel all workers when stopping the pool
 	cancel           context.CancelFunc
 	once             sync.Once
 }

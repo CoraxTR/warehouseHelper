@@ -44,7 +44,7 @@ func unmarshalMSOrderAttributes(o *MSOrder) error {
 			}
 
 			value = s
-		case "customentity":
+		case MSCustomEntityType:
 			var ce struct {
 				Name string `json:"name"`
 			}
@@ -56,7 +56,7 @@ func unmarshalMSOrderAttributes(o *MSOrder) error {
 
 			value = ce.Name
 
-		case "employee":
+		case MSEmployeeType:
 			var emp struct {
 				Name string `json:"name"`
 			}

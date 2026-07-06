@@ -6,9 +6,10 @@ import (
 	myhttp "warehouseHelper/internal/delivery/http"
 	"warehouseHelper/internal/exporter/excel"
 	"warehouseHelper/internal/exporter/pdf"
-	"warehouseHelper/internal/ms_workerpool"
+	"warehouseHelper/internal/msWorkerpool"
 	"warehouseHelper/internal/repository/msapiclient"
 	orderscache "warehouseHelper/internal/repository/ordercache"
+	"warehouseHelper/internal/repository/pdfpreloader"
 	"warehouseHelper/internal/repository/postgres"
 	"warehouseHelper/internal/usecase"
 )
@@ -16,14 +17,15 @@ import (
 type DIContainer struct {
 	// Инфраструктура
 	config       *config.Config
-	msrl         *ms_workerpool.MSOutRateLimiter
-	wp           *ms_workerpool.MSWorkerPool
+	msrl         *msWorkerpool.MSOutRateLimiter
+	wp           *msWorkerpool.MSWorkerPool
 	msc          *msapiclient.MSAPIClient
 	orepo        *postgres.PGClient
 	msconv       *msapiclient.MSConverter
 	xlxsexporter *excel.ExcelExporter
 	pdfexporter  *pdf.PDFExporter
 	ordercache   *orderscache.OrderCache
+	pdfpreloader *pdfpreloader.PDFPreloader
 
 	// Юзкейсы
 	syncUC          *usecase.SyncUseCase
@@ -48,17 +50,17 @@ func (d *DIContainer) Config() *config.Config {
 
 	return d.config
 }
-func (d *DIContainer) MSRateLimiter() *ms_workerpool.MSOutRateLimiter {
+func (d *DIContainer) MSRateLimiter() *msWorkerpool.MSOutRateLimiter {
 	if d.msrl == nil {
-		d.msrl = ms_workerpool.NewMSOutRateLimiter(d.Config().MSConfig)
+		d.msrl = msWorkerpool.NewMSOutRateLimiter(d.Config().MSConfig)
 	}
 
 	return d.msrl
 }
 
-func (d *DIContainer) MSWorkerPool() *ms_workerpool.MSWorkerPool {
+func (d *DIContainer) MSWorkerPool() *msWorkerpool.MSWorkerPool {
 	if d.wp == nil {
-		d.wp = ms_workerpool.NewMSWorkerPool(d.Config().MSConfig)
+		d.wp = msWorkerpool.NewMSWorkerPool(d.Config().MSConfig)
 	}
 
 	return d.wp
@@ -96,10 +98,18 @@ func (d *DIContainer) OrderCache() *orderscache.OrderCache {
 	return d.ordercache
 }
 
+func (d *DIContainer) PdfPreloader() *pdfpreloader.PDFPreloader {
+	if d.pdfpreloader == nil {
+		d.pdfpreloader = pdfpreloader.NewPDFPreloader(d.MSClient())
+	}
+
+	return d.pdfpreloader
+}
+
 func (d *DIContainer) SyncUC() *usecase.SyncUseCase {
 	if d.syncUC == nil {
 		d.syncUC = usecase.NewSyncUsecase(d.MSClient(), d.OrdersRepository(), d.MSConverter(),
-			d.Config().RefGoConfig)
+			d.Config().RefGoConfig, d.PdfPreloader())
 	}
 
 	return d.syncUC
@@ -146,7 +156,7 @@ func (d *DIContainer) PDFExporter() usecase.PDFExporter {
 
 func (d *DIContainer) PdfExportUC() *usecase.ExportOrderPDFUseCase {
 	if d.pdfExportUC == nil {
-		d.pdfExportUC = usecase.NewExportOrderPDFUseCase(d.MSClient(), d.PDFExporter())
+		d.pdfExportUC = usecase.NewExportOrderPDFUseCase(d.MSClient(), d.PDFExporter(), d.PdfPreloader())
 	}
 
 	return d.pdfExportUC

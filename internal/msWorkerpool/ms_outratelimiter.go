@@ -1,5 +1,5 @@
 //nolint:revive //i do what i have to do
-package ms_workerpool
+package msWorkerpool
 
 import (
 	"time"

@@ -15,9 +15,13 @@ import (
 	"github.com/xuri/excelize/v2"
 )
 
-const cashPaymentMethod = "Наличные"
-const cardPaymentMethod = "Терминал"
-const wirePaymentMethod = "расч. счет"
+const (
+	cashPaymentMethod   = "Наличные"
+	cardPaymentMethod   = "Терминал"
+	wirePaymentMethod   = "расч. счет"
+	fontTypeArial       = "Arial"
+	verticalAlignCenter = "center"
+)
 
 type ExcelExporter struct{}
 
@@ -690,11 +694,11 @@ func createxlsxStyles(f *excelize.File) (regular, right, header int) {
 		Font: &excelize.Font{
 			Size:   8,
 			Bold:   true,
-			Family: "Arial",
+			Family: fontTypeArial,
 		},
 		Alignment: &excelize.Alignment{
 			WrapText: true,
-			Vertical: "center",
+			Vertical: verticalAlignCenter,
 		},
 	})
 	if err != nil {
@@ -705,12 +709,12 @@ func createxlsxStyles(f *excelize.File) (regular, right, header int) {
 		Font: &excelize.Font{
 			Size:   8,
 			Bold:   true,
-			Family: "Arial",
+			Family: fontTypeArial,
 		},
 		Alignment: &excelize.Alignment{
 			WrapText:   true,
 			Horizontal: "right",
-			Vertical:   "center",
+			Vertical:   verticalAlignCenter,
 		},
 	})
 	if err != nil {
@@ -721,7 +725,7 @@ func createxlsxStyles(f *excelize.File) (regular, right, header int) {
 		Font: &excelize.Font{
 			Size:   14,
 			Bold:   true,
-			Family: "Arial",
+			Family: fontTypeArial,
 		},
 		Alignment: &excelize.Alignment{
 			Horizontal: "center",

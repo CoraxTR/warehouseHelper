@@ -1,3 +1,4 @@
+//nolint:revive //we alias the package to avoid conflict with the standard library "http" package
 package http
 
 import (

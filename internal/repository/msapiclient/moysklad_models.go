@@ -6,6 +6,13 @@ import (
 	"time"
 )
 
+const (
+	MSCustomEntityType  = "customentity"
+	MSEmployeeType      = "employee"
+	MSApplicationJSON   = "application/json"
+	MSAttributeMetaData = "attributemetadata"
+)
+
 type MSFetchOrdersResponse struct {
 	Meta struct {
 		Size int `json:"size"`

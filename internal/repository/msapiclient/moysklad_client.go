@@ -15,7 +15,7 @@ import (
 	"time"
 	"warehouseHelper/internal/config"
 	"warehouseHelper/internal/domain"
-	"warehouseHelper/internal/ms_workerpool"
+	"warehouseHelper/internal/msWorkerpool"
 )
 
 const msEncoding = "gzip"
@@ -26,13 +26,13 @@ type OrderCache interface {
 }
 
 type MSAPIClient struct {
-	workerpool *ms_workerpool.MSWorkerPool
+	workerpool *msWorkerpool.MSWorkerPool
 	msConfig   *config.MSConfig
 	rgConfig   *config.RefGoConfig
 	Cache      OrderCache
 }
 
-func NewMSAPIClient(c *config.Config, wp *ms_workerpool.MSWorkerPool, cache OrderCache) *MSAPIClient {
+func NewMSAPIClient(c *config.Config, wp *msWorkerpool.MSWorkerPool, cache OrderCache) *MSAPIClient {
 	return &MSAPIClient{
 		workerpool: wp,
 		msConfig:   c.MSConfig,
@@ -413,26 +413,26 @@ func (msac *MSAPIClient) SetOrderAsShippedToRefGo(parentctx context.Context, hre
 			Meta: Meta{
 				Href:      msac.msConfig.Hrefs.Shipedstatehref,
 				Type:      "state",
-				MediaType: "application/json",
+				MediaType: MSApplicationJSON,
 			},
 		},
 		// Атрибуты
-		Attributes: []interface{}{
+		Attributes: []any{
 			// 1. Вид продажи = "Прочие"
 			Attribute{
 				Meta: Meta{
 					Href:      msac.msConfig.Hrefs.SellTypehref,
-					Type:      "attributemetadata",
-					MediaType: "application/json",
+					Type:      MSAttributeMetaData,
+					MediaType: MSApplicationJSON,
 				},
 				ID:   msac.msConfig.SellTypeID,
 				Name: "Вид продажи",
-				Type: "customentity",
+				Type: MSCustomEntityType,
 				Value: Value{
 					Meta: Meta{
 						Href:      msac.msConfig.Hrefs.SellTypeOtherhref,
-						Type:      "customentity",
-						MediaType: "application/json",
+						Type:      MSCustomEntityType,
+						MediaType: MSApplicationJSON,
 					},
 					Name: "Прочие",
 				},
@@ -441,17 +441,17 @@ func (msac *MSAPIClient) SetOrderAsShippedToRefGo(parentctx context.Context, hre
 			Attribute{
 				Meta: Meta{
 					Href:      msac.msConfig.Hrefs.Courierhref,
-					Type:      "attributemetadata",
-					MediaType: "application/json",
+					Type:      MSAttributeMetaData,
+					MediaType: MSApplicationJSON,
 				},
 				ID:   msac.msConfig.CourierID,
 				Name: "Курьер",
-				Type: "employee",
+				Type: MSEmployeeType,
 				Value: Value{
 					Meta: Meta{
 						Href:      msac.msConfig.Hrefs.RefGoCourierhref,
-						Type:      "employee",
-						MediaType: "application/json",
+						Type:      MSEmployeeType,
+						MediaType: MSApplicationJSON,
 					},
 					Name: "РефГо",
 				},
@@ -509,8 +509,8 @@ func (msac *MSAPIClient) SetRefGoNumberOnly(parentctx context.Context, href, ref
 			{
 				Meta: Meta{
 					Href:      msac.msConfig.Hrefs.RefGoNumberhref,
-					Type:      "attributemetadata",
-					MediaType: "application/json",
+					Type:      MSAttributeMetaData,
+					MediaType: MSApplicationJSON,
 				},
 				ID:    msac.msConfig.RefGoNumberID,
 				Name:  "Номер в РЕФ",
@@ -583,7 +583,7 @@ func (msac *MSAPIClient) FetchOrderPDF(parentctx context.Context, href string) (
 				Meta: Meta{
 					Href:      msac.msConfig.Hrefs.Printtemplatehref,
 					Type:      "customtemplate",
-					MediaType: "application/json",
+					MediaType: MSApplicationJSON,
 				},
 			},
 			Extension: "pdf",
