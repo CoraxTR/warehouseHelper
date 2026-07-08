@@ -116,7 +116,8 @@ func (d *DIContainer) SyncUC() *usecase.SyncUseCase {
 }
 func (d *DIContainer) OrdersUC() *usecase.OrdersUseCase {
 	if d.ordersUC == nil {
-		d.ordersUC = usecase.NewOrdersUseCase(d.OrdersRepository(), d.MSClient(), d.MSConverter())
+		d.ordersUC = usecase.NewOrdersUseCase(d.OrdersRepository(), d.MSClient(), d.MSConverter(),
+			d.PdfPreloader())
 	}
 
 	return d.ordersUC
