@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 
 	"warehouseHelper/internal/domain"
+	"warehouseHelper/internal/tempdir"
 	"warehouseHelper/internal/usecase"
 )
 
@@ -148,7 +149,7 @@ func (h *Handler) DownloadFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	filePath := filepath.Join("..", "temp", name)
+	filePath := filepath.Join(tempdir.Dir, name)
 
 	_, err := os.Stat(filePath)
 	if os.IsNotExist(err) {

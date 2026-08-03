@@ -8,6 +8,8 @@ import (
 	"os"
 	"time"
 
+	"warehouseHelper/internal/tempdir"
+
 	"github.com/pdfcpu/pdfcpu/pkg/api"
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model"
 )
@@ -26,7 +28,7 @@ func (e *PDFExporter) ExportOrderPDF(data []byte) (string, error) {
 		log.Printf("couldn't validate, %v", err)
 	}
 
-	outFile, err := os.Create("../temp/exported.pdf")
+	outFile, err := os.Create(tempdir.Dir + "/exported.pdf")
 	if err != nil {
 		return "", err
 	}
@@ -42,7 +44,7 @@ func (e *PDFExporter) ExportOrderPDF(data []byte) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	// Файлы сохраняются во временную директорию ../temp
+	// Файлы сохраняются во временную директорию (tempdir.Dir)
 	return outFile.Name(), nil
 }
 
@@ -56,7 +58,7 @@ func (e *PDFExporter) ExportMergedPDF(data [][]byte) (string, error) {
 
 	timestamp := time.Now().Format("20060102_150405")
 	filename := fmt.Sprintf("merged_%s.pdf", timestamp)
-	fullpath := "../temp/" + filename
+	fullpath := tempdir.Dir + "/" + filename
 
 	file, err := os.Create(fullpath)
 	if err != nil {

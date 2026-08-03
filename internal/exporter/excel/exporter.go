@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"time"
 	"warehouseHelper/internal/domain"
+	"warehouseHelper/internal/tempdir"
 
 	"github.com/boombuler/barcode"
 	"github.com/boombuler/barcode/code128"
@@ -376,7 +377,7 @@ func (e *ExcelExporter) ExportOrdersToExcel(orders []*domain.InternalOrder) (sav
 
 	temptoday := time.Now()
 	today := temptoday.Format("02.01.2006")
-	savepath = "../temp/" + today + ".xlsx"
+	savepath = tempdir.Dir + "/" + today + ".xlsx"
 
 	uploadFile, err := excelize.OpenFile("../blankimport.xlsx")
 	if err != nil {
@@ -427,7 +428,7 @@ func (e *ExcelExporter) ExportOrdersToExcel(orders []*domain.InternalOrder) (sav
 		return "", fmt.Errorf("failed to save Excel file: %w", err)
 	}
 
-	return "temp/" + today + ".xlsx", nil
+	return today + ".xlsx", nil
 }
 
 func generateBarcodePNG(data string, width, height int) ([]byte, error) {
@@ -805,7 +806,7 @@ func (e *ExcelExporter) ExportOrdersBarcodesToExcel(orders []*domain.InternalOrd
 	temptoday := time.Now()
 	today := temptoday.Format("02.01.2006")
 
-	savepath = "../temp/" + today + ".xlsx"
+	savepath = tempdir.Dir + "/" + today + ".xlsx"
 
 	err = f.SaveAs(savepath)
 	if err != nil {

@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+
+	"warehouseHelper/internal/tempdir"
 )
 
 type PDFFetcher interface {
@@ -42,7 +44,7 @@ func (uc *ExportOrderPDFUseCase) GetOrderPDF(ctx context.Context, href string) (
 	uc.preloader.StopPreloading()
 
 	safeName := filepath.Base(strings.TrimSuffix(href, "/"))
-	filePath := filepath.Join("..", "temp", safeName+".pdf")
+	filePath := filepath.Join(tempdir.Dir, safeName+".pdf")
 
 	_, err := os.Stat(filePath)
 	if err == nil {
@@ -79,7 +81,7 @@ func (uc *ExportOrderPDFUseCase) GetMultipleOrdersPDF(ctx context.Context, hrefs
 		wg.Go(func() {
 			doneCounter := atomic.AddInt64(&counter, 1)
 			safeName := filepath.Base(strings.TrimSuffix(href, "/"))
-			filePath := filepath.Join("..", "temp", safeName+".pdf")
+			filePath := filepath.Join(tempdir.Dir, safeName+".pdf")
 
 			_, err := os.Stat(filePath)
 			if err == nil {

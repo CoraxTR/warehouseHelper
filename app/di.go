@@ -12,6 +12,7 @@ import (
 	"warehouseHelper/internal/repository/pdfpreloader"
 	"warehouseHelper/internal/repository/postgres"
 	tempcleaner "warehouseHelper/internal/repository/tempcleaner"
+	"warehouseHelper/internal/tempdir"
 	"warehouseHelper/internal/usecase"
 )
 
@@ -143,7 +144,7 @@ func (d *DIContainer) ExcelBarcodeExporter() usecase.ExcelBarcodesExporter {
 
 func (d *DIContainer) TempCleaner() usecase.TempCleaner {
 	if d.tempcleaner == nil {
-		d.tempcleaner = tempcleaner.NewTempCleaner("../temp")
+		d.tempcleaner = tempcleaner.NewTempCleaner(tempdir.Dir)
 	}
 
 	return d.tempcleaner

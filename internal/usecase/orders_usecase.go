@@ -10,6 +10,7 @@ import (
 	"warehouseHelper/internal/domain"
 	"warehouseHelper/internal/repository/msapiclient"
 	"warehouseHelper/internal/repository/pdfpreloader"
+	"warehouseHelper/internal/tempdir"
 )
 
 type OrderRepository interface {
@@ -87,7 +88,7 @@ func (uc *OrdersUseCase) DeleteOrder(ctx context.Context, href string) error {
 
 func (uc *OrdersUseCase) DeletePreloadedPDF(href string) error {
 	safeName := filepath.Base(strings.TrimSuffix(href, "/"))
-	filePath := filepath.Join("..", "temp", safeName+".pdf")
+	filePath := filepath.Join(tempdir.Dir, safeName+".pdf")
 
 	err := os.Remove(filePath)
 	if err != nil {
