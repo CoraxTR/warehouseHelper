@@ -4,6 +4,8 @@ import (
 	"context"
 	"log"
 	"sync"
+	"time"
+
 	"warehouseHelper/internal/domain"
 )
 
@@ -19,17 +21,24 @@ type OrdersShipper interface {
 	SetOrderAsShippedToRefGo(ctx context.Context, href string) error
 }
 
-type ExportToExcelUseCase struct {
-	exporter ExcelExporter
-	orders   *OrdersUseCase
-	shipper  OrdersShipper
+// TempCleaner удаляет устаревшие файлы из временной директории.
+type TempCleaner interface {
+	CleanOlderThan(maxAge time.Duration) error
 }
 
-func NewExportToExcelUseCase(exporter ExcelExporter, orders *OrdersUseCase, shipper OrdersShipper) *ExportToExcelUseCase {
+type ExportToExcelUseCase struct {
+	exporter    ExcelExporter
+	orders      *OrdersUseCase
+	shipper     OrdersShipper
+	tempCleaner TempCleaner
+}
+
+func NewExportToExcelUseCase(exporter ExcelExporter, orders *OrdersUseCase, shipper OrdersShipper, tempCleaner TempCleaner) *ExportToExcelUseCase {
 	return &ExportToExcelUseCase{
-		exporter: exporter,
-		orders:   orders,
-		shipper:  shipper,
+		exporter:    exporter,
+		orders:      orders,
+		shipper:     shipper,
+		tempCleaner: tempCleaner,
 	}
 }
 
@@ -43,7 +52,16 @@ type ExportSummary struct {
 	FileName        string
 }
 
+// tempCleanupMaxAge — возраст файлов в temp, после которого они удаляются при очистке.
+const tempCleanupMaxAge = 24 * time.Hour
+
 func (uc *ExportToExcelUseCase) ExportOrders(ctx context.Context) (summary *ExportSummary, err error) {
+	defer func() {
+		if cleanErr := uc.tempCleaner.CleanOlderThan(tempCleanupMaxAge); cleanErr != nil {
+			log.Printf("Failed to clean temp dir: %v", cleanErr)
+		}
+	}()
+
 	orders, err := uc.orders.GetAllOrders(ctx)
 	if err != nil {
 		return nil, err

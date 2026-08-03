@@ -4,10 +4,10 @@ import (
 	"encoding/json"
 	"html/template"
 	"log"
+	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"warehouseHelper/internal/domain"
 	"warehouseHelper/internal/usecase"
@@ -141,13 +141,14 @@ func (h *Handler) DownloadFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if strings.Contains(fileName, "/") || strings.Contains(fileName, "\\") {
+	name := filepath.Base(fileName)
+	if name == "." || name == ".." || name == "/" || name == "" {
 		http.Error(w, "Invalid file name", http.StatusBadRequest)
 
 		return
 	}
 
-	filePath := filepath.Join("..", fileName)
+	filePath := filepath.Join("..", "temp", name)
 
 	_, err := os.Stat(filePath)
 	if os.IsNotExist(err) {
@@ -156,7 +157,7 @@ func (h *Handler) DownloadFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Disposition", "attachment; filename="+fileName)
+	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": filepath.Base(fileName)}))
 	w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 	http.ServeFile(w, r, filePath)
 }

@@ -26,7 +26,7 @@ func (e *PDFExporter) ExportOrderPDF(data []byte) (string, error) {
 		log.Printf("couldn't validate, %v", err)
 	}
 
-	outFile, err := os.Create("exported.pdf")
+	outFile, err := os.Create("../temp/exported.pdf")
 	if err != nil {
 		return "", err
 	}
@@ -42,7 +42,7 @@ func (e *PDFExporter) ExportOrderPDF(data []byte) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	// На данный момент сохраняем в cmd, позже переделаем в отдельную папку
+	// Файлы сохраняются во временную директорию ../temp
 	return outFile.Name(), nil
 }
 
@@ -56,7 +56,7 @@ func (e *PDFExporter) ExportMergedPDF(data [][]byte) (string, error) {
 
 	timestamp := time.Now().Format("20060102_150405")
 	filename := fmt.Sprintf("merged_%s.pdf", timestamp)
-	fullpath := "../" + filename
+	fullpath := "../temp/" + filename
 
 	file, err := os.Create(fullpath)
 	if err != nil {

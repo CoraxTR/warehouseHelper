@@ -376,7 +376,7 @@ func (e *ExcelExporter) ExportOrdersToExcel(orders []*domain.InternalOrder) (sav
 
 	temptoday := time.Now()
 	today := temptoday.Format("02.01.2006")
-	savepath = "../" + today + ".xlsx"
+	savepath = "../temp/" + today + ".xlsx"
 
 	uploadFile, err := excelize.OpenFile("../blankimport.xlsx")
 	if err != nil {
@@ -424,10 +424,10 @@ func (e *ExcelExporter) ExportOrdersToExcel(orders []*domain.InternalOrder) (sav
 
 	err = uploadFile.SaveAs(savepath)
 	if err != nil {
-		log.Printf("Failed to save Excel file: %v", err)
+		return "", fmt.Errorf("failed to save Excel file: %w", err)
 	}
 
-	return today + ".xlsx", nil
+	return "temp/" + today + ".xlsx", nil
 }
 
 func generateBarcodePNG(data string, width, height int) ([]byte, error) {
@@ -805,7 +805,7 @@ func (e *ExcelExporter) ExportOrdersBarcodesToExcel(orders []*domain.InternalOrd
 	temptoday := time.Now()
 	today := temptoday.Format("02.01.2006")
 
-	savepath = "../" + today + ".xlsx"
+	savepath = "../temp/" + today + ".xlsx"
 
 	err = f.SaveAs(savepath)
 	if err != nil {
