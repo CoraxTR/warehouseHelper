@@ -41,7 +41,8 @@ func NewConfig() *Config {
 }
 
 type AppConfig struct {
-	HTTPAddress string
+	HTTPAddress       string
+	TempCleanupMaxAge time.Duration
 }
 
 func loadAppconfig() *AppConfig {
@@ -50,8 +51,18 @@ func loadAppconfig() *AppConfig {
 		os.Exit(1)
 	}
 
+	// Время жизни файлов в temp: по умолчанию сутки; настраивается
+	// через APP_TEMPCLEANUP_MAXAGE_HOURS (целое число часов).
+	tempCleanupMaxAge := 24 * time.Hour
+	if hoursStr := os.Getenv("APP_TEMPCLEANUP_MAXAGE_HOURS"); hoursStr != "" {
+		if hours, err := strconv.Atoi(hoursStr); err == nil && hours > 0 {
+			tempCleanupMaxAge = time.Duration(hours) * time.Hour
+		}
+	}
+
 	return &AppConfig{
-		HTTPAddress: httpAddress,
+		HTTPAddress:       httpAddress,
+		TempCleanupMaxAge: tempCleanupMaxAge,
 	}
 }
 

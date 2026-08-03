@@ -9,6 +9,7 @@ import (
 	"sync"
 	"warehouseHelper/internal/domain"
 	"warehouseHelper/internal/repository/msapiclient"
+	"warehouseHelper/internal/tempdir"
 )
 
 type PDFPreloader struct {
@@ -20,7 +21,7 @@ type PDFPreloader struct {
 }
 
 func NewPDFPreloader(client *msapiclient.MSAPIClient) *PDFPreloader {
-	err := os.MkdirAll("../temp", 0o750)
+	err := os.MkdirAll(tempdir.Dir, 0o750)
 	if err != nil {
 		log.Printf("Failed to create temp dir: %v", err)
 	}
@@ -72,7 +73,7 @@ func (p *PDFPreloader) StartPreloading(orders []*domain.InternalOrder) {
 			}
 
 			safeName := filepath.Base(strings.TrimSuffix(o.GetHREF(), "/"))
-			filePath := filepath.Join("..", "temp", safeName+".pdf")
+			filePath := filepath.Join(tempdir.Dir, safeName+".pdf")
 
 			_, err := os.Stat(filePath)
 			if err == nil {

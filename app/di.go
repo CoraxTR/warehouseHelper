@@ -11,6 +11,8 @@ import (
 	orderscache "warehouseHelper/internal/repository/ordercache"
 	"warehouseHelper/internal/repository/pdfpreloader"
 	"warehouseHelper/internal/repository/postgres"
+	tempcleaner "warehouseHelper/internal/repository/tempcleaner"
+	"warehouseHelper/internal/tempdir"
 	"warehouseHelper/internal/usecase"
 )
 
@@ -26,6 +28,7 @@ type DIContainer struct {
 	pdfexporter  *pdf.PDFExporter
 	ordercache   *orderscache.OrderCache
 	pdfpreloader *pdfpreloader.PDFPreloader
+	tempcleaner  *tempcleaner.TempCleaner
 
 	// Юзкейсы
 	syncUC          *usecase.SyncUseCase
@@ -139,9 +142,17 @@ func (d *DIContainer) ExcelBarcodeExporter() usecase.ExcelBarcodesExporter {
 	return d.xlxsexporter
 }
 
+func (d *DIContainer) TempCleaner() usecase.TempCleaner {
+	if d.tempcleaner == nil {
+		d.tempcleaner = tempcleaner.NewTempCleaner(tempdir.Dir)
+	}
+
+	return d.tempcleaner
+}
+
 func (d *DIContainer) ExcelExportUC() *usecase.ExportToExcelUseCase {
 	if d.excelExportUC == nil {
-		d.excelExportUC = usecase.NewExportToExcelUseCase(d.ExcelExporter(), d.OrdersUC(), d.MSClient())
+		d.excelExportUC = usecase.NewExportToExcelUseCase(d.ExcelExporter(), d.OrdersUC(), d.MSClient(), d.TempCleaner(), d.Config().TempCleanupMaxAge)
 	}
 
 	return d.excelExportUC
