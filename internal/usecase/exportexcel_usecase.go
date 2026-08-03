@@ -27,18 +27,20 @@ type TempCleaner interface {
 }
 
 type ExportToExcelUseCase struct {
-	exporter    ExcelExporter
-	orders      *OrdersUseCase
-	shipper     OrdersShipper
-	tempCleaner TempCleaner
+	exporter          ExcelExporter
+	orders            *OrdersUseCase
+	shipper           OrdersShipper
+	tempCleaner       TempCleaner
+	tempCleanupMaxAge time.Duration
 }
 
-func NewExportToExcelUseCase(exporter ExcelExporter, orders *OrdersUseCase, shipper OrdersShipper, tempCleaner TempCleaner) *ExportToExcelUseCase {
+func NewExportToExcelUseCase(exporter ExcelExporter, orders *OrdersUseCase, shipper OrdersShipper, tempCleaner TempCleaner, tempCleanupMaxAge time.Duration) *ExportToExcelUseCase {
 	return &ExportToExcelUseCase{
-		exporter:    exporter,
-		orders:      orders,
-		shipper:     shipper,
-		tempCleaner: tempCleaner,
+		exporter:          exporter,
+		orders:            orders,
+		shipper:           shipper,
+		tempCleaner:       tempCleaner,
+		tempCleanupMaxAge: tempCleanupMaxAge,
 	}
 }
 
@@ -52,12 +54,9 @@ type ExportSummary struct {
 	FileName        string
 }
 
-// tempCleanupMaxAge — возраст файлов в temp, после которого они удаляются при очистке.
-const tempCleanupMaxAge = 24 * time.Hour
-
 func (uc *ExportToExcelUseCase) ExportOrders(ctx context.Context) (summary *ExportSummary, err error) {
 	defer func() {
-		if cleanErr := uc.tempCleaner.CleanOlderThan(tempCleanupMaxAge); cleanErr != nil {
+		if cleanErr := uc.tempCleaner.CleanOlderThan(uc.tempCleanupMaxAge); cleanErr != nil {
 			log.Printf("Failed to clean temp dir: %v", cleanErr)
 		}
 	}()

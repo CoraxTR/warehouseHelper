@@ -152,7 +152,7 @@ func (d *DIContainer) TempCleaner() usecase.TempCleaner {
 
 func (d *DIContainer) ExcelExportUC() *usecase.ExportToExcelUseCase {
 	if d.excelExportUC == nil {
-		d.excelExportUC = usecase.NewExportToExcelUseCase(d.ExcelExporter(), d.OrdersUC(), d.MSClient(), d.TempCleaner())
+		d.excelExportUC = usecase.NewExportToExcelUseCase(d.ExcelExporter(), d.OrdersUC(), d.MSClient(), d.TempCleaner(), d.Config().TempCleanupMaxAge)
 	}
 
 	return d.excelExportUC
