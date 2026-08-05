@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -17,22 +18,29 @@ type Config struct {
 	*PGConfig
 }
 
-func NewConfig() *Config {
-	// .env ищем в корне репозитория: при запуске из корня — "./.env",
-	// из каталога cmd/ — "../.env".
-	loaded := false
+// envFilePath возвращает абсолютный путь к .env: сначала ищет в текущем
+// каталоге (запуск из корня репозитория), затем в родительском
+// (запуск из каталога cmd/). Пустая строка — файл не найден.
+func envFilePath() string {
 	for _, path := range []string{".env", "../.env"} {
-		if _, err := os.Stat(path); err != nil {
+		abs, err := filepath.Abs(path)
+		if err != nil {
 			continue
 		}
-		if err := godotenv.Load(path); err != nil {
-			panic("Cannot read config file: " + path)
+		if _, err := os.Stat(abs); err == nil {
+			return abs
 		}
-		loaded = true
-		break
 	}
-	if !loaded {
+	return ""
+}
+
+func NewConfig() *Config {
+	envPath := envFilePath()
+	if envPath == "" {
 		panic("Cannot read config file")
+	}
+	if err := godotenv.Load(envPath); err != nil {
+		panic("Cannot read config file: " + envPath)
 	}
 
 	apc := loadAppconfig()
@@ -291,7 +299,10 @@ func loadRefGoConfig() *RefGoConfig {
 }
 
 func (rgc *RefGoConfig) ChangeRefGoLatest(latestOrder int64) error {
-	envFile := "../.env"
+	envFile := envFilePath()
+	if envFile == "" {
+		return fmt.Errorf("файл .env не найден")
+	}
 
 	content, err := os.ReadFile(envFile)
 	if err != nil {
