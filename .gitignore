@@ -1,4 +1,5 @@
 .env
+AGENTS.md
 .golangci.yaml
 !.env.example
 .vscode

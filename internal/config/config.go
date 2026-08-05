@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -17,10 +18,29 @@ type Config struct {
 	*PGConfig
 }
 
+// envFilePath возвращает абсолютный путь к .env: сначала ищет в текущем
+// каталоге (запуск из корня репозитория), затем в родительском
+// (запуск из каталога cmd/). Пустая строка — файл не найден.
+func envFilePath() string {
+	for _, path := range []string{".env", "../.env"} {
+		abs, err := filepath.Abs(path)
+		if err != nil {
+			continue
+		}
+		if _, err := os.Stat(abs); err == nil {
+			return abs
+		}
+	}
+	return ""
+}
+
 func NewConfig() *Config {
-	err := godotenv.Load("../.env")
-	if err != nil {
+	envPath := envFilePath()
+	if envPath == "" {
 		panic("Cannot read config file")
+	}
+	if err := godotenv.Load(envPath); err != nil {
+		panic("Cannot read config file: " + envPath)
 	}
 
 	apc := loadAppconfig()
@@ -268,7 +288,7 @@ func loadRefGoConfig() *RefGoConfig {
 		os.Exit(1)
 	}
 
-	latestorder, err := strconv.Atoi(strings.Trim(os.Getenv("RG_LATESTORDER"), `"`))
+	latestorder, err := strconv.Atoi(os.Getenv("RG_LATESTORDER"))
 	if err != nil {
 		os.Exit(1)
 	}
@@ -279,7 +299,10 @@ func loadRefGoConfig() *RefGoConfig {
 }
 
 func (rgc *RefGoConfig) ChangeRefGoLatest(latestOrder int64) error {
-	envFile := "../.env"
+	envFile := envFilePath()
+	if envFile == "" {
+		return fmt.Errorf("файл .env не найден")
+	}
 
 	content, err := os.ReadFile(envFile)
 	if err != nil {
@@ -291,7 +314,7 @@ func (rgc *RefGoConfig) ChangeRefGoLatest(latestOrder int64) error {
 
 	for i, line := range lines {
 		if strings.HasPrefix(strings.TrimSpace(line), "RG_LATESTORDER=") {
-			lines[i] = fmt.Sprintf("RG_LATESTORDER=\"%d\"", latestOrder)
+			lines[i] = fmt.Sprintf("RG_LATESTORDER=%d", latestOrder)
 			found = true
 
 			break
@@ -299,7 +322,7 @@ func (rgc *RefGoConfig) ChangeRefGoLatest(latestOrder int64) error {
 	}
 
 	if !found {
-		lines = append(lines, fmt.Sprintf("RG_LATESTORDER=\"%d\"", latestOrder))
+		lines = append(lines, fmt.Sprintf("RG_LATESTORDER=%d", latestOrder))
 	}
 
 	err = os.WriteFile(envFile, []byte(strings.Join(lines, "\n")), 0o600)
