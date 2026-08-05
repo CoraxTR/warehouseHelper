@@ -18,8 +18,20 @@ type Config struct {
 }
 
 func NewConfig() *Config {
-	err := godotenv.Load("../.env")
-	if err != nil {
+	// .env ищем в корне репозитория: при запуске из корня — "./.env",
+	// из каталога cmd/ — "../.env".
+	loaded := false
+	for _, path := range []string{".env", "../.env"} {
+		if _, err := os.Stat(path); err != nil {
+			continue
+		}
+		if err := godotenv.Load(path); err != nil {
+			panic("Cannot read config file: " + path)
+		}
+		loaded = true
+		break
+	}
+	if !loaded {
 		panic("Cannot read config file")
 	}
 
@@ -268,7 +280,7 @@ func loadRefGoConfig() *RefGoConfig {
 		os.Exit(1)
 	}
 
-	latestorder, err := strconv.Atoi(strings.Trim(os.Getenv("RG_LATESTORDER"), `"`))
+	latestorder, err := strconv.Atoi(os.Getenv("RG_LATESTORDER"))
 	if err != nil {
 		os.Exit(1)
 	}
@@ -291,7 +303,7 @@ func (rgc *RefGoConfig) ChangeRefGoLatest(latestOrder int64) error {
 
 	for i, line := range lines {
 		if strings.HasPrefix(strings.TrimSpace(line), "RG_LATESTORDER=") {
-			lines[i] = fmt.Sprintf("RG_LATESTORDER=\"%d\"", latestOrder)
+			lines[i] = fmt.Sprintf("RG_LATESTORDER=%d", latestOrder)
 			found = true
 
 			break
@@ -299,7 +311,7 @@ func (rgc *RefGoConfig) ChangeRefGoLatest(latestOrder int64) error {
 	}
 
 	if !found {
-		lines = append(lines, fmt.Sprintf("RG_LATESTORDER=\"%d\"", latestOrder))
+		lines = append(lines, fmt.Sprintf("RG_LATESTORDER=%d", latestOrder))
 	}
 
 	err = os.WriteFile(envFile, []byte(strings.Join(lines, "\n")), 0o600)
