@@ -13,6 +13,7 @@ type UpdateOrderRequest struct {
 	DeliveryRegion        string  `json:"deliveryRegion"`
 	PaymentMethod         string  `json:"paymentMethod"`
 	RefGoNumber           string  `json:"refGoNumber"`
+	RefGoZone             string  `json:"refGoZone"`
 	Sum                   float64 `json:"sum"`
 	ChilledWeight         float64 `json:"chilledWeight"`
 	FrozenWeight          float64 `json:"frozenWeight"`

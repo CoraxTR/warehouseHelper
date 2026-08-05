@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -281,6 +282,20 @@ func loadMShrefs() *MShrefs {
 
 type RefGoConfig struct {
 	RGNextOrder int64
+
+	// Параметры модуля сверки с перевозчиком. Цены зон — рубли,
+	// лимит веса — килограммы, комиссии — проценты.
+	// Если хотя бы одна переменная не задана или невалидна,
+	// модуль сверки отключается (CheckAgainstModule = false).
+	CheckAgainstModule bool
+	RGGreenzonePrice   float64
+	RGYellowzonePrice  float64
+	RGOrangezonePrice  float64
+	RGRedzonePrice     float64
+	RGBluezonePrice    float64
+	RGWeightlimit      float64
+	RGCashtax          float64
+	RGCardtax          float64
 }
 
 func loadRefGoConfig() *RefGoConfig {
@@ -293,9 +308,51 @@ func loadRefGoConfig() *RefGoConfig {
 		os.Exit(1)
 	}
 
-	return &RefGoConfig{
+	rgc := &RefGoConfig{
 		RGNextOrder: int64(latestorder),
 	}
+
+	checkVars := map[string]*float64{
+		"RG_GREENZONE_PRICE":  &rgc.RGGreenzonePrice,
+		"RG_YELLOWZONE_PRICE": &rgc.RGYellowzonePrice,
+		"RG_ORANGEZONE_PRICE": &rgc.RGOrangezonePrice,
+		"RG_REDZONE_PRICE":    &rgc.RGRedzonePrice,
+		"RG_BLUEZONE_PRICE":   &rgc.RGBluezonePrice,
+		"RG_WEIGHTLIMIT":      &rgc.RGWeightlimit,
+		"RG_CASHTAX":          &rgc.RGCashtax,
+		"RG_CARDTAX":          &rgc.RGCardtax,
+	}
+
+	rgc.CheckAgainstModule = true
+	for name, dst := range checkVars {
+		v, ok := parseEnvFloat(name)
+		if !ok {
+			rgc.CheckAgainstModule = false
+			log.Printf("RefGo check module disabled: %s is empty or invalid", name)
+
+			continue
+		}
+
+		*dst = v
+	}
+
+	return rgc
+}
+
+// parseEnvFloat читает числовую переменную окружения; запятая допускается
+// как десятичный разделитель. ok=false, если переменная пуста или не число.
+func parseEnvFloat(name string) (float64, bool) {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return 0, false
+	}
+
+	v, err := strconv.ParseFloat(strings.ReplaceAll(raw, ",", "."), 64)
+	if err != nil {
+		return 0, false
+	}
+
+	return v, true
 }
 
 func (rgc *RefGoConfig) ChangeRefGoLatest(latestOrder int64) error {

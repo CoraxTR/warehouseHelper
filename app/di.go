@@ -12,6 +12,7 @@ import (
 	"warehouseHelper/internal/repository/pdfpreloader"
 	"warehouseHelper/internal/repository/postgres"
 	tempcleaner "warehouseHelper/internal/repository/tempcleaner"
+	"warehouseHelper/internal/repository/xlsximport"
 	"warehouseHelper/internal/tempdir"
 	"warehouseHelper/internal/usecase"
 )
@@ -29,6 +30,7 @@ type DIContainer struct {
 	ordercache   *orderscache.OrderCache
 	pdfpreloader *pdfpreloader.PDFPreloader
 	tempcleaner  *tempcleaner.TempCleaner
+	xlsximporter usecase.RefGoXlsxParser
 
 	// Юзкейсы
 	syncUC          *usecase.SyncUseCase
@@ -36,6 +38,7 @@ type DIContainer struct {
 	excelExportUC   *usecase.ExportToExcelUseCase
 	pdfExportUC     *usecase.ExportOrderPDFUseCase
 	barcodeExportUC *usecase.ExportBarcodesToExcelUseCase
+	refGoCheckUC    *usecase.RefGoCheckAgainstUseCase
 
 	// Хэндлеры
 	mux      *http.ServeMux
@@ -150,6 +153,14 @@ func (d *DIContainer) TempCleaner() usecase.TempCleaner {
 	return d.tempcleaner
 }
 
+func (d *DIContainer) XlsxImporter() usecase.RefGoXlsxParser {
+	if d.xlsximporter == nil {
+		d.xlsximporter = xlsximport.NewxlsxImporter()
+	}
+
+	return d.xlsximporter
+}
+
 func (d *DIContainer) ExcelExportUC() *usecase.ExportToExcelUseCase {
 	if d.excelExportUC == nil {
 		d.excelExportUC = usecase.NewExportToExcelUseCase(d.ExcelExporter(), d.OrdersUC(), d.MSClient(), d.TempCleaner(), d.Config().TempCleanupMaxAge)
@@ -182,9 +193,17 @@ func (d *DIContainer) BarcodeExportUC() *usecase.ExportBarcodesToExcelUseCase {
 	return d.barcodeExportUC
 }
 
+func (d *DIContainer) RefGoCheckAgainstUC() *usecase.RefGoCheckAgainstUseCase {
+	if d.refGoCheckUC == nil {
+		d.refGoCheckUC = usecase.NewRefGoCheckAgainstUseCase(d.OrdersRepository(), d.XlsxImporter(), d.Config().RefGoConfig)
+	}
+
+	return d.refGoCheckUC
+}
+
 func (d *DIContainer) Handler() *myhttp.Handler {
 	if d.handlers == nil {
-		d.handlers = myhttp.NewHandler(d.SyncUC(), d.OrdersUC(), d.ExcelExportUC(), d.PdfExportUC(), d.BarcodeExportUC())
+		d.handlers = myhttp.NewHandler(d.SyncUC(), d.OrdersUC(), d.ExcelExportUC(), d.PdfExportUC(), d.BarcodeExportUC(), d.RefGoCheckAgainstUC())
 	}
 
 	return d.handlers

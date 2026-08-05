@@ -15,6 +15,7 @@ CREATE TABLE refgoOrders (
     delivery_region TEXT,
     payment_method TEXT,
     refgo_number TEXT,
+    refgo_zone TEXT,
     sum NUMERIC(12, 2),
     chilled_weight NUMERIC(12, 3),
     frozen_weight NUMERIC(12, 3),
@@ -22,3 +23,6 @@ CREATE TABLE refgoOrders (
     chilled_boxes BIGINT,
     errors JSONB
 );
+
+-- Для баз, созданных до добавления колонки refgo_zone
+ALTER TABLE refgoOrders ADD COLUMN IF NOT EXISTS refgo_zone TEXT;

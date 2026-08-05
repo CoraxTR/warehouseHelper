@@ -68,6 +68,7 @@ INSERT INTO refgoOrders (
     delivery_region,
     payment_method,
     refgo_number,
+    refgo_zone,
     sum,
     chilled_weight,
     frozen_weight,
@@ -77,7 +78,8 @@ INSERT INTO refgoOrders (
 ) VALUES (
     $1, $2, $3, $4, $5, $6,
     $7, $8, $9, $10, $11, $12,
-    $13, $14, $15, $16, $17, $18
+    $13, $14, $15, $16, $17, $18,
+    $19
 ) ON CONFLICT (href) DO NOTHING`
 
 	tx, err := pg.Pool.Begin(ctx)
@@ -111,6 +113,7 @@ INSERT INTO refgoOrders (
 			o.GetDeliveryRegion(),
 			o.GetPaymentMethod(),
 			o.GetRefGoNumber(),
+			o.GetRefGoZone(),
 			o.GetSum(),
 			o.GetChilledWeight(),
 			o.GetFrozenWeight(),
@@ -154,7 +157,7 @@ func (pg *PGClient) GetAllOrders(ctx context.Context) ([]*domain.InternalOrder, 
             href, name, receiver_name, receiver_phone_number, description,
             delivery_planned_date, shipment_address, delivery_interval_from,
             delivery_interval_until, delivery_region, payment_method, refgo_number,
-            sum, chilled_weight, frozen_weight, frozen_boxes, chilled_boxes, errors
+            refgo_zone, sum, chilled_weight, frozen_weight, frozen_boxes, chilled_boxes, errors
         FROM refgoOrders
         WHERE (delivery_planned_date = $1 AND (delivery_region = 'МСК' OR delivery_region IS NULL))
            OR (delivery_planned_date = $2 AND delivery_region = 'СПБ')
@@ -173,7 +176,7 @@ func (pg *PGClient) GetAllOrders(ctx context.Context) ([]*domain.InternalOrder, 
 		var (
 			href, name, receiverName, description, deliveryPlannedDate,
 			shipmentAddress, deliveryIntervalFrom, deliveryIntervalUntil,
-			deliveryRegion, paymentMethod, refgoNumber string
+			deliveryRegion, paymentMethod, refgoNumber, refgoZone string
 			receiverPhoneNumber, frozenBoxes, chilledBoxes uint64
 			sum, chilledWeight, frozenWeight               float64
 			errorsJSON                                     []byte
@@ -183,7 +186,7 @@ func (pg *PGClient) GetAllOrders(ctx context.Context) ([]*domain.InternalOrder, 
 			&href, &name, &receiverName, &receiverPhoneNumber, &description,
 			&deliveryPlannedDate, &shipmentAddress, &deliveryIntervalFrom,
 			&deliveryIntervalUntil, &deliveryRegion, &paymentMethod, &refgoNumber,
-			&sum, &chilledWeight, &frozenWeight, &frozenBoxes, &chilledBoxes,
+			&refgoZone, &sum, &chilledWeight, &frozenWeight, &frozenBoxes, &chilledBoxes,
 			&errorsJSON,
 		)
 		if err != nil {
@@ -205,6 +208,7 @@ func (pg *PGClient) GetAllOrders(ctx context.Context) ([]*domain.InternalOrder, 
 		order.SetDeliveryRegion(deliveryRegion)
 		order.SetPaymentMethod(paymentMethod)
 		order.SetRefGoNumber(refgoNumber)
+		order.SetRefGoZone(refgoZone)
 		order.SetSum(sum)
 		order.SetChilledWeight(chilledWeight)
 		order.SetFrozenWeight(frozenWeight)
@@ -266,13 +270,14 @@ func (pg *PGClient) UpdateOrders(ctx context.Context, orders []*domain.InternalO
             delivery_interval_until = $8,
             delivery_region = $9,
             payment_method = $10,
-            sum = $11,
-            chilled_weight = $12,
-            frozen_weight = $13,
-            frozen_boxes = $14,
-            chilled_boxes = $15,
-            errors = $16
-        WHERE href = $17
+            refgo_zone = $11,
+            sum = $12,
+            chilled_weight = $13,
+            frozen_weight = $14,
+            frozen_boxes = $15,
+            chilled_boxes = $16,
+            errors = $17
+        WHERE href = $18
     `
 
 	for _, o := range orders {
@@ -292,6 +297,7 @@ func (pg *PGClient) UpdateOrders(ctx context.Context, orders []*domain.InternalO
 			o.GetDeliveryIntervalUntil(),
 			o.GetDeliveryRegion(),
 			o.GetPaymentMethod(),
+			o.GetRefGoZone(),
 			o.GetSum(),
 			o.GetChilledWeight(),
 			o.GetFrozenWeight(),
@@ -314,6 +320,94 @@ func (pg *PGClient) DeleteOrder(ctx context.Context, href string) error {
 	return err
 }
 
+// GetRefGoCheckOrdersByDateRange возвращает заказы, дата доставки которых
+// попадает в интервал [dateFrom, dateTo] (включительно), сгруппированные
+// по номеру РефГо. Даты — в формате «02.01.2006».
+func (pg *PGClient) GetRefGoCheckOrdersByDateRange(ctx context.Context, dateFrom, dateTo string) (map[string]domain.InternalRefGoCheckAgainstOrder, error) {
+	dates, err := deliveryDateRange(dateFrom, dateTo)
+	if err != nil {
+		return nil, fmt.Errorf("invalid date range: %w", err)
+	}
+
+	orders := make(map[string]domain.InternalRefGoCheckAgainstOrder)
+
+	rows, err := pg.Pool.Query(ctx, `
+        SELECT refgo_number, payment_method, sum, chilled_weight, frozen_weight, refgo_zone
+        FROM refgoOrders
+        WHERE delivery_planned_date = ANY($1)
+    `, dates)
+	if err != nil {
+		log.Printf("GetRefGoCheckOrdersByDateRange query error: %v", err)
+
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			refgoNumber, paymentMethod, refgoZone string
+			sum, chilledWeight, frozenWeight      float64
+		)
+
+		err := rows.Scan(&refgoNumber, &paymentMethod, &sum, &chilledWeight, &frozenWeight, &refgoZone)
+		if err != nil {
+			log.Printf("GetRefGoCheckOrdersByDateRange scan error: %v", err)
+
+			return nil, err
+		}
+
+		if refgoNumber == "" {
+			log.Printf("GetRefGoCheckOrdersByDateRange: order with empty refgo_number skipped")
+
+			continue
+		}
+
+		orders[refgoNumber] = domain.InternalRefGoCheckAgainstOrder{
+			RefGoNumber:   refgoNumber,
+			PaymentMethod: paymentMethod,
+			Sum:           sum,
+			Weight:        chilledWeight + frozenWeight,
+			RefGoZone:     refgoZone,
+		}
+	}
+
+	err = rows.Err()
+	if err != nil {
+		log.Printf("GetRefGoCheckOrdersByDateRange rows error: %v", err)
+
+		return nil, err
+	}
+
+	return orders, nil
+}
+
+// deliveryDateRange формирует набор дат внутри интервала [from, to]
+// включительно. Формат дат — «02.01.2006».
+func deliveryDateRange(from, to string) ([]string, error) {
+	const layout = "02.01.2006"
+
+	start, err := time.Parse(layout, from)
+	if err != nil {
+		return nil, err
+	}
+
+	end, err := time.Parse(layout, to)
+	if err != nil {
+		return nil, err
+	}
+
+	if end.Before(start) {
+		return nil, errors.New("dateTo is before dateFrom")
+	}
+
+	dates := make([]string, 0, int(end.Sub(start).Hours()/24)+1)
+	for d := start; !d.After(end); d = d.AddDate(0, 0, 1) {
+		dates = append(dates, d.Format(layout))
+	}
+
+	return dates, nil
+}
+
 func (pg *PGClient) GetOrdersByHREFs(ctx context.Context, hrefs []string) ([]*domain.InternalOrder, error) {
 	if len(hrefs) == 0 {
 		return nil, nil
@@ -324,7 +418,7 @@ func (pg *PGClient) GetOrdersByHREFs(ctx context.Context, hrefs []string) ([]*do
             href, name, receiver_name, receiver_phone_number, description,
             delivery_planned_date, shipment_address, delivery_interval_from,
             delivery_interval_until, delivery_region, payment_method, refgo_number,
-            sum, chilled_weight, frozen_weight, frozen_boxes, chilled_boxes, errors
+            refgo_zone, sum, chilled_weight, frozen_weight, frozen_boxes, chilled_boxes, errors
         FROM refgoOrders
         WHERE href = ANY($1)
         ORDER BY refgo_number::integer ASC
@@ -340,7 +434,7 @@ func (pg *PGClient) GetOrdersByHREFs(ctx context.Context, hrefs []string) ([]*do
 		var (
 			href, name, receiverName, description, deliveryPlannedDate,
 			shipmentAddress, deliveryIntervalFrom, deliveryIntervalUntil,
-			deliveryRegion, paymentMethod, refgoNumber string
+			deliveryRegion, paymentMethod, refgoNumber, refgoZone string
 			receiverPhoneNumber, frozenBoxes, chilledBoxes uint64
 			sum, chilledWeight, frozenWeight               float64
 			errorsJSON                                     []byte
@@ -350,7 +444,7 @@ func (pg *PGClient) GetOrdersByHREFs(ctx context.Context, hrefs []string) ([]*do
 			&href, &name, &receiverName, &receiverPhoneNumber, &description,
 			&deliveryPlannedDate, &shipmentAddress, &deliveryIntervalFrom,
 			&deliveryIntervalUntil, &deliveryRegion, &paymentMethod, &refgoNumber,
-			&sum, &chilledWeight, &frozenWeight, &frozenBoxes, &chilledBoxes,
+			&refgoZone, &sum, &chilledWeight, &frozenWeight, &frozenBoxes, &chilledBoxes,
 			&errorsJSON,
 		)
 		if err != nil {
@@ -372,6 +466,7 @@ func (pg *PGClient) GetOrdersByHREFs(ctx context.Context, hrefs []string) ([]*do
 		order.SetDeliveryRegion(deliveryRegion)
 		order.SetPaymentMethod(paymentMethod)
 		order.SetRefGoNumber(refgoNumber)
+		order.SetRefGoZone(refgoZone)
 		order.SetSum(sum)
 		order.SetChilledWeight(chilledWeight)
 		order.SetFrozenWeight(frozenWeight)

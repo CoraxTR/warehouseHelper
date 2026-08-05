@@ -19,6 +19,7 @@ func ToDomainOrder(dto *UpdateOrderRequest) *domain.InternalOrder {
 	order.SetDeliveryRegion(dto.DeliveryRegion)
 	order.SetPaymentMethod(dto.PaymentMethod)
 	order.SetRefGoNumber(dto.RefGoNumber)
+	order.SetRefGoZone(dto.RefGoZone)
 	order.SetSum(dto.Sum)
 	order.SetChilledWeight(dto.ChilledWeight)
 	order.SetFrozenWeight(dto.FrozenWeight)
