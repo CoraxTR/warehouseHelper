@@ -81,10 +81,6 @@ func (uc *RefGoCheckAgainstUseCase) Check(ctx context.Context, dateFrom, dateTo 
 			continue
 		}
 
-		// Заказ найден — убираем его из мапы БД, чтобы после прохода
-		// по реестру увидеть заказы, не участвовавшие в сверке.
-		delete(dbOrders, order.RefGoNumber)
-
 		switch dbOrder.PaymentMethod {
 		case "Наличные", "Терминал":
 			if !sumsMatch(dbOrder.Sum, order.CashFact+order.TerminalFact) {
@@ -107,6 +103,10 @@ func (uc *RefGoCheckAgainstUseCase) Check(ctx context.Context, dateFrom, dateTo 
 		if msg := uc.checkDeliveryPrice(dbOrder, order, row); msg != "" {
 			errorsList = append(errorsList, msg)
 		}
+
+		// Заказ найден и проверен — убираем его из мапы БД, чтобы после
+		// прохода по реестру увидеть заказы, не участвовавшие в сверке.
+		delete(dbOrders, order.RefGoNumber)
 	}
 
 	// Заказы из базы, которые не встретились в реестре перевозчика.
