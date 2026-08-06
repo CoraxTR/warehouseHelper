@@ -62,6 +62,8 @@ func TestRefGoCheckAgainstUseCaseCheck(t *testing.T) {
 		"1001": {RefGoNumber: "1001", PaymentMethod: "Наличные", Sum: 1000.0, Weight: 10, RefGoZone: "Зеленая"},
 		"1002": {RefGoNumber: "1002", PaymentMethod: "Терминал", Sum: 500.0, Weight: 30.5, RefGoZone: "Зеленая"},
 		"1003": {RefGoNumber: "1003", PaymentMethod: "Наличные", Sum: 1000.0, Weight: 10, RefGoZone: "Зеленая"},
+		// 1004 есть в базе, но отсутствует в реестре — попадёт в «не обнаружен в сверке».
+		"1004": {RefGoNumber: "1004", PaymentMethod: "Наличные", Sum: 100.0, Weight: 5, RefGoZone: "Зеленая"},
 	}
 
 	uc := NewRefGoCheckAgainstUseCase(&stubRefGoRepo{orders: dbOrders}, parser, &config.RefGoConfig{
@@ -91,7 +93,8 @@ func TestRefGoCheckAgainstUseCaseCheck(t *testing.T) {
 		t.Errorf("RetrievesCount = %d, want 1", result.RetrievesCount)
 	}
 
-	// 1001 и 1002 — корректные заказы, 1003 — 5 ошибок, 9999 — не найден.
+	// 1001 и 1002 — корректные заказы, 1003 — 5 ошибок, 9999 — не найден,
+	// 1004 — остался в мапе БД (нет в реестре).
 	wantErrors := []string{
 		"Ошибка на строке 6: Сумма оплаты не совпадает с базой",
 		"Ошибка на строке 6: Некорректная обработка д/с",
@@ -99,6 +102,7 @@ func TestRefGoCheckAgainstUseCaseCheck(t *testing.T) {
 		"Ошибка на строке 6: Проверь доп. услуги",
 		"Ошибка на строке 6: Неверная стоимость доставки",
 		"Ошибка на строке 7: Этот заказ не найден в базе",
+		"Заказ 1004 не обнаружен в сверке",
 	}
 
 	if !reflect.DeepEqual(result.Errors, wantErrors) {

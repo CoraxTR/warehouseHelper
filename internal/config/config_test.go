@@ -6,6 +6,33 @@ import (
 	"testing"
 )
 
+func TestParseEnvFloat(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  float64
+		ok    bool
+	}{
+		{"целое", "2", 2, true},
+		{"дробное через точку", "2.5", 2.5, true},
+		{"дробное через запятую", "2,5", 2.5, true},
+		{"пустая переменная", "", 0, false},
+		{"не число", "abc", 0, false},
+		{"пробелы вокруг", "  3.5 ", 3.5, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("RG_TEST_FLOAT", tt.value)
+
+			got, ok := parseEnvFloat("RG_TEST_FLOAT")
+			if got != tt.want || ok != tt.ok {
+				t.Errorf("parseEnvFloat() = (%v, %v), want (%v, %v)", got, ok, tt.want, tt.ok)
+			}
+		})
+	}
+}
+
 func TestEnvFilePath(t *testing.T) {
 	orig, err := os.Getwd()
 	if err != nil {
