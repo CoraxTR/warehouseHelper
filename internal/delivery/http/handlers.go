@@ -69,7 +69,14 @@ func (h *Handler) RefGoPage(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) RefGoCheckAgainst(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
+	switch r.Method {
+	case http.MethodGet:
+		http.ServeFile(w, r, "../internal/delivery/web/templates/refgo_checkagainst.html")
+
+		return
+	case http.MethodPost:
+		// логика запуска сверки ниже
+	default:
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 
 		return

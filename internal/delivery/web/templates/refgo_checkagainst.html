@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Сверка с перевозчиком</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+            margin-top: 40px;
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        button {
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+        }
+
+        button:hover {
+            background-color: #0056b3;
+        }
+
+        #drop-zone {
+            border: 2px dashed #007bff;
+            border-radius: 8px;
+            padding: 30px;
+            cursor: pointer;
+            max-width: 600px;
+            margin: 20px auto;
+            background: #f8f9fa;
+        }
+
+        #drop-zone:hover {
+            border-color: #0056b3;
+        }
+
+        a {
+            color: #007bff;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Сверка с перевозчиком</h1>
+    <p>Загрузите реестр перевозчика (xlsx) и выберите период, за который выполнялась доставка. Кнопка
+        «Провести сверку» появится после выбора файла и периода.</p>
+
+    <div id="drop-zone">
+        <p style="margin: 0;">Перетащите xlsx-файл реестра сюда или нажмите для выбора</p>
+        <p id="drop-zone-file" style="margin: 10px 0 0; font-weight: bold; color: #0056b3;"></p>
+        <input type="file" id="refgo-file-input" accept=".xlsx" style="display: none;">
+    </div>
+
+    <div style="margin-top: 15px;">
+        <label>Период: <input type="date" id="refgo-date-from"> — <input type="date" id="refgo-date-to"></label>
+    </div>
+
+    <form id="refgo-check-form" action="/refgo-check" method="post" enctype="multipart/form-data"
+        style="margin-top: 15px;">
+        <button type="submit" id="refgo-check-btn" class="hidden">Провести сверку</button>
+    </form>
+
+    <p><a href="/refgo">Назад</a></p>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function () {
+            const dropZone = document.getElementById('drop-zone');
+            const refgoFileInput = document.getElementById('refgo-file-input');
+            const dropZoneFile = document.getElementById('drop-zone-file');
+            const refgoDateFrom = document.getElementById('refgo-date-from');
+            const refgoDateTo = document.getElementById('refgo-date-to');
+            const refgoCheckBtn = document.getElementById('refgo-check-btn');
+            const refgoCheckForm = document.getElementById('refgo-check-form');
+            let selectedRefgoFile = null;
+
+            function updateRefgoCheckButton() {
+                if (selectedRefgoFile && refgoDateFrom.value && refgoDateTo.value) {
+                    refgoCheckBtn.classList.remove('hidden');
+                } else {
+                    refgoCheckBtn.classList.add('hidden');
+                }
+            }
+
+            dropZone.addEventListener('click', function (e) {
+                if (e.target === refgoFileInput) return;
+                refgoFileInput.click();
+            });
+
+            refgoFileInput.addEventListener('change', function () {
+                if (refgoFileInput.files.length > 0) {
+                    selectedRefgoFile = refgoFileInput.files[0];
+                    dropZoneFile.textContent = 'Файл: ' + selectedRefgoFile.name;
+                }
+                updateRefgoCheckButton();
+            });
+
+            dropZone.addEventListener('dragover', function (e) {
+                e.preventDefault();
+                dropZone.style.borderColor = '#0056b3';
+            });
+
+            dropZone.addEventListener('dragleave', function () {
+                dropZone.style.borderColor = '#007bff';
+            });
+
+            dropZone.addEventListener('drop', function (e) {
+                e.preventDefault();
+                dropZone.style.borderColor = '#007bff';
+                if (e.dataTransfer.files.length > 0) {
+                    selectedRefgoFile = e.dataTransfer.files[0];
+                    refgoFileInput.files = e.dataTransfer.files;
+                    dropZoneFile.textContent = 'Файл: ' + selectedRefgoFile.name;
+                }
+                updateRefgoCheckButton();
+            });
+
+            refgoDateFrom.addEventListener('change', updateRefgoCheckButton);
+            refgoDateTo.addEventListener('change', updateRefgoCheckButton);
+
+            // Перевод даты из формата input[type=date] (ГГГГ-ММ-ДД) в формат
+            // хранения в базе (ДД.ММ.ГГГГ).
+            function toRuDate(iso) {
+                const parts = iso.split('-');
+                return parts.length === 3 ? parts[2] + '.' + parts[1] + '.' + parts[0] : '';
+            }
+
+            refgoCheckForm.addEventListener('submit', function (e) {
+                e.preventDefault();
+                if (!selectedRefgoFile || !refgoDateFrom.value || !refgoDateTo.value) {
+                    return;
+                }
+
+                refgoCheckForm.querySelectorAll('input[name="file"], input[name="dateFrom"], input[name="dateTo"]')
+                    .forEach(input => input.remove());
+
+                const dataTransfer = new DataTransfer();
+                dataTransfer.items.add(selectedRefgoFile);
+
+                const fileInput = document.createElement('input');
+                fileInput.type = 'file';
+                fileInput.name = 'file';
+                fileInput.files = dataTransfer.files;
+                refgoCheckForm.appendChild(fileInput);
+
+                const dateFromInput = document.createElement('input');
+                dateFromInput.type = 'hidden';
+                dateFromInput.name = 'dateFrom';
+                dateFromInput.value = toRuDate(refgoDateFrom.value);
+                refgoCheckForm.appendChild(dateFromInput);
+
+                const dateToInput = document.createElement('input');
+                dateToInput.type = 'hidden';
+                dateToInput.name = 'dateTo';
+                dateToInput.value = toRuDate(refgoDateTo.value);
+                refgoCheckForm.appendChild(dateToInput);
+
+                refgoCheckForm.submit();
+            });
+        });
+    </script>
+</body>
+
+</html>
