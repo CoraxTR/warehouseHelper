@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strconv"
 	"strings"
 
 	"warehouseHelper/internal/config"
@@ -80,6 +81,10 @@ func (uc *RefGoCheckAgainstUseCase) Check(ctx context.Context, dateFrom, dateTo 
 			continue
 		}
 
+		// Заказ найден — убираем его из мапы БД, чтобы после прохода
+		// по реестру увидеть заказы, не участвовавшие в сверке.
+		delete(dbOrders, order.RefGoNumber)
+
 		switch dbOrder.PaymentMethod {
 		case "Наличные", "Терминал":
 			if !sumsMatch(dbOrder.Sum, order.CashFact+order.TerminalFact) {
@@ -104,10 +109,33 @@ func (uc *RefGoCheckAgainstUseCase) Check(ctx context.Context, dateFrom, dateTo 
 		}
 	}
 
+	// Заказы из базы, которые не встретились в реестре перевозчика.
+	leftoverNumbers := make([]string, 0, len(dbOrders))
+	for refgoNumber := range dbOrders {
+		leftoverNumbers = append(leftoverNumbers, refgoNumber)
+	}
+	sort.Slice(leftoverNumbers, func(i, j int) bool { return refgoNumberLess(leftoverNumbers[i], leftoverNumbers[j]) })
+
+	for _, refgoNumber := range leftoverNumbers {
+		errorsList = append(errorsList, fmt.Sprintf("Заказ %s не обнаружен в сверке", refgoNumber))
+	}
+
 	return &RefGoCheckResult{
 		RetrievesCount: retrievesCount,
 		Errors:         errorsList,
 	}, nil
+}
+
+// refgoNumberLess сравнивает номера РефГо как числа, если оба — числа,
+// иначе лексикографически.
+func refgoNumberLess(a, b string) bool {
+	ai, aerr := strconv.ParseInt(a, 10, 64)
+	bi, berr := strconv.ParseInt(b, 10, 64)
+	if aerr == nil && berr == nil {
+		return ai < bi
+	}
+
+	return a < b
 }
 
 // sumsMatch сравнивает сумму заказа из базы (рубли) с фактической оплатой

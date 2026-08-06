@@ -206,6 +206,13 @@ func TestValidateTaxFact(t *testing.T) {
 			wantDiff: 1.0,
 		},
 		{
+			name:     "fractional percents cash 1% card 2.5%",
+			order:    RefGoCheckAgainstOrder{CashFact: 10000, TerminalFact: 20000, TaxFact: 600},
+			cashTax:  1,
+			cardTax:  2.5,
+			wantDiff: 0,
+		},
+		{
 			name:     "no facts",
 			order:    RefGoCheckAgainstOrder{},
 			cashTax:  5,

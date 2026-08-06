@@ -71,6 +71,12 @@ func (h *Handler) RefGoPage(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) RefGoCheckAgainst(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
+		if !h.refGoUC.Enabled() {
+			http.Error(w, "Модуль сверки РефГо отключён: заполните его параметры в .env", http.StatusForbidden)
+
+			return
+		}
+
 		http.ServeFile(w, r, "../internal/delivery/web/templates/refgo_checkagainst.html")
 
 		return
