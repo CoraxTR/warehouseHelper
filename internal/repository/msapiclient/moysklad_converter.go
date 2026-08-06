@@ -99,6 +99,15 @@ func processPaymentMethod(msOrder *MSOrder) string {
 	return paymentMethod
 }
 
+func processRefGoZone(msOrder *MSOrder) string {
+	zone, ok := msOrder.AttributesMap["Зона доставки"].(string)
+	if !ok {
+		return ""
+	}
+
+	return zone
+}
+
 func processWeights(msOrder *MSOrder) (chilledWeight, frozenWeight, anyWeight float64) {
 	for _, position := range msOrder.PositionsWInfo {
 		if position.PositionCode == "" {
@@ -266,6 +275,7 @@ func (c *MSConverter) ToDomain(msOrder *MSOrder) *domain.InternalOrder {
 	o.SetDeliveryIntervalUntil(until)
 	o.SetDeliveryRegion(processDeliveryRegion(msOrder))
 	o.SetPaymentMethod(processPaymentMethod(msOrder))
+	o.SetRefGoZone(processRefGoZone(msOrder))
 
 	if refGoNumber, ok := msOrder.AttributesMap["Номер в РЕФ"].(string); ok {
 		o.SetRefGoNumber(refGoNumber)

@@ -9,6 +9,10 @@ import (
 type App struct {
 	di         *DIContainer
 	httpServer *http.Server
+
+	// RefGoCheckAgainstModule включает модуль сверки с перевозчиком.
+	// Выставляется в false, если в .env не заданы параметры модуля.
+	RefGoCheckAgainstModule bool
 }
 
 func New() *App {
@@ -17,6 +21,8 @@ func New() *App {
 	}
 
 	a.initDeps()
+
+	a.RefGoCheckAgainstModule = a.di.Config().RefGoConfig.CheckAgainstModule
 
 	return a
 }

@@ -82,6 +82,7 @@ type MSOrder struct {
 	AttributesMap  map[string]any `json:"-"`
 	AgentName      string         `json:"-"`
 	AgentPhone     string         `json:"-"`
+	RefGoZone      string         `json:"-"`
 	PositionsWInfo []MSPosition   `json:"-"`
 }
 

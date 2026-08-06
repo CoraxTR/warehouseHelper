@@ -13,6 +13,7 @@ type InternalOrder struct {
 	deliveryRegion        string
 	paymentMethod         string
 	refGoNumber           string
+	refGoZone             string
 	sum                   float64
 	chilledWeight         float64
 	frozenWeight          float64
@@ -67,6 +68,10 @@ func (o *InternalOrder) SetPaymentMethod(s string) {
 
 func (o *InternalOrder) SetRefGoNumber(s string) {
 	o.refGoNumber = s
+}
+
+func (o *InternalOrder) SetRefGoZone(s string) {
+	o.refGoZone = s
 }
 
 func (o *InternalOrder) SetSum(f float64) {
@@ -141,6 +146,10 @@ func (o *InternalOrder) GetRefGoNumber() string {
 	return o.refGoNumber
 }
 
+func (o *InternalOrder) GetRefGoZone() string {
+	return o.refGoZone
+}
+
 func (o *InternalOrder) GetSum() float64 {
 	return o.sum
 }
@@ -191,6 +200,10 @@ func (o *InternalOrder) Validate() {
 		o.errors["deliveryIntervalUntil"] = "Не указан интервал доставки"
 	}
 
+	if o.refGoZone == "" {
+		o.errors["refGoZone"] = "Не указана зона доставки"
+	}
+
 	if o.chilledBoxes != 0 && o.chilledWeight == 0 {
 		o.errors["chilledWeight"] = "Нулевой вес охлаждённой продукции"
 	}
@@ -203,6 +216,16 @@ func (o *InternalOrder) Validate() {
 		o.errors["frozenBoxes"] = "В заказе нет коробок"
 		o.errors["chilledBoxes"] = "В заказе нет коробок"
 	}
+}
+
+// InternalRefGoCheckAgainstOrder — заказ из базы для сверки с реестром
+// перевозчика. Sum — рубли, Weight — килограммы (охлаждённое + замороженное).
+type InternalRefGoCheckAgainstOrder struct {
+	RefGoNumber   string
+	PaymentMethod string
+	Sum           float64
+	Weight        float64
+	RefGoZone     string
 }
 
 type OrdersUsefulInfo struct {

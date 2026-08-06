@@ -3,11 +3,13 @@ package http
 import (
 	"encoding/json"
 	"html/template"
+	"io"
 	"log"
 	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"warehouseHelper/internal/domain"
 	"warehouseHelper/internal/tempdir"
@@ -20,15 +22,17 @@ type Handler struct {
 	exportUC  *usecase.ExportToExcelUseCase
 	pdfUC     *usecase.ExportOrderPDFUseCase
 	barcodeUC *usecase.ExportBarcodesToExcelUseCase
+	refGoUC   *usecase.RefGoCheckAgainstUseCase
 }
 
-func NewHandler(syncUC *usecase.SyncUseCase, ordersUC *usecase.OrdersUseCase, exportUC *usecase.ExportToExcelUseCase, pdfUC *usecase.ExportOrderPDFUseCase, barcodeUC *usecase.ExportBarcodesToExcelUseCase) *Handler {
+func NewHandler(syncUC *usecase.SyncUseCase, ordersUC *usecase.OrdersUseCase, exportUC *usecase.ExportToExcelUseCase, pdfUC *usecase.ExportOrderPDFUseCase, barcodeUC *usecase.ExportBarcodesToExcelUseCase, refGoUC *usecase.RefGoCheckAgainstUseCase) *Handler {
 	return &Handler{
 		syncUC:    syncUC,
 		ordersUC:  ordersUC,
 		exportUC:  exportUC,
 		pdfUC:     pdfUC,
 		barcodeUC: barcodeUC,
+		refGoUC:   refGoUC,
 	}
 }
 
@@ -52,6 +56,86 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 	h.syncUC.SyncDeliverableOrders(r.Context())
 
 	http.Redirect(w, r, "/orders", http.StatusSeeOther)
+}
+
+func (h *Handler) RefGoPage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+
+		return
+	}
+
+	http.ServeFile(w, r, "../internal/delivery/web/templates/refgo.html")
+}
+
+func (h *Handler) RefGoCheckAgainst(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		http.ServeFile(w, r, "../internal/delivery/web/templates/refgo_checkagainst.html")
+
+		return
+	case http.MethodPost:
+		// логика запуска сверки ниже
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+
+		return
+	}
+
+	if !h.refGoUC.Enabled() {
+		http.Error(w, "Модуль сверки РефГо отключён: заполните его параметры в .env", http.StatusForbidden)
+
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 32<<20)
+
+	err := r.ParseMultipartForm(32 << 20)
+	if err != nil {
+		http.Error(w, "Invalid form data: "+err.Error(), http.StatusBadRequest)
+
+		return
+	}
+
+	file, _, err := r.FormFile("file")
+	if err != nil {
+		http.Error(w, "File required: "+err.Error(), http.StatusBadRequest)
+
+		return
+	}
+	defer file.Close()
+
+	data, err := io.ReadAll(file)
+	if err != nil {
+		http.Error(w, "Failed to read file: "+err.Error(), http.StatusBadRequest)
+
+		return
+	}
+
+	dateFrom := strings.TrimSpace(r.FormValue("dateFrom"))
+	dateTo := strings.TrimSpace(r.FormValue("dateTo"))
+	if dateFrom == "" || dateTo == "" {
+		http.Error(w, "Date interval required", http.StatusBadRequest)
+
+		return
+	}
+
+	result, err := h.refGoUC.Check(r.Context(), dateFrom, dateTo, data)
+	if err != nil {
+		log.Printf("RefGoCheckAgainst error: %v", err)
+		http.Error(w, "Failed to run check: "+err.Error(), http.StatusInternalServerError)
+
+		return
+	}
+
+	tmpl := template.Must(template.ParseFiles("../internal/delivery/web/templates/refgo_result.html"))
+
+	err = tmpl.Execute(w, result)
+	if err != nil {
+		http.Error(w, "Failed to execute template: "+err.Error(), http.StatusInternalServerError)
+
+		return
+	}
 }
 
 func (h *Handler) Orders(w http.ResponseWriter, r *http.Request) {

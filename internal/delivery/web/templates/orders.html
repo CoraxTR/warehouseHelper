@@ -114,6 +114,7 @@
                 <th>Вес зам.</th>
                 <th>Коробки зам.</th>
                 <th>Коробки охл.</th>
+                <th>Зона РефГо</th>
                 <th>Действия</th>
             </tr>
         </thead>
@@ -136,6 +137,7 @@
             {{$frozenWeightKey := "frozenWeight"}}
             {{$frozenBoxesKey := "frozenBoxes"}}
             {{$chilledBoxesKey := "chilledBoxes"}}
+            {{$refGoZoneKey := "refGoZone"}}
             <tr data-href="{{.GetHREF}}" data-refgonumber="{{.GetRefGoNumber}}" data-order-id="{{.GetHREF}}"
                 class="order-row" data-modified="false">
                 <td><input type="checkbox" class="order-checkbox"></td>
@@ -169,6 +171,8 @@
                     {{.GetFrozenBoxes}}</td>
                 <td class="{{if index $err $chilledBoxesKey}}error-cell{{end}}" contenteditable="true">
                     {{.GetChilledBoxes}}</td>
+                <td class="{{if index $err $refGoZoneKey}}error-cell{{end}}" contenteditable="true">
+                    {{.GetRefGoZone}}</td>
                 <td class="action-buttons">
                     <button class="print-form-btn" data-href="{{.GetHREF}}">Бланк</button>
                     <button class="print-barcode-btn" data-href="{{.GetHREF}}">Штрих-код</button>
@@ -378,7 +382,8 @@
                             chilledWeight: Number(cells[12].innerText.replace(',', '.').replace(/\s+/g, '')) || 0,
                             frozenWeight: Number(cells[13].innerText.replace(',', '.').replace(/\s+/g, '')) || 0,
                             frozenBoxes: Number(cells[14].innerText.replace(/\s+/g, '')) || 0,
-                            chilledBoxes: Number(cells[15].innerText.replace(/\s+/g, '')) || 0
+                            chilledBoxes: Number(cells[15].innerText.replace(/\s+/g, '')) || 0,
+                            refGoZone: cells[16].innerText.trim()
                         };
                         modifiedRows.push(rowData);
                     }
