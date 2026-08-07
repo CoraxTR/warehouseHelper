@@ -185,7 +185,7 @@ func (o *InternalOrder) Validate() {
 	}
 
 	if o.shipmentAddress == "" {
-		o.errors["shipmentAdress"] = "Не указан адрес доставки"
+		o.errors["shipmentAddress"] = "Не указан адрес доставки"
 	}
 
 	if o.deliveryPlannedDate == "" {

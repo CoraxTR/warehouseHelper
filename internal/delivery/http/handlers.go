@@ -1,12 +1,14 @@
 package http
 
 import (
+	"context"
 	"encoding/json"
 	"html/template"
 	"io"
 	"log"
 	"mime"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -172,6 +174,118 @@ func (h *Handler) Orders(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to execute template: "+err.Error(), http.StatusInternalServerError)
 
 		return
+	}
+}
+
+// OrderFindPageData — данные для страницы поиска заказа по номеру.
+type OrderFindPageData struct {
+	MsNumber    string
+	RefGoNumber string
+	Order       *domain.InternalOrder
+	Error       string
+}
+
+// orderFindTmpl — шаблон страницы поиска, парсится один раз при старте.
+var orderFindTmpl = template.Must(template.ParseFiles("../internal/delivery/web/templates/order_find.html"))
+
+// OrderFind — GET: страница поиска заказа (поддерживает ?msNumber= / ?refGoNumber=);
+// POST: поиск по одному из номеров.
+func (h *Handler) OrderFind(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodPost {
+		w.Header().Set("Allow", "GET, POST")
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+
+		return
+	}
+
+	if r.Method == http.MethodPost {
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, "Invalid form data: "+err.Error(), http.StatusBadRequest)
+
+			return
+		}
+
+		data := OrderFindPageData{
+			MsNumber:    strings.TrimSpace(r.FormValue("msNumber")),
+			RefGoNumber: strings.TrimSpace(r.FormValue("refGoNumber")),
+		}
+
+		h.searchOrder(r.Context(), &data)
+
+		// PRG: после успешного поиска редиректим на GET с параметрами,
+		// чтобы F5 не повторял POST.
+		if data.Error == "" && data.Order != nil {
+			target := "/order-find?" + orderFindQuery(data.MsNumber, data.RefGoNumber)
+			http.Redirect(w, r, target, http.StatusSeeOther)
+
+			return
+		}
+
+		h.renderOrderFindPage(w, data)
+
+		return
+	}
+
+	data := OrderFindPageData{
+		MsNumber:    strings.TrimSpace(r.URL.Query().Get("msNumber")),
+		RefGoNumber: strings.TrimSpace(r.URL.Query().Get("refGoNumber")),
+	}
+
+	if data.MsNumber != "" || data.RefGoNumber != "" {
+		h.searchOrder(r.Context(), &data)
+	}
+
+	h.renderOrderFindPage(w, data)
+}
+
+// orderFindQuery формирует query-строку с заполненным полем поиска.
+func orderFindQuery(msNumber, refgoNumber string) string {
+	if msNumber != "" {
+		return "msNumber=" + url.QueryEscape(msNumber)
+	}
+
+	return "refGoNumber=" + url.QueryEscape(refgoNumber)
+}
+
+func (h *Handler) searchOrder(ctx context.Context, data *OrderFindPageData) {
+	// Заполнено должно быть ровно одно поле.
+	if (data.MsNumber == "") == (data.RefGoNumber == "") {
+		data.Error = "Заполните одно из полей: «Номер в МС» или «Номер в РефГо»"
+
+		return
+	}
+
+	var (
+		order *domain.InternalOrder
+		err   error
+	)
+
+	if data.MsNumber != "" {
+		order, err = h.ordersUC.GetOrderByName(ctx, data.MsNumber)
+	} else {
+		order, err = h.ordersUC.GetOrderByRefGoNumber(ctx, data.RefGoNumber)
+	}
+
+	if err != nil {
+		log.Printf("OrderFind search error: %v", err)
+		data.Error = "Ошибка поиска заказа"
+
+		return
+	}
+
+	if order == nil {
+		data.Error = "Заказ не найден"
+
+		return
+	}
+
+	data.Order = order
+}
+
+func (h *Handler) renderOrderFindPage(w http.ResponseWriter, data OrderFindPageData) {
+	err := orderFindTmpl.Execute(w, data)
+	if err != nil {
+		log.Printf("OrderFind template error: %v", err)
 	}
 }
 

@@ -18,6 +18,8 @@ type OrderRepository interface {
 	UpdateOrders(ctx context.Context, orders []*domain.InternalOrder) error
 	DeleteOrder(ctx context.Context, href string) error
 	GetOrdersByHREFs(ctx context.Context, hrefs []string) ([]*domain.InternalOrder, error)
+	GetOrderByName(ctx context.Context, name string) (*domain.InternalOrder, error)
+	GetOrderByRefGoNumber(ctx context.Context, refgoNumber string) (*domain.InternalOrder, error)
 }
 
 type OrdersUseCase struct {
@@ -84,6 +86,18 @@ func (uc *OrdersUseCase) UpdateOrderFromMS(ctx context.Context, href string) err
 
 func (uc *OrdersUseCase) DeleteOrder(ctx context.Context, href string) error {
 	return uc.repo.DeleteOrder(ctx, href)
+}
+
+// GetOrderByName возвращает заказ по номеру в МойСклад (name).
+// Если заказ не найден, возвращает (nil, nil).
+func (uc *OrdersUseCase) GetOrderByName(ctx context.Context, name string) (*domain.InternalOrder, error) {
+	return uc.repo.GetOrderByName(ctx, name)
+}
+
+// GetOrderByRefGoNumber возвращает заказ по номеру в РефГо (refgo_number).
+// Если заказ не найден, возвращает (nil, nil).
+func (uc *OrdersUseCase) GetOrderByRefGoNumber(ctx context.Context, refgoNumber string) (*domain.InternalOrder, error) {
+	return uc.repo.GetOrderByRefGoNumber(ctx, refgoNumber)
 }
 
 func (uc *OrdersUseCase) DeletePreloadedPDF(href string) error {
