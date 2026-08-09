@@ -15,6 +15,7 @@ func NewRouter(h *Handler) *http.ServeMux {
 	mux.HandleFunc("/sync", h.Sync)                     // POST
 	mux.HandleFunc("/refgo", h.RefGoPage)               // GET
 	mux.HandleFunc("/refgo-check", h.RefGoCheckAgainst) // GET — страница сверки, POST — запуск сверки
+	mux.HandleFunc("/order-find", h.OrderFind)          // GET — форма поиска, POST — поиск заказа
 	mux.HandleFunc("/orders", h.Orders)                 // GET
 	mux.HandleFunc("/orders/update", h.UpdateOrders)    // POST
 	mux.HandleFunc("/export", h.ExportToExcel)

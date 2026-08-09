@@ -12,6 +12,7 @@ import (
 	"warehouseHelper/internal/config"
 	"warehouseHelper/internal/domain"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -414,11 +415,7 @@ func (pg *PGClient) GetOrdersByHREFs(ctx context.Context, hrefs []string) ([]*do
 	}
 
 	rows, err := pg.Pool.Query(ctx, `
-        SELECT 
-            href, name, receiver_name, receiver_phone_number, description,
-            delivery_planned_date, shipment_address, delivery_interval_from,
-            delivery_interval_until, delivery_region, payment_method, refgo_number,
-            refgo_zone, sum, chilled_weight, frozen_weight, frozen_boxes, chilled_boxes, errors
+        SELECT `+orderColumns+`
         FROM refgoOrders
         WHERE href = ANY($1)
         ORDER BY refgo_number::integer ASC
@@ -431,59 +428,11 @@ func (pg *PGClient) GetOrdersByHREFs(ctx context.Context, hrefs []string) ([]*do
 	var orders []*domain.InternalOrder
 
 	for rows.Next() {
-		var (
-			href, name, receiverName, description, deliveryPlannedDate,
-			shipmentAddress, deliveryIntervalFrom, deliveryIntervalUntil,
-			deliveryRegion, paymentMethod, refgoNumber, refgoZone string
-			receiverPhoneNumber, frozenBoxes, chilledBoxes uint64
-			sum, chilledWeight, frozenWeight               float64
-			errorsJSON                                     []byte
-		)
-
-		err := rows.Scan(
-			&href, &name, &receiverName, &receiverPhoneNumber, &description,
-			&deliveryPlannedDate, &shipmentAddress, &deliveryIntervalFrom,
-			&deliveryIntervalUntil, &deliveryRegion, &paymentMethod, &refgoNumber,
-			&refgoZone, &sum, &chilledWeight, &frozenWeight, &frozenBoxes, &chilledBoxes,
-			&errorsJSON,
-		)
+		order, err := scanOrderRow(rows)
 		if err != nil {
-			log.Printf("GetAllOrders scan error: %v", err)
+			log.Printf("GetOrdersByHREFs scan error: %v", err)
 
 			return nil, err
-		}
-
-		order := &domain.InternalOrder{}
-		order.SetHREF(href)
-		order.SetName(name)
-		order.SetRecieverName(receiverName)
-		order.SetRecieverPhoneNumber(receiverPhoneNumber)
-		order.SetDescription(description)
-		order.SetDeliveryPlannedDate(deliveryPlannedDate)
-		order.SetShipmentAddress(shipmentAddress)
-		order.SetDeliveryIntervalFrom(deliveryIntervalFrom)
-		order.SetDeliveryIntervalUntil(deliveryIntervalUntil)
-		order.SetDeliveryRegion(deliveryRegion)
-		order.SetPaymentMethod(paymentMethod)
-		order.SetRefGoNumber(refgoNumber)
-		order.SetRefGoZone(refgoZone)
-		order.SetSum(sum)
-		order.SetChilledWeight(chilledWeight)
-		order.SetFrozenWeight(frozenWeight)
-		order.SetFrozenBoxes(frozenBoxes)
-		order.SetChilledBoxes(chilledBoxes)
-
-		if len(errorsJSON) > 0 {
-			var errs map[string]string
-
-			err := json.Unmarshal(errorsJSON, &errs)
-			if err != nil {
-				log.Printf("GetAllOrders unmarshal errors error: %v", err)
-
-				return nil, err
-			}
-
-			order.SetErrors(errs)
 		}
 
 		orders = append(orders, order)
@@ -491,10 +440,105 @@ func (pg *PGClient) GetOrdersByHREFs(ctx context.Context, hrefs []string) ([]*do
 
 	err = rows.Err()
 	if err != nil {
-		log.Printf("GetAllOrders rows error: %v", err)
+		log.Printf("GetOrdersByHREFs rows error: %v", err)
 
 		return nil, err
 	}
 
 	return orders, nil
+}
+
+// GetOrderByName возвращает заказ по номеру в МойСклад (name).
+// Если заказ не найден, возвращает (nil, nil).
+func (pg *PGClient) GetOrderByName(ctx context.Context, name string) (*domain.InternalOrder, error) {
+	row := pg.Pool.QueryRow(ctx, `
+        SELECT `+orderColumns+`
+        FROM refgoOrders
+        WHERE name = $1
+        LIMIT 1
+    `, name)
+
+	return scanOrderRow(row)
+}
+
+// GetOrderByRefGoNumber возвращает заказ по номеру в РефГо (refgo_number).
+// Если заказ не найден, возвращает (nil, nil).
+func (pg *PGClient) GetOrderByRefGoNumber(ctx context.Context, refgoNumber string) (*domain.InternalOrder, error) {
+	row := pg.Pool.QueryRow(ctx, `
+        SELECT `+orderColumns+`
+        FROM refgoOrders
+        WHERE refgo_number = $1
+        LIMIT 1
+    `, refgoNumber)
+
+	return scanOrderRow(row)
+}
+
+// orderColumns — список колонок таблицы refgoOrders, общий для всех SELECT.
+// Порядок должен совпадать с порядком Scan в scanOrderRow.
+const orderColumns = `
+    href, name, receiver_name, receiver_phone_number, description,
+    delivery_planned_date, shipment_address, delivery_interval_from,
+    delivery_interval_until, delivery_region, payment_method, refgo_number,
+    refgo_zone, sum, chilled_weight, frozen_weight, frozen_boxes, chilled_boxes, errors`
+
+// scanOrderRow читает строку результата запроса в InternalOrder.
+// Если строк нет (pgx.ErrNoRows), возвращает (nil, nil).
+func scanOrderRow(row pgx.Row) (*domain.InternalOrder, error) {
+	var (
+		href, name, receiverName, description, deliveryPlannedDate,
+		shipmentAddress, deliveryIntervalFrom, deliveryIntervalUntil,
+		deliveryRegion, paymentMethod, refgoNumber, refgoZone string
+		receiverPhoneNumber, frozenBoxes, chilledBoxes uint64
+		sum, chilledWeight, frozenWeight               float64
+		errorsJSON                                     []byte
+	)
+
+	err := row.Scan(
+		&href, &name, &receiverName, &receiverPhoneNumber, &description,
+		&deliveryPlannedDate, &shipmentAddress, &deliveryIntervalFrom,
+		&deliveryIntervalUntil, &deliveryRegion, &paymentMethod, &refgoNumber,
+		&refgoZone, &sum, &chilledWeight, &frozenWeight, &frozenBoxes, &chilledBoxes,
+		&errorsJSON,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+
+		return nil, err
+	}
+
+	order := &domain.InternalOrder{}
+	order.SetHREF(href)
+	order.SetName(name)
+	order.SetRecieverName(receiverName)
+	order.SetRecieverPhoneNumber(receiverPhoneNumber)
+	order.SetDescription(description)
+	order.SetDeliveryPlannedDate(deliveryPlannedDate)
+	order.SetShipmentAddress(shipmentAddress)
+	order.SetDeliveryIntervalFrom(deliveryIntervalFrom)
+	order.SetDeliveryIntervalUntil(deliveryIntervalUntil)
+	order.SetDeliveryRegion(deliveryRegion)
+	order.SetPaymentMethod(paymentMethod)
+	order.SetRefGoNumber(refgoNumber)
+	order.SetRefGoZone(refgoZone)
+	order.SetSum(sum)
+	order.SetChilledWeight(chilledWeight)
+	order.SetFrozenWeight(frozenWeight)
+	order.SetFrozenBoxes(frozenBoxes)
+	order.SetChilledBoxes(chilledBoxes)
+
+	if len(errorsJSON) > 0 {
+		var errs map[string]string
+
+		err = json.Unmarshal(errorsJSON, &errs)
+		if err != nil {
+			return nil, fmt.Errorf("unmarshal order errors: %w", err)
+		}
+
+		order.SetErrors(errs)
+	}
+
+	return order, nil
 }
