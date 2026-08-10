@@ -10,7 +10,7 @@ import (
 
 	"warehouseHelper/internal/config"
 	"warehouseHelper/internal/domain"
-	"warehouseHelper/internal/repository/xlsximport"
+	"warehouseHelper/internal/refgo/registry"
 )
 
 // RefGoCheckOrdersRepository — источник заказов для сверки.
@@ -20,7 +20,7 @@ type RefGoCheckOrdersRepository interface {
 
 // RefGoXlsxParser — парсер xlsx-реестра перевозчика.
 type RefGoXlsxParser interface {
-	ParseRefGoCheckFile(data []byte) (int64, map[int64]xlsximport.RefGoCheckAgainstOrder, error)
+	ParseRefGoCheckFile(data []byte) (int64, map[int64]registry.RefGoCheckAgainstOrder, error)
 }
 
 // RefGoCheckAgainstUseCase — сверка реестра перевозчика с заказами из базы.
@@ -153,7 +153,7 @@ func sumsMatch(dbSum float64, factKopecks int64) bool {
 
 // checkDeliveryPrice сверяет стоимость доставки из реестра с расчётной:
 // один тариф за каждые RGWeightlimit килограмм веса, округление вверх.
-func (uc *RefGoCheckAgainstUseCase) checkDeliveryPrice(dbOrder domain.InternalRefGoCheckAgainstOrder, order xlsximport.RefGoCheckAgainstOrder, row int64) string {
+func (uc *RefGoCheckAgainstUseCase) checkDeliveryPrice(dbOrder domain.InternalRefGoCheckAgainstOrder, order registry.RefGoCheckAgainstOrder, row int64) string {
 	zonePrice, ok := uc.zonePrice(dbOrder.RefGoZone)
 	if !ok {
 		return fmt.Sprintf("Ошибка на строке %d: Неизвестная зона доставки", row)

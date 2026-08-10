@@ -1,4 +1,4 @@
-package msapiclient
+package client
 
 import (
 	"fmt"

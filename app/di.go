@@ -4,41 +4,42 @@ import (
 	"net/http"
 	"warehouseHelper/internal/config"
 	myhttp "warehouseHelper/internal/delivery/http"
-	"warehouseHelper/internal/exporter/excel"
-	"warehouseHelper/internal/exporter/pdf"
-	"warehouseHelper/internal/msWorkerpool"
-	"warehouseHelper/internal/repository/msapiclient"
-	orderscache "warehouseHelper/internal/repository/ordercache"
-	"warehouseHelper/internal/repository/pdfpreloader"
+	"warehouseHelper/internal/msclient/client"
+	orderscache "warehouseHelper/internal/msclient/ordercache"
+	"warehouseHelper/internal/msclient/pdfpreloader"
+	msucase "warehouseHelper/internal/msclient/usecase"
+	"warehouseHelper/internal/msclient/workerpool"
+	"warehouseHelper/internal/refgo/export/excel"
+	"warehouseHelper/internal/refgo/export/pdf"
+	"warehouseHelper/internal/refgo/registry"
+	rgucase "warehouseHelper/internal/refgo/usecase"
 	"warehouseHelper/internal/repository/postgres"
-	tempcleaner "warehouseHelper/internal/repository/tempcleaner"
-	"warehouseHelper/internal/repository/xlsximport"
+	tempcleaner "warehouseHelper/internal/tempcleaner"
 	"warehouseHelper/internal/tempdir"
-	"warehouseHelper/internal/usecase"
 )
 
 type DIContainer struct {
 	// Инфраструктура
 	config       *config.Config
-	msrl         *msWorkerpool.MSOutRateLimiter
-	wp           *msWorkerpool.MSWorkerPool
-	msc          *msapiclient.MSAPIClient
+	msrl         *workerpool.MSOutRateLimiter
+	wp           *workerpool.MSWorkerPool
+	msc          *client.MSAPIClient
 	orepo        *postgres.PGClient
-	msconv       *msapiclient.MSConverter
+	msconv       *client.MSConverter
 	xlxsexporter *excel.ExcelExporter
 	pdfexporter  *pdf.PDFExporter
 	ordercache   *orderscache.OrderCache
 	pdfpreloader *pdfpreloader.PDFPreloader
 	tempcleaner  *tempcleaner.TempCleaner
-	xlsximporter usecase.RefGoXlsxParser
+	xlsximporter rgucase.RefGoXlsxParser
 
 	// Юзкейсы
-	syncUC          *usecase.SyncUseCase
-	ordersUC        *usecase.OrdersUseCase
-	excelExportUC   *usecase.ExportToExcelUseCase
-	pdfExportUC     *usecase.ExportOrderPDFUseCase
-	barcodeExportUC *usecase.ExportBarcodesToExcelUseCase
-	refGoCheckUC    *usecase.RefGoCheckAgainstUseCase
+	syncUC          *msucase.SyncUseCase
+	ordersUC        *msucase.OrdersUseCase
+	excelExportUC   *rgucase.ExportToExcelUseCase
+	pdfExportUC     *rgucase.ExportOrderPDFUseCase
+	barcodeExportUC *rgucase.ExportBarcodesToExcelUseCase
+	refGoCheckUC    *rgucase.RefGoCheckAgainstUseCase
 
 	// Хэндлеры
 	mux      *http.ServeMux
@@ -56,25 +57,25 @@ func (d *DIContainer) Config() *config.Config {
 
 	return d.config
 }
-func (d *DIContainer) MSRateLimiter() *msWorkerpool.MSOutRateLimiter {
+func (d *DIContainer) MSRateLimiter() *workerpool.MSOutRateLimiter {
 	if d.msrl == nil {
-		d.msrl = msWorkerpool.NewMSOutRateLimiter(d.Config().MSConfig)
+		d.msrl = workerpool.NewMSOutRateLimiter(d.Config().MSConfig)
 	}
 
 	return d.msrl
 }
 
-func (d *DIContainer) MSWorkerPool() *msWorkerpool.MSWorkerPool {
+func (d *DIContainer) MSWorkerPool() *workerpool.MSWorkerPool {
 	if d.wp == nil {
-		d.wp = msWorkerpool.NewMSWorkerPool(d.Config().MSConfig)
+		d.wp = workerpool.NewMSWorkerPool(d.Config().MSConfig)
 	}
 
 	return d.wp
 }
 
-func (d *DIContainer) MSClient() *msapiclient.MSAPIClient {
+func (d *DIContainer) MSClient() *client.MSAPIClient {
 	if d.msc == nil {
-		d.msc = msapiclient.NewMSAPIClient(d.Config(), d.MSWorkerPool(), d.OrderCache())
+		d.msc = client.NewMSAPIClient(d.Config(), d.MSWorkerPool(), d.OrderCache())
 	}
 
 	return d.msc
@@ -88,9 +89,9 @@ func (d *DIContainer) OrdersRepository() *postgres.PGClient {
 	return d.orepo
 }
 
-func (d *DIContainer) MSConverter() *msapiclient.MSConverter {
+func (d *DIContainer) MSConverter() *client.MSConverter {
 	if d.msconv == nil {
-		d.msconv = msapiclient.NewMSConverter()
+		d.msconv = client.NewMSConverter()
 	}
 
 	return d.msconv
@@ -112,24 +113,24 @@ func (d *DIContainer) PdfPreloader() *pdfpreloader.PDFPreloader {
 	return d.pdfpreloader
 }
 
-func (d *DIContainer) SyncUC() *usecase.SyncUseCase {
+func (d *DIContainer) SyncUC() *msucase.SyncUseCase {
 	if d.syncUC == nil {
-		d.syncUC = usecase.NewSyncUsecase(d.MSClient(), d.OrdersRepository(), d.MSConverter(),
+		d.syncUC = msucase.NewSyncUsecase(d.MSClient(), d.OrdersRepository(), d.MSConverter(),
 			d.Config().RefGoConfig, d.PdfPreloader())
 	}
 
 	return d.syncUC
 }
-func (d *DIContainer) OrdersUC() *usecase.OrdersUseCase {
+func (d *DIContainer) OrdersUC() *msucase.OrdersUseCase {
 	if d.ordersUC == nil {
-		d.ordersUC = usecase.NewOrdersUseCase(d.OrdersRepository(), d.MSClient(), d.MSConverter(),
+		d.ordersUC = msucase.NewOrdersUseCase(d.OrdersRepository(), d.MSClient(), d.MSConverter(),
 			d.PdfPreloader())
 	}
 
 	return d.ordersUC
 }
 
-func (d *DIContainer) ExcelExporter() usecase.ExcelExporter {
+func (d *DIContainer) ExcelExporter() rgucase.ExcelExporter {
 	if d.xlxsexporter == nil {
 		d.xlxsexporter = excel.NewExcelExporter()
 	}
@@ -137,7 +138,7 @@ func (d *DIContainer) ExcelExporter() usecase.ExcelExporter {
 	return d.xlxsexporter
 }
 
-func (d *DIContainer) ExcelBarcodeExporter() usecase.ExcelBarcodesExporter {
+func (d *DIContainer) ExcelBarcodeExporter() rgucase.ExcelBarcodesExporter {
 	if d.xlxsexporter == nil {
 		d.xlxsexporter = excel.NewExcelExporter()
 	}
@@ -145,7 +146,7 @@ func (d *DIContainer) ExcelBarcodeExporter() usecase.ExcelBarcodesExporter {
 	return d.xlxsexporter
 }
 
-func (d *DIContainer) TempCleaner() usecase.TempCleaner {
+func (d *DIContainer) TempCleaner() rgucase.TempCleaner {
 	if d.tempcleaner == nil {
 		d.tempcleaner = tempcleaner.NewTempCleaner(tempdir.Dir)
 	}
@@ -153,23 +154,23 @@ func (d *DIContainer) TempCleaner() usecase.TempCleaner {
 	return d.tempcleaner
 }
 
-func (d *DIContainer) XlsxImporter() usecase.RefGoXlsxParser {
+func (d *DIContainer) XlsxImporter() rgucase.RefGoXlsxParser {
 	if d.xlsximporter == nil {
-		d.xlsximporter = xlsximport.NewxlsxImporter()
+		d.xlsximporter = registry.NewxlsxImporter()
 	}
 
 	return d.xlsximporter
 }
 
-func (d *DIContainer) ExcelExportUC() *usecase.ExportToExcelUseCase {
+func (d *DIContainer) ExcelExportUC() *rgucase.ExportToExcelUseCase {
 	if d.excelExportUC == nil {
-		d.excelExportUC = usecase.NewExportToExcelUseCase(d.ExcelExporter(), d.OrdersUC(), d.MSClient(), d.TempCleaner(), d.Config().TempCleanupMaxAge)
+		d.excelExportUC = rgucase.NewExportToExcelUseCase(d.ExcelExporter(), d.OrdersUC(), d.MSClient(), d.TempCleaner(), d.Config().TempCleanupMaxAge)
 	}
 
 	return d.excelExportUC
 }
 
-func (d *DIContainer) PDFExporter() usecase.PDFExporter {
+func (d *DIContainer) PDFExporter() rgucase.PDFExporter {
 	if d.pdfexporter == nil {
 		d.pdfexporter = pdf.NewPDFExporter()
 	}
@@ -177,25 +178,25 @@ func (d *DIContainer) PDFExporter() usecase.PDFExporter {
 	return d.pdfexporter
 }
 
-func (d *DIContainer) PdfExportUC() *usecase.ExportOrderPDFUseCase {
+func (d *DIContainer) PdfExportUC() *rgucase.ExportOrderPDFUseCase {
 	if d.pdfExportUC == nil {
-		d.pdfExportUC = usecase.NewExportOrderPDFUseCase(d.MSClient(), d.PDFExporter(), d.PdfPreloader())
+		d.pdfExportUC = rgucase.NewExportOrderPDFUseCase(d.MSClient(), d.PDFExporter(), d.PdfPreloader())
 	}
 
 	return d.pdfExportUC
 }
 
-func (d *DIContainer) BarcodeExportUC() *usecase.ExportBarcodesToExcelUseCase {
+func (d *DIContainer) BarcodeExportUC() *rgucase.ExportBarcodesToExcelUseCase {
 	if d.barcodeExportUC == nil {
-		d.barcodeExportUC = usecase.NewExportBarcodesToExcelUseCase(d.ExcelBarcodeExporter(), d.OrdersRepository())
+		d.barcodeExportUC = rgucase.NewExportBarcodesToExcelUseCase(d.ExcelBarcodeExporter(), d.OrdersRepository())
 	}
 
 	return d.barcodeExportUC
 }
 
-func (d *DIContainer) RefGoCheckAgainstUC() *usecase.RefGoCheckAgainstUseCase {
+func (d *DIContainer) RefGoCheckAgainstUC() *rgucase.RefGoCheckAgainstUseCase {
 	if d.refGoCheckUC == nil {
-		d.refGoCheckUC = usecase.NewRefGoCheckAgainstUseCase(d.OrdersRepository(), d.XlsxImporter(), d.Config().RefGoConfig)
+		d.refGoCheckUC = rgucase.NewRefGoCheckAgainstUseCase(d.OrdersRepository(), d.XlsxImporter(), d.Config().RefGoConfig)
 	}
 
 	return d.refGoCheckUC

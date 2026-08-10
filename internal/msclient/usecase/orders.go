@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"warehouseHelper/internal/domain"
-	"warehouseHelper/internal/repository/msapiclient"
-	"warehouseHelper/internal/repository/pdfpreloader"
+	"warehouseHelper/internal/msclient/client"
+	"warehouseHelper/internal/msclient/pdfpreloader"
 	"warehouseHelper/internal/tempdir"
 )
 
@@ -25,15 +25,15 @@ type OrderRepository interface {
 type OrdersUseCase struct {
 	repo      OrderRepository
 	msClient  MoySkladClient
-	converter *msapiclient.MSConverter
+	converter *client.MSConverter
 	pdf       *pdfpreloader.PDFPreloader
 }
 
 type MoySkladClient interface {
-	GetOrderByHREF(ctx context.Context, href string) (*msapiclient.MSOrder, error)
+	GetOrderByHREF(ctx context.Context, href string) (*client.MSOrder, error)
 }
 
-func NewOrdersUseCase(repo OrderRepository, msClient MoySkladClient, converter *msapiclient.MSConverter,
+func NewOrdersUseCase(repo OrderRepository, msClient MoySkladClient, converter *client.MSConverter,
 	pdf *pdfpreloader.PDFPreloader) *OrdersUseCase {
 	return &OrdersUseCase{
 		repo:      repo,

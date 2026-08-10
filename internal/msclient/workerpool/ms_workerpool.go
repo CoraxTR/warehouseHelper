@@ -1,4 +1,4 @@
-package msWorkerpool
+package workerpool
 
 import (
 	"context"

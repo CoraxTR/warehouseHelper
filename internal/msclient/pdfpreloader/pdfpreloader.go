@@ -9,27 +9,27 @@ import (
 	"strings"
 	"sync"
 	"warehouseHelper/internal/domain"
-	"warehouseHelper/internal/repository/msapiclient"
+	"warehouseHelper/internal/msclient/client"
 	"warehouseHelper/internal/tempdir"
 )
 
 type PDFPreloader struct {
-	msapiclient *msapiclient.MSAPIClient
-	stopchan    chan struct{}
-	cancel      context.CancelFunc
-	wg          sync.WaitGroup
-	mu          sync.Mutex
+	msclient *client.MSAPIClient
+	stopchan chan struct{}
+	cancel   context.CancelFunc
+	wg       sync.WaitGroup
+	mu       sync.Mutex
 }
 
-func NewPDFPreloader(client *msapiclient.MSAPIClient) *PDFPreloader {
+func NewPDFPreloader(c *client.MSAPIClient) *PDFPreloader {
 	err := os.MkdirAll(tempdir.Dir, 0o750)
 	if err != nil {
 		log.Printf("Failed to create temp dir: %v", err)
 	}
 
 	return &PDFPreloader{
-		msapiclient: client,
-		stopchan:    make(chan struct{}, 1),
+		msclient: c,
+		stopchan: make(chan struct{}, 1),
 	}
 }
 
@@ -86,7 +86,7 @@ func (p *PDFPreloader) StartPreloading(orders []*domain.InternalOrder) {
 				removeFile(filePath)
 			}
 
-			data, err := p.msapiclient.FetchOrderPDF(ctx, o.GetHREF())
+			data, err := p.msclient.FetchOrderPDF(ctx, o.GetHREF())
 			if err != nil {
 				log.Printf("Failed to fetch PDF for order %s: %v", o.GetHREF(), err)
 				// Загрузка прервана (например, отменой контекста) — файл мог

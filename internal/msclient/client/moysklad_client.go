@@ -1,4 +1,4 @@
-package msapiclient
+package client
 
 import (
 	"bytes"
@@ -15,7 +15,7 @@ import (
 	"time"
 	"warehouseHelper/internal/config"
 	"warehouseHelper/internal/domain"
-	"warehouseHelper/internal/msWorkerpool"
+	"warehouseHelper/internal/msclient/workerpool"
 )
 
 const msEncoding = "gzip"
@@ -26,13 +26,13 @@ type OrderCache interface {
 }
 
 type MSAPIClient struct {
-	workerpool *msWorkerpool.MSWorkerPool
+	workerpool *workerpool.MSWorkerPool
 	msConfig   *config.MSConfig
 	rgConfig   *config.RefGoConfig
 	Cache      OrderCache
 }
 
-func NewMSAPIClient(c *config.Config, wp *msWorkerpool.MSWorkerPool, cache OrderCache) *MSAPIClient {
+func NewMSAPIClient(c *config.Config, wp *workerpool.MSWorkerPool, cache OrderCache) *MSAPIClient {
 	return &MSAPIClient{
 		workerpool: wp,
 		msConfig:   c.MSConfig,

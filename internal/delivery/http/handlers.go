@@ -14,20 +14,21 @@ import (
 	"strings"
 
 	"warehouseHelper/internal/domain"
+	msucase "warehouseHelper/internal/msclient/usecase"
+	rgucase "warehouseHelper/internal/refgo/usecase"
 	"warehouseHelper/internal/tempdir"
-	"warehouseHelper/internal/usecase"
 )
 
 type Handler struct {
-	syncUC    *usecase.SyncUseCase
-	ordersUC  *usecase.OrdersUseCase
-	exportUC  *usecase.ExportToExcelUseCase
-	pdfUC     *usecase.ExportOrderPDFUseCase
-	barcodeUC *usecase.ExportBarcodesToExcelUseCase
-	refGoUC   *usecase.RefGoCheckAgainstUseCase
+	syncUC    *msucase.SyncUseCase
+	ordersUC  *msucase.OrdersUseCase
+	exportUC  *rgucase.ExportToExcelUseCase
+	pdfUC     *rgucase.ExportOrderPDFUseCase
+	barcodeUC *rgucase.ExportBarcodesToExcelUseCase
+	refGoUC   *rgucase.RefGoCheckAgainstUseCase
 }
 
-func NewHandler(syncUC *usecase.SyncUseCase, ordersUC *usecase.OrdersUseCase, exportUC *usecase.ExportToExcelUseCase, pdfUC *usecase.ExportOrderPDFUseCase, barcodeUC *usecase.ExportBarcodesToExcelUseCase, refGoUC *usecase.RefGoCheckAgainstUseCase) *Handler {
+func NewHandler(syncUC *msucase.SyncUseCase, ordersUC *msucase.OrdersUseCase, exportUC *rgucase.ExportToExcelUseCase, pdfUC *rgucase.ExportOrderPDFUseCase, barcodeUC *rgucase.ExportBarcodesToExcelUseCase, refGoUC *rgucase.RefGoCheckAgainstUseCase) *Handler {
 	return &Handler{
 		syncUC:    syncUC,
 		ordersUC:  ordersUC,
