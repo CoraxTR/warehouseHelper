@@ -2,6 +2,7 @@ package pdfpreloader
 
 import (
 	"context"
+	"errors"
 	"log"
 	"os"
 	"path/filepath"
@@ -75,14 +76,30 @@ func (p *PDFPreloader) StartPreloading(orders []*domain.InternalOrder) {
 			safeName := filepath.Base(strings.TrimSuffix(o.GetHREF(), "/"))
 			filePath := filepath.Join(tempdir.Dir, safeName+".pdf")
 
-			_, err := os.Stat(filePath)
-			if err == nil {
+			info, err := os.Stat(filePath)
+			if err == nil && info.Size() > 0 {
 				return
+			}
+			if err == nil {
+				// Файл от прерванной загрузки остался пустым — удаляем,
+				// чтобы при следующем проходе скачать его заново.
+				removeFile(filePath)
 			}
 
 			data, err := p.msapiclient.FetchOrderPDF(ctx, o.GetHREF())
 			if err != nil {
 				log.Printf("Failed to fetch PDF for order %s: %v", o.GetHREF(), err)
+				// Загрузка прервана (например, отменой контекста) — файл мог
+				// остаться пустым или частичным; удаляем, чтобы он не попал
+				// пустым в merge мульти-PDF.
+				removeFile(filePath)
+
+				return
+			}
+
+			if len(data) == 0 {
+				log.Printf("Fetched empty PDF data for order %s", o.GetHREF())
+				removeFile(filePath)
 
 				return
 			}
@@ -104,5 +121,12 @@ func (p *PDFPreloader) StopPreloading() {
 		case p.stopchan <- struct{}{}:
 		default:
 		}
+	}
+}
+
+// removeFile удаляет файл по пути, игнорируя его отсутствие.
+func removeFile(path string) {
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		log.Printf("Failed to remove file %s: %v", path, err)
 	}
 }

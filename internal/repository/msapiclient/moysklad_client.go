@@ -627,9 +627,9 @@ func (msac *MSAPIClient) FetchOrderPDF(parentctx context.Context, href string) (
 
 		return pdfData, nil
 	case <-parentctx.Done():
-		log.Printf("FetchOrderPDF timed out: %v", parentctx.Err())
+		log.Printf("FetchOrderPDF aborted: %v", parentctx.Err())
 
-		return nil, nil
+		return nil, parentctx.Err()
 	}
 }
 
