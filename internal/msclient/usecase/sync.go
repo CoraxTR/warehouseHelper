@@ -7,8 +7,8 @@ import (
 	"sync"
 	"warehouseHelper/internal/config"
 	"warehouseHelper/internal/domain"
-	"warehouseHelper/internal/repository/msapiclient"
-	"warehouseHelper/internal/repository/pdfpreloader"
+	"warehouseHelper/internal/msclient/client"
+	"warehouseHelper/internal/msclient/pdfpreloader"
 )
 
 type OrdersRepository interface {
@@ -16,14 +16,14 @@ type OrdersRepository interface {
 }
 
 type SyncUseCase struct {
-	MSAPIClinet  *msapiclient.MSAPIClient
+	MSAPIClinet  *client.MSAPIClient
 	DBClient     OrdersRepository
-	Converter    *msapiclient.MSConverter
+	Converter    *client.MSConverter
 	Config       *config.RefGoConfig
 	PDFPreloader *pdfpreloader.PDFPreloader
 }
 
-func NewSyncUsecase(client *msapiclient.MSAPIClient, repo OrdersRepository, converter *msapiclient.MSConverter,
+func NewSyncUsecase(client *client.MSAPIClient, repo OrdersRepository, converter *client.MSConverter,
 	cfg *config.RefGoConfig, pdf *pdfpreloader.PDFPreloader) *SyncUseCase {
 	return &SyncUseCase{
 		MSAPIClinet:  client,
@@ -44,7 +44,7 @@ func (uc *SyncUseCase) SyncDeliverableOrders(ctx context.Context) {
 		return
 	}
 
-	suitableOrders := make([]*msapiclient.MSOrder, 0, len(orders)/2)
+	suitableOrders := make([]*client.MSOrder, 0, len(orders)/2)
 	for _, o := range orders {
 		if o.SuitableForDelivery() {
 			suitableOrders = append(suitableOrders, o)
@@ -61,7 +61,7 @@ func (uc *SyncUseCase) SyncDeliverableOrders(ctx context.Context) {
 		//nolint:revive //false positive, we can't use wg.Go for goroutines with variables
 		wg.Add(1)
 
-		go func(order *msapiclient.MSOrder, ctx context.Context) {
+		go func(order *client.MSOrder, ctx context.Context) {
 			defer wg.Done()
 
 			internalOrder := uc.Converter.ToDomain(order)

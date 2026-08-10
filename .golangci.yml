@@ -14,7 +14,7 @@ linters:
         - copyloopvar
         - cyclop
         - decorder
-        #    - depguard # хороший способ запретить импорт чего-либо. Зависит от подхода к разработке.
+        - depguard # границы модулей: msclient и refgo не импортируют друг друга
         - dogsled
         #    - dupl # сплошные false positives
         - dupword
@@ -117,6 +117,24 @@ linters:
         - zerologlint
 
     settings:
+        depguard:
+            rules:
+                module-boundary-msclient:
+                    files:
+                        - "**/internal/msclient/**"
+                    deny:
+                        - pkg: "warehouseHelper/internal/refgo"
+                          desc: "модуль msclient не должен импортировать модуль refgo"
+                        - pkg: "warehouseHelper/internal/refgo/**"
+                          desc: "модуль msclient не должен импортировать модуль refgo"
+                module-boundary-refgo:
+                    files:
+                        - "**/internal/refgo/**"
+                    deny:
+                        - pkg: "warehouseHelper/internal/msclient"
+                          desc: "модуль refgo не должен импортировать модуль msclient"
+                        - pkg: "warehouseHelper/internal/msclient/**"
+                          desc: "модуль refgo не должен импортировать модуль msclient"
         cyclop:
             # Default: 10
             max-complexity: 15

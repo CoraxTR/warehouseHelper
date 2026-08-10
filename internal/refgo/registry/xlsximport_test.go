@@ -1,4 +1,4 @@
-package xlsximport
+package registry
 
 import (
 	"testing"

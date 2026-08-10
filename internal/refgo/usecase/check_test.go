@@ -8,7 +8,7 @@ import (
 
 	"warehouseHelper/internal/config"
 	"warehouseHelper/internal/domain"
-	"warehouseHelper/internal/repository/xlsximport"
+	"warehouseHelper/internal/refgo/registry"
 
 	"github.com/xuri/excelize/v2"
 )
@@ -56,7 +56,7 @@ func buildCheckRegistry(t *testing.T, rows [][]any) []byte {
 }
 
 func TestRefGoCheckAgainstUseCaseCheck(t *testing.T) {
-	parser := xlsximport.NewxlsxImporter()
+	parser := registry.NewxlsxImporter()
 
 	dbOrders := map[string]domain.InternalRefGoCheckAgainstOrder{
 		"1001": {RefGoNumber: "1001", PaymentMethod: "Наличные", Sum: 1000.0, Weight: 10, RefGoZone: "Зеленая"},
@@ -111,7 +111,7 @@ func TestRefGoCheckAgainstUseCaseCheck(t *testing.T) {
 }
 
 func TestRefGoCheckAgainstUseCaseUnknownZone(t *testing.T) {
-	parser := xlsximport.NewxlsxImporter()
+	parser := registry.NewxlsxImporter()
 
 	dbOrders := map[string]domain.InternalRefGoCheckAgainstOrder{
 		"1001": {RefGoNumber: "1001", PaymentMethod: "Наличные", Sum: 1000.0, Weight: 10, RefGoZone: "Марс"},
@@ -142,7 +142,7 @@ func TestRefGoCheckAgainstUseCaseUnknownZone(t *testing.T) {
 }
 
 func TestRefGoCheckAgainstUseCaseRepoError(t *testing.T) {
-	parser := xlsximport.NewxlsxImporter()
+	parser := registry.NewxlsxImporter()
 
 	uc := NewRefGoCheckAgainstUseCase(&stubRefGoRepo{err: context.DeadlineExceeded}, parser, &config.RefGoConfig{
 		CheckAgainstModule: true,

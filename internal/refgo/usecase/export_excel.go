@@ -21,6 +21,16 @@ type OrdersShipper interface {
 	SetOrderAsShippedToRefGo(ctx context.Context, href string) error
 }
 
+// OrdersProvider — источник заказов для экспорта. Реализуется OrdersUseCase (модуль msclient).
+type OrdersProvider interface {
+	GetAllOrders(ctx context.Context) ([]*domain.InternalOrder, error)
+}
+
+// OrdersByHREFsProvider — выборка заказов по href для штрих-кодов. Реализуется OrdersUseCase (модуль msclient).
+type OrdersByHREFsProvider interface {
+	GetOrdersByHREFs(ctx context.Context, hrefs []string) ([]*domain.InternalOrder, error)
+}
+
 // TempCleaner удаляет устаревшие файлы из временной директории.
 type TempCleaner interface {
 	CleanOlderThan(maxAge time.Duration) error
@@ -28,13 +38,13 @@ type TempCleaner interface {
 
 type ExportToExcelUseCase struct {
 	exporter          ExcelExporter
-	orders            *OrdersUseCase
+	orders            OrdersProvider
 	shipper           OrdersShipper
 	tempCleaner       TempCleaner
 	tempCleanupMaxAge time.Duration
 }
 
-func NewExportToExcelUseCase(exporter ExcelExporter, orders *OrdersUseCase, shipper OrdersShipper, tempCleaner TempCleaner, tempCleanupMaxAge time.Duration) *ExportToExcelUseCase {
+func NewExportToExcelUseCase(exporter ExcelExporter, orders OrdersProvider, shipper OrdersShipper, tempCleaner TempCleaner, tempCleanupMaxAge time.Duration) *ExportToExcelUseCase {
 	return &ExportToExcelUseCase{
 		exporter:          exporter,
 		orders:            orders,
@@ -101,10 +111,10 @@ func (uc *ExportToExcelUseCase) ExportOrders(ctx context.Context) (summary *Expo
 
 type ExportBarcodesToExcelUseCase struct {
 	exporter   ExcelBarcodesExporter
-	repository OrderRepository
+	repository OrdersByHREFsProvider
 }
 
-func NewExportBarcodesToExcelUseCase(exporter ExcelBarcodesExporter, repository OrderRepository) *ExportBarcodesToExcelUseCase {
+func NewExportBarcodesToExcelUseCase(exporter ExcelBarcodesExporter, repository OrdersByHREFsProvider) *ExportBarcodesToExcelUseCase {
 	return &ExportBarcodesToExcelUseCase{
 		exporter:   exporter,
 		repository: repository,
