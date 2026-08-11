@@ -40,6 +40,14 @@ func (o *OrderCache) CheckOrderInCache(s string) bool {
 	return true
 }
 
+// RemoveFromCache удаляет заказ из кеша (например, при удалении из базы).
+func (o *OrderCache) RemoveFromCache(s string) {
+	o.OCmu.Lock()
+	defer o.OCmu.Unlock()
+
+	delete(o.data, s)
+}
+
 func (o *OrderCache) StartCacheFlusher() {
 	go func() {
 		for {

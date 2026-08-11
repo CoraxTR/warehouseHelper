@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"strings"
 	"time"
 	"warehouseHelper/internal/config"
 	"warehouseHelper/internal/domain"
@@ -23,6 +24,7 @@ const msEncoding = "gzip"
 type OrderCache interface {
 	AddOrdersToCache(orders []*domain.InternalOrder)
 	CheckOrderInCache(s string) bool
+	RemoveFromCache(s string)
 }
 
 type MSAPIClient struct {
@@ -39,6 +41,11 @@ func NewMSAPIClient(c *config.Config, wp *workerpool.MSWorkerPool, cache OrderCa
 		rgConfig:   c.RefGoConfig,
 		Cache:      cache,
 	}
+}
+
+// RemoveOrderFromCache удаляет заказ из кеша обработанных заказов.
+func (msac *MSAPIClient) RemoveOrderFromCache(href string) {
+	msac.Cache.RemoveFromCache(href)
 }
 
 func (msac *MSAPIClient) FetchOrderAgentByHREF(parentCtx context.Context, o *MSOrder) (name, phone string, err error) {
@@ -633,6 +640,40 @@ func (msac *MSAPIClient) FetchOrderPDF(parentctx context.Context, href string) (
 	}
 }
 
+// MSAPIError — ошибка API МойСклад: HTTP-статус и тексты из errors[].error.
+type MSAPIError struct {
+	Status string
+	Errors []string
+}
+
+func (e *MSAPIError) Error() string {
+	if len(e.Errors) == 0 {
+		return fmt.Sprintf("API returned %s", e.Status)
+	}
+
+	return fmt.Sprintf("API returned %s: %s", e.Status, strings.Join(e.Errors, "; "))
+}
+
+// msAPIError формирует MSAPIError из тела ответа МС (errors[].error).
+func msAPIError(status string, body []byte) *MSAPIError {
+	e := &MSAPIError{Status: status}
+
+	var parsed struct {
+		Errors []struct {
+			Error string `json:"error"`
+		} `json:"errors"`
+	}
+	if err := json.Unmarshal(body, &parsed); err == nil {
+		for _, item := range parsed.Errors {
+			if item.Error != "" {
+				e.Errors = append(e.Errors, item.Error)
+			}
+		}
+	}
+
+	return e
+}
+
 func (msac *MSAPIClient) httpRequest(ctx context.Context, method, url, apikey string, body io.Reader) ([]byte, *http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, method, url, body)
 	if err != nil {
@@ -835,7 +876,7 @@ func (msac *MSAPIClient) FetchDemandNewTemplate(parentctx context.Context, href 
 		}()
 
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			return nil, fmt.Errorf("API returned %s: %s", resp.Status, string(body))
+			return nil, msAPIError(resp.Status, body)
 		}
 
 		return json.RawMessage(body), nil
@@ -885,7 +926,7 @@ func (msac *MSAPIClient) CreateDemand(parentctx context.Context, template json.R
 		}()
 
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			return nil, fmt.Errorf("API returned %s: %s", resp.Status, string(body))
+			return nil, msAPIError(resp.Status, body)
 		}
 
 		return nil, nil

@@ -3,8 +3,10 @@ package usecase
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
+	"strings"
 
 	"warehouseHelper/internal/msclient/client"
 )
@@ -61,13 +63,13 @@ func (uc *OrderShipmentEnsurer) EnsureOrderShipment(ctx context.Context, href st
 func (uc *OrderShipmentEnsurer) createDemand(ctx context.Context, href, orderName string) error {
 	template, err := uc.client.FetchDemandNewTemplate(ctx, href)
 	if err != nil {
-		uc.notifyCreateFailed(orderName)
+		uc.notifyCreateFailed(orderName, err)
 
 		return fmt.Errorf("failed to fetch demand template: %w", err)
 	}
 
 	if err := uc.client.CreateDemand(ctx, template); err != nil {
-		uc.notifyCreateFailed(orderName)
+		uc.notifyCreateFailed(orderName, err)
 
 		return fmt.Errorf("failed to create demand: %w", err)
 	}
@@ -75,8 +77,17 @@ func (uc *OrderShipmentEnsurer) createDemand(ctx context.Context, href, orderNam
 	return nil
 }
 
-func (uc *OrderShipmentEnsurer) notifyCreateFailed(orderName string) {
-	uc.notifyWarehouse(fmt.Sprintf("Не удалось создать отгрузку в заказ: %s", orderName))
+// notifyCreateFailed шлёт в чат склада сообщение о неудаче создания отгрузки
+// и, если МС вернул ошибку (errors[].error), добавляет её текст.
+func (uc *OrderShipmentEnsurer) notifyCreateFailed(orderName string, cause error) {
+	msg := fmt.Sprintf("Не удалось создать отгрузку в заказ: %s", orderName)
+
+	var apiErr *client.MSAPIError
+	if errors.As(cause, &apiErr) && len(apiErr.Errors) > 0 {
+		msg += fmt.Sprintf(". Ошибка: %s", strings.Join(apiErr.Errors, "; "))
+	}
+
+	uc.notifyWarehouse(msg)
 }
 
 func (uc *OrderShipmentEnsurer) notifyWarehouse(text string) {

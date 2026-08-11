@@ -102,6 +102,17 @@ func (uc *ExportToExcelUseCase) ExportOrders(ctx context.Context) (summary *Expo
 		FileName:        savepath,
 	}
 
+	// Отметка «отгружен в Реф» и создание отгрузок — в фоне: страница с итогами
+	// не должна ждать обработки всех заказов. Контекст запроса тут не годится
+	// (отменяется после ответа), поэтому берём context.Background().
+	go uc.processOrdersShipments(context.Background(), orders)
+
+	return summary, nil
+}
+
+// processOrdersShipments помечает заказы отгруженными в Реф и создаёт отгрузки
+// для «Наличные»/«Терминал» в фоновом режиме после экспорта.
+func (uc *ExportToExcelUseCase) processOrdersShipments(ctx context.Context, orders []*domain.InternalOrder) {
 	wg := sync.WaitGroup{}
 
 	for _, order := range orders {
@@ -125,8 +136,6 @@ func (uc *ExportToExcelUseCase) ExportOrders(ctx context.Context) (summary *Expo
 	}
 
 	wg.Wait()
-
-	return summary, nil
 }
 
 type ExportBarcodesToExcelUseCase struct {

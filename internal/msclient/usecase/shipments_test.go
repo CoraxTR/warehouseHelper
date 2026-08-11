@@ -104,6 +104,21 @@ func TestOrderShipmentEnsurer(t *testing.T) {
 			wantMessages:      []string{"Не удалось создать отгрузку в заказ: 05754"},
 		},
 		{
+			name: "создание упало с ошибкой МС — текст ошибки в нотификации",
+			state: &client.MSOrderShipmentState{
+				Name: "05754",
+				Sum:  1772195.0,
+			},
+			createErr: &client.MSAPIError{
+				Status: "400 Bad Request",
+				Errors: []string{"Недостаточно прав для выполнения операции"},
+			},
+			wantErr:           true,
+			wantTemplateCalls: 1,
+			wantCreateCalls:   1,
+			wantMessages:      []string{"Не удалось создать отгрузку в заказ: 05754. Ошибка: Недостаточно прав для выполнения операции"},
+		},
+		{
 			name: "отгрузка есть и сумма совпадает — без действий",
 			state: &client.MSOrderShipmentState{
 				Name:       "05754",
