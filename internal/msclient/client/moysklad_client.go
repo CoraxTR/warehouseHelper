@@ -790,14 +790,15 @@ func (msac *MSAPIClient) FetchOrderShipmentState(parentctx context.Context, href
 	}
 }
 
-// demandNewRequest — тело запроса шаблона отгрузки (POST /entity/demand/new).
+// demandNewRequest — тело запроса шаблона отгрузки (PUT /entity/demand/new).
 type demandNewRequest struct {
 	CustomerOrder MSMetaRef `json:"customerOrder"`
 }
 
 // FetchDemandNewTemplate — получение шаблона создания отгрузки для заказа
-// (POST /entity/demand/new с ссылкой на заказ). Возвращает тело шаблона
+// (PUT /entity/demand/new с ссылкой на заказ). Возвращает тело шаблона
 // как есть — оно отправляется в CreateDemand без изменений.
+// ВАЖНО: эндпоинт принимает только PUT (POST → 404 «Неопознанный путь»).
 func (msac *MSAPIClient) FetchDemandNewTemplate(parentctx context.Context, href string) (json.RawMessage, error) {
 	job := func(apiKey string) (any, error) {
 		ctx, cancel := context.WithTimeout(parentctx, 300*time.Second)
@@ -821,7 +822,7 @@ func (msac *MSAPIClient) FetchDemandNewTemplate(parentctx context.Context, href 
 			return nil, fmt.Errorf("failed to marshal demand template request: %w", err)
 		}
 
-		body, resp, err := msac.httpRequest(ctx, http.MethodPost, endpoint, apiKey, bytes.NewReader(reqBody))
+		body, resp, err := msac.httpRequest(ctx, http.MethodPut, endpoint, apiKey, bytes.NewReader(reqBody))
 		if err != nil {
 			return nil, err
 		}
