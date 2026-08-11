@@ -904,14 +904,15 @@ func (msac *MSAPIClient) CreateDemand(parentctx context.Context, template json.R
 	}
 }
 
-// entityEndpoint — URL эндпоинта МойСклад: URLstart + /entity/<parts...>.
+// entityEndpoint — URL эндпоинта МойСклад: URLstart (заканчивается на /entity/)
+// + <parts...>. Сущность добавлять НЕ нужно: она уже в URLstart (см. .env.example).
 func (msac *MSAPIClient) entityEndpoint(parts ...string) (string, error) {
 	base, err := url.Parse(msac.msConfig.URLstart)
 	if err != nil {
 		return "", fmt.Errorf("failed to parse MS API base URL: %w", err)
 	}
 
-	base.Path = path.Join(append([]string{base.Path, "entity"}, parts...)...)
+	base.Path = path.Join(append([]string{base.Path}, parts...)...)
 
 	return base.String(), nil
 }
