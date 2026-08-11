@@ -82,7 +82,7 @@ func (uc *RefGoCheckAgainstUseCase) Check(ctx context.Context, dateFrom, dateTo 
 		}
 
 		switch dbOrder.PaymentMethod {
-		case "Наличные", "Терминал":
+		case domain.PaymentMethodCash, domain.PaymentMethodCard:
 			if !sumsMatch(dbOrder.Sum, order.CashFact+order.TerminalFact) {
 				errorsList = append(errorsList, fmt.Sprintf("Ошибка на строке %d: Сумма оплаты не совпадает с базой", row))
 			}

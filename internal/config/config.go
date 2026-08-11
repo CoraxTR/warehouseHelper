@@ -17,6 +17,7 @@ type Config struct {
 	*MSConfig
 	*RefGoConfig
 	*PGConfig
+	*TelegramConfig
 }
 
 // envFilePath возвращает абсолютный путь к .env: сначала ищет в текущем
@@ -48,16 +49,18 @@ func NewConfig() *Config {
 	msc := loadMSConfig()
 	rfc := loadRefGoConfig()
 	pfc := loadPGConfig()
+	tgc := loadTelegramConfig()
 
 	if os.Getenv("RG_LATESTORDER") == "" {
 		panic("RG_LATESTORDER does not exist")
 	}
 
 	return &Config{
-		AppConfig:   apc,
-		MSConfig:    msc,
-		RefGoConfig: rfc,
-		PGConfig:    pfc,
+		AppConfig:      apc,
+		MSConfig:       msc,
+		RefGoConfig:    rfc,
+		PGConfig:       pfc,
+		TelegramConfig: tgc,
 	}
 }
 
@@ -390,6 +393,40 @@ func (rgc *RefGoConfig) ChangeRefGoLatest(latestOrder int64) error {
 	rgc.RGNextOrder = latestOrder
 
 	return nil
+}
+
+// TelegramConfig — уведомления через Telegram-бота.
+// Токен и chat_id групп берутся из TG_* переменных; если токен или
+// chat_id склада не заданы или невалидны, уведомления отключены
+// (Notifier молча пропускает отправку), приложение не падает.
+type TelegramConfig struct {
+	BotToken        string
+	WarehouseChatID int64
+	EveryoneChatID  int64
+}
+
+func loadTelegramConfig() *TelegramConfig {
+	return &TelegramConfig{
+		BotToken:        os.Getenv("TG_BOT_TOKEN"),
+		WarehouseChatID: parseEnvInt64("TG_WAREHOUSE_CHAT_ID"),
+		EveryoneChatID:  parseEnvInt64("TG_EVERYONE_CHAT_ID"),
+	}
+}
+
+// parseEnvInt64 читает целочисленную переменную окружения;
+// 0, если переменная пуста или не число.
+func parseEnvInt64(name string) int64 {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return 0
+	}
+
+	v, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return 0
+	}
+
+	return v
 }
 
 type PGConfig struct {
