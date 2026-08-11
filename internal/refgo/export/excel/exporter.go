@@ -17,9 +17,6 @@ import (
 )
 
 const (
-	cashPaymentMethod   = "Наличные"
-	cardPaymentMethod   = "Терминал"
-	wirePaymentMethod   = "расч. счет"
 	fontTypeArial       = "Arial"
 	verticalAlignCenter = "center"
 )
@@ -45,7 +42,7 @@ func setPaymentInformation(f *excelize.File, sheet, paymentMethod, row string, s
 	result := make([]error, 0)
 
 	switch paymentMethod {
-	case cashPaymentMethod, cardPaymentMethod:
+	case domain.PaymentMethodCash, domain.PaymentMethodCard:
 		err := f.SetCellFloat(sheet, "M"+row, sum, -1, 64)
 		if err != nil {
 			result = append(result, err)
@@ -60,7 +57,7 @@ func setPaymentInformation(f *excelize.File, sheet, paymentMethod, row string, s
 		if err != nil {
 			result = append(result, err)
 		}
-	case wirePaymentMethod:
+	case domain.PaymentMethodWire:
 		err := f.SetCellFloat(sheet, "M"+row, 0, -1, 64)
 		if err != nil {
 			result = append(result, err)
@@ -220,7 +217,7 @@ func setFrozenAsSecondaryLine(f *excelize.File, sheet, row string, info *repeata
 		log.Printf("Failed to set cell value for order %d: %v", info.refgonumber, err)
 	}
 
-	if info.paymentMethod == wirePaymentMethod {
+	if info.paymentMethod == domain.PaymentMethodWire {
 		err = f.SetCellValue(sheet, "Q"+row, "Да")
 		if err != nil {
 			log.Printf("Failed to set cell value for order %d: %v", info.refgonumber, err)

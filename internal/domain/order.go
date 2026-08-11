@@ -248,7 +248,7 @@ func CollectOrdersInfo(orders []*InternalOrder) *OrdersUsefulInfo {
 	for _, order := range orders {
 		switch order.GetDeliveryRegion() {
 		case "МСК":
-			if order.GetPaymentMethod() == "Терминал" {
+			if order.GetPaymentMethod() == PaymentMethodCard {
 				moscowPayByCard = append(moscowPayByCard, order.GetRefGoNumber())
 			}
 
@@ -257,7 +257,7 @@ func CollectOrdersInfo(orders []*InternalOrder) *OrdersUsefulInfo {
 			}
 		case "СПБ":
 			spbOrders = append(spbOrders, order.GetRefGoNumber())
-			if order.GetPaymentMethod() == "Терминал" {
+			if order.GetPaymentMethod() == PaymentMethodCard {
 				spbOrdersByCard = append(spbOrdersByCard, order.GetRefGoNumber())
 			}
 
