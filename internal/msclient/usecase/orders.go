@@ -31,6 +31,7 @@ type OrdersUseCase struct {
 
 type MoySkladClient interface {
 	GetOrderByHREF(ctx context.Context, href string) (*client.MSOrder, error)
+	RemoveOrderFromCache(href string)
 }
 
 func NewOrdersUseCase(repo OrderRepository, msClient MoySkladClient, converter *client.MSConverter,
@@ -85,7 +86,15 @@ func (uc *OrdersUseCase) UpdateOrderFromMS(ctx context.Context, href string) err
 }
 
 func (uc *OrdersUseCase) DeleteOrder(ctx context.Context, href string) error {
-	return uc.repo.DeleteOrder(ctx, href)
+	if err := uc.repo.DeleteOrder(ctx, href); err != nil {
+		return err
+	}
+
+	// Удаляем и из кеша, чтобы при повторном появлении заказа в МС
+	// он снова попал в обработку.
+	uc.msClient.RemoveOrderFromCache(href)
+
+	return nil
 }
 
 // GetOrderByName возвращает заказ по номеру в МойСклад (name).
