@@ -2,7 +2,6 @@ package usecase
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 
@@ -14,12 +13,12 @@ type WarehouseNotifier interface {
 	NotifyWarehouse(text string) error
 }
 
-// OrderShipmentClient — операции МойСклад, нужные для обеспечения отгрузки.
+// OrderShipmentClient — операции МойСклад, нужные для обеспечения отгрузки заказа.
 // Реализуется *client.MSAPIClient.
 type OrderShipmentClient interface {
 	FetchOrderShipmentState(ctx context.Context, href string) (*client.MSOrderShipmentState, error)
-	FetchDemandNewTemplate(ctx context.Context, href string) (json.RawMessage, error)
-	CreateDemand(ctx context.Context, template json.RawMessage) error
+	FetchOrderPositions(ctx context.Context, positionsHref string) ([]client.MSPosition, error)
+	CreateDemand(ctx context.Context, orderHref, agentHref string, positions []client.MSPosition) error
 }
 
 // OrderShipmentEnsurer — гарантирует наличие корректной отгрузки у заказа.
@@ -45,9 +44,9 @@ func (uc *OrderShipmentEnsurer) EnsureOrderShipment(ctx context.Context, href st
 		return fmt.Errorf("failed to fetch shipment state: %w", err)
 	}
 
-	// Отгрузок нет — создаём новую из шаблона заказа.
+	// Отгрузок нет — создаём новую из позиций заказа.
 	if len(state.Demands) == 0 {
-		return uc.createDemand(ctx, href, state.Name)
+		return uc.createDemand(ctx, href, state)
 	}
 
 	// Отгрузка есть, но сумма не сходится с суммой заказа — на ручную правку.
@@ -58,16 +57,18 @@ func (uc *OrderShipmentEnsurer) EnsureOrderShipment(ctx context.Context, href st
 	return nil
 }
 
-func (uc *OrderShipmentEnsurer) createDemand(ctx context.Context, href, orderName string) error {
-	template, err := uc.client.FetchDemandNewTemplate(ctx, href)
+// createDemand создаёт отгрузку для заказа: позиции берутся из заказа
+// (assortment + quantity + price), организация и склад — из конфига клиента.
+func (uc *OrderShipmentEnsurer) createDemand(ctx context.Context, href string, state *client.MSOrderShipmentState) error {
+	positions, err := uc.client.FetchOrderPositions(ctx, href+"/positions")
 	if err != nil {
-		uc.notifyCreateFailed(orderName)
+		uc.notifyCreateFailed(state.Name)
 
-		return fmt.Errorf("failed to fetch demand template: %w", err)
+		return fmt.Errorf("failed to fetch order positions: %w", err)
 	}
 
-	if err := uc.client.CreateDemand(ctx, template); err != nil {
-		uc.notifyCreateFailed(orderName)
+	if err := uc.client.CreateDemand(ctx, href, state.Agent.Meta.HREF, positions); err != nil {
+		uc.notifyCreateFailed(state.Name)
 
 		return fmt.Errorf("failed to create demand: %w", err)
 	}

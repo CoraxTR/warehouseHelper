@@ -94,17 +94,22 @@ func (msac *MSAPIClient) FetchOrderAgentByHREF(parentCtx context.Context, o *MSO
 }
 
 func (msac *MSAPIClient) FetchOrderPositionsByHREF(parentCtx context.Context, o *MSOrder) ([]MSPosition, error) {
+	return msac.FetchOrderPositions(parentCtx, o.MSPositions.Meta.HREF)
+}
+
+// FetchOrderPositions — позиции списка по href (например, {заказ}/positions).
+func (msac *MSAPIClient) FetchOrderPositions(parentctx context.Context, positionsHref string) ([]MSPosition, error) {
 	job := func(apiKey string) (any, error) {
-		ctx, cancel := context.WithTimeout(parentCtx, 300*time.Second)
+		ctx, cancel := context.WithTimeout(parentctx, 300*time.Second)
 		defer cancel()
 
-		body, resp, err := msac.httpRequest(ctx, http.MethodGet, o.MSPositions.Meta.HREF, apiKey, nil)
+		body, resp, err := msac.httpRequest(ctx, http.MethodGet, positionsHref, apiKey, nil)
 		if err != nil {
 			select {
 			case <-ctx.Done():
-				log.Printf("FetchOrderPositionsByHREF timed out: %v", ctx.Err())
+				log.Printf("FetchOrderPositions timed out: %v", ctx.Err())
 			default:
-				log.Printf("FetchOrderPositionsByHREF failed: %v", err)
+				log.Printf("FetchOrderPositions failed: %v", err)
 			}
 
 			return nil, err
@@ -134,17 +139,17 @@ func (msac *MSAPIClient) FetchOrderPositionsByHREF(parentCtx context.Context, o 
 	select {
 	case res := <-resultCh:
 		if res.Err != nil {
-			return nil, fmt.Errorf("FetchOrderPositionsByHREF failed: %w", res.Err)
+			return nil, fmt.Errorf("FetchOrderPositions failed: %w", res.Err)
 		}
 
 		positions, ok := res.Value.([]MSPosition)
 		if !ok {
-			return nil, errors.New("FetchOrderPositionsByHREF failed: unexpected value type")
+			return nil, errors.New("FetchOrderPositions failed: unexpected value type")
 		}
 
 		return positions, nil
-	case <-parentCtx.Done():
-		log.Printf("FetchOrderPositionsByHREF timed out: %v", parentCtx.Err())
+	case <-parentctx.Done():
+		log.Printf("FetchOrderPositions timed out: %v", parentctx.Err())
 
 		return nil, nil
 	}
@@ -733,6 +738,7 @@ type MSOrderShipmentState struct {
 	Sum        float64        `json:"sum"`        // копейки
 	ShippedSum float64        `json:"shippedSum"` // копейки; 0 = отгрузок нет
 	Demands    []MSDemandMeta `json:"demands"`
+	Agent      MSAgent        `json:"agent"`
 }
 
 // FetchOrderShipmentState — проверка состояния отгрузки заказа по href.
@@ -790,78 +796,26 @@ func (msac *MSAPIClient) FetchOrderShipmentState(parentctx context.Context, href
 	}
 }
 
-// demandNewRequest — тело запроса шаблона отгрузки (POST /entity/demand/new).
-type demandNewRequest struct {
-	CustomerOrder MSMetaRef `json:"customerOrder"`
+// demandCreateBody — тело создания отгрузки (POST /entity/demand).
+// Связь с заказом — через customerOrder; позиции копируются из заказа.
+type demandCreateBody struct {
+	Organization  MSMetaRef        `json:"organization"`
+	Agent         MSMetaRef        `json:"agent"`
+	Store         MSMetaRef        `json:"store"`
+	CustomerOrder MSMetaRef        `json:"customerOrder"`
+	Positions     []demandPosition `json:"positions"`
 }
 
-// FetchDemandNewTemplate — получение шаблона создания отгрузки для заказа
-// (POST /entity/demand/new с ссылкой на заказ). Возвращает тело шаблона
-// как есть — оно отправляется в CreateDemand без изменений.
-func (msac *MSAPIClient) FetchDemandNewTemplate(parentctx context.Context, href string) (json.RawMessage, error) {
-	job := func(apiKey string) (any, error) {
-		ctx, cancel := context.WithTimeout(parentctx, 300*time.Second)
-		defer cancel()
-
-		endpoint, err := msac.entityEndpoint("demand", "new")
-		if err != nil {
-			return nil, err
-		}
-
-		reqBody, err := json.Marshal(demandNewRequest{
-			CustomerOrder: MSMetaRef{
-				Meta: Meta{
-					Href:      href,
-					Type:      "customerorder",
-					MediaType: MSApplicationJSON,
-				},
-			},
-		})
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal demand template request: %w", err)
-		}
-
-		body, resp, err := msac.httpRequest(ctx, http.MethodPost, endpoint, apiKey, bytes.NewReader(reqBody))
-		if err != nil {
-			return nil, err
-		}
-
-		defer func() {
-			err = resp.Body.Close()
-			if err != nil {
-				log.Printf("failed to close response body: %v", err)
-			}
-		}()
-
-		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-			return nil, fmt.Errorf("API returned %s: %s", resp.Status, string(body))
-		}
-
-		return json.RawMessage(body), nil
-	}
-
-	resCh := msac.workerpool.SubmitOther(job)
-
-	select {
-	case res := <-resCh:
-		if res.Err != nil {
-			return nil, fmt.Errorf("FetchDemandNewTemplate failed: %w", res.Err)
-		}
-
-		template, ok := res.Value.(json.RawMessage)
-		if !ok {
-			return nil, errors.New("FetchDemandNewTemplate failed: unexpected value type")
-		}
-
-		return template, nil
-	case <-parentctx.Done():
-		return nil, parentctx.Err()
-	}
+type demandPosition struct {
+	Assortment MSMetaRef `json:"assortment"`
+	Quantity   float64   `json:"quantity"`
+	Price      float64   `json:"price"`
 }
 
-// CreateDemand — создание отгрузки (POST /entity/demand) из шаблона,
-// полученного через FetchDemandNewTemplate. Шаблон отправляется как есть.
-func (msac *MSAPIClient) CreateDemand(parentctx context.Context, template json.RawMessage) error {
+// CreateDemand — создание отгрузки для заказа (POST /entity/demand).
+// Организация и склад берутся из конфига (MSAPI_ORGHREF/MSAPI_STOREHREF),
+// позиции — из позиций заказа (assortment + quantity + price).
+func (msac *MSAPIClient) CreateDemand(parentctx context.Context, orderHref, agentHref string, orderPositions []MSPosition) error {
 	job := func(apiKey string) (any, error) {
 		ctx, cancel := context.WithTimeout(parentctx, 300*time.Second)
 		defer cancel()
@@ -871,7 +825,47 @@ func (msac *MSAPIClient) CreateDemand(parentctx context.Context, template json.R
 			return nil, err
 		}
 
-		body, resp, err := msac.httpRequest(ctx, http.MethodPost, endpoint, apiKey, bytes.NewReader(template))
+		positions := make([]demandPosition, 0, len(orderPositions))
+		for _, p := range orderPositions {
+			positions = append(positions, demandPosition{
+				Assortment: MSMetaRef{Meta: Meta{
+					Href:      p.Assortment.Meta.HREF,
+					Type:      p.Assortment.Meta.Type,
+					MediaType: MSApplicationJSON,
+				}},
+				Quantity: p.Quantity,
+				Price:    p.Price,
+			})
+		}
+
+		reqBody, err := json.Marshal(demandCreateBody{
+			Organization: MSMetaRef{Meta: Meta{
+				Href:      msac.msConfig.Hrefs.Orghref,
+				Type:      "organization",
+				MediaType: MSApplicationJSON,
+			}},
+			Agent: MSMetaRef{Meta: Meta{
+				Href:      agentHref,
+				Type:      "counterparty",
+				MediaType: MSApplicationJSON,
+			}},
+			Store: MSMetaRef{Meta: Meta{
+				Href:      msac.msConfig.Hrefs.Storehref,
+				Type:      "store",
+				MediaType: MSApplicationJSON,
+			}},
+			CustomerOrder: MSMetaRef{Meta: Meta{
+				Href:      orderHref,
+				Type:      "customerorder",
+				MediaType: MSApplicationJSON,
+			}},
+			Positions: positions,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal demand request: %w", err)
+		}
+
+		body, resp, err := msac.httpRequest(ctx, http.MethodPost, endpoint, apiKey, bytes.NewReader(reqBody))
 		if err != nil {
 			return nil, err
 		}

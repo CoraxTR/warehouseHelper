@@ -2,7 +2,6 @@ package usecase
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"testing"
 
@@ -11,16 +10,18 @@ import (
 
 // stubShipmentClient — заглушка OrderShipmentClient для тестов.
 type stubShipmentClient struct {
-	state       *client.MSOrderShipmentState
-	stateErr    error
-	template    json.RawMessage
-	templateErr error
-	createErr   error
+	state        *client.MSOrderShipmentState
+	stateErr     error
+	positions    []client.MSPosition
+	positionsErr error
+	createErr    error
 
-	templateCalls     int
+	positionsCalls    int
 	createCalls       int
-	lastTemplateHref  string
-	lastCreatePayload json.RawMessage
+	lastPositionsHref string
+	lastOrderHref     string
+	lastAgentHref     string
+	lastPositions     []client.MSPosition
 }
 
 // Компиляционная проверка: стаб реализует OrderShipmentClient.
@@ -30,16 +31,18 @@ func (s *stubShipmentClient) FetchOrderShipmentState(_ context.Context, _ string
 	return s.state, s.stateErr
 }
 
-func (s *stubShipmentClient) FetchDemandNewTemplate(_ context.Context, href string) (json.RawMessage, error) {
-	s.templateCalls++
-	s.lastTemplateHref = href
+func (s *stubShipmentClient) FetchOrderPositions(_ context.Context, positionsHref string) ([]client.MSPosition, error) {
+	s.positionsCalls++
+	s.lastPositionsHref = positionsHref
 
-	return s.template, s.templateErr
+	return s.positions, s.positionsErr
 }
 
-func (s *stubShipmentClient) CreateDemand(_ context.Context, template json.RawMessage) error {
+func (s *stubShipmentClient) CreateDemand(_ context.Context, orderHref, agentHref string, positions []client.MSPosition) error {
 	s.createCalls++
-	s.lastCreatePayload = template
+	s.lastOrderHref = orderHref
+	s.lastAgentHref = agentHref
+	s.lastPositions = positions
 
 	return s.createErr
 }
@@ -55,72 +58,83 @@ func (s *stubWarehouseNotifier) NotifyWarehouse(text string) error {
 	return nil
 }
 
+const (
+	testOrderHref   = "https://api.moysklad.ru/api/remap/1.2/entity/customerorder/1"
+	testAgentHref   = "https://api.moysklad.ru/api/remap/1.2/entity/counterparty/6c08d8fa"
+	testOrderName   = "05754"
+	testPositionsHr = testOrderHref + "/positions"
+)
+
 func TestOrderShipmentEnsurer(t *testing.T) {
-	template := json.RawMessage(`{"organization":{"meta":{}}}`)
+	positions := []client.MSPosition{
+		{Quantity: 2.005, Price: 859000.0},
+	}
 
 	tests := []struct {
-		name        string
-		state       *client.MSOrderShipmentState
-		stateErr    error
-		templateErr error
-		createErr   error
-
-		wantErr           bool
-		wantTemplateCalls int
-		wantCreateCalls   int
-		wantMessages      []string
+		name           string
+		state          *client.MSOrderShipmentState
+		stateErr       error
+		positionsErr   error
+		createErr      error
+		wantErr        bool
+		wantPosCalls   int
+		wantCreateCall int
+		wantMessages   []string
 	}{
 		{
-			name: "отгрузок нет — создаём отгрузку",
+			name: "отгрузок нет — тянем позиции и создаём отгрузку",
 			state: &client.MSOrderShipmentState{
-				HREF: "https://api.moysklad.ru/entity/customerorder/1",
-				Name: "05754",
-				Sum:  1772195.0,
+				HREF:  testOrderHref,
+				Name:  testOrderName,
+				Sum:   1772195.0,
+				Agent: client.MSAgent{Meta: client.MSMeta{HREF: testAgentHref}},
 			},
-			wantTemplateCalls: 1,
-			wantCreateCalls:   1,
+			wantPosCalls:   1,
+			wantCreateCall: 1,
 		},
 		{
-			name: "отгрузок нет и шаблон упал — нотификация",
+			name: "отгрузок нет и позиции не пришли — нотификация",
 			state: &client.MSOrderShipmentState{
-				Name: "05754",
-				Sum:  1772195.0,
+				Name:  testOrderName,
+				Sum:   1772195.0,
+				Agent: client.MSAgent{Meta: client.MSMeta{HREF: testAgentHref}},
 			},
-			templateErr:       errors.New("timeout"),
-			wantErr:           true,
-			wantTemplateCalls: 1,
-			wantMessages:      []string{"Не удалось создать отгрузку в заказ: 05754"},
+			positionsErr: errors.New("timeout"),
+			wantErr:      true,
+			wantPosCalls: 1,
+			wantMessages: []string{"Не удалось создать отгрузку в заказ: " + testOrderName},
 		},
 		{
 			name: "отгрузок нет и создание упало — нотификация",
 			state: &client.MSOrderShipmentState{
-				Name: "05754",
-				Sum:  1772195.0,
+				Name:  testOrderName,
+				Sum:   1772195.0,
+				Agent: client.MSAgent{Meta: client.MSMeta{HREF: testAgentHref}},
 			},
-			createErr:         errors.New("API returned 400"),
-			wantErr:           true,
-			wantTemplateCalls: 1,
-			wantCreateCalls:   1,
-			wantMessages:      []string{"Не удалось создать отгрузку в заказ: 05754"},
+			createErr:      errors.New("API returned 400"),
+			wantErr:        true,
+			wantPosCalls:   1,
+			wantCreateCall: 1,
+			wantMessages:   []string{"Не удалось создать отгрузку в заказ: " + testOrderName},
 		},
 		{
 			name: "отгрузка есть и сумма совпадает — без действий",
 			state: &client.MSOrderShipmentState{
-				Name:       "05754",
+				Name:       testOrderName,
 				Sum:        1772195.0,
 				ShippedSum: 1772195.0,
-				Demands:    []client.MSDemandMeta{{Meta: client.MSMeta{HREF: "https://api.moysklad.ru/entity/demand/1"}}},
+				Demands:    []client.MSDemandMeta{{Meta: client.MSMeta{HREF: "https://api.moysklad.ru/api/remap/1.2/entity/demand/1"}}},
 			},
 		},
 		{
 			name: "отгрузка есть и сумма не совпадает — нотификация на правку",
 			state: &client.MSOrderShipmentState{
-				Name:       "05754",
+				Name:       testOrderName,
 				Sum:        1772195.0,
 				ShippedSum: 1700000.0,
-				Demands:    []client.MSDemandMeta{{Meta: client.MSMeta{HREF: "https://api.moysklad.ru/entity/demand/1"}}},
+				Demands:    []client.MSDemandMeta{{Meta: client.MSMeta{HREF: "https://api.moysklad.ru/api/remap/1.2/entity/demand/1"}}},
 			},
-			wantMessages: []string{"В заказе 05754 нужно поправить отгрузку"},
+			wantMessages: []string{"В заказе " + testOrderName + " нужно поправить отгрузку"},
 		},
 		{
 			name:     "получение состояния упало — ошибка без нотификации",
@@ -132,27 +146,27 @@ func TestOrderShipmentEnsurer(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			msc := &stubShipmentClient{
-				state:       tt.state,
-				stateErr:    tt.stateErr,
-				template:    template,
-				templateErr: tt.templateErr,
-				createErr:   tt.createErr,
+				state:        tt.state,
+				stateErr:     tt.stateErr,
+				positions:    positions,
+				positionsErr: tt.positionsErr,
+				createErr:    tt.createErr,
 			}
 			notifier := &stubWarehouseNotifier{}
 
 			uc := NewOrderShipmentEnsurer(msc, notifier)
 
-			err := uc.EnsureOrderShipment(context.Background(), "https://api.moysklad.ru/entity/customerorder/1")
+			err := uc.EnsureOrderShipment(context.Background(), testOrderHref)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("EnsureOrderShipment error = %v, wantErr %v", err, tt.wantErr)
 			}
 
-			if msc.templateCalls != tt.wantTemplateCalls {
-				t.Errorf("FetchDemandNewTemplate calls = %d, want %d", msc.templateCalls, tt.wantTemplateCalls)
+			if msc.positionsCalls != tt.wantPosCalls {
+				t.Errorf("FetchOrderPositions calls = %d, want %d", msc.positionsCalls, tt.wantPosCalls)
 			}
 
-			if msc.createCalls != tt.wantCreateCalls {
-				t.Errorf("CreateDemand calls = %d, want %d", msc.createCalls, tt.wantCreateCalls)
+			if msc.createCalls != tt.wantCreateCall {
+				t.Errorf("CreateDemand calls = %d, want %d", msc.createCalls, tt.wantCreateCall)
 			}
 
 			if len(notifier.messages) != len(tt.wantMessages) {
@@ -165,8 +179,22 @@ func TestOrderShipmentEnsurer(t *testing.T) {
 				}
 			}
 
-			if tt.wantCreateCalls > 0 && string(msc.lastCreatePayload) != string(template) {
-				t.Errorf("CreateDemand payload = %s, want template as-is", msc.lastCreatePayload)
+			if tt.wantCreateCall > 0 {
+				if msc.lastPositionsHref != testPositionsHr {
+					t.Errorf("positions href = %q, want %q", msc.lastPositionsHref, testPositionsHr)
+				}
+
+				if msc.lastOrderHref != testOrderHref {
+					t.Errorf("CreateDemand order href = %q, want %q", msc.lastOrderHref, testOrderHref)
+				}
+
+				if msc.lastAgentHref != testAgentHref {
+					t.Errorf("CreateDemand agent href = %q, want %q", msc.lastAgentHref, testAgentHref)
+				}
+
+				if len(msc.lastPositions) != len(positions) {
+					t.Errorf("CreateDemand positions count = %d, want %d", len(msc.lastPositions), len(positions))
+				}
 			}
 		})
 	}
