@@ -21,6 +21,12 @@ type OrdersShipper interface {
 	SetOrderAsShippedToRefGo(ctx context.Context, href string) error
 }
 
+// OrdersShipmentEnsurer — гарант наличия корректной отгрузки у заказа.
+// Реализуется OrderShipmentEnsurer (модуль msclient).
+type OrdersShipmentEnsurer interface {
+	EnsureOrderShipment(ctx context.Context, href string) error
+}
+
 // OrdersProvider — источник заказов для экспорта. Реализуется OrdersUseCase (модуль msclient).
 type OrdersProvider interface {
 	GetAllOrders(ctx context.Context) ([]*domain.InternalOrder, error)
@@ -40,15 +46,18 @@ type ExportToExcelUseCase struct {
 	exporter          ExcelExporter
 	orders            OrdersProvider
 	shipper           OrdersShipper
+	shipmentEnsurer   OrdersShipmentEnsurer
 	tempCleaner       TempCleaner
 	tempCleanupMaxAge time.Duration
 }
 
-func NewExportToExcelUseCase(exporter ExcelExporter, orders OrdersProvider, shipper OrdersShipper, tempCleaner TempCleaner, tempCleanupMaxAge time.Duration) *ExportToExcelUseCase {
+func NewExportToExcelUseCase(exporter ExcelExporter, orders OrdersProvider, shipper OrdersShipper,
+	shipmentEnsurer OrdersShipmentEnsurer, tempCleaner TempCleaner, tempCleanupMaxAge time.Duration) *ExportToExcelUseCase {
 	return &ExportToExcelUseCase{
 		exporter:          exporter,
 		orders:            orders,
 		shipper:           shipper,
+		shipmentEnsurer:   shipmentEnsurer,
 		tempCleaner:       tempCleaner,
 		tempCleanupMaxAge: tempCleanupMaxAge,
 	}
@@ -100,6 +109,17 @@ func (uc *ExportToExcelUseCase) ExportOrders(ctx context.Context) (summary *Expo
 			err := uc.shipper.SetOrderAsShippedToRefGo(ctx, order.GetHREF())
 			if err != nil {
 				log.Printf("Error setting order as shipped: %s", err)
+			}
+
+			// Отгрузку обеспечиваем только для оплат «Наличные»/«Терминал»:
+			// остальные заказы помечаем отгруженными как и раньше.
+			if !domain.IsShippablePayment(order.GetPaymentMethod()) {
+				return
+			}
+
+			err = uc.shipmentEnsurer.EnsureOrderShipment(ctx, order.GetHREF())
+			if err != nil {
+				log.Printf("Error ensuring order shipment: %s", err)
 			}
 		})
 	}

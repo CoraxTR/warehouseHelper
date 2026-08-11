@@ -14,6 +14,7 @@ import (
 	"warehouseHelper/internal/refgo/registry"
 	rgucase "warehouseHelper/internal/refgo/usecase"
 	"warehouseHelper/internal/repository/postgres"
+	"warehouseHelper/internal/telegram"
 	tempcleaner "warehouseHelper/internal/tempcleaner"
 	"warehouseHelper/internal/tempdir"
 )
@@ -32,10 +33,12 @@ type DIContainer struct {
 	pdfpreloader *pdfpreloader.PDFPreloader
 	tempcleaner  *tempcleaner.TempCleaner
 	xlsximporter rgucase.RefGoXlsxParser
+	tg           *telegram.Notifier
 
 	// Юзкейсы
 	syncUC          *msucase.SyncUseCase
 	ordersUC        *msucase.OrdersUseCase
+	shipmentEnsurer *msucase.OrderShipmentEnsurer
 	excelExportUC   *rgucase.ExportToExcelUseCase
 	pdfExportUC     *rgucase.ExportOrderPDFUseCase
 	barcodeExportUC *rgucase.ExportBarcodesToExcelUseCase
@@ -162,9 +165,26 @@ func (d *DIContainer) XlsxImporter() rgucase.RefGoXlsxParser {
 	return d.xlsximporter
 }
 
+func (d *DIContainer) TelegramNotifier() *telegram.Notifier {
+	if d.tg == nil {
+		d.tg = telegram.NewNotifier(d.Config().TelegramConfig)
+	}
+
+	return d.tg
+}
+
+func (d *DIContainer) ShipmentEnsurer() *msucase.OrderShipmentEnsurer {
+	if d.shipmentEnsurer == nil {
+		d.shipmentEnsurer = msucase.NewOrderShipmentEnsurer(d.MSClient(), d.TelegramNotifier())
+	}
+
+	return d.shipmentEnsurer
+}
+
 func (d *DIContainer) ExcelExportUC() *rgucase.ExportToExcelUseCase {
 	if d.excelExportUC == nil {
-		d.excelExportUC = rgucase.NewExportToExcelUseCase(d.ExcelExporter(), d.OrdersUC(), d.MSClient(), d.TempCleaner(), d.Config().TempCleanupMaxAge)
+		d.excelExportUC = rgucase.NewExportToExcelUseCase(d.ExcelExporter(), d.OrdersUC(), d.MSClient(),
+			d.ShipmentEnsurer(), d.TempCleaner(), d.Config().TempCleanupMaxAge)
 	}
 
 	return d.excelExportUC

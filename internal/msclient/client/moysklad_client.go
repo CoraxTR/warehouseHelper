@@ -713,3 +713,205 @@ func (msac *MSAPIClient) enrichOrder(ctx context.Context, order *MSOrder) {
 		order.PositionsWInfo[i].PositionWeight = weight
 	}
 }
+
+// MSMetaRef — ссылка на сущность МойСклад (meta) в теле запроса.
+type MSMetaRef struct {
+	Meta Meta `json:"meta"`
+}
+
+// MSDemandMeta — ссылка на отгрузку (demand) заказа.
+type MSDemandMeta struct {
+	Meta MSMeta `json:"meta"`
+}
+
+// MSOrderShipmentState — «снимок» состояния отгрузки заказа: сумма заказа,
+// сумма отгрузок и ссылки на отгрузки. Поле demands отсутствует в JSON,
+// если отгрузок нет (nil в Go).
+type MSOrderShipmentState struct {
+	HREF       string         `json:"href"`
+	Name       string         `json:"name"`
+	Sum        float64        `json:"sum"`        // копейки
+	ShippedSum float64        `json:"shippedSum"` // копейки; 0 = отгрузок нет
+	Demands    []MSDemandMeta `json:"demands"`
+}
+
+// FetchOrderShipmentState — проверка состояния отгрузки заказа по href.
+// Лёгкий запрос: без enrichOrder (агент/позиции/субинфо не тянутся).
+func (msac *MSAPIClient) FetchOrderShipmentState(parentctx context.Context, href string) (*MSOrderShipmentState, error) {
+	job := func(apiKey string) (any, error) {
+		ctx, cancel := context.WithTimeout(parentctx, 300*time.Second)
+		defer cancel()
+
+		body, resp, err := msac.httpRequest(ctx, http.MethodGet, href, apiKey, http.NoBody)
+		if err != nil {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			default:
+				return nil, err
+			}
+		}
+
+		defer func() {
+			err = resp.Body.Close()
+			if err != nil {
+				log.Printf("failed to close response body: %v", err)
+			}
+		}()
+
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("API returned %s: %s", resp.Status, string(body))
+		}
+
+		var state MSOrderShipmentState
+		if err := json.Unmarshal(body, &state); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal order shipment state: %w", err)
+		}
+
+		return &state, nil
+	}
+
+	resCh := msac.workerpool.SubmitOther(job)
+
+	select {
+	case res := <-resCh:
+		if res.Err != nil {
+			return nil, fmt.Errorf("FetchOrderShipmentState failed: %w", res.Err)
+		}
+
+		state, ok := res.Value.(*MSOrderShipmentState)
+		if !ok {
+			return nil, errors.New("FetchOrderShipmentState failed: unexpected value type")
+		}
+
+		return state, nil
+	case <-parentctx.Done():
+		return nil, parentctx.Err()
+	}
+}
+
+// demandNewRequest — тело запроса шаблона отгрузки (POST /entity/demand/new).
+type demandNewRequest struct {
+	CustomerOrder MSMetaRef `json:"customerOrder"`
+}
+
+// FetchDemandNewTemplate — получение шаблона создания отгрузки для заказа
+// (POST /entity/demand/new с ссылкой на заказ). Возвращает тело шаблона
+// как есть — оно отправляется в CreateDemand без изменений.
+func (msac *MSAPIClient) FetchDemandNewTemplate(parentctx context.Context, href string) (json.RawMessage, error) {
+	job := func(apiKey string) (any, error) {
+		ctx, cancel := context.WithTimeout(parentctx, 300*time.Second)
+		defer cancel()
+
+		endpoint, err := msac.entityEndpoint("demand", "new")
+		if err != nil {
+			return nil, err
+		}
+
+		reqBody, err := json.Marshal(demandNewRequest{
+			CustomerOrder: MSMetaRef{
+				Meta: Meta{
+					Href:      href,
+					Type:      "customerorder",
+					MediaType: MSApplicationJSON,
+				},
+			},
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal demand template request: %w", err)
+		}
+
+		body, resp, err := msac.httpRequest(ctx, http.MethodPost, endpoint, apiKey, bytes.NewReader(reqBody))
+		if err != nil {
+			return nil, err
+		}
+
+		defer func() {
+			err = resp.Body.Close()
+			if err != nil {
+				log.Printf("failed to close response body: %v", err)
+			}
+		}()
+
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return nil, fmt.Errorf("API returned %s: %s", resp.Status, string(body))
+		}
+
+		return json.RawMessage(body), nil
+	}
+
+	resCh := msac.workerpool.SubmitOther(job)
+
+	select {
+	case res := <-resCh:
+		if res.Err != nil {
+			return nil, fmt.Errorf("FetchDemandNewTemplate failed: %w", res.Err)
+		}
+
+		template, ok := res.Value.(json.RawMessage)
+		if !ok {
+			return nil, errors.New("FetchDemandNewTemplate failed: unexpected value type")
+		}
+
+		return template, nil
+	case <-parentctx.Done():
+		return nil, parentctx.Err()
+	}
+}
+
+// CreateDemand — создание отгрузки (POST /entity/demand) из шаблона,
+// полученного через FetchDemandNewTemplate. Шаблон отправляется как есть.
+func (msac *MSAPIClient) CreateDemand(parentctx context.Context, template json.RawMessage) error {
+	job := func(apiKey string) (any, error) {
+		ctx, cancel := context.WithTimeout(parentctx, 300*time.Second)
+		defer cancel()
+
+		endpoint, err := msac.entityEndpoint("demand")
+		if err != nil {
+			return nil, err
+		}
+
+		body, resp, err := msac.httpRequest(ctx, http.MethodPost, endpoint, apiKey, bytes.NewReader(template))
+		if err != nil {
+			return nil, err
+		}
+
+		defer func() {
+			err = resp.Body.Close()
+			if err != nil {
+				log.Printf("failed to close response body: %v", err)
+			}
+		}()
+
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return nil, fmt.Errorf("API returned %s: %s", resp.Status, string(body))
+		}
+
+		return nil, nil
+	}
+
+	resCh := msac.workerpool.SubmitOther(job)
+
+	select {
+	case res := <-resCh:
+		if res.Err != nil {
+			return fmt.Errorf("CreateDemand failed: %w", res.Err)
+		}
+
+		return nil
+	case <-parentctx.Done():
+		return parentctx.Err()
+	}
+}
+
+// entityEndpoint — URL эндпоинта МойСклад: URLstart + /entity/<parts...>.
+func (msac *MSAPIClient) entityEndpoint(parts ...string) (string, error) {
+	base, err := url.Parse(msac.msConfig.URLstart)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse MS API base URL: %w", err)
+	}
+
+	base.Path = path.Join(append([]string{base.Path, "entity"}, parts...)...)
+
+	return base.String(), nil
+}
