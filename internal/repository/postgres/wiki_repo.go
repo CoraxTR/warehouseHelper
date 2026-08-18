@@ -16,11 +16,11 @@ import (
 // wikiPageColumns — список колонок таблицы wiki_pages, общий для выборок страницы.
 // Порядок должен совпадать с порядком Scan в scanWikiPage.
 const wikiPageColumns = `
-    page_type, title, content, contacts, order_days, delivery_days,
+    id, page_type, title, content, contacts, order_days, delivery_days,
     average_weight, suppliers, (photo IS NOT NULL)`
 
-// GetPage возвращает вики-страницу по заголовку (без учёта регистра).
-// Если страница не найдена, возвращает (nil, nil).
+// GetPage возвращает вики-страницу по заголовку (без учёта регистра),
+// включая теги. Если страница не найдена, возвращает (nil, nil).
 func (pg *PGClient) GetPage(ctx context.Context, title string) (*domain.WikiPage, error) {
 	row := pg.Pool.QueryRow(ctx, `
         SELECT `+wikiPageColumns+`
@@ -28,22 +28,56 @@ func (pg *PGClient) GetPage(ctx context.Context, title string) (*domain.WikiPage
         WHERE lower(title) = lower($1)
     `, title)
 
-	return scanWikiPage(row)
+	page, err := scanWikiPage(row)
+	if err != nil || page == nil {
+		return page, err
+	}
+
+	// Теги страницы — отдельным запросом.
+	tagRows, err := pg.Pool.Query(ctx, `
+        SELECT t.name
+        FROM wiki_page_tags pt
+        JOIN wiki_tags t ON t.id = pt.tag_id
+        WHERE pt.page_id = $1
+        ORDER BY lower(t.name)
+    `, page.ID)
+	if err != nil {
+		return nil, err
+	}
+	defer tagRows.Close()
+
+	for tagRows.Next() {
+		var name string
+
+		if err = tagRows.Scan(&name); err != nil {
+			return nil, err
+		}
+
+		page.Tags = append(page.Tags, name)
+	}
+
+	if err = tagRows.Err(); err != nil {
+		return nil, err
+	}
+
+	return page, nil
 }
 
 // scanWikiPage читает строку результата запроса в WikiPage.
 // Если строк нет (pgx.ErrNoRows), возвращает (nil, nil).
 func scanWikiPage(row pgx.Row) (*domain.WikiPage, error) {
 	var (
-		pageType, title, content, averageWeight string
-		contactsJSON                            []byte
-		orderDays, deliveryDays                 []int16
-		suppliers                               []string
-		hasPhoto                                bool
+		id                       int64
+		pageType, title, content string
+		averageWeight            string
+		contactsJSON             []byte
+		orderDays, deliveryDays  []int16
+		suppliers                []string
+		hasPhoto                 bool
 	)
 
 	err := row.Scan(
-		&pageType, &title, &content, &contactsJSON,
+		&id, &pageType, &title, &content, &contactsJSON,
 		&orderDays, &deliveryDays, &averageWeight, &suppliers, &hasPhoto,
 	)
 	if err != nil {
@@ -55,6 +89,7 @@ func scanWikiPage(row pgx.Row) (*domain.WikiPage, error) {
 	}
 
 	page := &domain.WikiPage{
+		ID:            id,
 		Type:          domain.PageType(pageType),
 		Title:         title,
 		Content:       content,
@@ -129,13 +164,16 @@ func escapeLike(s string) string {
 }
 
 // GetBacklinks возвращает заголовки страниц, в содержимом которых
-// есть ссылка [[title]] (без учёта регистра заголовка).
+// есть ссылка [[title]] (без учёта регистра ссылки и заголовка).
 func (pg *PGClient) GetBacklinks(ctx context.Context, title string) ([]string, error) {
+	// lower(content) с обеих сторон: вики-ссылки пишутся в любом регистре.
+	pattern := `%[[` + escapeLike(strings.ToLower(title)) + `]]%`
+
 	rows, err := pg.Pool.Query(ctx, `
         SELECT title
         FROM wiki_pages
-        WHERE content LIKE '%[[' || $1 || ']]%' ESCAPE '\'
-    `, escapeLike(title))
+        WHERE lower(content) LIKE $1 ESCAPE '\'
+    `, pattern)
 	if err != nil {
 		return nil, err
 	}
@@ -168,11 +206,17 @@ func (pg *PGClient) ResolveLinkTargets(ctx context.Context, rawTitles []string) 
 		return nil, nil
 	}
 
+	// Приводим цели к нижнему регистру — сравнение идёт с lower(title).
+	keys := make([]string, 0, len(rawTitles))
+	for _, t := range rawTitles {
+		keys = append(keys, strings.ToLower(strings.TrimSpace(t)))
+	}
+
 	rows, err := pg.Pool.Query(ctx, `
         SELECT title
         FROM wiki_pages
         WHERE lower(title) = ANY($1::text[])
-    `, rawTitles)
+    `, keys)
 	if err != nil {
 		return nil, err
 	}
@@ -309,15 +353,32 @@ func (pg *PGClient) ListIndex(ctx context.Context, query string, tags []string, 
 	}
 
 	if len(tags) > 0 {
-		args = append(args, tags)
-		where = append(where, fmt.Sprintf(`
+		// Регистронезависимая фильтрация: и теги, и параметры — в нижнем
+		// регистре; дубли параметров убираем (иначе сломается HAVING count).
+		tagKeys := make([]string, 0, len(tags))
+		seen := make(map[string]struct{}, len(tags))
+		for _, t := range tags {
+			t = strings.ToLower(strings.TrimSpace(t))
+			if t == "" {
+				continue
+			}
+			if _, ok := seen[t]; ok {
+				continue
+			}
+			seen[t] = struct{}{}
+			tagKeys = append(tagKeys, t)
+		}
+		if len(tagKeys) > 0 {
+			args = append(args, tagKeys)
+			where = append(where, fmt.Sprintf(`
             p.id IN (
                 SELECT pt.page_id FROM wiki_page_tags pt
                 JOIN wiki_tags t ON t.id = pt.tag_id
-                WHERE t.name = ANY($%d::text[])
+                WHERE lower(t.name) = ANY($%d::text[])
                 GROUP BY pt.page_id
                 HAVING count(*) = cardinality($%d::text[])
             )`, len(args), len(args)))
+		}
 	}
 
 	if typ != "" {
@@ -432,7 +493,9 @@ func (pg *PGClient) SavePage(ctx context.Context, page *domain.WikiPage, current
 	}
 
 	if currentTitle == "" {
-		// Создание новой страницы.
+		// Создание новой страницы. ON CONFLICT DO NOTHING без целевого
+		// индекса: единственный уникальный индекс — lower(title), поэтому
+		// 0 затронутых строк означает занятый заголовок.
 		tag, err := tx.Exec(ctx, `
             INSERT INTO wiki_pages (
                 page_type, title, content, contacts, order_days, delivery_days, average_weight, suppliers
@@ -451,7 +514,7 @@ func (pg *PGClient) SavePage(ctx context.Context, page *domain.WikiPage, current
 		}
 	} else {
 		// Обновление или переименование существующей страницы.
-		_, err := tx.Exec(ctx, `
+		tag, err := tx.Exec(ctx, `
             UPDATE wiki_pages SET
                 page_type = $1, title = $2, content = $3, contacts = $4,
                 order_days = $5, delivery_days = $6, average_weight = $7, suppliers = $8
@@ -467,6 +530,13 @@ func (pg *PGClient) SavePage(ctx context.Context, page *domain.WikiPage, current
 			}
 
 			return err
+		}
+
+		// Гонка: страница удалена между проверкой в usecase и UPDATE.
+		// Не продолжаем — иначе SELECT id ниже попадёт на чужую страницу
+		// и перезапишет её теги.
+		if tag.RowsAffected() == 0 {
+			return domain.ErrPageNotFound
 		}
 	}
 
@@ -487,6 +557,10 @@ func (pg *PGClient) SavePage(ctx context.Context, page *domain.WikiPage, current
         SELECT id FROM wiki_pages WHERE lower(title) = lower($1)
     `, page.Title).Scan(&pageID)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return domain.ErrPageNotFound
+		}
+
 		return err
 	}
 

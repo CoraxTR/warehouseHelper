@@ -5,6 +5,9 @@ import "errors"
 // ErrTitleTaken — страница с таким заголовком уже существует.
 var ErrTitleTaken = errors.New("страница с таким заголовком уже существует")
 
+// ErrPageNotFound — страница не найдена (в т.ч. удалена конкурентно).
+var ErrPageNotFound = errors.New("вики-страница не найдена")
+
 // PageType — тип вики-страницы.
 type PageType string
 
@@ -32,6 +35,7 @@ type Contact struct {
 
 // WikiPage — вики-страница поставщика или товара.
 type WikiPage struct {
+	ID            int64     // внутренний идентификатор страницы
 	Type          PageType  // тип страницы
 	Title         string    // заголовок
 	Content       string    // содержимое страницы

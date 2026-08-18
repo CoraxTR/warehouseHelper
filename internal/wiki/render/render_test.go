@@ -79,6 +79,39 @@ func TestRender(t *testing.T) {
 			wantAbsent: []string{"script", "iframe"},
 		},
 		{
+			// Инъекция через канонический заголовок: markdown-метасимволы
+			// в заголовке не должны выводить ссылку наружу. Враждебный текст
+			// остаётся текстом ссылки (экранирован), но не становится href.
+			name:    "враждебный canonical не выходит за [text](url)",
+			md:      "[[Кликни]]",
+			targets: map[string]string{"кликни": `Кликни](https://evil.example)`},
+			want: []string{
+				`href="/wiki/page?title=` + url.QueryEscape(`Кликни](https://evil.example)`) + `"`,
+			},
+			wantAbsent: []string{`href="https:`}, // внешний href не появляется
+		},
+		{
+			// Картинка-трекер в заголовке не должна стать тегом img.
+			name:    "canonical с картинкой не рендерит img",
+			md:      "[[бейдж]]",
+			targets: map[string]string{"бейдж": `![бейдж](https://evil.example/pixel.png)`},
+			want: []string{
+				`href="/wiki/page?title=` + url.QueryEscape(`![бейдж](https://evil.example/pixel.png)`) + `"`,
+			},
+			wantAbsent: []string{"<img"},
+		},
+		{
+			// javascript: в заголовке не может стать href ссылки
+			// (href всегда /wiki/page?title=...; текст экранируется).
+			name:    "canonical с javascript: остаётся текстом внутри вики-ссылки",
+			md:      "[[ссылка]]",
+			targets: map[string]string{"ссылка": `x](javascript:alert(1))`},
+			want: []string{
+				`href="/wiki/page?title=` + url.QueryEscape(`x](javascript:alert(1))`) + `"`,
+			},
+			wantAbsent: []string{`href="javascript:`},
+		},
+		{
 			name:      "пустой контент — пустой HTML",
 			md:        "",
 			wantEmpty: true,

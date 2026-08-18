@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"html/template"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -268,6 +269,8 @@ func (h *Handler) wikiSave(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if page.Type == domain.PageTypeSupplier {
+		// Собираем все строки контактов (до 20), пустые пропускаем —
+		// серверная логика не должна полагаться на порядок строк из JS.
 		for n := 0; n < 20; n++ {
 			contact := domain.Contact{
 				Name:  r.FormValue(fmt.Sprintf("contacts_name_%d", n)),
@@ -276,10 +279,6 @@ func (h *Handler) wikiSave(w http.ResponseWriter, r *http.Request) {
 				Site:  r.FormValue(fmt.Sprintf("contacts_site_%d", n)),
 			}
 			if contact.Name == "" && contact.Phone == "" && contact.Email == "" && contact.Site == "" {
-				if n > 0 {
-					break
-				}
-
 				continue
 			}
 			page.Contacts = append(page.Contacts, contact)
@@ -300,6 +299,11 @@ func (h *Handler) wikiSave(w http.ResponseWriter, r *http.Request) {
 		_ = f.Close()
 		if readErr != nil {
 			http.Error(w, "Ошибка чтения фото: "+readErr.Error(), http.StatusBadRequest)
+
+			return
+		}
+		if len(data) > 5<<20 {
+			http.Error(w, "Фото больше 5 МБ", http.StatusBadRequest)
 
 			return
 		}
@@ -327,8 +331,10 @@ func (h *Handler) wikiSave(w http.ResponseWriter, r *http.Request) {
 
 	// Удаление фото по отметке, если новое фото не загружалось.
 	// После успешного SavePage страница уже под page.Title (возможно, переименована).
-	if r.FormValue("remove_photo") == "on" && photo == nil && currentTitle != "" {
-		_ = h.wikiUC.RemovePhoto(r.Context(), page.Title)
+	if r.FormValue("remove_photo") != "" && photo == nil && currentTitle != "" {
+		if err = h.wikiUC.RemovePhoto(r.Context(), page.Title); err != nil {
+			log.Printf("WikiSave RemovePhoto error: %v", err)
+		}
 	}
 
 	http.Redirect(w, r, "/wiki/page?title="+url.QueryEscape(page.Title), http.StatusSeeOther)
@@ -364,6 +370,11 @@ func (h *Handler) WikiDelete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	title := r.FormValue("title")
+	if title == "" {
+		http.Error(w, "Заголовок не указан", http.StatusBadRequest)
+
+		return
+	}
 
 	if err := h.wikiUC.DeletePage(r.Context(), title); err != nil {
 		http.Error(w, "Ошибка удаления страницы: "+err.Error(), http.StatusInternalServerError)
@@ -396,5 +407,6 @@ func (h *Handler) WikiPhoto(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	_, _ = w.Write(data)
 }

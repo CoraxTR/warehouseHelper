@@ -184,7 +184,7 @@
     <div class="selected-tags">
         {{range .TagFilter}}
         {{$t := .}}
-        <span class="chip active">{{$t}} <a class="chip-remove" href="/wiki?q={{$.Query}}&type={{$.Type}}{{range $.TagFilter}}{{if ne . $t}}&tag={{.|urlquery}}{{end}}{{end}}">убрать</a></span>
+        <span class="chip active">{{$t}} <a class="chip-remove" href="/wiki?q={{$.Query|urlquery}}&type={{$.Type}}{{range $.TagFilter}}{{if ne . $t}}&tag={{.|urlquery}}{{end}}{{end}}">убрать</a></span>
         {{end}}
     </div>
     {{end}}

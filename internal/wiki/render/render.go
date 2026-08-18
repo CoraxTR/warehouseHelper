@@ -12,16 +12,23 @@ import (
 
 	"github.com/microcosm-cc/bluemonday"
 	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/extension"
 )
 
 // linkRe — вики-ссылка вида [[Цель]].
 var linkRe = regexp.MustCompile(`\[\[([^\]]+)\]\]`)
 
-// mdRenderer — конвертер markdown в HTML с типовым набором расширений.
-var mdRenderer = goldmark.New(goldmark.WithExtensions())
+// mdRenderer — конвертер markdown в HTML (GFM: таблицы, зачёркивание,
+// autolink, task-списки).
+var mdRenderer = goldmark.New(goldmark.WithExtensions(extension.GFM))
 
 // sanitizer — политика UGC: типовые теги разрешены, скрипты и iframe вырезаются.
 var sanitizer = bluemonday.UGCPolicy()
+
+// linkTextEscaper экранирует markdown-метасимволы в тексте вики-ссылки,
+// чтобы заголовок страницы не мог выйти за синтаксис [text](url)
+// и подменить ссылку (например, заголовком вида «x](https://evil.example)»).
+var linkTextEscaper = strings.NewReplacer(`\`, `\\`, `]`, `\]`, `[`, `\[`)
 
 // ExtractLinks возвращает цели вики-ссылок [[Цель]] в порядке первого
 // вхождения, обрезанные по пробелам, без дублей (без учёта регистра).
@@ -65,6 +72,11 @@ func Render(md string, targets map[string]string) (template.HTML, error) {
 	return template.HTML(sanitized), nil
 }
 
+// escapeLinkText экранирует markdown-метасимволы в тексте вики-ссылки.
+func escapeLinkText(s string) string {
+	return linkTextEscaper.Replace(s)
+}
+
 // replaceLinks итеративно заменяет [[Цель]]: каждая найденная ссылка
 // обрабатывается один раз, уже заменённый фрагмент повторно не сканируется.
 func replaceLinks(md string, targets map[string]string) string {
@@ -82,9 +94,9 @@ func replaceLinks(md string, targets map[string]string) string {
 
 		if canonical, ok := targets[strings.ToLower(title)]; ok {
 			href := "/wiki/page?title=" + url.QueryEscape(canonical)
-			b.WriteString("[" + canonical + "](" + href + ")")
+			b.WriteString("[" + escapeLinkText(canonical) + "](" + href + ")")
 		} else {
-			b.WriteString("**" + title + "**")
+			b.WriteString("**" + escapeLinkText(title) + "**")
 		}
 		rest = rest[loc[1]:]
 	}

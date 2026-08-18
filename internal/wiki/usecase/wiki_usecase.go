@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"warehouseHelper/internal/domain"
 )
@@ -46,13 +48,17 @@ func (uc *WikiUseCase) GetPage(ctx context.Context, title string) (*domain.WikiP
 }
 
 // GetPageWithBacklinks возвращает страницу и её обратные ссылки;
-// если страницы нет — (nil, nil, nil).
+// если страницы нет — (nil, nil, nil). Обратные ссылки ищутся
+// по каноническому заголовку страницы.
 func (uc *WikiUseCase) GetPageWithBacklinks(ctx context.Context, title string) (*domain.WikiPage, []string, error) {
 	page, err := uc.repo.GetPage(ctx, title)
-	if err != nil || page == nil {
-		return page, nil, err
+	if err != nil {
+		return nil, nil, err
 	}
-	backlinks, err := uc.repo.GetBacklinks(ctx, title)
+	if page == nil {
+		return nil, nil, nil
+	}
+	backlinks, err := uc.repo.GetBacklinks(ctx, page.Title)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -73,7 +79,7 @@ func (uc *WikiUseCase) TagCloud(ctx context.Context) ([]domain.WikiTagCount, err
 // страниц; пустой список не требует обращения к хранилищу.
 func (uc *WikiUseCase) ResolveLinkTargets(ctx context.Context, rawTitles []string) (map[string]string, error) {
 	if len(rawTitles) == 0 {
-		return map[string]string{}, nil
+		return nil, nil
 	}
 	return uc.repo.ResolveLinkTargets(ctx, rawTitles)
 }
@@ -95,6 +101,7 @@ func (uc *WikiUseCase) RemovePhoto(ctx context.Context, title string) error {
 
 // SavePage валидирует и нормализует страницу, затем сохраняет её.
 // Ошибки хранилища (в т.ч. domain.ErrTitleTaken) возвращаются как есть.
+// Внимание: метод мутирует переданный page (нормализация полей).
 func (uc *WikiUseCase) SavePage(ctx context.Context, currentTitle string, page *domain.WikiPage, photo *domain.PhotoUpload) error {
 	if page == nil {
 		return fmt.Errorf("страница не передана")
@@ -107,8 +114,14 @@ func (uc *WikiUseCase) SavePage(ctx context.Context, currentTitle string, page *
 	if page.Title == "" {
 		return fmt.Errorf("заголовок не может быть пустым")
 	}
-	if len(page.Title) > 255 {
-		return fmt.Errorf("заголовок слишком длинный")
+	if utf8.RuneCountInString(page.Title) > 255 {
+		return fmt.Errorf("заголовок слишком длинный (максимум 255 символов)")
+	}
+	// Управляющие символы ломают рендер [[ссылок]] и URL.
+	for _, r := range page.Title {
+		if unicode.IsControl(r) {
+			return fmt.Errorf("заголовок содержит недопустимые символы")
+		}
 	}
 
 	// Тип страницы неизменяем при редактировании.
@@ -139,6 +152,12 @@ func (uc *WikiUseCase) SavePage(ctx context.Context, currentTitle string, page *
 		if c.Phone == "" && c.Email == "" && c.Site == "" {
 			return fmt.Errorf("заполните телефон, email или сайт в контакте %d", i+1)
 		}
+		if utf8.RuneCountInString(c.Name) > 255 ||
+			utf8.RuneCountInString(c.Phone) > 255 ||
+			utf8.RuneCountInString(c.Email) > 255 ||
+			utf8.RuneCountInString(c.Site) > 255 {
+			return fmt.Errorf("поле контакта %d слишком длинное (максимум 255 символов)", i+1)
+		}
 	}
 
 	var err error
@@ -150,15 +169,21 @@ func (uc *WikiUseCase) SavePage(ctx context.Context, currentTitle string, page *
 	}
 
 	page.AverageWeight = strings.TrimSpace(page.AverageWeight)
-	if len(page.AverageWeight) > 100 {
+	if utf8.RuneCountInString(page.AverageWeight) > 100 {
 		return fmt.Errorf("средний вес слишком длинный (максимум 100 символов)")
 	}
 
-	page.Suppliers, err = normalizeStrings(page.Suppliers, 50, "поставщиков")
+	// Ограничение размера содержимого: каждая страница рендерится
+	// goldmark+bluemonday при каждом просмотре.
+	if len(page.Content) > 256<<10 {
+		return fmt.Errorf("содержимое слишком большое (максимум 256 КБ)")
+	}
+
+	page.Suppliers, err = normalizeStrings(page.Suppliers, 50, "поставщиков", 100)
 	if err != nil {
 		return err
 	}
-	page.Tags, err = normalizeStrings(page.Tags, 50, "тегов")
+	page.Tags, err = normalizeStrings(page.Tags, 50, "тегов", 100)
 	if err != nil {
 		return err
 	}
@@ -202,9 +227,9 @@ func normalizeDays(days []int) ([]int, error) {
 }
 
 // normalizeStrings обрезает строки по пробелам, выкидывает пустые,
-// убирает дубли без учёта регистра (сохраняя первый вариант)
-// и проверяет максимальное количество элементов.
-func normalizeStrings(items []string, max int, kind string) ([]string, error) {
+// убирает дубли без учёта регистра (сохраняя первый вариант),
+// проверяет максимальное количество элементов и длину каждого.
+func normalizeStrings(items []string, max int, kind string, maxLen int) ([]string, error) {
 	if len(items) == 0 {
 		return nil, nil
 	}
@@ -214,6 +239,9 @@ func normalizeStrings(items []string, max int, kind string) ([]string, error) {
 		it = strings.TrimSpace(it)
 		if it == "" {
 			continue
+		}
+		if utf8.RuneCountInString(it) > maxLen {
+			return nil, fmt.Errorf("элемент %s слишком длинный (максимум %d символов)", kind, maxLen)
 		}
 		key := strings.ToLower(it)
 		if _, ok := seen[key]; ok {
