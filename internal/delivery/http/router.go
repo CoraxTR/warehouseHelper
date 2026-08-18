@@ -25,6 +25,11 @@ func NewRouter(h *Handler) *http.ServeMux {
 	mux.HandleFunc("/print-multiple-forms", h.PrintMultipleForms) // POST
 	mux.HandleFunc("/orders/delete", h.DeleteOrder)               // DELETE
 	mux.HandleFunc("/print-barcodes", h.PrintBarcodes)            // POST
+	mux.HandleFunc("/wiki", h.WikiIndex)                          // GET
+	mux.HandleFunc("/wiki/page", h.WikiPage)                      // GET
+	mux.HandleFunc("/wiki/edit", h.WikiEdit)                      // GET — форма, POST — сохранение
+	mux.HandleFunc("/wiki/delete", h.WikiDelete)                  // POST
+	mux.HandleFunc("/wiki/photo", h.WikiPhoto)                    // GET
 
 	return mux
 }

@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <title>База знаний</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+        }
+
+        h1 {
+            font-size: 24px;
+        }
+
+        form.search {
+            margin: 15px 0;
+        }
+
+        form.search input[type="text"] {
+            padding: 6px;
+            width: 300px;
+            font-size: 14px;
+        }
+
+        .tabs {
+            margin: 15px 0;
+            display: flex;
+            gap: 10px;
+        }
+
+        .tab {
+            padding: 8px 16px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            font-size: 14px;
+            text-decoration: none;
+            display: inline-block;
+        }
+
+        .tab:hover {
+            background-color: #0056b3;
+        }
+
+        .tab.active {
+            background-color: #0056b3;
+            font-weight: bold;
+        }
+
+        .error {
+            color: #ff3333;
+        }
+
+        .selected-tags {
+            margin: 10px 0;
+        }
+
+        .chip {
+            display: inline-block;
+            background-color: #e0e0e0;
+            border-radius: 12px;
+            padding: 2px 10px;
+            margin: 2px;
+            font-size: 13px;
+            text-decoration: none;
+            color: #333;
+        }
+
+        .chip:hover {
+            background-color: #cccccc;
+        }
+
+        .chip.active {
+            background-color: #007bff;
+            color: white;
+        }
+
+        .chip .chip-remove {
+            color: #007bff;
+            margin-left: 6px;
+            font-size: 12px;
+        }
+
+        .chip.active .chip-remove {
+            color: #ffffff;
+        }
+
+        .entries {
+            margin-top: 10px;
+        }
+
+        .entry {
+            padding: 8px 0;
+            border-bottom: 1px solid #eee;
+        }
+
+        .entry-title {
+            font-size: 16px;
+            color: #007bff;
+            text-decoration: none;
+        }
+
+        .entry-title:hover {
+            text-decoration: underline;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 12px;
+            color: white;
+            margin-left: 8px;
+        }
+
+        .badge-supplier {
+            background-color: #007bff;
+        }
+
+        .badge-product {
+            background-color: #4CAF50;
+        }
+
+        .tag-cloud {
+            margin-top: 20px;
+        }
+
+        .tag-cloud h3 {
+            margin-bottom: 6px;
+        }
+
+        .bottom-actions {
+            margin-top: 20px;
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .bottom-actions a {
+            padding: 8px 16px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            text-decoration: none;
+            display: inline-block;
+        }
+
+        .bottom-actions a:hover {
+            background-color: #0056b3;
+        }
+
+        .hidden {
+            display: none !important;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>База знаний</h1>
+
+    {{if .Error}}
+    <p class="error">{{.Error}}</p>
+    {{end}}
+
+    <form class="search" method="get" action="/wiki">
+        <input type="text" name="q" value="{{.Query}}" placeholder="Поиск по базе знаний...">
+        <button type="submit">Найти</button>
+    </form>
+
+    <div class="tabs">
+        <a class="tab {{if eq .Type ""}}active{{end}}" href="/wiki">Все</a>
+        <a class="tab {{if eq .Type "supplier"}}active{{end}}" href="/wiki?type=supplier">Поставщики</a>
+        <a class="tab {{if eq .Type "product"}}active{{end}}" href="/wiki?type=product">Продукты</a>
+    </div>
+
+    {{if .TagFilter}}
+    <div class="selected-tags">
+        {{range .TagFilter}}
+        {{$t := .}}
+        <span class="chip active">{{$t}} <a class="chip-remove" href="/wiki?q={{$.Query}}&type={{$.Type}}{{range $.TagFilter}}{{if ne . $t}}&tag={{.|urlquery}}{{end}}{{end}}">убрать</a></span>
+        {{end}}
+    </div>
+    {{end}}
+
+    <div class="entries">
+        {{range .Entries}}
+        <div class="entry">
+            <a class="entry-title" href="/wiki/page?title={{.Title|urlquery}}">{{.Title}}</a>
+            {{if eq .Type "supplier"}}<span class="badge badge-supplier">Поставщик</span>{{else}}<span class="badge badge-product">Продукт</span>{{end}}
+            {{range .Tags}}
+            <a class="chip" href="/wiki?tag={{.|urlquery}}">{{.}}</a>
+            {{end}}
+        </div>
+        {{else}}
+        <p>Ничего не найдено</p>
+        {{end}}
+    </div>
+
+    {{if .TagCloud}}
+    <div class="tag-cloud">
+        <h3>Теги</h3>
+        {{range .TagCloud}}
+        <a class="chip" href="/wiki?tag={{.Name|urlquery}}">{{.Name}} ({{.Count}})</a>
+        {{end}}
+    </div>
+    {{end}}
+
+    <div class="bottom-actions">
+        <a href="/wiki/edit?type=supplier">Создать поставщика</a>
+        <a href="/wiki/edit?type=product">Создать продукт</a>
+    </div>
+</body>
+
+</html>

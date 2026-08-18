@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <title>{{.Page.Title}}</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+        }
+
+        h1 {
+            font-size: 24px;
+            margin: 0;
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .btn {
+            padding: 8px 16px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            text-decoration: none;
+            display: inline-block;
+        }
+
+        .btn:hover {
+            background-color: #0056b3;
+        }
+
+        .btn-danger {
+            background-color: #dc3545;
+        }
+
+        .btn-danger:hover {
+            background-color: #c82333;
+        }
+
+        .error {
+            color: #ff3333;
+        }
+
+        .section {
+            margin-top: 20px;
+        }
+
+        .section h2 {
+            font-size: 18px;
+            border-bottom: 1px solid #ddd;
+            padding-bottom: 4px;
+        }
+
+        .muted {
+            color: #777;
+        }
+
+        .chip {
+            display: inline-block;
+            background-color: #e0e0e0;
+            border-radius: 12px;
+            padding: 2px 10px;
+            margin: 2px;
+            font-size: 13px;
+            text-decoration: none;
+            color: #333;
+        }
+
+        .chip:hover {
+            background-color: #cccccc;
+        }
+
+        .content {
+            line-height: 1.6;
+        }
+
+        .bottom-actions {
+            margin-top: 20px;
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .hidden {
+            display: none !important;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="header">
+        <h1>{{.Page.Title}}</h1>
+        <a class="btn" href="/wiki/edit?title={{.Page.Title|urlquery}}">Редактировать</a>
+    </div>
+
+    {{if .Error}}
+    <p class="error">{{.Error}}</p>
+    {{end}}
+
+    {{if .Page.HasPhoto}}
+    <div class="section">
+        <img src="/wiki/photo?title={{.Page.Title|urlquery}}" style="max-width:300px" alt="{{.Page.Title}}">
+    </div>
+    {{end}}
+
+    {{if .Page.AverageWeight}}
+    <div class="section">
+        <h2>Средний вес</h2>
+        <p>{{.Page.AverageWeight}}</p>
+    </div>
+    {{end}}
+
+    {{if .SupplierLinks}}
+    <div class="section">
+        <h2>Поставщики</h2>
+        <ul>
+            {{range .SupplierLinks}}
+            <li>{{if .Exists}}<a href="/wiki/page?title={{.Title|urlquery}}">{{.Title}}</a>{{else}}{{.Title}}{{end}}</li>
+            {{end}}
+        </ul>
+    </div>
+    {{end}}
+
+    <div class="section">
+        <h2>Дополнительная информация</h2>
+        <div class="content">{{.ContentHTML}}</div>
+    </div>
+
+    {{if .Page.Tags}}
+    <div class="section">
+        <h2>Теги</h2>
+        {{range .Page.Tags}}
+        <a class="chip" href="/wiki?tag={{.|urlquery}}">{{.}}</a>
+        {{end}}
+    </div>
+    {{end}}
+
+    {{if .Backlinks}}
+    <div class="section">
+        <h2>Сюда ссылаются</h2>
+        <ul>
+            {{range .Backlinks}}
+            <li><a href="/wiki/page?title={{.|urlquery}}">{{.}}</a></li>
+            {{end}}
+        </ul>
+    </div>
+    {{end}}
+
+    <div class="bottom-actions">
+        <a class="btn" href="/wiki">Назад</a>
+        <form method="post" action="/wiki/delete" onsubmit="return confirm('Удалить страницу?')">
+            <input type="hidden" name="title" value="{{.Page.Title}}">
+            <button type="submit" class="btn btn-danger">Удалить</button>
+        </form>
+    </div>
+</body>
+
+</html>
