@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <title>{{.Page.Title}}</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+        }
+
+        h1 {
+            font-size: 24px;
+            margin: 0;
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .btn {
+            padding: 8px 16px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            text-decoration: none;
+            display: inline-block;
+        }
+
+        .btn:hover {
+            background-color: #0056b3;
+        }
+
+        .btn-danger {
+            background-color: #dc3545;
+        }
+
+        .btn-danger:hover {
+            background-color: #c82333;
+        }
+
+        .error {
+            color: #ff3333;
+        }
+
+        .section {
+            margin-top: 20px;
+        }
+
+        .section h2 {
+            font-size: 18px;
+            border-bottom: 1px solid #ddd;
+            padding-bottom: 4px;
+        }
+
+        .mini-calendar {
+            border-collapse: collapse;
+        }
+
+        .mini-calendar td {
+            border: 1px solid #ddd;
+            padding: 8px 12px;
+            text-align: center;
+            font-size: 14px;
+        }
+
+        .mini-calendar td.day-on {
+            background-color: #4CAF50;
+            color: white;
+            font-weight: bold;
+        }
+
+        .muted {
+            color: #777;
+        }
+
+        .chip {
+            display: inline-block;
+            background-color: #e0e0e0;
+            border-radius: 12px;
+            padding: 2px 10px;
+            margin: 2px;
+            font-size: 13px;
+            text-decoration: none;
+            color: #333;
+        }
+
+        .chip:hover {
+            background-color: #cccccc;
+        }
+
+        .content {
+            line-height: 1.6;
+        }
+
+        .bottom-actions {
+            margin-top: 20px;
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .hidden {
+            display: none !important;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="header">
+        <h1>{{.Page.Title}}</h1>
+        <a class="btn" href="/wiki/edit?title={{.Page.Title|urlquery}}">Редактировать</a>
+    </div>
+
+    {{if .Error}}
+    <p class="error">{{.Error}}</p>
+    {{end}}
+
+    <div class="section">
+        <h2>Контактные данные</h2>
+        {{if .Page.Contacts}}
+        <ul>
+            {{range .Page.Contacts}}
+            <li>{{if .Name}}{{.Name}}: {{end}}{{if .Phone}}{{.Phone}}{{if or .Email .Site}}, {{end}}{{end}}{{if .Email}}{{.Email}}{{if .Site}}, {{end}}{{end}}{{if .Site}}{{.Site}}{{end}}</li>
+            {{end}}
+        </ul>
+        {{else}}
+        <p class="muted">Нет контактов</p>
+        {{end}}
+    </div>
+
+    <div class="section">
+        <h2>Заказ</h2>
+        <table class="mini-calendar">
+            <tr>
+                <td class="{{range .Page.OrderDays}}{{if eq . 1}}day-on{{end}}{{end}}">Пн</td>
+                <td class="{{range .Page.OrderDays}}{{if eq . 2}}day-on{{end}}{{end}}">Вт</td>
+                <td class="{{range .Page.OrderDays}}{{if eq . 3}}day-on{{end}}{{end}}">Ср</td>
+                <td class="{{range .Page.OrderDays}}{{if eq . 4}}day-on{{end}}{{end}}">Чт</td>
+                <td class="{{range .Page.OrderDays}}{{if eq . 5}}day-on{{end}}{{end}}">Пт</td>
+                <td class="{{range .Page.OrderDays}}{{if eq . 6}}day-on{{end}}{{end}}">Сб</td>
+                <td class="{{range .Page.OrderDays}}{{if eq . 7}}day-on{{end}}{{end}}">Вс</td>
+            </tr>
+        </table>
+        {{if not .Page.OrderDays}}
+        <p class="muted">Дни не выбраны</p>
+        {{end}}
+    </div>
+
+    <div class="section">
+        <h2>Доставка</h2>
+        <table class="mini-calendar">
+            <tr>
+                <td class="{{range .Page.DeliveryDays}}{{if eq . 1}}day-on{{end}}{{end}}">Пн</td>
+                <td class="{{range .Page.DeliveryDays}}{{if eq . 2}}day-on{{end}}{{end}}">Вт</td>
+                <td class="{{range .Page.DeliveryDays}}{{if eq . 3}}day-on{{end}}{{end}}">Ср</td>
+                <td class="{{range .Page.DeliveryDays}}{{if eq . 4}}day-on{{end}}{{end}}">Чт</td>
+                <td class="{{range .Page.DeliveryDays}}{{if eq . 5}}day-on{{end}}{{end}}">Пт</td>
+                <td class="{{range .Page.DeliveryDays}}{{if eq . 6}}day-on{{end}}{{end}}">Сб</td>
+                <td class="{{range .Page.DeliveryDays}}{{if eq . 7}}day-on{{end}}{{end}}">Вс</td>
+            </tr>
+        </table>
+        {{if not .Page.DeliveryDays}}
+        <p class="muted">Дни не выбраны</p>
+        {{end}}
+    </div>
+
+    <div class="section">
+        <h2>Дополнительная информация</h2>
+        <div class="content">{{.ContentHTML}}</div>
+    </div>
+
+    {{if .Page.Tags}}
+    <div class="section">
+        <h2>Теги</h2>
+        {{range .Page.Tags}}
+        <a class="chip" href="/wiki?tag={{.|urlquery}}">{{.}}</a>
+        {{end}}
+    </div>
+    {{end}}
+
+    {{if .Backlinks}}
+    <div class="section">
+        <h2>Сюда ссылаются</h2>
+        <ul>
+            {{range .Backlinks}}
+            <li><a href="/wiki/page?title={{.|urlquery}}">{{.}}</a></li>
+            {{end}}
+        </ul>
+    </div>
+    {{end}}
+
+    <div class="bottom-actions">
+        <a class="btn" href="/wiki">Назад</a>
+        <form method="post" action="/wiki/delete" onsubmit="return confirm('Удалить страницу?')">
+            <input type="hidden" name="title" value="{{.Page.Title}}">
+            <button type="submit" class="btn btn-danger">Удалить</button>
+        </form>
+    </div>
+</body>
+
+</html>

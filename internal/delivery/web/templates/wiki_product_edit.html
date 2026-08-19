@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <title>{{if .CurrentTitle}}Редактирование продукта{{else}}Новый продукт{{end}}</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+        }
+
+        h1 {
+            font-size: 24px;
+        }
+
+        label.field {
+            display: block;
+            margin-top: 14px;
+            font-weight: bold;
+        }
+
+        input[type="text"],
+        textarea {
+            width: 100%;
+            padding: 6px;
+            box-sizing: border-box;
+            margin-top: 4px;
+            font-size: 14px;
+        }
+
+        .error {
+            color: #ff3333;
+        }
+
+        .photo-block {
+            margin-top: 6px;
+        }
+
+        .photo-block img {
+            display: block;
+            margin-bottom: 6px;
+        }
+
+        .photo-block label {
+            font-weight: normal;
+        }
+
+        .hint {
+            color: #777;
+            font-size: 13px;
+            font-weight: normal;
+            margin-top: 4px;
+        }
+
+        .btn {
+            padding: 8px 16px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            text-decoration: none;
+            display: inline-block;
+        }
+
+        .btn:hover {
+            background-color: #0056b3;
+        }
+
+        .bottom-actions {
+            margin-top: 20px;
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .hidden {
+            display: none !important;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>{{if .CurrentTitle}}Редактирование продукта{{else}}Новый продукт{{end}}</h1>
+
+    {{if .Error}}
+    <p class="error">{{.Error}}</p>
+    {{end}}
+
+    <form method="post" action="/wiki/edit" enctype="multipart/form-data">
+        <input type="hidden" name="type" value="product">
+        <input type="hidden" name="currentTitle" value="{{.CurrentTitle}}">
+
+        <label class="field" for="title">Заголовок</label>
+        <input type="text" id="title" name="title" value="{{.Page.Title}}">
+
+        <label class="field">Фото</label>
+        {{if .Page.HasPhoto}}
+        <div class="photo-block">
+            <img src="/wiki/photo?title={{.Page.Title|urlquery}}" style="max-width:200px" alt="{{.Page.Title}}">
+            <label><input type="checkbox" name="remove_photo" value="1"> удалить фото</label>
+        </div>
+        {{end}}
+        <input type="file" name="photo" accept="image/*" style="margin-top:6px">
+
+        <label class="field" for="average_weight">Средний вес</label>
+        <input type="text" id="average_weight" name="average_weight" value="{{.Page.AverageWeight}}" placeholder="например, 12 кг">
+
+        <label class="field" for="suppliers">Поставщики</label>
+        <input type="text" id="suppliers" name="suppliers" value="{{.SuppliersValue}}" list="supplier-titles" placeholder="названия через запятую">
+        <div class="hint">Названия через запятую</div>
+        <datalist id="supplier-titles">
+            {{range .SupplierTitles}}
+            <option value="{{.}}">
+            {{end}}
+        </datalist>
+
+        <label class="field" for="content">Дополнительная информация</label>
+        <textarea id="content" name="content" rows="10">{{.Page.Content}}</textarea>
+
+        <label class="field" for="tags">Теги</label>
+        <input type="text" id="tags" name="tags" value="{{.TagsValue}}" list="all-tags" placeholder="теги через запятую">
+        <datalist id="all-tags">
+            {{range .AllTags}}
+            <option value="{{.}}">
+            {{end}}
+        </datalist>
+
+        <div class="bottom-actions">
+            <button type="submit" class="btn">Сохранить</button>
+            <a class="btn" href="/wiki">Отмена</a>
+        </div>
+    </form>
+</body>
+
+</html>

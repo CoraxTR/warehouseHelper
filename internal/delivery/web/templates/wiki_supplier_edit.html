@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <title>{{if .CurrentTitle}}Редактирование поставщика{{else}}Новый поставщик{{end}}</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+        }
+
+        h1 {
+            font-size: 24px;
+        }
+
+        label.field {
+            display: block;
+            margin-top: 14px;
+            font-weight: bold;
+        }
+
+        input[type="text"],
+        textarea {
+            width: 100%;
+            padding: 6px;
+            box-sizing: border-box;
+            margin-top: 4px;
+            font-size: 14px;
+        }
+
+        .error {
+            color: #ff3333;
+        }
+
+        .contact-row {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            margin-top: 6px;
+        }
+
+        .contact-row input[type="text"] {
+            flex: 1;
+        }
+
+        .btn {
+            padding: 8px 16px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            text-decoration: none;
+            display: inline-block;
+        }
+
+        .btn:hover {
+            background-color: #0056b3;
+        }
+
+        .btn-remove {
+            background-color: #dc3545;
+            padding: 6px 10px;
+            font-size: 13px;
+            white-space: nowrap;
+        }
+
+        .btn-remove:hover {
+            background-color: #c82333;
+        }
+
+        #add-contact {
+            margin-top: 10px;
+        }
+
+        .days {
+            display: flex;
+            gap: 14px;
+            flex-wrap: wrap;
+            margin-top: 6px;
+            font-weight: normal;
+        }
+
+        .days label {
+            font-weight: normal;
+        }
+
+        .bottom-actions {
+            margin-top: 20px;
+            display: flex;
+            gap: 10px;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .hidden {
+            display: none !important;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>{{if .CurrentTitle}}Редактирование поставщика{{else}}Новый поставщик{{end}}</h1>
+
+    {{if .Error}}
+    <p class="error">{{.Error}}</p>
+    {{end}}
+
+    <form method="post" action="/wiki/edit" enctype="multipart/form-data">
+        <input type="hidden" name="type" value="supplier">
+        <input type="hidden" name="currentTitle" value="{{.CurrentTitle}}">
+
+        <label class="field" for="title">Заголовок</label>
+        <input type="text" id="title" name="title" value="{{.Page.Title}}">
+
+        <label class="field">Контакты</label>
+        <div id="contacts">
+            {{range $i, $c := .Page.Contacts}}
+            <div class="contact-row">
+                <input type="text" name="contacts_name_{{$i}}" value="{{$c.Name}}" placeholder="Имя">
+                <input type="text" name="contacts_phone_{{$i}}" value="{{$c.Phone}}" placeholder="Телефон">
+                <input type="text" name="contacts_email_{{$i}}" value="{{$c.Email}}" placeholder="Email">
+                <input type="text" name="contacts_site_{{$i}}" value="{{$c.Site}}" placeholder="Сайт">
+                <button type="button" class="btn btn-remove contact-remove">Удалить строку</button>
+            </div>
+            {{end}}
+        </div>
+        <button type="button" id="add-contact" class="btn">Добавить контакт</button>
+
+        <label class="field">Дни заказа</label>
+        <div class="days">
+            <label><input type="checkbox" name="order_days" value="1" {{range .Page.OrderDays}}{{if eq . 1}}checked{{end}}{{end}}> Пн</label>
+            <label><input type="checkbox" name="order_days" value="2" {{range .Page.OrderDays}}{{if eq . 2}}checked{{end}}{{end}}> Вт</label>
+            <label><input type="checkbox" name="order_days" value="3" {{range .Page.OrderDays}}{{if eq . 3}}checked{{end}}{{end}}> Ср</label>
+            <label><input type="checkbox" name="order_days" value="4" {{range .Page.OrderDays}}{{if eq . 4}}checked{{end}}{{end}}> Чт</label>
+            <label><input type="checkbox" name="order_days" value="5" {{range .Page.OrderDays}}{{if eq . 5}}checked{{end}}{{end}}> Пт</label>
+            <label><input type="checkbox" name="order_days" value="6" {{range .Page.OrderDays}}{{if eq . 6}}checked{{end}}{{end}}> Сб</label>
+            <label><input type="checkbox" name="order_days" value="7" {{range .Page.OrderDays}}{{if eq . 7}}checked{{end}}{{end}}> Вс</label>
+        </div>
+
+        <label class="field">Дни доставки</label>
+        <div class="days">
+            <label><input type="checkbox" name="delivery_days" value="1" {{range .Page.DeliveryDays}}{{if eq . 1}}checked{{end}}{{end}}> Пн</label>
+            <label><input type="checkbox" name="delivery_days" value="2" {{range .Page.DeliveryDays}}{{if eq . 2}}checked{{end}}{{end}}> Вт</label>
+            <label><input type="checkbox" name="delivery_days" value="3" {{range .Page.DeliveryDays}}{{if eq . 3}}checked{{end}}{{end}}> Ср</label>
+            <label><input type="checkbox" name="delivery_days" value="4" {{range .Page.DeliveryDays}}{{if eq . 4}}checked{{end}}{{end}}> Чт</label>
+            <label><input type="checkbox" name="delivery_days" value="5" {{range .Page.DeliveryDays}}{{if eq . 5}}checked{{end}}{{end}}> Пт</label>
+            <label><input type="checkbox" name="delivery_days" value="6" {{range .Page.DeliveryDays}}{{if eq . 6}}checked{{end}}{{end}}> Сб</label>
+            <label><input type="checkbox" name="delivery_days" value="7" {{range .Page.DeliveryDays}}{{if eq . 7}}checked{{end}}{{end}}> Вс</label>
+        </div>
+
+        <label class="field" for="content">Дополнительная информация</label>
+        <textarea id="content" name="content" rows="10">{{.Page.Content}}</textarea>
+
+        <label class="field" for="tags">Теги</label>
+        <input type="text" id="tags" name="tags" value="{{.TagsValue}}" list="all-tags" placeholder="теги через запятую">
+        <datalist id="all-tags">
+            {{range .AllTags}}
+            <option value="{{.}}">
+            {{end}}
+        </datalist>
+
+        <div class="bottom-actions">
+            <button type="submit" class="btn">Сохранить</button>
+            <a class="btn" href="/wiki">Отмена</a>
+        </div>
+    </form>
+
+    <template id="contact-row">
+        <div class="contact-row">
+            <input type="text" name="contacts_name_" placeholder="Имя">
+            <input type="text" name="contacts_phone_" placeholder="Телефон">
+            <input type="text" name="contacts_email_" placeholder="Email">
+            <input type="text" name="contacts_site_" placeholder="Сайт">
+            <button type="button" class="btn btn-remove contact-remove">Удалить строку</button>
+        </div>
+    </template>
+
+    <script>
+        function reindexContacts() {
+            var rows = document.querySelectorAll('#contacts .contact-row');
+            var names = ['contacts_name_', 'contacts_phone_', 'contacts_email_', 'contacts_site_'];
+            rows.forEach(function (row, i) {
+                var inputs = row.querySelectorAll('input');
+                inputs.forEach(function (input, j) {
+                    input.name = names[j] + i;
+                });
+            });
+        }
+
+        function addContactRow() {
+            var tpl = document.getElementById('contact-row');
+            var clone = tpl.content.cloneNode(true);
+            document.getElementById('contacts').appendChild(clone);
+            reindexContacts();
+        }
+
+        document.addEventListener('click', function (e) {
+            if (e.target && e.target.classList.contains('contact-remove')) {
+                var row = e.target.closest('.contact-row');
+                if (row) {
+                    row.remove();
+                    reindexContacts();
+                }
+            }
+        });
+
+        document.getElementById('add-contact').addEventListener('click', addContactRow);
+    </script>
+</body>
+
+</html>

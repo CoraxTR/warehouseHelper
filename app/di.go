@@ -17,6 +17,7 @@ import (
 	"warehouseHelper/internal/telegram"
 	tempcleaner "warehouseHelper/internal/tempcleaner"
 	"warehouseHelper/internal/tempdir"
+	wucase "warehouseHelper/internal/wiki/usecase"
 )
 
 type DIContainer struct {
@@ -43,6 +44,7 @@ type DIContainer struct {
 	pdfExportUC     *rgucase.ExportOrderPDFUseCase
 	barcodeExportUC *rgucase.ExportBarcodesToExcelUseCase
 	refGoCheckUC    *rgucase.RefGoCheckAgainstUseCase
+	wikiUC          *wucase.WikiUseCase
 
 	// Хэндлеры
 	mux      *http.ServeMux
@@ -222,9 +224,18 @@ func (d *DIContainer) RefGoCheckAgainstUC() *rgucase.RefGoCheckAgainstUseCase {
 	return d.refGoCheckUC
 }
 
+// WikiUC — сценарий работы с вики-страницами; PGClient реализует WikiRepository.
+func (d *DIContainer) WikiUC() *wucase.WikiUseCase {
+	if d.wikiUC == nil {
+		d.wikiUC = wucase.NewWikiUseCase(d.OrdersRepository())
+	}
+
+	return d.wikiUC
+}
+
 func (d *DIContainer) Handler() *myhttp.Handler {
 	if d.handlers == nil {
-		d.handlers = myhttp.NewHandler(d.SyncUC(), d.OrdersUC(), d.ExcelExportUC(), d.PdfExportUC(), d.BarcodeExportUC(), d.RefGoCheckAgainstUC())
+		d.handlers = myhttp.NewHandler(d.SyncUC(), d.OrdersUC(), d.ExcelExportUC(), d.PdfExportUC(), d.BarcodeExportUC(), d.RefGoCheckAgainstUC(), d.WikiUC())
 	}
 
 	return d.handlers
