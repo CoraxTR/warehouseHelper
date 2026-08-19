@@ -82,9 +82,10 @@ func fullFolderPath(f client.MSProductFolder) string {
 	return f.PathName + "/" + f.Name
 }
 
-// sortNodes сортирует узлы по имени без учёта регистра.
+// sortNodes сортирует узлы по имени без учёта регистра (стабильно —
+// при равных именах порядок не меняется между выгрузками).
 func sortNodes(nodes []*FolderNode) {
-	sort.Slice(nodes, func(i, j int) bool {
+	sort.SliceStable(nodes, func(i, j int) bool {
 		return strings.ToLower(nodes[i].Name) < strings.ToLower(nodes[j].Name)
 	})
 }

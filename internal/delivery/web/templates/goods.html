@@ -17,7 +17,6 @@
         #folder-tree {
             list-style: none;
             padding-left: 0;
-            max-width: 700px;
         }
 
         .folder-children {
@@ -28,8 +27,6 @@
         .folder-toggle {
             cursor: pointer;
             user-select: none;
-            padding: 2px 0;
-            display: inline-block;
         }
 
         .folder-toggle::before {
@@ -45,10 +42,8 @@
             display: none;
         }
 
-        .folder-leaf {
+        .folder-leaf label {
             cursor: pointer;
-            padding: 2px 0;
-            display: inline-block;
         }
 
         .error-banner {
@@ -80,20 +75,20 @@
 
 <body>
     <h1>Продукция</h1>
-    <p>Нажмите «Выгрузить товары из МС», чтобы загрузить дерево папок товаров. Раскрывайте папки и отмечайте галочками
-        папки нижнего уровня.</p>
+    <p>Нажмите «Выгрузить товары из МС», чтобы загрузить дерево папок товаров.
+        Галочками отмечаются только папки нижнего уровня.</p>
 
     {{if .Error}}
     <div class="error-banner">{{.Error}}</div>
     {{end}}
 
-    {{if .Tree}}
-    <ul id="folder-tree">
-        {{range .Tree}}{{template "folderNode" .}}{{end}}
-    </ul>
-    {{end}}
-
     <form method="post" action="/goods">
+        {{if .Tree}}
+        <ul id="folder-tree">
+            {{range .Tree}}{{template "folderNode" (folderCtx . $.Selected)}}{{end}}
+        </ul>
+        {{end}}
+
         <button type="submit" class="export-btn">Выгрузить товары из МС</button>
     </form>
 
@@ -110,14 +105,14 @@
 
 {{define "folderNode"}}
 <li>
-    {{if .Children}}
-    <span class="folder-toggle" onclick="toggleFolder(this)">{{.Name}}</span>
+    {{if .Node.Children}}
+    <span class="folder-toggle" onclick="toggleFolder(this)">{{.Node.Name}}</span>
     <ul class="folder-children hidden">
-        {{range .Children}}{{template "folderNode" .}}{{end}}
+        {{range .Node.Children}}{{template "folderNode" (folderCtx . $.Selected)}}{{end}}
     </ul>
     {{else}}
     <label class="folder-leaf">
-        <input type="checkbox" name="folders" value="{{.Href}}"> {{.Name}}
+        <input type="checkbox" name="folders" value="{{.Node.Href}}" {{if index $.Selected .Node.Href}}checked{{end}}> {{.Node.Name}}
     </label>
     {{end}}
 </li>

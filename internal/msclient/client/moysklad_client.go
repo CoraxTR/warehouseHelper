@@ -965,7 +965,7 @@ const productFolderPageLimit = 1000
 
 // FetchProductFolders — получение всех папок товаров МойСклад
 // (GET /entity/productfolder). Пагинация по offset: запросы повторяются
-// с шагом limit=1000, пока offset < meta.size ответа.
+// с шагом limit=1000, пока не получены все meta.size папок.
 func (msac *MSAPIClient) FetchProductFolders(parentctx context.Context) ([]MSProductFolder, error) {
 	job := func(apiKey string) (any, error) {
 		ctx, cancel := context.WithTimeout(parentctx, 300*time.Second)
@@ -974,6 +974,11 @@ func (msac *MSAPIClient) FetchProductFolders(parentctx context.Context) ([]MSPro
 		var folders []MSProductFolder
 
 		for offset := 0; ; offset += productFolderPageLimit {
+			// Отмена контекста между страницами: не тратим запрос, если родитель уже отменил.
+			if err := parentctx.Err(); err != nil {
+				return nil, err
+			}
+
 			endpoint, err := msac.productFolderListEndpoint(offset, productFolderPageLimit)
 			if err != nil {
 				return nil, err
