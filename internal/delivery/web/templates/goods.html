@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Продукция</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+        }
+
+        h1 {
+            font-size: 24px;
+        }
+
+        #folder-tree {
+            list-style: none;
+            padding-left: 0;
+            max-width: 700px;
+        }
+
+        .folder-children {
+            list-style: none;
+            padding-left: 20px;
+        }
+
+        .folder-toggle {
+            cursor: pointer;
+            user-select: none;
+            padding: 2px 0;
+            display: inline-block;
+        }
+
+        .folder-toggle::before {
+            content: "▸ ";
+            color: #666;
+        }
+
+        .folder-toggle.expanded::before {
+            content: "▾ ";
+        }
+
+        .folder-children.hidden {
+            display: none;
+        }
+
+        .folder-leaf {
+            cursor: pointer;
+            padding: 2px 0;
+            display: inline-block;
+        }
+
+        .error-banner {
+            color: #b00020;
+            background: #ffe6e6;
+            padding: 10px;
+            border-radius: 4px;
+            margin-bottom: 16px;
+        }
+
+        .export-btn {
+            position: fixed;
+            right: 20px;
+            bottom: 20px;
+            padding: 12px 24px;
+            font-size: 16px;
+            cursor: pointer;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+        }
+
+        .export-btn:hover {
+            background-color: #0056b3;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Продукция</h1>
+    <p>Нажмите «Выгрузить товары из МС», чтобы загрузить дерево папок товаров. Раскрывайте папки и отмечайте галочками
+        папки нижнего уровня.</p>
+
+    {{if .Error}}
+    <div class="error-banner">{{.Error}}</div>
+    {{end}}
+
+    {{if .Tree}}
+    <ul id="folder-tree">
+        {{range .Tree}}{{template "folderNode" .}}{{end}}
+    </ul>
+    {{end}}
+
+    <form method="post" action="/goods">
+        <button type="submit" class="export-btn">Выгрузить товары из МС</button>
+    </form>
+
+    <script>
+        function toggleFolder(el) {
+            el.classList.toggle('expanded');
+            var children = el.nextElementSibling;
+            if (children) children.classList.toggle('hidden');
+        }
+    </script>
+</body>
+
+</html>
+
+{{define "folderNode"}}
+<li>
+    {{if .Children}}
+    <span class="folder-toggle" onclick="toggleFolder(this)">{{.Name}}</span>
+    <ul class="folder-children hidden">
+        {{range .Children}}{{template "folderNode" .}}{{end}}
+    </ul>
+    {{else}}
+    <label class="folder-leaf">
+        <input type="checkbox" name="folders" value="{{.Href}}"> {{.Name}}
+    </label>
+    {{end}}
+</li>
+{{end}}

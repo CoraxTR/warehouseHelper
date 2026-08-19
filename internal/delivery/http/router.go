@@ -30,6 +30,7 @@ func NewRouter(h *Handler) *http.ServeMux {
 	mux.HandleFunc("/wiki/edit", h.WikiEdit)                      // GET — форма, POST — сохранение
 	mux.HandleFunc("/wiki/delete", h.WikiDelete)                  // POST
 	mux.HandleFunc("/wiki/photo", h.WikiPhoto)                    // GET
+	mux.HandleFunc("/goods", h.GoodsPage)                         // GET — страница, POST — выгрузка дерева папок товаров
 
 	return mux
 }

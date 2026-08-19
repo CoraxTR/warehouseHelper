@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"strconv"
 	"strings"
 	"time"
 	"warehouseHelper/internal/config"
@@ -957,4 +958,97 @@ func (msac *MSAPIClient) entityEndpoint(parts ...string) (string, error) {
 	base.Path = path.Join(append([]string{base.Path}, parts...)...)
 
 	return base.String(), nil
+}
+
+// productFolderPageLimit — размер страницы при пагинации папок товаров.
+const productFolderPageLimit = 1000
+
+// FetchProductFolders — получение всех папок товаров МойСклад
+// (GET /entity/productfolder). Пагинация по offset: запросы повторяются
+// с шагом limit=1000, пока offset < meta.size ответа.
+func (msac *MSAPIClient) FetchProductFolders(parentctx context.Context) ([]MSProductFolder, error) {
+	job := func(apiKey string) (any, error) {
+		ctx, cancel := context.WithTimeout(parentctx, 300*time.Second)
+		defer cancel()
+
+		var folders []MSProductFolder
+
+		for offset := 0; ; offset += productFolderPageLimit {
+			endpoint, err := msac.productFolderListEndpoint(offset, productFolderPageLimit)
+			if err != nil {
+				return nil, err
+			}
+
+			body, resp, err := msac.httpRequest(ctx, http.MethodGet, endpoint, apiKey, http.NoBody)
+			if err != nil {
+				select {
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				default:
+					return nil, err
+				}
+			}
+
+			err = resp.Body.Close()
+			if err != nil {
+				log.Printf("failed to close response body: %v", err)
+			}
+
+			if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+				return nil, msAPIError(resp.Status, body)
+			}
+
+			var list MSProductFolderList
+			if err := json.Unmarshal(body, &list); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal product folders: %w", err)
+			}
+
+			folders = append(folders, list.Rows...)
+
+			if offset+productFolderPageLimit >= list.Meta.Size {
+				break
+			}
+		}
+
+		return folders, nil
+	}
+
+	resCh := msac.workerpool.SubmitOther(job)
+
+	select {
+	case res := <-resCh:
+		if res.Err != nil {
+			return nil, fmt.Errorf("FetchProductFolders failed: %w", res.Err)
+		}
+
+		folders, ok := res.Value.([]MSProductFolder)
+		if !ok {
+			return nil, errors.New("FetchProductFolders failed: unexpected value type")
+		}
+
+		return folders, nil
+	case <-parentctx.Done():
+		return nil, parentctx.Err()
+	}
+}
+
+// productFolderListEndpoint — URL списка папок товаров с пагинацией.
+// Query-строка добавляется после entityEndpoint: path.Join не переваривает '?'.
+func (msac *MSAPIClient) productFolderListEndpoint(offset, limit int) (string, error) {
+	endpoint, err := msac.entityEndpoint("productfolder")
+	if err != nil {
+		return "", err
+	}
+
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse product folder endpoint: %w", err)
+	}
+
+	q := u.Query()
+	q.Set("limit", strconv.Itoa(limit))
+	q.Set("offset", strconv.Itoa(offset))
+	u.RawQuery = q.Encode()
+
+	return u.String(), nil
 }
