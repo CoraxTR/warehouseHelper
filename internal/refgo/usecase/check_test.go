@@ -179,7 +179,7 @@ func TestZonePrice(t *testing.T) {
 		{"Желтая", 600, true},
 		{"Оранжевая", 700, true},
 		{"Красная", 800, true},
-		{"Синяя", 900, true},
+		{"Голубая", 900, true},
 		{"Марс", 0, false},
 		{"", 0, false},
 	}

@@ -190,7 +190,7 @@ func (uc *RefGoCheckAgainstUseCase) zonePrice(zone string) (float64, bool) {
 		return uc.cfg.RGOrangezonePrice, true
 	case strings.Contains(normalized, "красн"):
 		return uc.cfg.RGRedzonePrice, true
-	case strings.Contains(normalized, "син"):
+	case strings.Contains(normalized, "гол"):
 		return uc.cfg.RGBluezonePrice, true
 	default:
 		return 0, false
