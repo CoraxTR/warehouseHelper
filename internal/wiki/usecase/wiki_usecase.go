@@ -183,6 +183,10 @@ func (uc *WikiUseCase) SavePage(ctx context.Context, currentTitle string, page *
 	if err != nil {
 		return err
 	}
+	page.Products, err = normalizeStrings(page.Products, 50, "продуктов", 100)
+	if err != nil {
+		return err
+	}
 	page.Tags, err = normalizeStrings(page.Tags, 50, "тегов", 100)
 	if err != nil {
 		return err

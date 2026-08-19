@@ -119,17 +119,6 @@
     </div>
     {{end}}
 
-    {{if .SupplierLinks}}
-    <div class="section">
-        <h2>Поставщики</h2>
-        <ul>
-            {{range .SupplierLinks}}
-            <li>{{if .Exists}}<a href="/wiki/page?title={{.Title|urlquery}}">{{.Title}}</a>{{else}}{{.Title}}{{end}}</li>
-            {{end}}
-        </ul>
-    </div>
-    {{end}}
-
     <div class="section">
         <h2>Дополнительная информация</h2>
         <div class="content">{{.ContentHTML}}</div>
@@ -141,6 +130,17 @@
         {{range .Page.Tags}}
         <a class="chip" href="/wiki?tag={{.|urlquery}}">{{.}}</a>
         {{end}}
+    </div>
+    {{end}}
+
+    {{if .SupplierLinks}}
+    <div class="section">
+        <h2>Поставщики</h2>
+        <ul>
+            {{range .SupplierLinks}}
+            <li>{{if .Exists}}<a href="/wiki/page?title={{.Title|urlquery}}">{{.Title}}</a>{{else}}{{.Title}}{{end}}</li>
+            {{end}}
+        </ul>
     </div>
     {{end}}
 

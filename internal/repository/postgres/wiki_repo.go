@@ -17,7 +17,7 @@ import (
 // Порядок должен совпадать с порядком Scan в scanWikiPage.
 const wikiPageColumns = `
     id, page_type, title, content, contacts, order_days, delivery_days,
-    average_weight, suppliers, (photo IS NOT NULL)`
+    average_weight, suppliers, products, (photo IS NOT NULL)`
 
 // GetPage возвращает вики-страницу по заголовку (без учёта регистра),
 // включая теги. Если страница не найдена, возвращает (nil, nil).
@@ -73,12 +73,13 @@ func scanWikiPage(row pgx.Row) (*domain.WikiPage, error) {
 		contactsJSON             []byte
 		orderDays, deliveryDays  []int16
 		suppliers                []string
+		products                 []string
 		hasPhoto                 bool
 	)
 
 	err := row.Scan(
 		&id, &pageType, &title, &content, &contactsJSON,
-		&orderDays, &deliveryDays, &averageWeight, &suppliers, &hasPhoto,
+		&orderDays, &deliveryDays, &averageWeight, &suppliers, &products, &hasPhoto,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -97,6 +98,7 @@ func scanWikiPage(row pgx.Row) (*domain.WikiPage, error) {
 		DeliveryDays:  int16ToInt(deliveryDays),
 		AverageWeight: averageWeight,
 		Suppliers:     suppliers,
+		Products:      products,
 		HasPhoto:      hasPhoto,
 	}
 
@@ -127,6 +129,20 @@ func intsToInt16(src []int) []int16 {
 	}
 
 	return res
+}
+
+// lowerStrings возвращает элементы списка в нижнем регистре
+// (для регистронезависимого сравнения в SQL).
+func lowerStrings(items []string) []string {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(items))
+	for _, it := range items {
+		out = append(out, strings.ToLower(it))
+	}
+
+	return out
 }
 
 // GetPhoto возвращает фото страницы и его MIME-тип.
@@ -312,15 +328,35 @@ func (pg *PGClient) TagCloud(ctx context.Context) ([]domain.WikiTagCount, error)
 }
 
 // DeletePage удаляет страницу по заголовку (без учёта регистра).
-// Связи с тегами удаляются каскадом; удаление несуществующей
+// Связи с тегами удаляются каскадом; ссылки на удаляемую страницу
+// вычищаются из массивов остальных страниц. Удаление несуществующей
 // страницы не является ошибкой.
 func (pg *PGClient) DeletePage(ctx context.Context, title string) error {
-	_, err := pg.Pool.Exec(ctx, `
+	tx, err := pg.Pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// Вычищаем заголовок из suppliers и products всех остальных страниц.
+	if _, err = tx.Exec(ctx, `
+        UPDATE wiki_pages SET
+            suppliers = ARRAY(SELECT x FROM unnest(suppliers) x WHERE lower(x) <> lower($1)),
+            products  = ARRAY(SELECT x FROM unnest(products) x WHERE lower(x) <> lower($1))
+        WHERE EXISTS (SELECT 1 FROM unnest(suppliers) x WHERE lower(x) = lower($1))
+           OR EXISTS (SELECT 1 FROM unnest(products) x WHERE lower(x) = lower($1))
+    `, title); err != nil {
+		return err
+	}
+
+	if _, err = tx.Exec(ctx, `
         DELETE FROM wiki_pages
         WHERE lower(title) = lower($1)
-    `, title)
+    `, title); err != nil {
+		return err
+	}
 
-	return err
+	return tx.Commit(ctx)
 }
 
 // RemovePhoto удаляет фото страницы по заголовку (без учёта регистра).
@@ -492,18 +528,24 @@ func (pg *PGClient) SavePage(ctx context.Context, page *domain.WikiPage, current
 		suppliers = []string{}
 	}
 
+	products := page.Products
+	if products == nil {
+		products = []string{}
+	}
+
 	if currentTitle == "" {
 		// Создание новой страницы. ON CONFLICT DO NOTHING без целевого
 		// индекса: единственный уникальный индекс — lower(title), поэтому
 		// 0 затронутых строк означает занятый заголовок.
 		tag, err := tx.Exec(ctx, `
             INSERT INTO wiki_pages (
-                page_type, title, content, contacts, order_days, delivery_days, average_weight, suppliers
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                page_type, title, content, contacts, order_days, delivery_days,
+                average_weight, suppliers, products
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             ON CONFLICT DO NOTHING
         `,
 			string(page.Type), page.Title, page.Content, contactsJSON,
-			orderDays, deliveryDays, page.AverageWeight, suppliers,
+			orderDays, deliveryDays, page.AverageWeight, suppliers, products,
 		)
 		if err != nil {
 			return err
@@ -517,11 +559,12 @@ func (pg *PGClient) SavePage(ctx context.Context, page *domain.WikiPage, current
 		tag, err := tx.Exec(ctx, `
             UPDATE wiki_pages SET
                 page_type = $1, title = $2, content = $3, contacts = $4,
-                order_days = $5, delivery_days = $6, average_weight = $7, suppliers = $8
-            WHERE lower(title) = lower($9)
+                order_days = $5, delivery_days = $6, average_weight = $7,
+                suppliers = $8, products = $9
+            WHERE lower(title) = lower($10)
         `,
 			string(page.Type), page.Title, page.Content, contactsJSON,
-			orderDays, deliveryDays, page.AverageWeight, suppliers, currentTitle,
+			orderDays, deliveryDays, page.AverageWeight, suppliers, products, currentTitle,
 		)
 		if err != nil {
 			var pgErr *pgconn.PgError
@@ -562,6 +605,81 @@ func (pg *PGClient) SavePage(ctx context.Context, page *domain.WikiPage, current
 		}
 
 		return err
+	}
+
+	// Кросс-синхронизация связей «поставщик ⇄ продукт».
+	// Инвариант: title в products у поставщика ⟺ title в suppliers у продукта.
+	// Синхронизация сеточная, без чтения старого состояния: добавление
+	// идемпотентно (заголовок не дублируется), удаление действует на все
+	// страницы противоположного типа, не попавшие в выбранный список.
+	// Сама сохраняемая страница не задевается: условия фильтруют по
+	// page_type противоположного типа, а lower(title) уникален по таблице.
+	// Переименование: старый заголовок заменяется новым в массивах
+	// остальных страниц — иначе ссылки после переименования гниют.
+	if currentTitle != "" && !strings.EqualFold(currentTitle, page.Title) {
+		if _, err = tx.Exec(ctx, `
+            UPDATE wiki_pages SET
+                suppliers = ARRAY(SELECT CASE WHEN lower(x) = lower($1) THEN $2 ELSE x END
+                                  FROM unnest(suppliers) x)
+            WHERE EXISTS (SELECT 1 FROM unnest(suppliers) x WHERE lower(x) = lower($1))
+        `, currentTitle, page.Title); err != nil {
+			return err
+		}
+
+		if _, err = tx.Exec(ctx, `
+            UPDATE wiki_pages SET
+                products = ARRAY(SELECT CASE WHEN lower(x) = lower($1) THEN $2 ELSE x END
+                                 FROM unnest(products) x)
+            WHERE EXISTS (SELECT 1 FROM unnest(products) x WHERE lower(x) = lower($1))
+        `, currentTitle, page.Title); err != nil {
+			return err
+		}
+	}
+
+	if page.Type == domain.PageTypeProduct {
+		// Добавление: продукт в products каждого выбранного поставщика.
+		if _, err = tx.Exec(ctx, `
+            UPDATE wiki_pages SET products = products || ARRAY[$1]
+            WHERE page_type = 'supplier'
+              AND lower(title) = ANY(COALESCE($2::text[], '{}'))
+              AND NOT EXISTS (SELECT 1 FROM unnest(products) x WHERE lower(x) = lower($1))
+        `, page.Title, lowerStrings(page.Suppliers)); err != nil {
+			return err
+		}
+
+		// Удаление: продукт из products всех поставщиков, не выбранных.
+		// COALESCE: пустой выбор (nil -> NULL у pgx) должен удалять
+		// из ВСЕХ, а не молча не срабатывать (ANY(NULL) = NULL).
+		if _, err = tx.Exec(ctx, `
+            UPDATE wiki_pages SET
+                products = ARRAY(SELECT x FROM unnest(products) x WHERE lower(x) <> lower($1))
+            WHERE page_type = 'supplier'
+              AND NOT (lower(title) = ANY(COALESCE($2::text[], '{}')))
+              AND EXISTS (SELECT 1 FROM unnest(products) x WHERE lower(x) = lower($1))
+        `, page.Title, lowerStrings(page.Suppliers)); err != nil {
+			return err
+		}
+	} else {
+		// Зеркально: поставщик в suppliers каждого выбранного продукта.
+		if _, err = tx.Exec(ctx, `
+            UPDATE wiki_pages SET suppliers = suppliers || ARRAY[$1]
+            WHERE page_type = 'product'
+              AND lower(title) = ANY(COALESCE($2::text[], '{}'))
+              AND NOT EXISTS (SELECT 1 FROM unnest(suppliers) x WHERE lower(x) = lower($1))
+        `, page.Title, lowerStrings(page.Products)); err != nil {
+			return err
+		}
+
+		// Удаление: поставщик из suppliers всех продуктов, не выбранных.
+		if _, err = tx.Exec(ctx, `
+            UPDATE wiki_pages SET
+                suppliers = ARRAY(SELECT x FROM unnest(suppliers) x WHERE lower(x) <> lower($1))
+            WHERE page_type = 'product'
+              AND NOT (lower(title) = ANY(COALESCE($2::text[], '{}')))
+              AND EXISTS (SELECT 1 FROM unnest(suppliers) x WHERE lower(x) = lower($1))
+        `, page.Title, lowerStrings(page.Products)); err != nil {
+			return err
+		}
 	}
 
 	tags := page.Tags

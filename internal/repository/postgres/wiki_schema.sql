@@ -14,6 +14,7 @@ CREATE TABLE wiki_pages (
     contacts       JSONB NOT NULL DEFAULT '[]',       -- [{"name","phone","email","site"}]
     order_days     SMALLINT[] NOT NULL DEFAULT '{}',  -- 1..7, ISO: 1=Пн ... 7=Вс
     delivery_days  SMALLINT[] NOT NULL DEFAULT '{}',
+    products       TEXT[] NOT NULL DEFAULT '{}',      -- названия страниц продуктов
     -- поля продукта:
     average_weight TEXT NOT NULL DEFAULT '',
     suppliers      TEXT[] NOT NULL DEFAULT '{}',      -- названия страниц поставщиков

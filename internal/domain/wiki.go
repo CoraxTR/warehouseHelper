@@ -45,6 +45,7 @@ type WikiPage struct {
 	DeliveryDays  []int     // дни доставки (1..7, ISO)
 	AverageWeight string    // средний вес заказа
 	Suppliers     []string  // поставщики (для страницы товара)
+	Products      []string  // продукты (для страницы поставщика)
 	HasPhoto      bool      // есть ли фото
 }
 
