@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -89,6 +90,12 @@ func (s *stubWikiRepo) ListPageTitlesByType(context.Context, domain.PageType) ([
 }
 
 func TestWikiUseCaseSavePageValidation(t *testing.T) {
+	// 51 уникальных названий продуктов — превышение лимита в 50 элементов.
+	products51 := make([]string, 51)
+	for i := range products51 {
+		products51[i] = fmt.Sprintf("п%d", i)
+	}
+
 	tests := []struct {
 		name      string
 		current   string
@@ -132,6 +139,24 @@ func TestWikiUseCaseSavePageValidation(t *testing.T) {
 				AverageWeight: strings.Repeat("0", 101),
 			},
 			wantError: "средний вес",
+		},
+		{
+			name: "слишком много продуктов",
+			page: &domain.WikiPage{
+				Type:     domain.PageTypeSupplier,
+				Title:    "Поставщик",
+				Products: products51,
+			},
+			wantError: "слишком много продуктов",
+		},
+		{
+			name: "продукт слишком длинный",
+			page: &domain.WikiPage{
+				Type:     domain.PageTypeSupplier,
+				Title:    "Поставщик",
+				Products: []string{strings.Repeat("П", 101)},
+			},
+			wantError: "элемент продуктов слишком длинный",
 		},
 		{
 			name: "фото больше 5 МБ",
@@ -184,6 +209,7 @@ func TestWikiUseCaseSavePageNormalization(t *testing.T) {
 		DeliveryDays:  []int{2, 2, 5},
 		AverageWeight: " 12 кг ",
 		Suppliers:     []string{"X", "x", " y "},
+		Products:      []string{"П", "п", " q "},
 		Tags:          []string{" Б ", "a", "b", " A ", "", " "},
 	}
 
@@ -212,6 +238,9 @@ func TestWikiUseCaseSavePageNormalization(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got.Suppliers, []string{"X", "y"}) {
 		t.Errorf("Suppliers = %v, want [X y]", got.Suppliers)
+	}
+	if !reflect.DeepEqual(got.Products, []string{"П", "q"}) {
+		t.Errorf("Products = %v, want [П q]", got.Products)
 	}
 	if !reflect.DeepEqual(got.Tags, []string{"Б", "a", "b"}) {
 		t.Errorf("Tags = %v, want [Б a b]", got.Tags)

@@ -186,6 +186,17 @@
     </div>
     {{end}}
 
+    {{if .ProductLinks}}
+    <div class="section">
+        <h2>Продукты</h2>
+        <ul>
+            {{range .ProductLinks}}
+            <li>{{if .Exists}}<a href="/wiki/page?title={{.Title|urlquery}}">{{.Title}}</a>{{else}}{{.Title}}{{end}}</li>
+            {{end}}
+        </ul>
+    </div>
+    {{end}}
+
     {{if .Backlinks}}
     <div class="section">
         <h2>Сюда ссылаются</h2>

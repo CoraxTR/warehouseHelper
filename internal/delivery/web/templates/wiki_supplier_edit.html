@@ -98,6 +98,48 @@
         .hidden {
             display: none !important;
         }
+
+        .multi-select {
+            margin-top: 4px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            padding: 6px;
+        }
+
+        .multi-select summary {
+            cursor: pointer;
+            font-weight: normal;
+            color: #333;
+        }
+
+        .multi-select .ms-filter {
+            width: 100%;
+            padding: 4px;
+            margin-top: 6px;
+            box-sizing: border-box;
+            font-size: 13px;
+        }
+
+        .multi-select .ms-list {
+            max-height: 200px;
+            overflow-y: auto;
+            margin-top: 6px;
+            border-top: 1px solid #eee;
+            padding-top: 4px;
+        }
+
+        .multi-select .ms-list label {
+            display: block;
+            font-weight: normal;
+            padding: 2px 0;
+            cursor: pointer;
+        }
+
+        .multi-select .ms-empty {
+            color: #777;
+            font-size: 13px;
+            margin-top: 6px;
+        }
     </style>
 </head>
 
@@ -162,6 +204,21 @@
             {{end}}
         </datalist>
 
+        <label class="field">Продукты</label>
+        <details class="multi-select">
+            <summary>Выбрано: {{len .Page.Products}}</summary>
+            <input type="text" class="ms-filter" placeholder="Поиск по названию...">
+            <div class="ms-list">
+                {{if .ProductTitles}}
+                {{range $t := .ProductTitles}}
+                <label><input type="checkbox" name="products" value="{{$t}}" {{range $.Page.Products}}{{if eq . $t}}checked{{end}}{{end}}> {{$t}}</label>
+                {{end}}
+                {{else}}
+                <p class="ms-empty">Нет продуктов — сначала создайте страницы продуктов</p>
+                {{end}}
+            </div>
+        </details>
+
         <div class="bottom-actions">
             <button type="submit" class="btn">Сохранить</button>
             <a class="btn" href="/wiki">Отмена</a>
@@ -208,6 +265,31 @@
         });
 
         document.getElementById('add-contact').addEventListener('click', addContactRow);
+
+        document.querySelectorAll('details.multi-select').forEach(function (details) {
+            var filter = details.querySelector('.ms-filter');
+            var summary = details.querySelector('summary');
+            var boxes = details.querySelectorAll('input[type="checkbox"]');
+
+            function updateSummary() {
+                var checked = details.querySelectorAll('input[type="checkbox"]:checked').length;
+                var total = boxes.length;
+                summary.textContent = 'Выбрано: ' + checked + ' из ' + total;
+            }
+
+            boxes.forEach(function (box) { box.addEventListener('change', updateSummary); });
+
+            if (filter) {
+                filter.addEventListener('input', function () {
+                    var q = filter.value.toLowerCase();
+                    details.querySelectorAll('.ms-list label').forEach(function (label) {
+                        label.style.display = label.textContent.toLowerCase().indexOf(q) !== -1 ? '' : 'none';
+                    });
+                });
+            }
+
+            updateSummary();
+        });
     </script>
 </body>
 

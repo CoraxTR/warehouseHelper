@@ -28,8 +28,9 @@ type WikiIndexData struct {
 	Error     string
 }
 
-// SupplierLink — ссылка на страницу поставщика со страницы товара.
-type SupplierLink struct {
+// WikiLink — ссылка на вики-страницу со страницы противоположного типа:
+// поставщик на странице товара или товар на странице поставщика.
+type WikiLink struct {
 	Title  string
 	Exists bool
 }
@@ -39,7 +40,8 @@ type WikiPageData struct {
 	Page          *domain.WikiPage
 	ContentHTML   template.HTML
 	Backlinks     []string
-	SupplierLinks []SupplierLink
+	SupplierLinks []WikiLink
+	ProductLinks  []WikiLink
 	Error         string
 }
 
@@ -47,9 +49,9 @@ type WikiPageData struct {
 type WikiEditData struct {
 	Page           *domain.WikiPage
 	CurrentTitle   string
-	SuppliersValue string
 	TagsValue      string
 	SupplierTitles []string
+	ProductTitles  []string
 	AllTags        []string
 	Error          string
 }
@@ -120,10 +122,13 @@ func (h *Handler) WikiPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Цели вики-ссылок из содержимого; для товара добавляем поставщиков.
+	// Цели вики-ссылок из содержимого; добавляем связанные страницы
+	// противоположного типа: поставщиков у товара, продукты у поставщика.
 	extracted := render.ExtractLinks(page.Content)
 	if page.Type == domain.PageTypeProduct {
 		extracted = append(extracted, page.Suppliers...)
+	} else {
+		extracted = append(extracted, page.Products...)
 	}
 
 	targets, err := h.wikiUC.ResolveLinkTargets(r.Context(), extracted)
@@ -144,11 +149,16 @@ func (h *Handler) WikiPage(w http.ResponseWriter, r *http.Request) {
 		Page:          page,
 		ContentHTML:   contentHTML,
 		Backlinks:     backlinks,
-		SupplierLinks: make([]SupplierLink, 0, len(page.Suppliers)),
+		SupplierLinks: make([]WikiLink, 0, len(page.Suppliers)),
+		ProductLinks:  make([]WikiLink, 0, len(page.Products)),
 	}
 	for _, s := range page.Suppliers {
 		_, exists := targets[strings.ToLower(s)]
-		data.SupplierLinks = append(data.SupplierLinks, SupplierLink{Title: s, Exists: exists})
+		data.SupplierLinks = append(data.SupplierLinks, WikiLink{Title: s, Exists: exists})
+	}
+	for _, p := range page.Products {
+		_, exists := targets[strings.ToLower(p)]
+		data.ProductLinks = append(data.ProductLinks, WikiLink{Title: p, Exists: exists})
 	}
 
 	tmpl := wikiSupplierTmpl
@@ -211,15 +221,18 @@ func (h *Handler) wikiEditForm(w http.ResponseWriter, r *http.Request) {
 // форма отрендерится без подсказок.
 func (h *Handler) wikiEditData(ctx context.Context, page *domain.WikiPage, currentTitle string) WikiEditData {
 	data := WikiEditData{
-		Page:           page,
-		CurrentTitle:   currentTitle,
-		SuppliersValue: strings.Join(page.Suppliers, ", "),
-		TagsValue:      strings.Join(page.Tags, ", "),
+		Page:         page,
+		CurrentTitle: currentTitle,
+		TagsValue:    strings.Join(page.Tags, ", "),
 	}
 
 	if page.Type == domain.PageTypeProduct {
 		if titles, err := h.wikiUC.ListPageTitlesByType(ctx, domain.PageTypeSupplier); err == nil {
 			data.SupplierTitles = titles
+		}
+	} else {
+		if titles, err := h.wikiUC.ListPageTitlesByType(ctx, domain.PageTypeProduct); err == nil {
+			data.ProductTitles = titles
 		}
 	}
 
@@ -285,9 +298,10 @@ func (h *Handler) wikiSave(w http.ResponseWriter, r *http.Request) {
 		}
 		page.OrderDays = formDays(r.Form["order_days"])
 		page.DeliveryDays = formDays(r.Form["delivery_days"])
+		page.Products = r.Form["products"]
 	} else {
 		page.AverageWeight = r.FormValue("average_weight")
-		page.Suppliers = strings.Split(r.FormValue("suppliers"), ",")
+		page.Suppliers = r.Form["suppliers"]
 	}
 
 	// Фото: multipart-файл либо отсутствует.
