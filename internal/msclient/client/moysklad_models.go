@@ -20,6 +20,29 @@ type MSFetchOrdersResponse struct {
 	Rows []MSOrder `json:"rows"`
 }
 
+// MSProductFolder — папка товаров МойСклад (entity/productfolder).
+// Для построения дерева нужны meta.href (идентификатор папки), name и pathName
+// (полный путь предков через "/"; пустая строка — папка верхнего уровня).
+type MSProductFolder struct {
+	Meta struct {
+		Href string `json:"href"`
+	} `json:"meta"`
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	PathName string `json:"pathName"`
+}
+
+// MSProductFolderList — ответ /entity/productfolder. Пагинация по offset/limit,
+// всего папок — meta.size.
+type MSProductFolderList struct {
+	Meta struct {
+		Size   int `json:"size"`
+		Limit  int `json:"limit"`
+		Offset int `json:"offset"`
+	} `json:"meta"`
+	Rows []MSProductFolder `json:"rows"`
+}
+
 type MSMeta struct {
 	Size int    `json:"size"`
 	HREF string `json:"href"`

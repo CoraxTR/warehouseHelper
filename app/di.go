@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"warehouseHelper/internal/config"
 	myhttp "warehouseHelper/internal/delivery/http"
+	gucase "warehouseHelper/internal/goods/usecase"
 	"warehouseHelper/internal/msclient/client"
 	orderscache "warehouseHelper/internal/msclient/ordercache"
 	"warehouseHelper/internal/msclient/pdfpreloader"
@@ -45,6 +46,7 @@ type DIContainer struct {
 	barcodeExportUC *rgucase.ExportBarcodesToExcelUseCase
 	refGoCheckUC    *rgucase.RefGoCheckAgainstUseCase
 	wikiUC          *wucase.WikiUseCase
+	goodsUC         *gucase.GoodsUseCase
 
 	// Хэндлеры
 	mux      *http.ServeMux
@@ -233,9 +235,19 @@ func (d *DIContainer) WikiUC() *wucase.WikiUseCase {
 	return d.wikiUC
 }
 
+// GoodsUC — сценарий «выгрузить дерево папок товаров из МС»; MSClient реализует
+// gucase.ProductFolderClient.
+func (d *DIContainer) GoodsUC() *gucase.GoodsUseCase {
+	if d.goodsUC == nil {
+		d.goodsUC = gucase.NewGoodsUseCase(d.MSClient())
+	}
+
+	return d.goodsUC
+}
+
 func (d *DIContainer) Handler() *myhttp.Handler {
 	if d.handlers == nil {
-		d.handlers = myhttp.NewHandler(d.SyncUC(), d.OrdersUC(), d.ExcelExportUC(), d.PdfExportUC(), d.BarcodeExportUC(), d.RefGoCheckAgainstUC(), d.WikiUC())
+		d.handlers = myhttp.NewHandler(d.SyncUC(), d.OrdersUC(), d.ExcelExportUC(), d.PdfExportUC(), d.BarcodeExportUC(), d.RefGoCheckAgainstUC(), d.WikiUC(), d.GoodsUC())
 	}
 
 	return d.handlers
