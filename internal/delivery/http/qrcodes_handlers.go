@@ -24,9 +24,10 @@ var (
 )
 
 const (
-	qrMaxBodyBytes    = 64 << 20 // лимит тела запроса с фотографиями
-	qrMaxPhotos       = 10       // максимум фотографий за одно сохранение
-	qrMaxOrderNumLen  = 100      // максимум символов в номере заказа
+	// qrMaxBodyBytes — жёсткий предохранитель размера тела запроса (~1 ГБ):
+	// ограничения на КОЛИЧЕСТВО фото нет, лимит — только диск сервера.
+	qrMaxBodyBytes    = 1 << 30
+	qrMaxOrderNumLen  = 100 // максимум символов в номере заказа
 	qrOrderNumTooLong = "Номер заказа слишком длинный: максимум 100 символов."
 )
 
@@ -79,7 +80,9 @@ func (h *Handler) renderQRAdd(w http.ResponseWriter, data QRAddPageData) {
 
 func (h *Handler) saveQRPhotos(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, qrMaxBodyBytes)
-	if err := r.ParseMultipartForm(qrMaxBodyBytes); err != nil {
+	// maxMemory — порог спула multipart на диск: файлы сверх 32 МБ пишутся
+	// во временные файлы, а не держатся в памяти.
+	if err := r.ParseMultipartForm(32 << 20); err != nil {
 		log.Printf("qrcodes: parse multipart form: %v", err)
 		h.renderQRAdd(w, QRAddPageData{Error: "Не удалось прочитать отправленные данные. Попробуйте ещё раз."})
 
@@ -101,14 +104,6 @@ func (h *Handler) saveQRPhotos(w http.ResponseWriter, r *http.Request) {
 	files := r.MultipartForm.File["photos"]
 	if len(files) == 0 {
 		h.renderQRAdd(w, QRAddPageData{OrderNumber: orderNumber, Error: "Добавьте хотя бы одну фотографию."})
-
-		return
-	}
-	if len(files) > qrMaxPhotos {
-		h.renderQRAdd(w, QRAddPageData{
-			OrderNumber: orderNumber,
-			Error:       "Слишком много фотографий: максимум " + strconv.Itoa(qrMaxPhotos) + " за раз.",
-		})
 
 		return
 	}

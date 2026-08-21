@@ -89,6 +89,23 @@
             border-radius: 4px;
         }
 
+        .photo-count {
+            margin: 10px 0 4px;
+            font-size: 15px;
+            color: #555;
+        }
+
+        .btn-secondary {
+            margin-top: 6px;
+            padding: 10px 16px;
+            font-size: 15px;
+            cursor: pointer;
+            background: #fff;
+            color: #333;
+            border: 1px solid #ccc;
+            border-radius: 6px;
+        }
+
         .back {
             display: inline-block;
             margin-top: 16px;
@@ -112,6 +129,8 @@
         <label for="photos">Фотографии кодов</label>
         <input type="file" id="photos" name="photos" accept="image/*" multiple capture="environment">
         <div id="preview"></div>
+        <div id="photo-count" class="photo-count"></div>
+        <button type="button" id="clear-photos" class="btn-secondary" style="display:none">Очистить фото</button>
 
         <button type="submit" class="btn">Сохранить</button>
     </form>
@@ -119,16 +138,45 @@
     <a class="back" href="/qrcodes">← Назад</a>
 
     <script>
+        // Несколько фото за раз: на iOS capture-камера отдаёт один снимок за
+        // вызов, поэтому все выбранные/снятые файлы накапливаются в списке
+        // (DataTransfer), а не заменяют друг друга. На Android срабатывает
+        // и серийная съёмка (multiple + capture), она тоже складывается сюда.
+        // Ограничения на количество фото нет — сколько сняли, столько и уйдёт.
         const input = document.getElementById('photos');
         const preview = document.getElementById('preview');
+        const count = document.getElementById('photo-count');
+        const clearBtn = document.getElementById('clear-photos');
+        const dt = new DataTransfer();
+        const objectUrls = [];
 
-        input.addEventListener('change', () => {
+        function renderPreview() {
+            for (const url of objectUrls) URL.revokeObjectURL(url);
+            objectUrls.length = 0;
             preview.innerHTML = '';
-            for (const file of input.files) {
+            for (const file of dt.files) {
                 const img = document.createElement('img');
                 img.src = URL.createObjectURL(file);
+                objectUrls.push(img.src);
                 preview.appendChild(img);
             }
+            count.textContent = dt.files.length > 0 ? 'Добавлено фото: ' + dt.files.length : '';
+            clearBtn.style.display = dt.files.length > 0 ? 'inline-block' : 'none';
+        }
+
+        input.addEventListener('change', () => {
+            for (const file of input.files) {
+                dt.items.add(file);
+            }
+            input.value = ''; // сброс, чтобы можно было снять ещё раз те же сцены
+            input.files = dt.files; // в форму уйдут все накопленные файлы
+            renderPreview();
+        });
+
+        clearBtn.addEventListener('click', () => {
+            while (dt.items.length) dt.items.remove(0);
+            input.files = dt.files;
+            renderPreview();
         });
     </script>
 </body>
