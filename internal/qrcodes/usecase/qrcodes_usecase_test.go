@@ -100,11 +100,14 @@ func (s *stubFileStore) ListDirsOlderThan(context.Context, time.Time) ([]string,
 func newTestStore(t *testing.T) (root string, store *photostore.Store) {
 	t.Helper()
 	root = t.TempDir()
-	store, err := photostore.NewStore(filepath.Join(root, "QRCodes"))
-	if err != nil {
-		t.Fatalf("NewStore: %v", err)
-	}
+	store = photostore.NewStore(filepath.Join(root, "QRCodes"))
 	return root, store
+}
+
+// jpgData возвращает байты с JPEG magic (FF D8 FF E0): real-store Save
+// пропускает содержимое только для изображений.
+func jpgData(tail string) []byte {
+	return append([]byte{0xFF, 0xD8, 0xFF, 0xE0}, []byte(tail)...)
 }
 
 func TestSavePhotosSuccess(t *testing.T) {
@@ -113,8 +116,8 @@ func TestSavePhotosSuccess(t *testing.T) {
 	uc := NewQRUseCase(repo, store, filepath.Join(root, "QRCodes"), time.Hour)
 
 	uploads := []PhotoUpload{
-		{Ext: "jpg", Data: bytes.NewReader([]byte("фото1"))},
-		{Ext: "png", Data: bytes.NewReader([]byte("фото2"))},
+		{Ext: "jpg", Data: bytes.NewReader(jpgData("фото1"))},
+		{Ext: "png", Data: bytes.NewReader(jpgData("фото2"))},
 	}
 
 	n, err := uc.SavePhotos(context.Background(), "  123  ", uploads)
@@ -144,9 +147,9 @@ func TestSavePhotosSuccess(t *testing.T) {
 			t.Errorf("файл %s не создан: %v", path, err)
 			continue
 		}
-		want := []byte("фото1")
+		want := jpgData("фото1")
 		if i == 1 {
-			want = []byte("фото2")
+			want = jpgData("фото2")
 		}
 		if !bytes.Equal(got, want) {
 			t.Errorf("содержимое %s = %q, want %q", path, got, want)
@@ -190,8 +193,8 @@ func TestSavePhotosRepoError(t *testing.T) {
 	uc := NewQRUseCase(repo, store, filepath.Join(root, "QRCodes"), time.Hour)
 
 	uploads := []PhotoUpload{
-		{Ext: "jpg", Data: bytes.NewReader([]byte("фото1"))},
-		{Ext: "png", Data: bytes.NewReader([]byte("фото2"))},
+		{Ext: "jpg", Data: bytes.NewReader(jpgData("фото1"))},
+		{Ext: "png", Data: bytes.NewReader(jpgData("фото2"))},
 	}
 
 	_, err := uc.SavePhotos(context.Background(), "123", uploads)
@@ -398,7 +401,7 @@ func TestCleanupRealStoreRemovesOldDirs(t *testing.T) {
 		t.Fatalf("newPhotoID: %v", err)
 	}
 	for _, id := range []string{oldID, freshID} {
-		if err := store.Save(context.Background(), id, "jpg", bytes.NewReader([]byte("фото"))); err != nil {
+		if err := store.Save(context.Background(), id, "jpg", bytes.NewReader(jpgData("фото"))); err != nil {
 			t.Fatalf("Save(%s): %v", id, err)
 		}
 	}

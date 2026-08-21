@@ -252,11 +252,7 @@ func (d *DIContainer) GoodsUC() *gucase.GoodsUseCase {
 func (d *DIContainer) QRUC() *qucase.QRUseCase {
 	if d.qrUC == nil {
 		qrConfig := d.Config().QRConfig
-		store, err := photostore.NewStore(qrConfig.PhotosDir)
-		if err != nil {
-			panic(err)
-		}
-		d.qrUC = qucase.NewQRUseCase(d.OrdersRepository(), store, qrConfig.PhotosDir, qrConfig.PhotosMaxAge)
+		d.qrUC = qucase.NewQRUseCase(d.OrdersRepository(), photostore.NewStore(qrConfig.PhotosDir), qrConfig.PhotosDir, qrConfig.PhotosMaxAge)
 	}
 
 	return d.qrUC

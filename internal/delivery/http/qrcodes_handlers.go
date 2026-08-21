@@ -6,6 +6,9 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
+	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -21,8 +24,10 @@ var (
 )
 
 const (
-	qrMaxBodyBytes = 64 << 20 // лимит тела запроса с фотографиями
-	qrMaxPhotos    = 10       // максимум фотографий за одно сохранение
+	qrMaxBodyBytes    = 64 << 20 // лимит тела запроса с фотографиями
+	qrMaxPhotos       = 10       // максимум фотографий за одно сохранение
+	qrMaxOrderNumLen  = 100      // максимум символов в номере заказа
+	qrOrderNumTooLong = "Номер заказа слишком длинный: максимум 100 символов."
 )
 
 // QRAddPageData — данные формы «Добавить коды».
@@ -84,6 +89,11 @@ func (h *Handler) saveQRPhotos(w http.ResponseWriter, r *http.Request) {
 	orderNumber := strings.TrimSpace(r.FormValue("order_number"))
 	if orderNumber == "" {
 		h.renderQRAdd(w, QRAddPageData{Error: "Введите номер заказа."})
+
+		return
+	}
+	if len(orderNumber) > qrMaxOrderNumLen {
+		h.renderQRAdd(w, QRAddPageData{OrderNumber: orderNumber, Error: qrOrderNumTooLong})
 
 		return
 	}
@@ -151,7 +161,7 @@ func (h *Handler) saveQRPhotos(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	http.Redirect(w, r, "/qrcodes/add?msg=Сохранено "+strconv.Itoa(saved)+" фото", http.StatusSeeOther)
+	http.Redirect(w, r, "/qrcodes/add?msg="+url.QueryEscape("Сохранено "+strconv.Itoa(saved)+" фото"), http.StatusSeeOther)
 }
 
 // QRList — таблица заказов с миниатюрами фотографий. Перед показом удаляет
@@ -179,6 +189,35 @@ func (h *Handler) QRList(w http.ResponseWriter, r *http.Request) {
 	if err := qrListTmpl.Execute(w, QRListPageData{Orders: orders}); err != nil {
 		log.Printf("qrcodes: render list: %v", err)
 	}
+}
+
+// qrPhotoPathRe — допустимый путь к файлу фото внутри корня QRCodes:
+// только QRCodes/<id>/photo.<ext> (без листинга и обхода каталогов).
+var qrPhotoPathRe = regexp.MustCompile(`^[a-f0-9]{16}/photo\.[a-z0-9]{1,8}$`)
+
+// qrPhotosHandler раздаёт файлы фото из корня QRCodes: принимает только
+// точный путь <id>/photo.<ext>, листинг каталогов не отдаёт, на все ответы
+// ставит X-Content-Type-Options: nosniff (защита от переинтерпретации
+// содержимого как HTML/JS).
+func qrPhotosHandler(dir string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.Header().Set("Allow", "GET, HEAD")
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+
+			return
+		}
+
+		rel := strings.TrimPrefix(r.URL.Path, "/")
+		if !qrPhotoPathRe.MatchString(rel) {
+			http.NotFound(w, r)
+
+			return
+		}
+
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		http.ServeFile(w, r, filepath.Join(dir, rel))
+	})
 }
 
 // extFromContentType возвращает расширение файла по Content-Type изображения;

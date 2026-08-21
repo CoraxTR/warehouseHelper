@@ -74,9 +74,12 @@ func (u *QRUseCase) SavePhotos(ctx context.Context, orderNumber string, uploads 
 	photos := make([]domain.QRPhoto, 0, len(uploads))
 	var savedIDs []string
 	// rollback удаляет папки фото, созданные в рамках этого вызова.
+	// Контекст берём без отмены: при обрыве клиента (отмена ctx) папки
+	// всё равно должны подчиститься, а не остаться сиротами до очистки.
 	rollback := func() {
+		rctx := context.WithoutCancel(ctx)
 		for _, id := range savedIDs {
-			if err := u.files.RemoveAll(ctx, id); err != nil {
+			if err := u.files.RemoveAll(rctx, id); err != nil {
 				log.Printf("qrcodes: откат папки фото %s: %v", id, err)
 			}
 		}
@@ -116,7 +119,9 @@ func (u *QRUseCase) ListOrders(ctx context.Context) ([]domain.QROrder, error) {
 	return orders, nil
 }
 
-// Cleanup удаляет папки фото старше maxAge и чистит связанные записи в БД.
+// Cleanup удаляет фото старше maxAge. Сначала чистится БД (строки фото и
+// заказы без фото), потом файлы: осиротевшие строки не самовосстанавливаются,
+// а осиротевшие папки на следующем прогоне снова попадут в список старых.
 // Ошибки удаления отдельных папок логируются, но не прерывают обход;
 // возвращает количество удалённых папок.
 func (u *QRUseCase) Cleanup(ctx context.Context) (int, error) {
@@ -124,6 +129,16 @@ func (u *QRUseCase) Cleanup(ctx context.Context) (int, error) {
 	dirs, err := u.files.ListDirsOlderThan(ctx, cutoff)
 	if err != nil {
 		return 0, fmt.Errorf("qrcodes: список устаревших папок фото: %w", err)
+	}
+	if len(dirs) == 0 {
+		return 0, nil
+	}
+
+	if err := u.repo.DeletePhotosByIDs(ctx, dirs); err != nil {
+		return 0, fmt.Errorf("qrcodes: удаление фото из БД: %w", err)
+	}
+	if err := u.repo.DeleteEmptyOrders(ctx); err != nil {
+		return 0, fmt.Errorf("qrcodes: удаление пустых заказов: %w", err)
 	}
 
 	removed := 0
@@ -133,16 +148,6 @@ func (u *QRUseCase) Cleanup(ctx context.Context) (int, error) {
 			continue
 		}
 		removed++
-	}
-	if removed == 0 {
-		return 0, nil
-	}
-
-	if err := u.repo.DeletePhotosByIDs(ctx, dirs); err != nil {
-		return removed, fmt.Errorf("qrcodes: удаление фото из БД: %w", err)
-	}
-	if err := u.repo.DeleteEmptyOrders(ctx); err != nil {
-		return removed, fmt.Errorf("qrcodes: удаление пустых заказов: %w", err)
 	}
 	return removed, nil
 }

@@ -34,8 +34,7 @@ func NewRouter(h *Handler) *http.ServeMux {
 	mux.HandleFunc("/qrcodes", h.QRPage)                          // GET — модуль «Честный знак»
 	mux.HandleFunc("/qrcodes/add", h.QRAdd)                       // GET — форма, POST — сохранение фото
 	mux.HandleFunc("/qrcodes/list", h.QRList)                     // GET — таблица заказов с фото
-	qrFiles := http.FileServer(http.Dir(h.qrUC.PhotosDir()))
-	mux.Handle("/qrcodes/photos/", http.StripPrefix("/qrcodes/photos/", qrFiles))
+	mux.Handle("/qrcodes/photos/", http.StripPrefix("/qrcodes/photos/", qrPhotosHandler(h.qrUC.PhotosDir())))
 
 	return mux
 }

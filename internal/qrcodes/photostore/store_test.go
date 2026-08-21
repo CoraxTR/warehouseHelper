@@ -15,22 +15,30 @@ import (
 // testID — валидный id фото (16 hex-символов в нижнем регистре).
 const testID = "0123456789abcdef"
 
+// jpgData возвращает байты с JPEG magic (FF D8 FF E0): http.DetectContentType
+// распознаёт их как image/jpeg, поэтому Save пропускает содержимое.
+func jpgData(tail string) []byte {
+	return append([]byte{0xFF, 0xD8, 0xFF, 0xE0}, []byte(tail)...)
+}
+
+// heicData возвращает минимальный HEIC-заголовок: ftyp-бокс с брендом heic.
+func heicData() []byte {
+	return []byte{0x00, 0x00, 0x00, 0x18, 'f', 't', 'y', 'p', 'h', 'e', 'i', 'c'}
+}
+
 // newTestStore создаёт хранилище в t.TempDir()/QRCodes и возвращает корень
 // temp-директории и само хранилище.
 func newTestStore(t *testing.T) (root string, s *Store) {
 	t.Helper()
 	root = t.TempDir()
-	s, err := NewStore(filepath.Join(root, "QRCodes"))
-	if err != nil {
-		t.Fatalf("NewStore: %v", err)
-	}
+	s = NewStore(filepath.Join(root, "QRCodes"))
 	return root, s
 }
 
 func TestStoreSaveSuccess(t *testing.T) {
 	root, s := newTestStore(t)
 
-	want := []byte("фото-данные")
+	want := jpgData("фото-данные")
 	if err := s.Save(context.Background(), testID, "jpg", bytes.NewReader(want)); err != nil {
 		t.Fatalf("Save error: %v", err)
 	}
@@ -108,18 +116,49 @@ func TestStoreSaveInvalidIDAndExt(t *testing.T) {
 func TestStoreSaveDuplicateID(t *testing.T) {
 	_, s := newTestStore(t)
 
-	if err := s.Save(context.Background(), testID, "jpg", bytes.NewReader([]byte("первое фото"))); err != nil {
+	if err := s.Save(context.Background(), testID, "jpg", bytes.NewReader(jpgData("первое фото"))); err != nil {
 		t.Fatalf("первый Save error: %v", err)
 	}
 
 	// Повторное сохранение того же id падает: файл создаётся с O_EXCL
 	// и существующий не перезаписывается.
-	err := s.Save(context.Background(), testID, "jpg", bytes.NewReader([]byte("дубль")))
+	err := s.Save(context.Background(), testID, "jpg", bytes.NewReader(jpgData("дубль")))
 	if err == nil {
 		t.Fatal("ожидалась ошибка при повторном Save того же id")
 	}
 	if !strings.Contains(err.Error(), "file exists") {
 		t.Errorf("ошибка = %q, want содержит «file exists» (O_EXCL)", err)
+	}
+}
+
+func TestStoreSaveRejectsNonImage(t *testing.T) {
+	root, s := newTestStore(t)
+
+	// HTML-файл под видом фото не должен сохраняться (защита от stored XSS
+	// через раздачу фото): содержимое проверяется по magic bytes.
+	html := []byte("<!DOCTYPE html><html><script>alert(1)</script></html>")
+	err := s.Save(context.Background(), testID, "jpg", bytes.NewReader(html))
+	if err == nil {
+		t.Fatal("ожидалась ошибка для содержимого не-изображения")
+	}
+	if !strings.Contains(err.Error(), "не похоже на изображение") {
+		t.Errorf("ошибка = %q, want содержит «не похоже на изображение»", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "QRCodes", testID)); !os.IsNotExist(err) {
+		t.Errorf("папка %s должна быть удалена после ошибки (err=%v)", testID, err)
+	}
+}
+
+func TestStoreSaveAcceptsHEIC(t *testing.T) {
+	root, s := newTestStore(t)
+
+	// HEIC Go не распознаёт через DetectContentType, но это валидное фото
+	// с iPhone: ftyp-бокс с брендом heic должен приниматься.
+	if err := s.Save(context.Background(), testID, "heic", bytes.NewReader(heicData())); err != nil {
+		t.Fatalf("Save HEIC error: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "QRCodes", testID, "photo.heic")); err != nil {
+		t.Errorf("файл photo.heic не создан: %v", err)
 	}
 }
 
@@ -130,7 +169,7 @@ func TestStoreListDirsOlderThan(t *testing.T) {
 	oldID := "aaaaaaaaaaaaaaaa"
 	newID := "bbbbbbbbbbbbbbbb"
 	for _, id := range []string{oldID, newID} {
-		if err := s.Save(ctx, id, "jpg", bytes.NewReader([]byte("фото"))); err != nil {
+		if err := s.Save(ctx, id, "jpg", bytes.NewReader(jpgData("фото"))); err != nil {
 			t.Fatalf("Save(%s): %v", id, err)
 		}
 	}
@@ -175,7 +214,7 @@ func TestStoreRemoveAll(t *testing.T) {
 	root, s := newTestStore(t)
 	ctx := context.Background()
 
-	if err := s.Save(ctx, testID, "jpg", bytes.NewReader([]byte("фото"))); err != nil {
+	if err := s.Save(ctx, testID, "jpg", bytes.NewReader(jpgData("фото"))); err != nil {
 		t.Fatalf("Save error: %v", err)
 	}
 
