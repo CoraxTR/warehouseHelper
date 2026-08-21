@@ -18,6 +18,7 @@ type Config struct {
 	*RefGoConfig
 	*PGConfig
 	*TelegramConfig
+	*QRConfig
 }
 
 // envFilePath возвращает абсолютный путь к .env: сначала ищет в текущем
@@ -50,6 +51,7 @@ func NewConfig() *Config {
 	rfc := loadRefGoConfig()
 	pfc := loadPGConfig()
 	tgc := loadTelegramConfig()
+	qrc := loadQRConfig()
 
 	if os.Getenv("RG_LATESTORDER") == "" {
 		panic("RG_LATESTORDER does not exist")
@@ -61,12 +63,41 @@ func NewConfig() *Config {
 		RefGoConfig:    rfc,
 		PGConfig:       pfc,
 		TelegramConfig: tgc,
+		QRConfig:       qrc,
 	}
 }
 
 type AppConfig struct {
 	HTTPAddress       string
 	TempCleanupMaxAge time.Duration
+}
+
+// QRConfig — модуль «Честный знак»: фото кодов маркировки по заказам.
+// PhotosDir — корневая папка фото (по умолчанию ../QRCodes — от каталога cmd/,
+// как tempdir "../temp"); PhotosMaxAge — срок жизни фото (по умолчанию неделя,
+// всё старше удаляется при обращении к списку).
+type QRConfig struct {
+	PhotosDir    string
+	PhotosMaxAge time.Duration
+}
+
+func loadQRConfig() *QRConfig {
+	photosDir := os.Getenv("QR_PHOTOS_DIR")
+	if photosDir == "" {
+		photosDir = "../QRCodes"
+	}
+
+	photosMaxAge := 7 * 24 * time.Hour
+	if hoursStr := os.Getenv("QR_PHOTOS_MAXAGE_HOURS"); hoursStr != "" {
+		if hours, err := strconv.Atoi(hoursStr); err == nil && hours > 0 {
+			photosMaxAge = time.Duration(hours) * time.Hour
+		}
+	}
+
+	return &QRConfig{
+		PhotosDir:    photosDir,
+		PhotosMaxAge: photosMaxAge,
+	}
 }
 
 func loadAppconfig() *AppConfig {

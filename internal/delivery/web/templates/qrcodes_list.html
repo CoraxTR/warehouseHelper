@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Получить коды</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 16px;
+            background: #f5f5f5;
+        }
+
+        h1 {
+            font-size: 22px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            background: white;
+        }
+
+        th,
+        td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            vertical-align: top;
+            text-align: left;
+        }
+
+        th {
+            background: #e9ecef;
+        }
+
+        td:first-child {
+            font-weight: bold;
+            white-space: nowrap;
+        }
+
+        .thumbs {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+        }
+
+        .thumbs img {
+            width: 25%;
+            border-radius: 4px;
+            cursor: zoom-in;
+        }
+
+        .empty {
+            padding: 20px;
+            background: white;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+        }
+
+        .back {
+            display: inline-block;
+            margin-top: 16px;
+            color: #555;
+            font-size: 16px;
+        }
+
+        #lightbox {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.9);
+            align-items: center;
+            justify-content: center;
+            z-index: 10;
+            cursor: zoom-out;
+        }
+
+        #lightbox img {
+            max-width: 96%;
+            max-height: 96%;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Получить коды</h1>
+
+    {{if .Orders}}
+    <table>
+        <thead>
+            <tr>
+                <th>Номер заказа</th>
+                <th>Фотографии</th>
+            </tr>
+        </thead>
+        <tbody>
+            {{range $order := .Orders}}
+            <tr>
+                <td>{{$order.OrderNumber}}</td>
+                <td>
+                    <div class="thumbs">
+                        {{range $order.Photos}}
+                        <img src="/qrcodes/photos/{{.ID}}/photo.{{.Ext}}" alt="Фото заказа {{$order.OrderNumber}}">
+                        {{end}}
+                    </div>
+                </td>
+            </tr>
+            {{end}}
+        </tbody>
+    </table>
+    {{else}}
+    <p class="empty">Заказов с фотографиями пока нет.</p>
+    {{end}}
+
+    <a class="back" href="/qrcodes">← Назад</a>
+
+    <div id="lightbox"><img id="lightbox-img" src="" alt="Фото"></div>
+
+    <script>
+        const lightbox = document.getElementById('lightbox');
+        const lightboxImg = document.getElementById('lightbox-img');
+
+        document.querySelectorAll('.thumbs img').forEach((img) => {
+            img.addEventListener('click', () => {
+                lightboxImg.src = img.src;
+                lightbox.style.display = 'flex';
+            });
+        });
+
+        lightbox.addEventListener('click', () => {
+            lightbox.style.display = 'none';
+        });
+    </script>
+</body>
+
+</html>

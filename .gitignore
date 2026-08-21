@@ -1,6 +1,7 @@
 .env
 AGENTS.md
 .golangci.yaml
+QRCodes/
 !.env.example
 .vscode
 !blankimport.xlsx
