@@ -142,8 +142,7 @@
         // вызов, поэтому все выбранные/снятые файлы накапливаются в списке
         // (DataTransfer), а не заменяют друг друга. На Android срабатывает
         // и серийная съёмка (multiple + capture), она тоже складывается сюда.
-        const MAX_PHOTOS = 10; // должно совпадать с лимитом на сервере
-
+        // Ограничения на количество фото нет — сколько сняли, столько и уйдёт.
         const input = document.getElementById('photos');
         const preview = document.getElementById('preview');
         const count = document.getElementById('photo-count');
@@ -166,12 +165,6 @@
         }
 
         input.addEventListener('change', () => {
-            const added = input.files.length;
-            if (dt.files.length + added > MAX_PHOTOS) {
-                alert('Максимум ' + MAX_PHOTOS + ' фотографий за раз.');
-                input.value = '';
-                return;
-            }
             for (const file of input.files) {
                 dt.items.add(file);
             }
