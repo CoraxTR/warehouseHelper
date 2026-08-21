@@ -435,6 +435,71 @@ func TestCleanupRealStoreRemovesOldFiles(t *testing.T) {
 	}
 }
 
+func TestCleanupThrottleOncePerDay(t *testing.T) {
+	oldNames := []string{"aaaaaaaaaaaaaaaa.jpg"}
+	repo := &stubQRRepo{}
+	files := &stubFileStore{names: oldNames}
+	uc := NewQRUseCase(repo, files, "photos", time.Hour)
+
+	// Первая очистка дня выполняется.
+	removed, err := uc.Cleanup(context.Background())
+	if err != nil {
+		t.Fatalf("Cleanup error: %v", err)
+	}
+	if removed != 1 {
+		t.Errorf("Cleanup вернул %d, want 1", removed)
+	}
+	if len(files.removed) != 1 || len(repo.deletePhotosIDs) != 1 {
+		t.Errorf("первая очистка должна выполниться: removed=%v, deletePhotosIDs=%v", files.removed, repo.deletePhotosIDs)
+	}
+
+	// Повторный вызов в тот же день — скип: файлы и репозиторий не трогаются.
+	removed, err = uc.Cleanup(context.Background())
+	if err != nil {
+		t.Fatalf("Cleanup error: %v", err)
+	}
+	if removed != 0 {
+		t.Errorf("повторный Cleanup в тот же день вернул %d, want 0", removed)
+	}
+	if len(files.removed) != 1 || len(repo.deletePhotosIDs) != 1 {
+		t.Errorf("повторный Cleanup не должен трогать файлы/БД: removed=%v, deletePhotosIDs=%v", files.removed, repo.deletePhotosIDs)
+	}
+
+	// На следующий день (дата сброшена на вчера) очистка выполняется снова.
+	uc.lastCheckDate = time.Now().AddDate(0, 0, -1).Format("02.01.2006")
+	removed, err = uc.Cleanup(context.Background())
+	if err != nil {
+		t.Fatalf("Cleanup error: %v", err)
+	}
+	if removed != 1 {
+		t.Errorf("Cleanup на следующий день вернул %d, want 1", removed)
+	}
+	if len(files.removed) != 2 {
+		t.Errorf("RemoveAll вызван %d раз, want 2", len(files.removed))
+	}
+}
+
+func TestSavePhotosIgnoresCleanupError(t *testing.T) {
+	// Ошибка фоновой очистки после успешного сохранения не должна ронять
+	// само сохранение: фото уже на диске и в БД, ошибку лишь логируем.
+	repo := &stubQRRepo{}
+	files := &stubFileStore{namesErr: errStub}
+	uc := NewQRUseCase(repo, files, "photos", time.Hour)
+
+	n, err := uc.SavePhotos(context.Background(), "12345", []PhotoUpload{
+		{Ext: "jpg", Data: bytes.NewReader(jpgData("фото"))},
+	})
+	if err != nil {
+		t.Fatalf("SavePhotos error: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("SavePhotos вернул %d, want 1", n)
+	}
+	if !repo.upsertCalled {
+		t.Error("UpsertOrderWithPhotos не вызван")
+	}
+}
+
 func TestPhotosDir(t *testing.T) {
 	uc := NewQRUseCase(&stubQRRepo{}, &stubFileStore{}, "/tmp/photos", time.Hour)
 	if got := uc.PhotosDir(); got != "/tmp/photos" {

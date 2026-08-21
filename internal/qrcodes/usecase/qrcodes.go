@@ -13,6 +13,7 @@ import (
 	"log"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"warehouseHelper/internal/domain"
@@ -51,6 +52,11 @@ type QRUseCase struct {
 	files     PhotoFileStore
 	photosDir string
 	maxAge    time.Duration
+
+	// mu защищает lastCheckDate: Cleanup может вызываться из параллельных
+	// запросов (одновременные сохранения фото).
+	mu            sync.Mutex
+	lastCheckDate string // дата последней очистки (ДД.ММ.ГГГГ); пустая — очистка ещё не выполнялась
 }
 
 // NewQRUseCase создаёт сценарии модуля «Честный знак».
@@ -103,6 +109,13 @@ func (u *QRUseCase) SavePhotos(ctx context.Context, orderNumber string, uploads 
 		rollback()
 		return 0, fmt.Errorf("qrcodes: сохранение заказа %q: %w", orderNumber, err)
 	}
+
+	// Очистка устаревших фото выполняется при добавлении новых (не чаще раза
+	// в день — см. Cleanup); ошибка очистки не влияет на уже успешное
+	// сохранение, а лишь логируется.
+	if _, err := u.Cleanup(ctx); err != nil {
+		log.Printf("qrcodes: очистка устаревших фото после сохранения: %v", err)
+	}
 	return len(photos), nil
 }
 
@@ -128,19 +141,30 @@ func (u *QRUseCase) ListOrders(ctx context.Context) ([]domain.QROrder, error) {
 	return orders, nil
 }
 
-// Cleanup удаляет фото старше maxAge. Сначала чистится БД (строки фото и
-// заказы без фото), потом файлы: осиротевшие строки не самовосстанавливаются,
-// а осиротевшие файлы на следующем прогоне снова попадут в список старых.
-// Ошибки удаления отдельных записей логируются, но не прерывают обход;
-// возвращает количество удалённых записей (файлов новой схемы и папок
-// старой схемы).
+// Cleanup удаляет фото старше maxAge, но не чаще раза в день: при повторном
+// вызове в тот же день (lastCheckDate == сегодня) сразу возвращает 0. Дата
+// без времени — удалить файлы на несколько часов раньше допустимо. Сначала
+// чистится БД (строки фото и заказы без фото), потом файлы: осиротевшие
+// строки не самовосстанавливаются, а осиротевшие файлы на следующем прогоне
+// снова попадут в список старых. Ошибки удаления отдельных записей
+// логируются, но не прерывают обход; возвращает количество удалённых
+// записей (файлов новой схемы и папок старой схемы).
 func (u *QRUseCase) Cleanup(ctx context.Context) (int, error) {
+	u.mu.Lock()
+	today := time.Now().Format("02.01.2006")
+	if u.lastCheckDate == today {
+		u.mu.Unlock()
+		return 0, nil
+	}
+	u.mu.Unlock()
+
 	cutoff := time.Now().Add(-u.maxAge)
 	names, err := u.files.ListOlderThan(ctx, cutoff)
 	if err != nil {
 		return 0, fmt.Errorf("qrcodes: список устаревших фото: %w", err)
 	}
 	if len(names) == 0 {
+		u.setLastCheckDate(today)
 		return 0, nil
 	}
 
@@ -164,7 +188,17 @@ func (u *QRUseCase) Cleanup(ctx context.Context) (int, error) {
 		}
 		removed++
 	}
+	u.setLastCheckDate(today)
 	return removed, nil
+}
+
+// setLastCheckDate запоминает дату успешной очистки под защитой мьютекса.
+// Дата проставляется только после успеха: при ошибке в тот же день будет
+// ещё одна попытка, а не скип до завтра.
+func (u *QRUseCase) setLastCheckDate(date string) {
+	u.mu.Lock()
+	u.lastCheckDate = date
+	u.mu.Unlock()
 }
 
 // PhotosDir возвращает директорию хранения фото (для раздачи файлов хендлерами).

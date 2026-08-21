@@ -160,18 +160,15 @@ func (h *Handler) saveQRPhotos(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/qrcodes/add?msg="+url.QueryEscape("Сохранено "+strconv.Itoa(saved)+" фото"), http.StatusSeeOther)
 }
 
-// QRList — таблица заказов с миниатюрами фотографий. Перед показом удаляет
-// фото старше недели (файлы + строки БД + заказы без фото).
+// QRList — таблица заказов с миниатюрами фотографий. Очистка устаревших
+// фото здесь не выполняется: она привязана к сохранению новых фото (не чаще
+// раза в день), чтобы просмотр списка не делал лишней работы на диске и в БД.
 func (h *Handler) QRList(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 
 		return
-	}
-
-	if _, err := h.qrUC.Cleanup(r.Context()); err != nil {
-		log.Printf("qrcodes: cleanup photos: %v", err)
 	}
 
 	orders, err := h.qrUC.ListOrders(r.Context())
