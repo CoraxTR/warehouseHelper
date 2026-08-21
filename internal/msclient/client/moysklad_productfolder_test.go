@@ -131,7 +131,7 @@ func TestFetchProductFoldersPagination(t *testing.T) {
 	var server *httptest.Server
 	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/entity/productfolder" {
-			// validateKey при создании воркерпула (GET на Hrefs.Orghref)
+			// validateKey при создании воркерпула (GET на organization/{OrgID})
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{}`))
 
