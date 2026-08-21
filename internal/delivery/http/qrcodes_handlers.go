@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -187,13 +188,16 @@ func (h *Handler) QRList(w http.ResponseWriter, r *http.Request) {
 }
 
 // qrPhotoPathRe — допустимый путь к файлу фото внутри корня QRCodes:
-// только QRCodes/<id>/photo.<ext> (без листинга и обхода каталогов).
-var qrPhotoPathRe = regexp.MustCompile(`^[a-f0-9]{16}/photo\.[a-z0-9]{1,8}$`)
+// QRCodes/<id>.<ext> (новая схема) или QRCodes/<id>/photo.<ext> (старая
+// схема) — без листинга и обхода каталогов.
+var qrPhotoPathRe = regexp.MustCompile(`^([a-f0-9]{16})(?:/photo)?\.([a-z0-9]{1,8})$`)
 
 // qrPhotosHandler раздаёт файлы фото из корня QRCodes: принимает только
-// точный путь <id>/photo.<ext>, листинг каталогов не отдаёт, на все ответы
-// ставит X-Content-Type-Options: nosniff (защита от переинтерпретации
-// содержимого как HTML/JS).
+// точные пути <id>.<ext> и <id>/photo.<ext>, листинг каталогов не отдаёт,
+// на все ответы ставит X-Content-Type-Options: nosniff (защита от
+// переинтерпретации содержимого как HTML/JS). Если файла новой схемы
+// <id>.<ext> нет — пробует старую схему <id>/photo.<ext>, чтобы фото,
+// сохранённые до перехода на плоские файлы, продолжали отображаться.
 func qrPhotosHandler(dir string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -204,14 +208,21 @@ func qrPhotosHandler(dir string) http.Handler {
 		}
 
 		rel := strings.TrimPrefix(r.URL.Path, "/")
-		if !qrPhotoPathRe.MatchString(rel) {
+		m := qrPhotoPathRe.FindStringSubmatch(rel)
+		if m == nil {
 			http.NotFound(w, r)
 
 			return
 		}
 
+		path := filepath.Join(dir, rel)
+		if _, err := os.Stat(path); err != nil {
+			// Старая схема: <id>/photo.<ext>.
+			path = filepath.Join(dir, m[1], "photo."+m[2])
+		}
+
 		w.Header().Set("X-Content-Type-Options", "nosniff")
-		http.ServeFile(w, r, filepath.Join(dir, rel))
+		http.ServeFile(w, r, path)
 	})
 }
 

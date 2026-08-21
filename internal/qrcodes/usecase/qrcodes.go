@@ -41,8 +41,8 @@ type QRRepository interface {
 // PhotoFileStore — файловое хранилище фото (реализация: photostore.Store).
 type PhotoFileStore interface {
 	Save(ctx context.Context, id, ext string, data io.Reader) error
-	RemoveAll(ctx context.Context, id string) error
-	ListDirsOlderThan(ctx context.Context, cutoff time.Time) ([]string, error)
+	RemoveAll(ctx context.Context, name string) error
+	ListOlderThan(ctx context.Context, cutoff time.Time) ([]string, error)
 }
 
 // QRUseCase — сценарии модуля «Честный знак».
@@ -72,15 +72,15 @@ func (u *QRUseCase) SavePhotos(ctx context.Context, orderNumber string, uploads 
 	}
 
 	photos := make([]domain.QRPhoto, 0, len(uploads))
-	var savedIDs []string
-	// rollback удаляет папки фото, созданные в рамках этого вызова.
-	// Контекст берём без отмены: при обрыве клиента (отмена ctx) папки
-	// всё равно должны подчиститься, а не остаться сиротами до очистки.
+	var savedNames []string
+	// rollback удаляет файлы фото, созданные в рамках этого вызова. Контекст
+	// берём без отмены: при обрыве клиента (отмена ctx) файлы всё равно
+	// должны подчиститься, а не остаться сиротами до очистки.
 	rollback := func() {
 		rctx := context.WithoutCancel(ctx)
-		for _, id := range savedIDs {
-			if err := u.files.RemoveAll(rctx, id); err != nil {
-				log.Printf("qrcodes: откат папки фото %s: %v", id, err)
+		for _, name := range savedNames {
+			if err := u.files.RemoveAll(rctx, name); err != nil {
+				log.Printf("qrcodes: откат файла фото %s: %v", name, err)
 			}
 		}
 	}
@@ -95,7 +95,7 @@ func (u *QRUseCase) SavePhotos(ctx context.Context, orderNumber string, uploads 
 			rollback()
 			return 0, fmt.Errorf("qrcodes: сохранение фото %s: %w", id, err)
 		}
-		savedIDs = append(savedIDs, id)
+		savedNames = append(savedNames, id+"."+up.Ext)
 		photos = append(photos, domain.QRPhoto{ID: id, Ext: up.Ext})
 	}
 
@@ -107,34 +107,49 @@ func (u *QRUseCase) SavePhotos(ctx context.Context, orderNumber string, uploads 
 }
 
 // ListOrders возвращает заказы с фотографиями, отсортированные по номеру
-// заказа natural-сортировкой по возрастанию («2» < «10», «2а» между «2» и «3»).
+// заказа natural-сортировкой по убыванию («10» выше «2», «2а» ниже «2» и
+// выше «3»): более новые заказы имеют больший номер и оказываются выше.
+// Пустые строки сортируются в конец.
 func (u *QRUseCase) ListOrders(ctx context.Context) ([]domain.QROrder, error) {
 	orders, err := u.repo.GetOrdersWithPhotos(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("qrcodes: список заказов: %w", err)
 	}
 	sort.Slice(orders, func(i, j int) bool {
-		return naturalLess(orders[i].OrderNumber, orders[j].OrderNumber)
+		a, b := orders[i].OrderNumber, orders[j].OrderNumber
+		if a == "" {
+			return false // пустые строки — в конец
+		}
+		if b == "" {
+			return true
+		}
+		return naturalLess(b, a) // по убыванию
 	})
 	return orders, nil
 }
 
 // Cleanup удаляет фото старше maxAge. Сначала чистится БД (строки фото и
 // заказы без фото), потом файлы: осиротевшие строки не самовосстанавливаются,
-// а осиротевшие папки на следующем прогоне снова попадут в список старых.
-// Ошибки удаления отдельных папок логируются, но не прерывают обход;
-// возвращает количество удалённых папок.
+// а осиротевшие файлы на следующем прогоне снова попадут в список старых.
+// Ошибки удаления отдельных записей логируются, но не прерывают обход;
+// возвращает количество удалённых записей (файлов новой схемы и папок
+// старой схемы).
 func (u *QRUseCase) Cleanup(ctx context.Context) (int, error) {
 	cutoff := time.Now().Add(-u.maxAge)
-	dirs, err := u.files.ListDirsOlderThan(ctx, cutoff)
+	names, err := u.files.ListOlderThan(ctx, cutoff)
 	if err != nil {
-		return 0, fmt.Errorf("qrcodes: список устаревших папок фото: %w", err)
+		return 0, fmt.Errorf("qrcodes: список устаревших фото: %w", err)
 	}
-	if len(dirs) == 0 {
+	if len(names) == 0 {
 		return 0, nil
 	}
 
-	if err := u.repo.DeletePhotosByIDs(ctx, dirs); err != nil {
+	// В БД удаляются строки по id, извлечённому из имени записи хранилища.
+	ids := make([]string, 0, len(names))
+	for _, name := range names {
+		ids = append(ids, photoIDFromName(name))
+	}
+	if err := u.repo.DeletePhotosByIDs(ctx, ids); err != nil {
 		return 0, fmt.Errorf("qrcodes: удаление фото из БД: %w", err)
 	}
 	if err := u.repo.DeleteEmptyOrders(ctx); err != nil {
@@ -142,9 +157,9 @@ func (u *QRUseCase) Cleanup(ctx context.Context) (int, error) {
 	}
 
 	removed := 0
-	for _, id := range dirs {
-		if err := u.files.RemoveAll(ctx, id); err != nil {
-			log.Printf("qrcodes: удаление папки фото %s: %v", id, err)
+	for _, name := range names {
+		if err := u.files.RemoveAll(ctx, name); err != nil {
+			log.Printf("qrcodes: удаление фото %s: %v", name, err)
 			continue
 		}
 		removed++
@@ -164,6 +179,17 @@ func newPhotoID() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(b), nil
+}
+
+// photoIDFromName извлекает id фото из имени записи хранилища: для файла
+// <id>.<ext> новой схемы и для папки <id>/ старой схемы. Имена приходят из
+// ListOlderThan, который пропускает посторонние записи, поэтому формат
+// всегда валиден.
+func photoIDFromName(name string) string {
+	if i := strings.LastIndexByte(name, '.'); i != -1 {
+		return name[:i]
+	}
+	return name
 }
 
 // naturalLess сравнивает строки natural-сортировкой: числовые последовательности
