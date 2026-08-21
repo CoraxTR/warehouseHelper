@@ -10,6 +10,8 @@ import (
 	"warehouseHelper/internal/msclient/pdfpreloader"
 	msucase "warehouseHelper/internal/msclient/usecase"
 	"warehouseHelper/internal/msclient/workerpool"
+	photostore "warehouseHelper/internal/qrcodes/photostore"
+	qucase "warehouseHelper/internal/qrcodes/usecase"
 	"warehouseHelper/internal/refgo/export/excel"
 	"warehouseHelper/internal/refgo/export/pdf"
 	"warehouseHelper/internal/refgo/registry"
@@ -47,6 +49,7 @@ type DIContainer struct {
 	refGoCheckUC    *rgucase.RefGoCheckAgainstUseCase
 	wikiUC          *wucase.WikiUseCase
 	goodsUC         *gucase.GoodsUseCase
+	qrUC            *qucase.QRUseCase
 
 	// Хэндлеры
 	mux      *http.ServeMux
@@ -245,9 +248,23 @@ func (d *DIContainer) GoodsUC() *gucase.GoodsUseCase {
 	return d.goodsUC
 }
 
+// QRUC — сценарии модуля «Честный знак»; PGClient реализует qucase.QRRepository.
+func (d *DIContainer) QRUC() *qucase.QRUseCase {
+	if d.qrUC == nil {
+		qrConfig := d.Config().QRConfig
+		store, err := photostore.NewStore(qrConfig.PhotosDir)
+		if err != nil {
+			panic(err)
+		}
+		d.qrUC = qucase.NewQRUseCase(d.OrdersRepository(), store, qrConfig.PhotosDir, qrConfig.PhotosMaxAge)
+	}
+
+	return d.qrUC
+}
+
 func (d *DIContainer) Handler() *myhttp.Handler {
 	if d.handlers == nil {
-		d.handlers = myhttp.NewHandler(d.SyncUC(), d.OrdersUC(), d.ExcelExportUC(), d.PdfExportUC(), d.BarcodeExportUC(), d.RefGoCheckAgainstUC(), d.WikiUC(), d.GoodsUC())
+		d.handlers = myhttp.NewHandler(d.SyncUC(), d.OrdersUC(), d.ExcelExportUC(), d.PdfExportUC(), d.BarcodeExportUC(), d.RefGoCheckAgainstUC(), d.WikiUC(), d.GoodsUC(), d.QRUC())
 	}
 
 	return d.handlers

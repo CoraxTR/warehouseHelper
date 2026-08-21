@@ -31,6 +31,11 @@ func NewRouter(h *Handler) *http.ServeMux {
 	mux.HandleFunc("/wiki/delete", h.WikiDelete)                  // POST
 	mux.HandleFunc("/wiki/photo", h.WikiPhoto)                    // GET
 	mux.HandleFunc("/goods", h.GoodsPage)                         // GET — страница, POST — выгрузка дерева папок товаров
+	mux.HandleFunc("/qrcodes", h.QRPage)                          // GET — модуль «Честный знак»
+	mux.HandleFunc("/qrcodes/add", h.QRAdd)                       // GET — форма, POST — сохранение фото
+	mux.HandleFunc("/qrcodes/list", h.QRList)                     // GET — таблица заказов с фото
+	qrFiles := http.FileServer(http.Dir(h.qrUC.PhotosDir()))
+	mux.Handle("/qrcodes/photos/", http.StripPrefix("/qrcodes/photos/", qrFiles))
 
 	return mux
 }
