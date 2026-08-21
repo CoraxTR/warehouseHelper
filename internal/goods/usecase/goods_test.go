@@ -10,14 +10,10 @@ import (
 )
 
 // msFolder собирает папку МС в стиле ответа /entity/productfolder:
-// meta.href, name, pathName.
-func msFolder(href, name, pathName string) client.MSProductFolder {
+// id, name, pathName.
+func msFolder(id, name, pathName string) client.MSProductFolder {
 	return client.MSProductFolder{
-		Meta: struct {
-			Href string `json:"href"`
-		}{
-			Href: href,
-		},
+		ID:       id,
 		Name:     name,
 		PathName: pathName,
 	}
@@ -52,26 +48,26 @@ func TestBuildFolderTree(t *testing.T) {
 		{
 			name: "корни и вложенность 2-3 уровня",
 			folders: []client.MSProductFolder{
-				msFolder("href-030", "030 - Минеральное масло", "1 - Ассортимент на продажу/2 - Моторные масла"),
-				msFolder("href-2-motor", "2 - Моторные масла", "1 - Ассортимент на продажу"),
-				msFolder("href-020", "020 - Синтетическое масло", "1 - Ассортимент на продажу/2 - Моторные масла"),
-				msFolder("href-root", "1 - Ассортимент на продажу", ""),
-				msFolder("href-2-filters", "2 - Фильтры", "1 - Ассортимент на продажу"),
+				msFolder("id-030", "030 - Минеральное масло", "1 - Ассортимент на продажу/2 - Моторные масла"),
+				msFolder("id-2-motor", "2 - Моторные масла", "1 - Ассортимент на продажу"),
+				msFolder("id-020", "020 - Синтетическое масло", "1 - Ассортимент на продажу/2 - Моторные масла"),
+				msFolder("id-root", "1 - Ассортимент на продажу", ""),
+				msFolder("id-2-filters", "2 - Фильтры", "1 - Ассортимент на продажу"),
 			},
 			want: []*FolderNode{
 				{
 					Name: "1 - Ассортимент на продажу",
-					Href: "href-root",
+					ID: "id-root",
 					Children: []*FolderNode{
 						{
 							Name: "2 - Моторные масла",
-							Href: "href-2-motor",
+							ID: "id-2-motor",
 							Children: []*FolderNode{
-								{Name: "020 - Синтетическое масло", Href: "href-020"},
-								{Name: "030 - Минеральное масло", Href: "href-030"},
+								{Name: "020 - Синтетическое масло", ID: "id-020"},
+								{Name: "030 - Минеральное масло", ID: "id-030"},
 							},
 						},
-						{Name: "2 - Фильтры", Href: "href-2-filters"},
+						{Name: "2 - Фильтры", ID: "id-2-filters"},
 					},
 				},
 			},
@@ -79,36 +75,36 @@ func TestBuildFolderTree(t *testing.T) {
 		{
 			name: "родитель отсутствует в списке — папка остаётся корнем",
 			folders: []client.MSProductFolder{
-				msFolder("href-orphan-2", "2 - Моторные масла", "1 - Ассортимент на продажу/2 - Моторные масла"),
-				msFolder("href-orphan-030", "030 - Минеральное масло", "Нет такого корня"),
-				msFolder("href-root", "1 - Ассортимент на продажу", ""),
+				msFolder("id-orphan-2", "2 - Моторные масла", "1 - Ассортимент на продажу/2 - Моторные масла"),
+				msFolder("id-orphan-030", "030 - Минеральное масло", "Нет такого корня"),
+				msFolder("id-root", "1 - Ассортимент на продажу", ""),
 			},
 			want: []*FolderNode{
-				{Name: "030 - Минеральное масло", Href: "href-orphan-030"},
-				{Name: "1 - Ассортимент на продажу", Href: "href-root"},
-				{Name: "2 - Моторные масла", Href: "href-orphan-2"},
+				{Name: "030 - Минеральное масло", ID: "id-orphan-030"},
+				{Name: "1 - Ассортимент на продажу", ID: "id-root"},
+				{Name: "2 - Моторные масла", ID: "id-orphan-2"},
 			},
 		},
 		{
 			name: "сортировка детей и корней по имени без учёта регистра",
 			folders: []client.MSProductFolder{
-				msFolder("href-c", "c", "Корень"),
-				msFolder("href-A", "A", "Корень"),
-				msFolder("href-b", "b", "Корень"),
-				msFolder("href-root", "Корень", ""),
-				msFolder("href-z", "Zeta", ""),
-				msFolder("href-alpha", "alpha", ""),
+				msFolder("id-c", "c", "Корень"),
+				msFolder("id-A", "A", "Корень"),
+				msFolder("id-b", "b", "Корень"),
+				msFolder("id-root", "Корень", ""),
+				msFolder("id-z", "Zeta", ""),
+				msFolder("id-alpha", "alpha", ""),
 			},
 			want: []*FolderNode{
-				{Name: "alpha", Href: "href-alpha"},
-				{Name: "Zeta", Href: "href-z"},
+				{Name: "alpha", ID: "id-alpha"},
+				{Name: "Zeta", ID: "id-z"},
 				{
 					Name: "Корень",
-					Href: "href-root",
+					ID: "id-root",
 					Children: []*FolderNode{
-						{Name: "A", Href: "href-A"},
-						{Name: "b", Href: "href-b"},
-						{Name: "c", Href: "href-c"},
+						{Name: "A", ID: "id-A"},
+						{Name: "b", ID: "id-b"},
+						{Name: "c", ID: "id-c"},
 					},
 				},
 			},
@@ -116,16 +112,16 @@ func TestBuildFolderTree(t *testing.T) {
 		{
 			name: "дубль полного пути — мапа хранит первого, узел один",
 			folders: []client.MSProductFolder{
-				msFolder("href-root", "1 - Ассортимент на продажу", ""),
-				msFolder("href-dup-1", "2 - Моторные масла", "1 - Ассортимент на продажу"),
-				msFolder("href-dup-2", "2 - Моторные масла", "1 - Ассортимент на продажу"),
+				msFolder("id-root", "1 - Ассортимент на продажу", ""),
+				msFolder("id-dup-1", "2 - Моторные масла", "1 - Ассортимент на продажу"),
+				msFolder("id-dup-2", "2 - Моторные масла", "1 - Ассортимент на продажу"),
 			},
 			want: []*FolderNode{
 				{
 					Name: "1 - Ассортимент на продажу",
-					Href: "href-root",
+					ID: "id-root",
 					Children: []*FolderNode{
-						{Name: "2 - Моторные масла", Href: "href-dup-1"},
+						{Name: "2 - Моторные масла", ID: "id-dup-1"},
 					},
 				},
 			},
@@ -156,8 +152,8 @@ func TestBuildFolderTree(t *testing.T) {
 
 func TestFolderNodeIsLeaf(t *testing.T) {
 	roots := BuildFolderTree([]client.MSProductFolder{
-		msFolder("href-root", "1 - Ассортимент на продажу", ""),
-		msFolder("href-leaf", "2 - Фильтры", "1 - Ассортимент на продажу"),
+		msFolder("id-root", "1 - Ассортимент на продажу", ""),
+		msFolder("id-leaf", "2 - Фильтры", "1 - Ассортимент на продажу"),
 	})
 
 	if len(roots) != 1 {
@@ -209,8 +205,8 @@ func TestGoodsUseCaseLoadFolderTree(t *testing.T) {
 			name: "успех: папки из МС превращаются в дерево",
 			stub: &stubProductFolderClient{
 				folders: []client.MSProductFolder{
-					msFolder("href-root", "1 - Ассортимент на продажу", ""),
-					msFolder("href-child", "2 - Фильтры", "1 - Ассортимент на продажу"),
+					msFolder("id-root", "1 - Ассортимент на продажу", ""),
+					msFolder("id-child", "2 - Фильтры", "1 - Ассортимент на продажу"),
 				},
 			},
 			wantLen: 1,

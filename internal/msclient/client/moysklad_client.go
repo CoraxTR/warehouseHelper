@@ -45,8 +45,8 @@ func NewMSAPIClient(c *config.Config, wp *workerpool.MSWorkerPool, cache OrderCa
 }
 
 // RemoveOrderFromCache удаляет заказ из кеша обработанных заказов.
-func (msac *MSAPIClient) RemoveOrderFromCache(href string) {
-	msac.Cache.RemoveFromCache(href)
+func (msac *MSAPIClient) RemoveOrderFromCache(id string) {
+	msac.Cache.RemoveFromCache(id)
 }
 
 func (msac *MSAPIClient) FetchOrderAgentByHREF(parentCtx context.Context, o *MSOrder) (name, phone string, err error) {
@@ -241,7 +241,7 @@ func (msac *MSAPIClient) FetchDeliverableOrders(parentctx context.Context) ([]*M
 		baseURL.Path = path.Join(baseURL.Path, "customerorder")
 
 		filterValue := fmt.Sprintf("deliveryPlannedMoment%s;deliveryPlannedMoment%s;state=%s",
-			tomorrowStart, dayAfterTomorrowEnd, msac.msConfig.Hrefs.Readystatehref)
+			tomorrowStart, dayAfterTomorrowEnd, msac.refHref("customerorder/metadata/states", msac.msConfig.Refs.ReadystateID))
 
 		log.Println(tomorrowStart)
 		log.Println(dayAfterTomorrowEnd)
@@ -280,7 +280,7 @@ func (msac *MSAPIClient) FetchDeliverableOrders(parentctx context.Context) ([]*M
 
 		newOrders := make([]*MSOrder, 0, len(unmFOR.Rows)/2)
 		for _, o := range unmFOR.Rows {
-			if !msac.Cache.CheckOrderInCache(o.Meta.HREF) {
+			if !msac.Cache.CheckOrderInCache(o.ID) {
 				newOrders = append(newOrders, &o)
 			}
 		}
@@ -317,12 +317,17 @@ func (msac *MSAPIClient) FetchDeliverableOrders(parentctx context.Context) ([]*M
 	}
 }
 
-func (msac *MSAPIClient) GetOrderByHREF(parentctx context.Context, href string) (*MSOrder, error) {
+func (msac *MSAPIClient) GetOrderByID(parentctx context.Context, id string) (*MSOrder, error) {
 	job := func(apiKey string) (any, error) {
 		ctx, cancel := context.WithTimeout(parentctx, 300*time.Second)
 		defer cancel()
 
-		body, resp, err := msac.httpRequest(ctx, http.MethodGet, href, apiKey, http.NoBody)
+		endpoint, err := msac.entityEndpoint("customerorder", id)
+		if err != nil {
+			return nil, err
+		}
+
+		body, resp, err := msac.httpRequest(ctx, http.MethodGet, endpoint, apiKey, http.NoBody)
 		if err != nil {
 			select {
 			case <-ctx.Done():
@@ -414,12 +419,12 @@ type Meta struct {
 	MediaType string `json:"mediaType"`
 }
 
-func (msac *MSAPIClient) SetOrderAsShippedToRefGo(parentctx context.Context, href string) error {
+func (msac *MSAPIClient) SetOrderAsShippedToRefGo(parentctx context.Context, id string) error {
 	update := FullOrderUpdate{
 		// Статус
 		State: &State{
 			Meta: Meta{
-				Href:      msac.msConfig.Hrefs.Shipedstatehref,
+				Href:      msac.refHref("customerorder/metadata/states", msac.msConfig.Refs.ShipedstateID),
 				Type:      "state",
 				MediaType: MSApplicationJSON,
 			},
@@ -429,7 +434,7 @@ func (msac *MSAPIClient) SetOrderAsShippedToRefGo(parentctx context.Context, hre
 			// 1. Вид продажи = "Прочие"
 			Attribute{
 				Meta: Meta{
-					Href:      msac.msConfig.Hrefs.SellTypehref,
+					Href:      msac.refHref("customerorder/metadata/attributes", msac.msConfig.SellTypeID),
 					Type:      MSAttributeMetaData,
 					MediaType: MSApplicationJSON,
 				},
@@ -438,7 +443,7 @@ func (msac *MSAPIClient) SetOrderAsShippedToRefGo(parentctx context.Context, hre
 				Type: MSCustomEntityType,
 				Value: Value{
 					Meta: Meta{
-						Href:      msac.msConfig.Hrefs.SellTypeOtherhref,
+						Href:      msac.refHref("customentity/"+msac.msConfig.Refs.SellTypeOtherType, msac.msConfig.Refs.SellTypeOtherID),
 						Type:      MSCustomEntityType,
 						MediaType: MSApplicationJSON,
 					},
@@ -448,7 +453,7 @@ func (msac *MSAPIClient) SetOrderAsShippedToRefGo(parentctx context.Context, hre
 			// 3. Курьер = "РефГо"
 			Attribute{
 				Meta: Meta{
-					Href:      msac.msConfig.Hrefs.Courierhref,
+					Href:      msac.refHref("customerorder/metadata/attributes", msac.msConfig.CourierID),
 					Type:      MSAttributeMetaData,
 					MediaType: MSApplicationJSON,
 				},
@@ -457,7 +462,7 @@ func (msac *MSAPIClient) SetOrderAsShippedToRefGo(parentctx context.Context, hre
 				Type: MSEmployeeType,
 				Value: Value{
 					Meta: Meta{
-						Href:      msac.msConfig.Hrefs.RefGoCourierhref,
+						Href:      msac.refHref("employee", msac.msConfig.Refs.RefGoCourierID),
 						Type:      MSEmployeeType,
 						MediaType: MSApplicationJSON,
 					},
@@ -476,7 +481,12 @@ func (msac *MSAPIClient) SetOrderAsShippedToRefGo(parentctx context.Context, hre
 			return nil, err
 		}
 
-		respBody, resp, err := msac.httpRequest(ctx, http.MethodPut, href, apiKey, bytes.NewBuffer(jsonBody))
+		endpoint, err := msac.entityEndpoint("customerorder", id)
+		if err != nil {
+			return nil, err
+		}
+
+		respBody, resp, err := msac.httpRequest(ctx, http.MethodPut, endpoint, apiKey, bytes.NewBuffer(jsonBody))
 		if err != nil {
 			return nil, fmt.Errorf("request failed: %w", err)
 		}
@@ -509,14 +519,14 @@ func (msac *MSAPIClient) SetOrderAsShippedToRefGo(parentctx context.Context, hre
 	return nil
 }
 
-func (msac *MSAPIClient) SetRefGoNumberOnly(parentctx context.Context, href, refGoNumber string) error {
+func (msac *MSAPIClient) SetRefGoNumberOnly(parentctx context.Context, id, refGoNumber string) error {
 	update := struct {
 		Attributes []StringedAttribute `json:"attributes"`
 	}{
 		Attributes: []StringedAttribute{
 			{
 				Meta: Meta{
-					Href:      msac.msConfig.Hrefs.RefGoNumberhref,
+					Href:      msac.refHref("customerorder/metadata/attributes", msac.msConfig.RefGoNumberID),
 					Type:      MSAttributeMetaData,
 					MediaType: MSApplicationJSON,
 				},
@@ -537,7 +547,12 @@ func (msac *MSAPIClient) SetRefGoNumberOnly(parentctx context.Context, href, ref
 			return nil, err
 		}
 
-		respBody, resp, err := msac.httpRequest(ctx, http.MethodPut, href, apiKey, bytes.NewBuffer(jsonBody))
+		endpoint, err := msac.entityEndpoint("customerorder", id)
+		if err != nil {
+			return nil, err
+		}
+
+		respBody, resp, err := msac.httpRequest(ctx, http.MethodPut, endpoint, apiKey, bytes.NewBuffer(jsonBody))
 		if err != nil {
 			return nil, fmt.Errorf("request failed: %w", err)
 		}
@@ -579,17 +594,22 @@ type exportTemplate struct {
 	Meta Meta `json:"meta"`
 }
 
-func (msac *MSAPIClient) FetchOrderPDF(parentctx context.Context, href string) ([]byte, error) {
+func (msac *MSAPIClient) FetchOrderPDF(parentctx context.Context, id string) ([]byte, error) {
 	job := func(apiKey string) (any, error) {
 		ctx, cancel := context.WithTimeout(parentctx, 300*time.Second)
 		defer cancel()
 
-		exportURL := href + "/export/"
+		endpoint, err := msac.entityEndpoint("customerorder", id)
+		if err != nil {
+			return nil, err
+		}
+
+		exportURL := endpoint + "/export/"
 
 		reqBody := PDFExportRequest{
 			Template: exportTemplate{
 				Meta: Meta{
-					Href:      msac.msConfig.Hrefs.Printtemplatehref,
+					Href:      msac.refHref("customtemplate", msac.msConfig.Refs.PrinttemplateID),
 					Type:      "customtemplate",
 					MediaType: MSApplicationJSON,
 				},
@@ -728,7 +748,7 @@ func (msac *MSAPIClient) httpRequest(ctx context.Context, method, url, apikey st
 func (msac *MSAPIClient) enrichOrder(ctx context.Context, order *MSOrder) {
 	name, phone, err := msac.FetchOrderAgentByHREF(ctx, order)
 	if err != nil {
-		log.Printf("failed to fetch agent for order %s: %v", order.HREF, err)
+		log.Printf("failed to fetch agent for order %s: %v", order.ID, err)
 	} else {
 		order.AgentName = name
 		order.AgentPhone = phone
@@ -736,7 +756,7 @@ func (msac *MSAPIClient) enrichOrder(ctx context.Context, order *MSOrder) {
 
 	positions, err := msac.FetchOrderPositionsByHREF(ctx, order)
 	if err != nil {
-		log.Printf("failed to fetch positions for order %s: %v", order.HREF, err)
+		log.Printf("failed to fetch positions for order %s: %v", order.ID, err)
 
 		return
 	}
@@ -779,12 +799,17 @@ type MSOrderShipmentState struct {
 
 // FetchOrderShipmentState — проверка состояния отгрузки заказа по href.
 // Лёгкий запрос: без enrichOrder (агент/позиции/субинфо не тянутся).
-func (msac *MSAPIClient) FetchOrderShipmentState(parentctx context.Context, href string) (*MSOrderShipmentState, error) {
+func (msac *MSAPIClient) FetchOrderShipmentState(parentctx context.Context, id string) (*MSOrderShipmentState, error) {
 	job := func(apiKey string) (any, error) {
 		ctx, cancel := context.WithTimeout(parentctx, 300*time.Second)
 		defer cancel()
 
-		body, resp, err := msac.httpRequest(ctx, http.MethodGet, href, apiKey, http.NoBody)
+		endpoint, err := msac.entityEndpoint("customerorder", id)
+		if err != nil {
+			return nil, err
+		}
+
+		body, resp, err := msac.httpRequest(ctx, http.MethodGet, endpoint, apiKey, http.NoBody)
 		if err != nil {
 			select {
 			case <-ctx.Done():
@@ -841,12 +866,12 @@ type demandNewRequest struct {
 // (PUT /entity/demand/new с ссылкой на заказ). Возвращает тело шаблона
 // как есть — оно отправляется в CreateDemand без изменений.
 // ВАЖНО: эндпоинт принимает только PUT (POST → 404 «Неопознанный путь»).
-func (msac *MSAPIClient) FetchDemandNewTemplate(parentctx context.Context, href string) (json.RawMessage, error) {
+func (msac *MSAPIClient) FetchDemandNewTemplate(parentctx context.Context, id string) (json.RawMessage, error) {
 	job := func(apiKey string) (any, error) {
 		ctx, cancel := context.WithTimeout(parentctx, 300*time.Second)
 		defer cancel()
 
-		endpoint, err := msac.entityEndpoint("demand", "new")
+		endpoint, err := msac.entityEndpoint("customerorder", id)
 		if err != nil {
 			return nil, err
 		}
@@ -854,7 +879,7 @@ func (msac *MSAPIClient) FetchDemandNewTemplate(parentctx context.Context, href 
 		reqBody, err := json.Marshal(demandNewRequest{
 			CustomerOrder: MSMetaRef{
 				Meta: Meta{
-					Href:      href,
+					Href:      endpoint,
 					Type:      "customerorder",
 					MediaType: MSApplicationJSON,
 				},
@@ -949,6 +974,18 @@ func (msac *MSAPIClient) CreateDemand(parentctx context.Context, template json.R
 
 // entityEndpoint — URL эндпоинта МойСклад: URLstart (заканчивается на /entity/)
 // + <parts...>. Сущность добавлять НЕ нужно: она уже в URLstart (см. .env.example).
+// refHref собирает href сущности МС из пути и id: URLstart + path + id.
+// Ошибка парсинга URLstart невозможна (конфиг валидируется при старте),
+// поэтому при сбое возвращается пустая строка.
+func (msac *MSAPIClient) refHref(entityPath, id string) string {
+	href, err := msac.entityEndpoint(entityPath, id)
+	if err != nil {
+		return ""
+	}
+
+	return href
+}
+
 func (msac *MSAPIClient) entityEndpoint(parts ...string) (string, error) {
 	base, err := url.Parse(msac.msConfig.URLstart)
 	if err != nil {

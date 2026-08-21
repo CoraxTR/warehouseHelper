@@ -1,9 +1,11 @@
--- Active: 1770100121828@@localhost@5432@postgres
+-- Актуальная схема: первичный ключ — id (UUID МойСклад).
+-- Для баз, созданных до перехода с href: сначала применить
+-- refgo_orders_migration_to_id.sql (backfill id из href), затем эту схему.
 
 DROP TABLE IF EXISTS refgoOrders;
 
 CREATE TABLE refgoOrders (
-    href TEXT PRIMARY KEY,
+    id TEXT PRIMARY KEY,
     name TEXT,
     receiver_name TEXT,
     receiver_phone_number BIGINT,

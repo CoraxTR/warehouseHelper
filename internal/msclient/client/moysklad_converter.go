@@ -234,7 +234,7 @@ func processBoxesAndWeights(msOrder *MSOrder) BoxWeightInfo {
 
 func (c *MSConverter) ToDomain(msOrder *MSOrder) *domain.InternalOrder {
 	o := new(domain.InternalOrder)
-	o.SetHREF(msOrder.Meta.HREF)
+	o.SetID(msOrder.ID)
 	o.SetName(msOrder.Name)
 
 	if name, ok := msOrder.AttributesMap["Имя получателя"]; ok {

@@ -127,7 +127,7 @@ type MSWorker struct {
 }
 
 type MSConfig struct {
-	Hrefs *MShrefs
+	Refs *MSRefs
 
 	WarehouseAPIKEYS []MSWorker
 	OthersAPIKEYS    []MSWorker
@@ -143,7 +143,7 @@ type MSConfig struct {
 }
 
 func loadMSConfig() *MSConfig {
-	mshrf := loadMShrefs()
+	msrefs := loadMSRefs()
 
 	wrhsakeysStr := os.Getenv("MSAPI_KEYS_WAREHOUSE")
 	wrhsakeys := strings.Split(wrhsakeysStr, ",")
@@ -219,7 +219,7 @@ func loadMSConfig() *MSConfig {
 	}
 
 	return &MSConfig{
-		Hrefs: mshrf,
+		Refs: msrefs,
 
 		WarehouseAPIKEYS: wrhworkers,
 		OthersAPIKEYS:    othrworkers,
@@ -235,82 +235,68 @@ func loadMSConfig() *MSConfig {
 	}
 }
 
-type MShrefs struct {
-	Readystatehref    string
-	Shipedstatehref   string
-	SellTypehref      string
-	SellTypeOtherhref string
-	Storehref         string
-	Orghref           string
-	RefGoNumberhref   string
-	Courierhref       string
-	RefGoCourierhref  string
-	Printtemplatehref string
+// MSRefs — идентификаторы сущностей МойСклад, из которых собираются href'ы:
+// href = MSAPI_URLSTART + путь сущности + id. Пути:
+//   - статусы:          customerorder/metadata/states/{id}
+//   - атрибуты заказа:  customerorder/metadata/attributes/{id}
+//   - значение кастом-сущности: customentity/{тип}/{id}
+//   - сотрудник:        employee/{id}
+//   - шаблон печати:    customtemplate/{id}
+//   - организация:      organization/{id}
+type MSRefs struct {
+	ReadystateID      string
+	ShipedstateID     string
+	SellTypeOtherID   string
+	SellTypeOtherType string
+	OrgID             string
+	RefGoCourierID    string
+	PrinttemplateID   string
 }
 
-func loadMShrefs() *MShrefs {
-	readystatehref := os.Getenv("MSAPI_READYSTATEHREF")
-	if readystatehref == "" {
+func loadMSRefs() *MSRefs {
+	readystateID := os.Getenv("MSAPI_READYSTATE_ID")
+	if readystateID == "" {
 		os.Exit(1)
 	}
 
-	shipedstatehref := os.Getenv("MSAPI_SHIPEDSTATEHREF")
-	if shipedstatehref == "" {
+	shipedstateID := os.Getenv("MSAPI_SHIPEDSTATE_ID")
+	if shipedstateID == "" {
 		os.Exit(1)
 	}
 
-	selltypehref := os.Getenv("MSAPI_SELLTYPEHREF")
-	if selltypehref == "" {
+	sellTypeOtherID := os.Getenv("MSAPI_SELLTYPEOTHER_ID")
+	if sellTypeOtherID == "" {
 		os.Exit(1)
 	}
 
-	selltypeOtherhref := os.Getenv("MSAPI_SELLTYPEOTHERHREF")
-	if selltypeOtherhref == "" {
+	sellTypeOtherType := os.Getenv("MSAPI_SELLTYPEOTHER_TYPE")
+	if sellTypeOtherType == "" {
 		os.Exit(1)
 	}
 
-	storehref := os.Getenv("MSAPI_STOREHREF")
-	if storehref == "" {
+	orgID := os.Getenv("MSAPI_ORG_ID")
+	if orgID == "" {
 		os.Exit(1)
 	}
 
-	orghref := os.Getenv("MSAPI_ORGHREF")
-	if orghref == "" {
+	refGoCourierID := os.Getenv("MSAPI_REFGOCOURIER_ID")
+	if refGoCourierID == "" {
 		os.Exit(1)
 	}
 
-	refgonumberhref := os.Getenv("MSAPI_REFGONUMBERHREF")
-	if refgonumberhref == "" {
+	printtemplateID := os.Getenv("MSAPI_PRINTTEMPLATE_ID")
+	if printtemplateID == "" {
 		os.Exit(1)
 	}
 
-	courierhref := os.Getenv("MSAPI_COURIERHREF")
-	if courierhref == "" {
-		os.Exit(1)
-	}
-
-	refgocourierhref := os.Getenv("MSAPI_REFGOCOURIERHREF")
-	if refgocourierhref == "" {
-		os.Exit(1)
-	}
-
-	printtemplatehref := os.Getenv("MSAPI_PRINTTEMPLATEHREF")
-
-	if printtemplatehref == "" {
-		os.Exit(1)
-	}
-
-	return &MShrefs{
-		Readystatehref:    readystatehref,
-		Shipedstatehref:   shipedstatehref,
-		SellTypehref:      selltypehref,
-		SellTypeOtherhref: selltypeOtherhref,
-		Storehref:         storehref,
-		Orghref:           orghref,
-		RefGoNumberhref:   refgonumberhref,
-		Courierhref:       courierhref,
-		RefGoCourierhref:  refgocourierhref,
-		Printtemplatehref: printtemplatehref,
+	return &MSRefs{
+		ReadystateID:      readystateID,
+		ShipedstateID:     shipedstateID,
+		SellTypeOtherID:   sellTypeOtherID,
+		SellTypeOtherType: sellTypeOtherType,
+		OrgID:             orgID,
+		RefGoCourierID:    refGoCourierID,
+		PrinttemplateID:   printtemplateID,
 	}
 }
 

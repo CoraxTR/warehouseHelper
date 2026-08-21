@@ -7,7 +7,7 @@ import (
 func ToDomainOrder(dto *UpdateOrderRequest) *domain.InternalOrder {
 	order := &domain.InternalOrder{}
 
-	order.SetHREF(dto.HREF)
+	order.SetID(dto.ID)
 	order.SetName(dto.Name)
 	order.SetRecieverName(dto.ReceiverName)
 	order.SetRecieverPhoneNumber(dto.ReceiverPhoneNumber)

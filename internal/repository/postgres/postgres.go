@@ -57,7 +57,7 @@ func (pg *PGClient) InsertOrders(ctx context.Context, orders []*domain.InternalO
 
 	const query = `
 INSERT INTO refgoOrders (
-    href,
+    id,
     name,
     receiver_name,
     receiver_phone_number,
@@ -81,7 +81,7 @@ INSERT INTO refgoOrders (
     $7, $8, $9, $10, $11, $12,
     $13, $14, $15, $16, $17, $18,
     $19
-) ON CONFLICT (href) DO NOTHING`
+) ON CONFLICT (id) DO NOTHING`
 
 	tx, err := pg.Pool.Begin(ctx)
 	if err != nil {
@@ -102,7 +102,7 @@ INSERT INTO refgoOrders (
 		_, err = tx.Exec(
 			ctx,
 			query,
-			o.GetHREF(),
+			o.GetID(),
 			o.GetName(),
 			o.GetRecieverName(),
 			o.GetRecieverPhoneNumber(),
@@ -155,7 +155,7 @@ func (pg *PGClient) GetAllOrders(ctx context.Context) ([]*domain.InternalOrder, 
 
 	rows, err := pg.Pool.Query(ctx, `
         SELECT 
-            href, name, receiver_name, receiver_phone_number, description,
+            id, name, receiver_name, receiver_phone_number, description,
             delivery_planned_date, shipment_address, delivery_interval_from,
             delivery_interval_until, delivery_region, payment_method, refgo_number,
             refgo_zone, sum, chilled_weight, frozen_weight, frozen_boxes, chilled_boxes, errors
@@ -175,7 +175,7 @@ func (pg *PGClient) GetAllOrders(ctx context.Context) ([]*domain.InternalOrder, 
 
 	for rows.Next() {
 		var (
-			href, name, receiverName, description, deliveryPlannedDate,
+			id, name, receiverName, description, deliveryPlannedDate,
 			shipmentAddress, deliveryIntervalFrom, deliveryIntervalUntil,
 			deliveryRegion, paymentMethod, refgoNumber, refgoZone string
 			receiverPhoneNumber, frozenBoxes, chilledBoxes uint64
@@ -184,7 +184,7 @@ func (pg *PGClient) GetAllOrders(ctx context.Context) ([]*domain.InternalOrder, 
 		)
 
 		err := rows.Scan(
-			&href, &name, &receiverName, &receiverPhoneNumber, &description,
+			&id, &name, &receiverName, &receiverPhoneNumber, &description,
 			&deliveryPlannedDate, &shipmentAddress, &deliveryIntervalFrom,
 			&deliveryIntervalUntil, &deliveryRegion, &paymentMethod, &refgoNumber,
 			&refgoZone, &sum, &chilledWeight, &frozenWeight, &frozenBoxes, &chilledBoxes,
@@ -197,7 +197,7 @@ func (pg *PGClient) GetAllOrders(ctx context.Context) ([]*domain.InternalOrder, 
 		}
 
 		order := &domain.InternalOrder{}
-		order.SetHREF(href)
+		order.SetID(id)
 		order.SetName(name)
 		order.SetRecieverName(receiverName)
 		order.SetRecieverPhoneNumber(receiverPhoneNumber)
@@ -278,7 +278,7 @@ func (pg *PGClient) UpdateOrders(ctx context.Context, orders []*domain.InternalO
             frozen_boxes = $15,
             chilled_boxes = $16,
             errors = $17
-        WHERE href = $18
+        WHERE id = $18
     `
 
 	for _, o := range orders {
@@ -305,7 +305,7 @@ func (pg *PGClient) UpdateOrders(ctx context.Context, orders []*domain.InternalO
 			o.GetFrozenBoxes(),
 			o.GetChilledBoxes(),
 			errorsJSON,
-			o.GetHREF(),
+			o.GetID(),
 		)
 		if err != nil {
 			return err
@@ -315,8 +315,8 @@ func (pg *PGClient) UpdateOrders(ctx context.Context, orders []*domain.InternalO
 	return tx.Commit(ctx)
 }
 
-func (pg *PGClient) DeleteOrder(ctx context.Context, href string) error {
-	_, err := pg.Pool.Exec(ctx, `DELETE FROM refgoOrders WHERE href = $1`, href)
+func (pg *PGClient) DeleteOrder(ctx context.Context, id string) error {
+	_, err := pg.Pool.Exec(ctx, `DELETE FROM refgoOrders WHERE id = $1`, id)
 
 	return err
 }
@@ -409,17 +409,17 @@ func deliveryDateRange(from, to string) ([]string, error) {
 	return dates, nil
 }
 
-func (pg *PGClient) GetOrdersByHREFs(ctx context.Context, hrefs []string) ([]*domain.InternalOrder, error) {
-	if len(hrefs) == 0 {
+func (pg *PGClient) GetOrdersByIDs(ctx context.Context, ids []string) ([]*domain.InternalOrder, error) {
+	if len(ids) == 0 {
 		return nil, nil
 	}
 
 	rows, err := pg.Pool.Query(ctx, `
         SELECT `+orderColumns+`
         FROM refgoOrders
-        WHERE href = ANY($1)
+        WHERE id = ANY($1)
         ORDER BY refgo_number::integer ASC
-    `, hrefs)
+    `, ids)
 	if err != nil {
 		return nil, err
 	}
@@ -430,7 +430,7 @@ func (pg *PGClient) GetOrdersByHREFs(ctx context.Context, hrefs []string) ([]*do
 	for rows.Next() {
 		order, err := scanOrderRow(rows)
 		if err != nil {
-			log.Printf("GetOrdersByHREFs scan error: %v", err)
+			log.Printf("GetOrdersByIDs scan error: %v", err)
 
 			return nil, err
 		}
@@ -440,7 +440,7 @@ func (pg *PGClient) GetOrdersByHREFs(ctx context.Context, hrefs []string) ([]*do
 
 	err = rows.Err()
 	if err != nil {
-		log.Printf("GetOrdersByHREFs rows error: %v", err)
+		log.Printf("GetOrdersByIDs rows error: %v", err)
 
 		return nil, err
 	}
@@ -477,7 +477,7 @@ func (pg *PGClient) GetOrderByRefGoNumber(ctx context.Context, refgoNumber strin
 // orderColumns — список колонок таблицы refgoOrders, общий для всех SELECT.
 // Порядок должен совпадать с порядком Scan в scanOrderRow.
 const orderColumns = `
-    href, name, receiver_name, receiver_phone_number, description,
+    id, name, receiver_name, receiver_phone_number, description,
     delivery_planned_date, shipment_address, delivery_interval_from,
     delivery_interval_until, delivery_region, payment_method, refgo_number,
     refgo_zone, sum, chilled_weight, frozen_weight, frozen_boxes, chilled_boxes, errors`
@@ -486,7 +486,7 @@ const orderColumns = `
 // Если строк нет (pgx.ErrNoRows), возвращает (nil, nil).
 func scanOrderRow(row pgx.Row) (*domain.InternalOrder, error) {
 	var (
-		href, name, receiverName, description, deliveryPlannedDate,
+		id, name, receiverName, description, deliveryPlannedDate,
 		shipmentAddress, deliveryIntervalFrom, deliveryIntervalUntil,
 		deliveryRegion, paymentMethod, refgoNumber, refgoZone string
 		receiverPhoneNumber, frozenBoxes, chilledBoxes uint64
@@ -495,7 +495,7 @@ func scanOrderRow(row pgx.Row) (*domain.InternalOrder, error) {
 	)
 
 	err := row.Scan(
-		&href, &name, &receiverName, &receiverPhoneNumber, &description,
+		&id, &name, &receiverName, &receiverPhoneNumber, &description,
 		&deliveryPlannedDate, &shipmentAddress, &deliveryIntervalFrom,
 		&deliveryIntervalUntil, &deliveryRegion, &paymentMethod, &refgoNumber,
 		&refgoZone, &sum, &chilledWeight, &frozenWeight, &frozenBoxes, &chilledBoxes,
@@ -510,7 +510,7 @@ func scanOrderRow(row pgx.Row) (*domain.InternalOrder, error) {
 	}
 
 	order := &domain.InternalOrder{}
-	order.SetHREF(href)
+	order.SetID(id)
 	order.SetName(name)
 	order.SetRecieverName(receiverName)
 	order.SetRecieverPhoneNumber(receiverPhoneNumber)

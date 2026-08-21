@@ -44,7 +44,11 @@ type MSOtherWorker struct {
 }
 
 func validateKey(ctx context.Context, config *config.MSConfig, apikey string) bool {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, config.Hrefs.Orghref, http.NoBody)
+	// Проверочный GET на организацию: href собирается из base URL + id,
+	// чтобы валидация не зависела от хранимых href'ов.
+	orgURL := config.URLstart + "organization/" + config.Refs.OrgID
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, orgURL, http.NoBody)
 	if err != nil {
 		log.Printf("failed to create request: %s", err)
 

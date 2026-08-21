@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"warehouseHelper/internal/domain"
 	"warehouseHelper/internal/msclient/client"
 	"warehouseHelper/internal/msclient/pdfpreloader"
@@ -16,8 +15,8 @@ import (
 type OrderRepository interface {
 	GetAllOrders(ctx context.Context) ([]*domain.InternalOrder, error)
 	UpdateOrders(ctx context.Context, orders []*domain.InternalOrder) error
-	DeleteOrder(ctx context.Context, href string) error
-	GetOrdersByHREFs(ctx context.Context, hrefs []string) ([]*domain.InternalOrder, error)
+	DeleteOrder(ctx context.Context, id string) error
+	GetOrdersByIDs(ctx context.Context, ids []string) ([]*domain.InternalOrder, error)
 	GetOrderByName(ctx context.Context, name string) (*domain.InternalOrder, error)
 	GetOrderByRefGoNumber(ctx context.Context, refgoNumber string) (*domain.InternalOrder, error)
 }
@@ -30,8 +29,8 @@ type OrdersUseCase struct {
 }
 
 type MoySkladClient interface {
-	GetOrderByHREF(ctx context.Context, href string) (*client.MSOrder, error)
-	RemoveOrderFromCache(href string)
+	GetOrderByID(ctx context.Context, id string) (*client.MSOrder, error)
+	RemoveOrderFromCache(id string)
 }
 
 func NewOrdersUseCase(repo OrderRepository, msClient MoySkladClient, converter *client.MSConverter,
@@ -57,13 +56,13 @@ func (uc *OrdersUseCase) UpdateOrders(ctx context.Context, orders []*domain.Inte
 	return nil
 }
 
-func (uc *OrdersUseCase) UpdateOrderFromMS(ctx context.Context, href string) error {
-	err := uc.DeletePreloadedPDF(href)
+func (uc *OrdersUseCase) UpdateOrderFromMS(ctx context.Context, id string) error {
+	err := uc.DeletePreloadedPDF(id)
 	if err != nil {
 		return err
 	}
 
-	msOrder, err := uc.msClient.GetOrderByHREF(ctx, href)
+	msOrder, err := uc.msClient.GetOrderByID(ctx, id)
 	if err != nil {
 		return fmt.Errorf("failed to fetch order from MS: %w", err)
 	}
@@ -85,14 +84,14 @@ func (uc *OrdersUseCase) UpdateOrderFromMS(ctx context.Context, href string) err
 	return nil
 }
 
-func (uc *OrdersUseCase) DeleteOrder(ctx context.Context, href string) error {
-	if err := uc.repo.DeleteOrder(ctx, href); err != nil {
+func (uc *OrdersUseCase) DeleteOrder(ctx context.Context, id string) error {
+	if err := uc.repo.DeleteOrder(ctx, id); err != nil {
 		return err
 	}
 
 	// Удаляем и из кеша, чтобы при повторном появлении заказа в МС
 	// он снова попал в обработку.
-	uc.msClient.RemoveOrderFromCache(href)
+	uc.msClient.RemoveOrderFromCache(id)
 
 	return nil
 }
@@ -109,9 +108,8 @@ func (uc *OrdersUseCase) GetOrderByRefGoNumber(ctx context.Context, refgoNumber 
 	return uc.repo.GetOrderByRefGoNumber(ctx, refgoNumber)
 }
 
-func (uc *OrdersUseCase) DeletePreloadedPDF(href string) error {
-	safeName := filepath.Base(strings.TrimSuffix(href, "/"))
-	filePath := filepath.Join(tempdir.Dir, safeName+".pdf")
+func (uc *OrdersUseCase) DeletePreloadedPDF(id string) error {
+	filePath := filepath.Join(tempdir.Dir, id+".pdf")
 
 	err := os.Remove(filePath)
 	if err != nil {

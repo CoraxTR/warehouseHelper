@@ -21,7 +21,7 @@ type MSFetchOrdersResponse struct {
 }
 
 // MSProductFolder — папка товаров МойСклад (entity/productfolder).
-// Для построения дерева нужны meta.href (идентификатор папки), name и pathName
+// Для построения дерева нужны id (идентификатор папки), name и pathName
 // (полный путь предков через "/"; пустая строка — папка верхнего уровня).
 type MSProductFolder struct {
 	Meta struct {
@@ -91,6 +91,7 @@ type PositionSubInfo struct {
 }
 
 type MSOrder struct {
+	ID                    string         `json:"id"`
 	HREF                  string         `json:"href"`
 	Meta                  MSMeta         `json:"meta"`
 	Name                  string         `json:"name"`

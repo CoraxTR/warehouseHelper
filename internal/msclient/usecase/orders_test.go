@@ -32,7 +32,7 @@ func (s *stubOrdersRepo) DeleteOrder(context.Context, string) error {
 	return nil
 }
 
-func (s *stubOrdersRepo) GetOrdersByHREFs(context.Context, []string) ([]*domain.InternalOrder, error) {
+func (s *stubOrdersRepo) GetOrdersByIDs(context.Context, []string) ([]*domain.InternalOrder, error) {
 	return nil, nil
 }
 

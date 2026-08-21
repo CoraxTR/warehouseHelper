@@ -138,7 +138,7 @@
             {{$frozenBoxesKey := "frozenBoxes"}}
             {{$chilledBoxesKey := "chilledBoxes"}}
             {{$refGoZoneKey := "refGoZone"}}
-            <tr data-href="{{.GetHREF}}" data-refgonumber="{{.GetRefGoNumber}}" data-order-id="{{.GetHREF}}"
+            <tr data-id="{{.GetID}}" data-refgonumber="{{.GetRefGoNumber}}" data-order-id="{{.GetID}}"
                 class="order-row" data-modified="false">
                 <td><input type="checkbox" class="order-checkbox"></td>
                 <td class="{{if index $err $nameKey}}error-cell{{end}}" contenteditable="true">{{.GetName}}</td>
@@ -174,10 +174,10 @@
                 <td class="{{if index $err $refGoZoneKey}}error-cell{{end}}" contenteditable="true">
                     {{.GetRefGoZone}}</td>
                 <td class="action-buttons">
-                    <button class="print-form-btn" data-href="{{.GetHREF}}">Бланк</button>
-                    <button class="print-barcode-btn" data-href="{{.GetHREF}}">Штрих-код</button>
-                    <button class="update-from-ms-btn" data-href="{{.GetHREF}}">Обновить до МС</button>
-                    <button class="delete-order-btn" data-href="{{.GetHREF}}">Удалить</button>
+                    <button class="print-form-btn" data-id="{{.GetID}}">Бланк</button>
+                    <button class="print-barcode-btn" data-id="{{.GetID}}">Штрих-код</button>
+                    <button class="update-from-ms-btn" data-id="{{.GetID}}">Обновить до МС</button>
+                    <button class="delete-order-btn" data-id="{{.GetID}}">Удалить</button>
                 </td>
             </tr>
             {{end}}
@@ -249,11 +249,11 @@
                 if (selectedRows.length === 0) return;
 
                 const orders = selectedRows.map(row => ({
-                    href: row.dataset.href,
+                    id: row.dataset.id,
                     refGoNumber: parseInt(row.dataset.refgonumber) || 0
                 }));
                 orders.sort((a, b) => a.refGoNumber - b.refGoNumber);
-                const hrefs = orders.map(o => o.href);
+                const ids = orders.map(o => o.id);
 
                 const originalText = this.innerText;
                 this.disabled = true;
@@ -262,7 +262,7 @@
                 fetch('/print-barcodes', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ hrefs: hrefs })
+                    body: JSON.stringify({ ids: ids })
                 })
                     .then(response => {
                         if (!response.ok) {
@@ -297,12 +297,12 @@
                 if (selectedRows.length === 0) return;
 
                 const orders = selectedRows.map(row => ({
-                    href: row.dataset.href,
+                    id: row.dataset.id,
                     refGoNumber: parseInt(row.dataset.refgonumber) || 0
                 }));
 
                 orders.sort((a, b) => a.refGoNumber - b.refGoNumber);
-                const hrefs = orders.map(o => o.href);
+                const ids = orders.map(o => o.id);
 
                 const originalText = this.innerText;
                 this.disabled = true;
@@ -311,7 +311,7 @@
                 fetch('/print-multiple-forms', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ hrefs: hrefs })
+                    body: JSON.stringify({ ids: ids })
                 })
                     .then(response => {
                         if (!response.ok) {
@@ -366,7 +366,7 @@
                     if (row.dataset.modified === 'true') {
                         const cells = row.querySelectorAll('td[contenteditable="true"]');
                         const rowData = {
-                            href: row.dataset.href,
+                            id: row.dataset.id,
                             name: cells[0].innerText.trim(),
                             receiverName: cells[1].innerText.trim(),
                             receiverPhoneNumber: Number(cells[2].innerText.replace(/\s+/g, '')) || 0,
@@ -424,7 +424,7 @@
             document.querySelectorAll('.update-from-ms-btn').forEach(btn => {
                 btn.addEventListener('click', function (e) {
                     e.preventDefault();
-                    const href = this.dataset.href;
+                    const id = this.dataset.id;
                     const originalText = this.innerText;
                     this.disabled = true;
                     this.innerText = 'Обновление...';
@@ -432,7 +432,7 @@
                     fetch('/update-from-ms', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ href: href })
+                        body: JSON.stringify({ id: id })
                     })
                         .then(response => {
                             if (!response.ok) {
@@ -454,10 +454,10 @@
                     e.preventDefault();
                     if (!confirm('Удалить заказ?')) return;
 
-                    const href = this.dataset.href;
+                    const id = this.dataset.id;
                     this.disabled = true;
 
-                    fetch('/orders/delete?' + new URLSearchParams({ href }), {
+                    fetch('/orders/delete?' + new URLSearchParams({ id }), {
                         method: 'DELETE'
                     })
                         .then(response => {
@@ -476,9 +476,9 @@
             document.querySelectorAll('.print-form-btn').forEach(btn => {
                 btn.addEventListener('click', function (e) {
                     e.preventDefault();
-                    const href = this.dataset.href;
-                    if (href) {
-                        window.location.href = '/print-form?href=' + encodeURIComponent(href);
+                    const id = this.dataset.id;
+                    if (id) {
+                        window.location.href = '/print-form?id=' + encodeURIComponent(id);
                     }
                 });
             });
@@ -487,8 +487,8 @@
             document.querySelectorAll('.print-barcode-btn').forEach(btn => {
                 btn.addEventListener('click', function (e) {
                     e.preventDefault();
-                    const href = this.dataset.href;
-                    if (!href) return;
+                    const id = this.dataset.id;
+                    if (!id) return;
 
                     const originalText = this.innerText;
                     this.disabled = true;
@@ -497,7 +497,7 @@
                     fetch('/print-barcodes', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ hrefs: [href] })
+                        body: JSON.stringify({ ids: [id] })
                     })
                         .then(response => {
                             if (!response.ok) {

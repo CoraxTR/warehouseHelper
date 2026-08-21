@@ -9,7 +9,7 @@ import (
 )
 
 // folderCtxData — контекст рекурсивного рендера узла дерева: сам узел и
-// выбранные href (нужны для проставления checked у листьев). Внутри вызова
+// выбранные id (нужны для проставления checked у листьев). Внутри вызова
 // {{template}} $ сбрасывается на аргумент вызова, поэтому корневой контекст
 // передаётся в узел явно через folderCtx.
 type folderCtxData struct {
@@ -27,7 +27,7 @@ var goodsTmpl = template.Must(
 		ParseFiles("../internal/delivery/web/templates/goods.html"),
 )
 
-// GoodsPageData — данные страницы «Продукция». Selected — href отмеченных
+// GoodsPageData — данные страницы «Продукция». Selected — id отмеченных
 // галочками листьев дерева: они сохраняются на странице и передаются дальше
 // (следующий шаг модуля) как r.Form["folders"].
 type GoodsPageData struct {

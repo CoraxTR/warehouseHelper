@@ -74,7 +74,7 @@ func (uc *SyncUseCase) SyncDeliverableOrders(ctx context.Context) {
 
 				countermu.Unlock()
 
-				err := uc.MSAPIClinet.SetRefGoNumberOnly(ctx, internalOrder.GetHREF(), strconv.Itoa(int(currentRefNumber)))
+				err := uc.MSAPIClinet.SetRefGoNumberOnly(ctx, internalOrder.GetID(), strconv.Itoa(int(currentRefNumber)))
 				if err != nil {
 					log.Printf("Failed to set RefGoNumber for order %s: %v", internalOrder.GetName(), err)
 				}

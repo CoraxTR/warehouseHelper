@@ -18,13 +18,13 @@ type ExcelBarcodesExporter interface {
 }
 
 type OrdersShipper interface {
-	SetOrderAsShippedToRefGo(ctx context.Context, href string) error
+	SetOrderAsShippedToRefGo(ctx context.Context, id string) error
 }
 
 // OrdersShipmentEnsurer — гарант наличия корректной отгрузки у заказа.
 // Реализуется OrderShipmentEnsurer (модуль msclient).
 type OrdersShipmentEnsurer interface {
-	EnsureOrderShipment(ctx context.Context, href string) error
+	EnsureOrderShipment(ctx context.Context, id string) error
 }
 
 // OrdersProvider — источник заказов для экспорта. Реализуется OrdersUseCase (модуль msclient).
@@ -32,9 +32,9 @@ type OrdersProvider interface {
 	GetAllOrders(ctx context.Context) ([]*domain.InternalOrder, error)
 }
 
-// OrdersByHREFsProvider — выборка заказов по href для штрих-кодов. Реализуется OrdersUseCase (модуль msclient).
-type OrdersByHREFsProvider interface {
-	GetOrdersByHREFs(ctx context.Context, hrefs []string) ([]*domain.InternalOrder, error)
+// OrdersByIDsProvider — выборка заказов по id для штрих-кодов. Реализуется OrdersUseCase (модуль msclient).
+type OrdersByIDsProvider interface {
+	GetOrdersByIDs(ctx context.Context, ids []string) ([]*domain.InternalOrder, error)
 }
 
 // TempCleaner удаляет устаревшие файлы из временной директории.
@@ -117,7 +117,7 @@ func (uc *ExportToExcelUseCase) processOrdersShipments(ctx context.Context, orde
 
 	for _, order := range orders {
 		wg.Go(func() {
-			err := uc.shipper.SetOrderAsShippedToRefGo(ctx, order.GetHREF())
+			err := uc.shipper.SetOrderAsShippedToRefGo(ctx, order.GetID())
 			if err != nil {
 				log.Printf("Error setting order as shipped: %s", err)
 			}
@@ -128,7 +128,7 @@ func (uc *ExportToExcelUseCase) processOrdersShipments(ctx context.Context, orde
 				return
 			}
 
-			err = uc.shipmentEnsurer.EnsureOrderShipment(ctx, order.GetHREF())
+			err = uc.shipmentEnsurer.EnsureOrderShipment(ctx, order.GetID())
 			if err != nil {
 				log.Printf("Error ensuring order shipment: %s", err)
 			}
@@ -140,18 +140,18 @@ func (uc *ExportToExcelUseCase) processOrdersShipments(ctx context.Context, orde
 
 type ExportBarcodesToExcelUseCase struct {
 	exporter   ExcelBarcodesExporter
-	repository OrdersByHREFsProvider
+	repository OrdersByIDsProvider
 }
 
-func NewExportBarcodesToExcelUseCase(exporter ExcelBarcodesExporter, repository OrdersByHREFsProvider) *ExportBarcodesToExcelUseCase {
+func NewExportBarcodesToExcelUseCase(exporter ExcelBarcodesExporter, repository OrdersByIDsProvider) *ExportBarcodesToExcelUseCase {
 	return &ExportBarcodesToExcelUseCase{
 		exporter:   exporter,
 		repository: repository,
 	}
 }
 
-func (uc *ExportBarcodesToExcelUseCase) GetMultipleOrdersBarcodes(ctx context.Context, hrefs []string) (string, error) {
-	orders, err := uc.repository.GetOrdersByHREFs(ctx, hrefs)
+func (uc *ExportBarcodesToExcelUseCase) GetMultipleOrdersBarcodes(ctx context.Context, ids []string) (string, error) {
+	orders, err := uc.repository.GetOrdersByIDs(ctx, ids)
 	if err != nil {
 		log.Printf("getMultipleOrdersBarcodes could not get orders from repository: %s", err)
 	}

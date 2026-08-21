@@ -112,7 +112,7 @@
     </ul>
     {{else}}
     <label class="folder-leaf">
-        <input type="checkbox" name="folders" value="{{.Node.Href}}" {{if index $.Selected .Node.Href}}checked{{end}}> {{.Node.Name}}
+        <input type="checkbox" name="folders" value="{{.Node.ID}}" {{if index $.Selected .Node.ID}}checked{{end}}> {{.Node.Name}}
     </label>
     {{end}}
 </li>

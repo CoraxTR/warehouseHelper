@@ -24,7 +24,7 @@ func (o *OrderCache) AddOrdersToCache(orders []*domain.InternalOrder) {
 	defer o.OCmu.Unlock()
 
 	for _, order := range orders {
-		o.data[order.GetHREF()] = struct{}{}
+		o.data[order.GetID()] = struct{}{}
 	}
 }
 

@@ -393,13 +393,13 @@ func (h *Handler) UpdateFromMS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Href == "" {
-		http.Error(w, "href is required", http.StatusBadRequest)
+	if req.ID == "" {
+		http.Error(w, "id is required", http.StatusBadRequest)
 
 		return
 	}
 
-	err = h.ordersUC.UpdateOrderFromMS(r.Context(), req.Href)
+	err = h.ordersUC.UpdateOrderFromMS(r.Context(), req.ID)
 	if err != nil {
 		log.Printf("UpdateFromMS error: %v", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -424,14 +424,14 @@ func (h *Handler) PrintForm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	href := r.URL.Query().Get("href")
-	if href == "" {
-		http.Error(w, "href parameter required", http.StatusBadRequest)
+	id := r.URL.Query().Get("id")
+	if id == "" {
+		http.Error(w, "id parameter required", http.StatusBadRequest)
 
 		return
 	}
 
-	filePath, err := h.pdfUC.GetOrderPDF(r.Context(), href)
+	filePath, err := h.pdfUC.GetOrderPDF(r.Context(), id)
 	if err != nil {
 		log.Printf("Error getting PDF: %v", err)
 		http.Error(w, "Failed to get PDF: "+err.Error(), http.StatusInternalServerError)
@@ -462,13 +462,13 @@ func (h *Handler) PrintMultipleForms(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if len(req.Hrefs) == 0 {
-		http.Error(w, "No hrefs provided", http.StatusBadRequest)
+	if len(req.IDs) == 0 {
+		http.Error(w, "No ids provided", http.StatusBadRequest)
 
 		return
 	}
 
-	filePath, err := h.pdfUC.GetMultipleOrdersPDF(r.Context(), req.Hrefs)
+	filePath, err := h.pdfUC.GetMultipleOrdersPDF(r.Context(), req.IDs)
 	if err != nil {
 		log.Printf("Error merging PDFs: %v", err)
 		http.Error(w, "Failed to merge PDFs: "+err.Error(), http.StatusInternalServerError)
@@ -488,14 +488,14 @@ func (h *Handler) DeleteOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	href := r.URL.Query().Get("href")
-	if href == "" {
-		http.Error(w, "href is required", http.StatusBadRequest)
+	id := r.URL.Query().Get("id")
+	if id == "" {
+		http.Error(w, "id is required", http.StatusBadRequest)
 
 		return
 	}
 
-	err := h.ordersUC.DeleteOrder(r.Context(), href)
+	err := h.ordersUC.DeleteOrder(r.Context(), id)
 	if err != nil {
 		log.Printf("DeleteOrder error: %v", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -522,13 +522,13 @@ func (h *Handler) PrintBarcodes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if len(req.Hrefs) == 0 {
-		http.Error(w, "No hrefs provided", http.StatusBadRequest)
+	if len(req.IDs) == 0 {
+		http.Error(w, "No ids provided", http.StatusBadRequest)
 
 		return
 	}
 
-	filePath, err := h.barcodeUC.GetMultipleOrdersBarcodes(r.Context(), req.Hrefs)
+	filePath, err := h.barcodeUC.GetMultipleOrdersBarcodes(r.Context(), req.IDs)
 	if err != nil {
 		log.Printf("Error exporting barcodes: %v", err)
 		http.Error(w, "Failed to export barcodes: "+err.Error(), http.StatusInternalServerError)

@@ -7,7 +7,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -15,7 +14,7 @@ import (
 )
 
 type PDFFetcher interface {
-	FetchOrderPDF(ctx context.Context, href string) ([]byte, error)
+	FetchOrderPDF(ctx context.Context, id string) ([]byte, error)
 }
 
 type PDFExporter interface {
@@ -41,11 +40,10 @@ func NewExportOrderPDFUseCase(fetcher PDFFetcher, exporter PDFExporter, preloade
 	}
 }
 
-func (uc *ExportOrderPDFUseCase) GetOrderPDF(ctx context.Context, href string) (string, error) {
+func (uc *ExportOrderPDFUseCase) GetOrderPDF(ctx context.Context, id string) (string, error) {
 	uc.preloader.StopPreloading()
 
-	safeName := filepath.Base(strings.TrimSuffix(href, "/"))
-	filePath := filepath.Join(tempdir.Dir, safeName+".pdf")
+	filePath := filepath.Join(tempdir.Dir, id+".pdf")
 
 	data, err := os.ReadFile(filePath)
 	if err == nil {
@@ -54,21 +52,21 @@ func (uc *ExportOrderPDFUseCase) GetOrderPDF(ctx context.Context, href string) (
 		}
 
 		// Пустой файл — след прерванной загрузки; удаляем и качаем заново.
-		removeCachedPDF(filePath, href)
+		removeCachedPDF(filePath, id)
 	}
 
-	pdfData, err := uc.fetcher.FetchOrderPDF(ctx, href)
+	pdfData, err := uc.fetcher.FetchOrderPDF(ctx, id)
 	if err != nil {
 		return "", fmt.Errorf("failed to fetch PDF: %w", err)
 	}
 
 	if len(pdfData) == 0 {
-		return "", fmt.Errorf("failed to fetch PDF for order %s: empty response", href)
+		return "", fmt.Errorf("failed to fetch PDF for order %s: empty response", id)
 	}
 
 	err = os.WriteFile(filePath, pdfData, 0o600)
 	if err != nil {
-		log.Printf("Failed to save PDF for order %s: %v", href, err)
+		log.Printf("Failed to save PDF for order %s: %v", id, err)
 	}
 
 	savePath, err := uc.exporter.ExportOrderPDF(pdfData)
@@ -79,23 +77,22 @@ func (uc *ExportOrderPDFUseCase) GetOrderPDF(ctx context.Context, href string) (
 	return savePath, nil
 }
 
-func (uc *ExportOrderPDFUseCase) GetMultipleOrdersPDF(ctx context.Context, hrefs []string) (string, error) {
+func (uc *ExportOrderPDFUseCase) GetMultipleOrdersPDF(ctx context.Context, ids []string) (string, error) {
 	uc.preloader.StopPreloading()
 
-	pdfData := make([][]byte, len(hrefs))
+	pdfData := make([][]byte, len(ids))
 	wg := sync.WaitGroup{}
 
 	var counter int64
 
-	for i, href := range hrefs {
+	for i, id := range ids {
 		wg.Go(func() {
 			doneCounter := atomic.AddInt64(&counter, 1)
-			safeName := filepath.Base(strings.TrimSuffix(href, "/"))
-			filePath := filepath.Join(tempdir.Dir, safeName+".pdf")
+			filePath := filepath.Join(tempdir.Dir, id+".pdf")
 
 			data, err := os.ReadFile(filePath)
 			if err == nil && len(data) > 0 {
-				log.Printf("Fetched Order PDF %v/%v", doneCounter, len(hrefs))
+				log.Printf("Fetched Order PDF %v/%v", doneCounter, len(ids))
 
 				pdfData[i] = data
 
@@ -104,10 +101,10 @@ func (uc *ExportOrderPDFUseCase) GetMultipleOrdersPDF(ctx context.Context, hrefs
 			if err == nil {
 				// Пустой файл — след прерванной загрузки; удаляем, чтобы
 				// он не попал пустым в merge, и качаем заново.
-				removeCachedPDF(filePath, href)
+				removeCachedPDF(filePath, id)
 			}
 
-			data, err = uc.fetcher.FetchOrderPDF(ctx, href)
+			data, err = uc.fetcher.FetchOrderPDF(ctx, id)
 			if err != nil {
 				log.Printf("failed to fetch PDF: %s", err)
 
@@ -115,17 +112,17 @@ func (uc *ExportOrderPDFUseCase) GetMultipleOrdersPDF(ctx context.Context, hrefs
 			}
 
 			if len(data) == 0 {
-				log.Printf("fetched empty PDF data for order %s", href)
+				log.Printf("fetched empty PDF data for order %s", id)
 
 				return
 			}
 
 			err = os.WriteFile(filePath, data, 0o600)
 			if err != nil {
-				log.Printf("Failed to save PDF for order %s: %v", href, err)
+				log.Printf("Failed to save PDF for order %s: %v", id, err)
 			}
 
-			log.Printf("Fetched Order PDF %v/%v", doneCounter, len(hrefs))
+			log.Printf("Fetched Order PDF %v/%v", doneCounter, len(ids))
 
 			pdfData[i] = data
 		})
@@ -142,8 +139,8 @@ func (uc *ExportOrderPDFUseCase) GetMultipleOrdersPDF(ctx context.Context, hrefs
 }
 
 // removeCachedPDF удаляет файл из temp-кэша, игнорируя его отсутствие.
-func removeCachedPDF(path, href string) {
+func removeCachedPDF(path, id string) {
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		log.Printf("Failed to remove cached PDF %s: %v", href, err)
+		log.Printf("Failed to remove cached PDF %s: %v", id, err)
 	}
 }

@@ -191,7 +191,7 @@
             </tr>
         </thead>
         <tbody>
-            <tr data-href="{{.Order.GetHREF}}" class="order-row" data-modified="false">
+            <tr data-id="{{.Order.GetID}}" class="order-row" data-modified="false">
                 <td class="{{if index $err $nameKey}}error-cell{{end}}" contenteditable="true">{{.Order.GetName}}</td>
                 <td class="{{if index $err $recieverNameKey}}error-cell{{end}}" contenteditable="true">
                     {{.Order.GetRecieverName}}</td>
@@ -225,8 +225,8 @@
                 <td class="{{if index $err $refGoZoneKey}}error-cell{{end}}" contenteditable="true">
                     {{.Order.GetRefGoZone}}</td>
                 <td class="action-buttons">
-                    <button class="update-from-ms-btn" data-href="{{.Order.GetHREF}}">Обновить до МС</button>
-                    <button class="delete-order-btn" data-href="{{.Order.GetHREF}}">Удалить</button>
+                    <button class="update-from-ms-btn" data-id="{{.Order.GetID}}">Обновить до МС</button>
+                    <button class="delete-order-btn" data-id="{{.Order.GetID}}">Удалить</button>
                 </td>
             </tr>
         </tbody>
@@ -298,7 +298,7 @@
                     }
 
                     const rowData = {
-                        href: row.dataset.href,
+                        id: row.dataset.id,
                         name: cells[0].innerText.trim(),
                         receiverName: cells[1].innerText.trim(),
                         receiverPhoneNumber: Number(cells[2].innerText.replace(/\D+/g, '')) || 0,
@@ -340,7 +340,7 @@
                 document.querySelectorAll('.update-from-ms-btn').forEach(btn => {
                     btn.addEventListener('click', function (e) {
                         e.preventDefault();
-                        const href = this.dataset.href;
+                        const id = this.dataset.id;
                         const originalText = this.innerText;
                         this.disabled = true;
                         this.innerText = 'Обновление...';
@@ -348,7 +348,7 @@
                         fetch('/update-from-ms', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ href: href })
+                            body: JSON.stringify({ id: id })
                         })
                             .then(response => {
                                 if (!response.ok) {
@@ -371,10 +371,10 @@
                         e.preventDefault();
                         if (!confirm('Удалить заказ?')) return;
 
-                        const href = this.dataset.href;
+                        const id = this.dataset.id;
                         this.disabled = true;
 
-                        fetch('/orders/delete?' + new URLSearchParams({ href }), {
+                        fetch('/orders/delete?' + new URLSearchParams({ id }), {
                             method: 'DELETE'
                         })
                             .then(response => {

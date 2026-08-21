@@ -179,7 +179,7 @@ func TestFetchProductFoldersPagination(t *testing.T) {
 	msCfg := &config.MSConfig{
 		URLstart:      server.URL + "/entity/",
 		AuthHeader:    "Bearer",
-		Hrefs:         &config.MShrefs{Orghref: server.URL},
+		Refs:          &config.MSRefs{OrgID: "org-test"},
 		OthersAPIKEYS: []config.MSWorker{{Name: "test-worker", APIKey: "test-key"}},
 		TimeSpan:      time.Second,
 		RequestCap:    1000,
