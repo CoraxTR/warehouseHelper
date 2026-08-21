@@ -1,5 +1,5 @@
 // Тесты файлового хранилища фотографий кодов маркировки:
-// сохранение QRCodes/<id>/photo.<ext>, листинг устаревших папок и удаление.
+// сохранение QRCodes/<id>.<ext>, листинг устаревших записей и удаление.
 package photostore
 
 import (
@@ -7,6 +7,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -43,7 +44,7 @@ func TestStoreSaveSuccess(t *testing.T) {
 		t.Fatalf("Save error: %v", err)
 	}
 
-	path := filepath.Join(root, "QRCodes", testID, "photo.jpg")
+	path := filepath.Join(root, "QRCodes", testID+".jpg")
 	got, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("файл %s не создан: %v", path, err)
@@ -63,9 +64,9 @@ func TestStoreSaveEmptyReader(t *testing.T) {
 	if !strings.Contains(err.Error(), "файл пустой") {
 		t.Errorf("ошибка = %q, want содержит «файл пустой»", err)
 	}
-	// Папка удалена после ошибки.
-	if _, err := os.Stat(filepath.Join(root, "QRCodes", testID)); !os.IsNotExist(err) {
-		t.Errorf("папка %s должна быть удалена после ошибки (err=%v)", testID, err)
+	// Файл не создан после ошибки.
+	if _, err := os.Stat(filepath.Join(root, "QRCodes", testID+".jpg")); !os.IsNotExist(err) {
+		t.Errorf("файл %s не должен существовать после ошибки (err=%v)", testID+".jpg", err)
 	}
 }
 
@@ -95,7 +96,7 @@ func TestStoreSaveInvalidIDAndExt(t *testing.T) {
 			if err == nil {
 				t.Fatal("ожидалась ошибка валидации")
 			}
-			// Валидация выполняется до создания папки: в хранилище
+			// Валидация выполняется до создания файла: в хранилище
 			// не должно появиться ничего (для пустого id путь сворачивается
 			// к корню хранилища, поэтому проверяем именно корень).
 			entries, err := os.ReadDir(filepath.Join(root, "QRCodes"))
@@ -144,8 +145,8 @@ func TestStoreSaveRejectsNonImage(t *testing.T) {
 	if !strings.Contains(err.Error(), "не похоже на изображение") {
 		t.Errorf("ошибка = %q, want содержит «не похоже на изображение»", err)
 	}
-	if _, err := os.Stat(filepath.Join(root, "QRCodes", testID)); !os.IsNotExist(err) {
-		t.Errorf("папка %s должна быть удалена после ошибки (err=%v)", testID, err)
+	if _, err := os.Stat(filepath.Join(root, "QRCodes", testID+".jpg")); !os.IsNotExist(err) {
+		t.Errorf("файл %s не должен существовать после ошибки (err=%v)", testID+".jpg", err)
 	}
 }
 
@@ -157,56 +158,72 @@ func TestStoreSaveAcceptsHEIC(t *testing.T) {
 	if err := s.Save(context.Background(), testID, "heic", bytes.NewReader(heicData())); err != nil {
 		t.Fatalf("Save HEIC error: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(root, "QRCodes", testID, "photo.heic")); err != nil {
-		t.Errorf("файл photo.heic не создан: %v", err)
+	if _, err := os.Stat(filepath.Join(root, "QRCodes", testID+".heic")); err != nil {
+		t.Errorf("файл %s.heic не создан: %v", testID, err)
 	}
 }
 
-func TestStoreListDirsOlderThan(t *testing.T) {
+func TestStoreListOlderThan(t *testing.T) {
 	root, s := newTestStore(t)
 	ctx := context.Background()
 
-	oldID := "aaaaaaaaaaaaaaaa"
-	newID := "bbbbbbbbbbbbbbbb"
+	oldID := "aaaaaaaaaaaaaaaa"    // файл новой схемы, будет состарен
+	newID := "bbbbbbbbbbbbbbbb"    // файл новой схемы, свежий
+	oldDirID := "cccccccccccccccc" // папка старой схемы, будет состарена
 	for _, id := range []string{oldID, newID} {
 		if err := s.Save(ctx, id, "jpg", bytes.NewReader(jpgData("фото"))); err != nil {
 			t.Fatalf("Save(%s): %v", id, err)
 		}
 	}
-	// Файл в корне хранилища — не папка, должен пропускаться.
+	// Папка старой схемы: <id>/photo.<ext> — должна тоже попасть в список,
+	// чтобы дочиститься после перехода на плоские файлы.
+	oldDir := filepath.Join(root, "QRCodes", oldDirID)
+	if err := os.MkdirAll(oldDir, 0o750); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(oldDir, "photo.jpg"), jpgData("старое фото"), 0o640); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	// Посторонний файл в корне хранилища должен пропускаться.
 	if err := os.WriteFile(filepath.Join(root, "QRCodes", "readme.txt"), []byte("x"), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
-	// Состариваем папку oldID (mtime = now - 2 часа).
+	// Состариваем файл oldID и папку oldDirID (mtime = now - 2 часа).
 	oldTime := time.Now().Add(-2 * time.Hour)
-	if err := os.Chtimes(filepath.Join(root, "QRCodes", oldID), oldTime, oldTime); err != nil {
-		t.Fatalf("Chtimes: %v", err)
+	for _, p := range []string{
+		filepath.Join(root, "QRCodes", oldID+".jpg"),
+		filepath.Join(root, "QRCodes", oldDirID),
+	} {
+		if err := os.Chtimes(p, oldTime, oldTime); err != nil {
+			t.Fatalf("Chtimes(%s): %v", p, err)
+		}
 	}
 
-	// cutoff = now - 1 час: под него попадает только oldID.
+	// cutoff = now - 1 час: под него попадают только oldID и oldDirID.
 	cutoff := time.Now().Add(-time.Hour)
-	dirs, err := s.ListDirsOlderThan(ctx, cutoff)
+	names, err := s.ListOlderThan(ctx, cutoff)
 	if err != nil {
-		t.Fatalf("ListDirsOlderThan error: %v", err)
+		t.Fatalf("ListOlderThan error: %v", err)
 	}
-	if len(dirs) != 1 || dirs[0] != oldID {
-		t.Errorf("ListDirsOlderThan = %v, want [%s]", dirs, oldID)
+	want := []string{oldID + ".jpg", oldDirID}
+	if !reflect.DeepEqual(names, want) {
+		t.Errorf("ListOlderThan = %v, want %v", names, want)
 	}
 }
 
-func TestStoreListDirsOlderThanMissingDir(t *testing.T) {
+func TestStoreListOlderThanMissingDir(t *testing.T) {
 	_, s := newTestStore(t)
 
 	// Несуществующая директория считается пустой (nil, nil).
 	if err := os.RemoveAll(s.dir); err != nil {
 		t.Fatalf("RemoveAll: %v", err)
 	}
-	dirs, err := s.ListDirsOlderThan(context.Background(), time.Now())
+	names, err := s.ListOlderThan(context.Background(), time.Now())
 	if err != nil {
-		t.Fatalf("ListDirsOlderThan error: %v", err)
+		t.Fatalf("ListOlderThan error: %v", err)
 	}
-	if dirs != nil {
-		t.Errorf("ListDirsOlderThan = %v, want nil", dirs)
+	if names != nil {
+		t.Errorf("ListOlderThan = %v, want nil", names)
 	}
 }
 
@@ -218,15 +235,31 @@ func TestStoreRemoveAll(t *testing.T) {
 		t.Fatalf("Save error: %v", err)
 	}
 
-	if err := s.RemoveAll(ctx, testID); err != nil {
+	// Файл новой схемы удаляется по полному имени <id>.<ext>.
+	if err := s.RemoveAll(ctx, testID+".jpg"); err != nil {
 		t.Fatalf("RemoveAll error: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(root, "QRCodes", testID)); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(root, "QRCodes", testID+".jpg")); !os.IsNotExist(err) {
+		t.Errorf("файл %s не удалён (err=%v)", testID+".jpg", err)
+	}
+
+	// Папка старой схемы удаляется по имени <id> (без расширения).
+	oldDir := filepath.Join(root, "QRCodes", testID)
+	if err := os.MkdirAll(oldDir, 0o750); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(oldDir, "photo.jpg"), jpgData("старое"), 0o640); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := s.RemoveAll(ctx, testID); err != nil {
+		t.Fatalf("RemoveAll(папка старой схемы): %v", err)
+	}
+	if _, err := os.Stat(oldDir); !os.IsNotExist(err) {
 		t.Errorf("папка %s не удалена (err=%v)", testID, err)
 	}
 
-	// Повторное удаление отсутствующей папки — не ошибка.
-	if err := s.RemoveAll(ctx, testID); err != nil {
-		t.Errorf("RemoveAll отсутствующей папки: %v", err)
+	// Повторное удаление отсутствующей записи — не ошибка.
+	if err := s.RemoveAll(ctx, testID+".jpg"); err != nil {
+		t.Errorf("RemoveAll отсутствующей записи: %v", err)
 	}
 }

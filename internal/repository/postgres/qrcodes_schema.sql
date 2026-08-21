@@ -15,7 +15,7 @@ CREATE TABLE qrcode_orders (
 CREATE UNIQUE INDEX qrcode_orders_number_uniq ON qrcode_orders (order_number);
 
 CREATE TABLE qrcode_photos (
-    id         TEXT PRIMARY KEY,   -- id фото, генерируется приложением; имя папки в QRCodes/
+    id         TEXT PRIMARY KEY,   -- id фото, генерируется приложением; имя файла в QRCodes/
     order_id   BIGINT NOT NULL REFERENCES qrcode_orders(id) ON DELETE CASCADE,
     ext        TEXT NOT NULL,      -- расширение файла (jpg/png/webp/...)
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()

@@ -4,7 +4,7 @@ import "time"
 
 // QRPhoto — фотография кода маркировки, привязанная к заказу.
 type QRPhoto struct {
-	ID        string    // id фото, генерируется приложением; имя папки QRCodes/<id>/
+	ID        string    // id фото, генерируется приложением; имя файла QRCodes/<id>.<ext>
 	Ext       string    // расширение файла без точки: jpg, png, webp
 	CreatedAt time.Time // время сохранения (заполняет репозиторий из БД)
 }

@@ -1,5 +1,7 @@
 // Пакет photostore — файловое хранилище фотографий кодов маркировки:
-// каждая фотография лежит в отдельной папке QRCodes/<id>/photo.<ext>.
+// каждая фотография — файл QRCodes/<id>.<ext>. Записи старой схемы (папка
+// QRCodes/<id>/photo.<ext>) поддерживаются в ListOlderThan и RemoveAll, чтобы
+// дожить до очистки и не остаться мусором.
 package photostore
 
 import (
@@ -22,7 +24,10 @@ var idRe = regexp.MustCompile(`^[a-f0-9]{16}$`)
 // extRe — допустимое расширение файла (защита от path traversal).
 var extRe = regexp.MustCompile(`^[a-z0-9]{1,8}$`)
 
-// Store — файловое хранилище фото: QRCodes/<id>/photo.<ext>.
+// fileRe — допустимое имя файла фото: <id>.<ext>.
+var fileRe = regexp.MustCompile(`^[a-f0-9]{16}\.[a-z0-9]{1,8}$`)
+
+// Store — файловое хранилище фото: файл QRCodes/<id>.<ext>.
 type Store struct {
 	dir string
 }
@@ -37,13 +42,13 @@ func NewStore(dir string) *Store {
 	return &Store{dir: dir}
 }
 
-// Save записывает фото в папку QRCodes/<id>/photo.<ext>.
+// Save записывает фото в файл QRCodes/<id>.<ext>.
 // Файл создаётся с флагом O_EXCL (существующий не перезаписывается) и
 // подтверждается fsync-ом и проверкой размера: сохранение считается успешным,
 // только если файл реально записан на диск и непустой. Содержимое проверяется
 // по magic bytes (http.DetectContentType): в хранилище попадают только
 // изображения (image/* или HEIC/HEIF), чтобы через раздачу нельзя было
-// подсунуть HTML/JS. При любой ошибке созданные файл и папка удаляются.
+// подсунуть HTML/JS. При любой ошибке созданный файл удаляется.
 func (s *Store) Save(ctx context.Context, id, ext string, data io.Reader) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("photostore: сохранение фото %s: %w", id, err)
@@ -60,47 +65,48 @@ func (s *Store) Save(ctx context.Context, id, ext string, data io.Reader) error 
 	br := bufio.NewReader(data)
 	head, _ := br.Peek(512)
 	if len(head) == 0 {
-		s.removeCreated(id)
+		s.removeCreated(id, ext)
 		return fmt.Errorf("photostore: сохранение фото %s: файл пустой", id)
 	}
 	if !isImageContent(head) {
-		s.removeCreated(id)
+		s.removeCreated(id, ext)
 		return fmt.Errorf("photostore: сохранение фото %s: содержимое не похоже на изображение", id)
 	}
 
-	dir := filepath.Join(s.dir, id)
-	if err := os.MkdirAll(dir, 0o750); err != nil {
-		return fmt.Errorf("photostore: создание папки фото %s: %w", id, err)
+	// Файл кладётся прямо в корень хранилища; MkdirAll — страховка на случай,
+	// если NewStore не смог создать директорию при старте.
+	if err := os.MkdirAll(s.dir, 0o750); err != nil {
+		return fmt.Errorf("photostore: создание директории хранилища: %w", err)
 	}
-	path := filepath.Join(dir, "photo."+ext)
+	path := filepath.Join(s.dir, id+"."+ext)
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o640)
 	if err != nil {
-		s.removeCreated(id)
+		s.removeCreated(id, ext)
 		return fmt.Errorf("photostore: создание файла фото %s: %w", id, err)
 	}
 
 	if _, err := io.Copy(f, br); err != nil {
 		_ = f.Close()
-		s.removeCreated(id)
+		s.removeCreated(id, ext)
 		return fmt.Errorf("photostore: запись фото %s: %w", id, err)
 	}
 	if err := f.Sync(); err != nil {
 		_ = f.Close()
-		s.removeCreated(id)
+		s.removeCreated(id, ext)
 		return fmt.Errorf("photostore: синхронизация фото %s: %w", id, err)
 	}
 	if err := f.Close(); err != nil {
-		s.removeCreated(id)
+		s.removeCreated(id, ext)
 		return fmt.Errorf("photostore: закрытие файла фото %s: %w", id, err)
 	}
 
 	info, err := os.Stat(path)
 	if err != nil {
-		s.removeCreated(id)
+		s.removeCreated(id, ext)
 		return fmt.Errorf("photostore: проверка файла фото %s: %w", id, err)
 	}
 	if info.Size() == 0 {
-		s.removeCreated(id)
+		s.removeCreated(id, ext)
 		return fmt.Errorf("photostore: проверка файла фото %s: файл пустой", id)
 	}
 	return nil
@@ -124,33 +130,36 @@ func isImageContent(head []byte) bool {
 	return false
 }
 
-// removeCreated подчищает папку фото при ошибке сохранения; ошибки очистки
+// removeCreated удаляет файл фото при ошибке сохранения; ошибки очистки
 // логируются, но не перетирают основную ошибку.
-func (s *Store) removeCreated(id string) {
-	if err := os.RemoveAll(filepath.Join(s.dir, id)); err != nil {
-		log.Printf("photostore: очистка папки фото %s после ошибки: %v", id, err)
+func (s *Store) removeCreated(id, ext string) {
+	if err := os.Remove(filepath.Join(s.dir, id+"."+ext)); err != nil && !os.IsNotExist(err) {
+		log.Printf("photostore: удаление файла фото %s после ошибки: %v", id, err)
 	}
 }
 
-// RemoveAll удаляет папку фото QRCodes/<id>/; отсутствие папки не считается ошибкой.
-func (s *Store) RemoveAll(ctx context.Context, id string) error {
+// RemoveAll удаляет запись фото по имени: файл QRCodes/<name> новой схемы или
+// папку QRCodes/<name>/ старой схемы (в обоих случаях передаётся name = id
+// или id.ext из списка ListOlderThan); отсутствие записи не считается ошибкой.
+func (s *Store) RemoveAll(ctx context.Context, name string) error {
 	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("photostore: удаление фото %s: %w", id, err)
+		return fmt.Errorf("photostore: удаление фото %s: %w", name, err)
 	}
 	// os.RemoveAll возвращает nil, если путь не существует.
-	if err := os.RemoveAll(filepath.Join(s.dir, id)); err != nil {
-		return fmt.Errorf("photostore: удаление фото %s: %w", id, err)
+	if err := os.RemoveAll(filepath.Join(s.dir, name)); err != nil {
+		return fmt.Errorf("photostore: удаление фото %s: %w", name, err)
 	}
 	return nil
 }
 
-// ListDirsOlderThan возвращает имена папок фото, изменённых раньше cutoff;
-// файлы в корне хранилища и папки с невалидным id (посторонние) пропускаются.
-// ModTime папки не меняется после сохранения (файлы пишутся один раз), поэтому
-// оно и есть время сохранения. Несуществующая директория считается пустой.
-func (s *Store) ListDirsOlderThan(ctx context.Context, cutoff time.Time) ([]string, error) {
+// ListOlderThan возвращает имена записей фото, изменённых раньше cutoff:
+// файлы QRCodes/<id>.<ext> новой схемы и папки QRCodes/<id>/ старой схемы.
+// Посторонние файлы и папки в корне хранилища пропускаются. ModTime записи
+// не меняется после сохранения (файлы пишутся один раз), поэтому оно и есть
+// время сохранения. Несуществующая директория считается пустой.
+func (s *Store) ListOlderThan(ctx context.Context, cutoff time.Time) ([]string, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, fmt.Errorf("photostore: список папок фото: %w", err)
+		return nil, fmt.Errorf("photostore: список фото: %w", err)
 	}
 	entries, err := os.ReadDir(s.dir)
 	if err != nil {
@@ -162,15 +171,22 @@ func (s *Store) ListDirsOlderThan(ctx context.Context, cutoff time.Time) ([]stri
 
 	var old []string
 	for _, e := range entries {
-		if !e.IsDir() || !idRe.MatchString(e.Name()) {
+		name := e.Name()
+		if e.IsDir() {
+			// Старая схема: папка <id>/.
+			if !idRe.MatchString(name) {
+				continue
+			}
+		} else if !fileRe.MatchString(name) {
+			// Новая схема: файл <id>.<ext>.
 			continue
 		}
 		info, err := e.Info()
 		if err != nil {
-			return nil, fmt.Errorf("photostore: метаданные папки %s: %w", e.Name(), err)
+			return nil, fmt.Errorf("photostore: метаданные записи %s: %w", name, err)
 		}
 		if info.ModTime().Before(cutoff) {
-			old = append(old, e.Name())
+			old = append(old, name)
 		}
 	}
 	return old, nil

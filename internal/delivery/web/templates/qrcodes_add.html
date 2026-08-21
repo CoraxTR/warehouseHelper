@@ -124,7 +124,7 @@
     <form method="post" action="/qrcodes/add" enctype="multipart/form-data">
         <label for="order_number">Введите номер заказа</label>
         <input type="text" id="order_number" name="order_number" value="{{.OrderNumber}}"
-            placeholder="Например, 12345" autofocus required>
+            placeholder="Например, 12345" autofocus required inputmode="numeric">
 
         <label for="photos">Фотографии кодов</label>
         <input type="file" id="photos" name="photos" accept="image/*" multiple capture="environment">
