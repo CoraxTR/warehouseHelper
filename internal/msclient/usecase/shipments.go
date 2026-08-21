@@ -19,8 +19,8 @@ type WarehouseNotifier interface {
 // OrderShipmentClient — операции МойСклад, нужные для обеспечения отгрузки.
 // Реализуется *client.MSAPIClient.
 type OrderShipmentClient interface {
-	FetchOrderShipmentState(ctx context.Context, href string) (*client.MSOrderShipmentState, error)
-	FetchDemandNewTemplate(ctx context.Context, href string) (json.RawMessage, error)
+	FetchOrderShipmentState(ctx context.Context, id string) (*client.MSOrderShipmentState, error)
+	FetchDemandNewTemplate(ctx context.Context, id string) (json.RawMessage, error)
 	CreateDemand(ctx context.Context, template json.RawMessage) error
 }
 
@@ -39,17 +39,17 @@ func NewOrderShipmentEnsurer(client OrderShipmentClient, notifier WarehouseNotif
 	}
 }
 
-// EnsureOrderShipment проверяет состояние отгрузки заказа по href и, при
+// EnsureOrderShipment проверяет состояние отгрузки заказа по id и, при
 // необходимости, создаёт отгрузку или уведомляет склад о несоответствии.
-func (uc *OrderShipmentEnsurer) EnsureOrderShipment(ctx context.Context, href string) error {
-	state, err := uc.client.FetchOrderShipmentState(ctx, href)
+func (uc *OrderShipmentEnsurer) EnsureOrderShipment(ctx context.Context, id string) error {
+	state, err := uc.client.FetchOrderShipmentState(ctx, id)
 	if err != nil {
 		return fmt.Errorf("failed to fetch shipment state: %w", err)
 	}
 
 	// Отгрузок нет — создаём новую из шаблона заказа.
 	if len(state.Demands) == 0 {
-		return uc.createDemand(ctx, href, state.Name)
+		return uc.createDemand(ctx, id, state.Name)
 	}
 
 	// Отгрузка есть, но сумма не сходится с суммой заказа — на ручную правку.
@@ -60,8 +60,8 @@ func (uc *OrderShipmentEnsurer) EnsureOrderShipment(ctx context.Context, href st
 	return nil
 }
 
-func (uc *OrderShipmentEnsurer) createDemand(ctx context.Context, href, orderName string) error {
-	template, err := uc.client.FetchDemandNewTemplate(ctx, href)
+func (uc *OrderShipmentEnsurer) createDemand(ctx context.Context, id, orderName string) error {
+	template, err := uc.client.FetchDemandNewTemplate(ctx, id)
 	if err != nil {
 		uc.notifyCreateFailed(orderName, err)
 

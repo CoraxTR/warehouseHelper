@@ -14,10 +14,10 @@ type ProductFolderClient interface {
 	FetchProductFolders(ctx context.Context) ([]client.MSProductFolder, error)
 }
 
-// FolderNode — узел дерева папок товаров. Href — meta.href папки из МС (id для чекбоксов).
+// FolderNode — узел дерева папок товаров. ID — id папки из МС (для чекбоксов).
 type FolderNode struct {
 	Name     string
-	Href     string
+	ID       string
 	Children []*FolderNode
 }
 
@@ -43,7 +43,7 @@ func BuildFolderTree(folders []client.MSProductFolder) []*FolderNode {
 		if _, exists := byFullPath[fullPath]; exists {
 			continue
 		}
-		byFullPath[fullPath] = &FolderNode{Name: folders[i].Name, Href: folders[i].Meta.Href}
+		byFullPath[fullPath] = &FolderNode{Name: folders[i].Name, ID: folders[i].ID}
 	}
 
 	roots := make([]*FolderNode, 0, len(folders))

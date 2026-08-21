@@ -6,7 +6,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"warehouseHelper/internal/domain"
 	"warehouseHelper/internal/msclient/client"
@@ -73,7 +72,7 @@ func (p *PDFPreloader) StartPreloading(orders []*domain.InternalOrder) {
 			default:
 			}
 
-			safeName := filepath.Base(strings.TrimSuffix(o.GetHREF(), "/"))
+			safeName := o.GetID()
 			filePath := filepath.Join(tempdir.Dir, safeName+".pdf")
 
 			info, err := os.Stat(filePath)
@@ -86,9 +85,9 @@ func (p *PDFPreloader) StartPreloading(orders []*domain.InternalOrder) {
 				removeFile(filePath)
 			}
 
-			data, err := p.msclient.FetchOrderPDF(ctx, o.GetHREF())
+			data, err := p.msclient.FetchOrderPDF(ctx, o.GetID())
 			if err != nil {
-				log.Printf("Failed to fetch PDF for order %s: %v", o.GetHREF(), err)
+				log.Printf("Failed to fetch PDF for order %s: %v", o.GetID(), err)
 				// Загрузка прервана (например, отменой контекста) — файл мог
 				// остаться пустым или частичным; удаляем, чтобы он не попал
 				// пустым в merge мульти-PDF.
@@ -98,7 +97,7 @@ func (p *PDFPreloader) StartPreloading(orders []*domain.InternalOrder) {
 			}
 
 			if len(data) == 0 {
-				log.Printf("Fetched empty PDF data for order %s", o.GetHREF())
+				log.Printf("Fetched empty PDF data for order %s", o.GetID())
 				removeFile(filePath)
 
 				return
@@ -106,7 +105,7 @@ func (p *PDFPreloader) StartPreloading(orders []*domain.InternalOrder) {
 
 			err = os.WriteFile(filePath, data, 0o600)
 			if err != nil {
-				log.Printf("Failed to save PDF for order %s: %v", o.GetHREF(), err)
+				log.Printf("Failed to save PDF for order %s: %v", o.GetID(), err)
 			}
 		}(ctx, order)
 	}

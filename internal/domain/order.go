@@ -1,7 +1,7 @@
 package domain
 
 type InternalOrder struct {
-	href                  string
+	id                    string
 	name                  string
 	receiverName          string
 	receiverPhoneNumber   uint64
@@ -22,8 +22,8 @@ type InternalOrder struct {
 	errors                map[string]string
 }
 
-func (o *InternalOrder) SetHREF(s string) {
-	o.href = s
+func (o *InternalOrder) SetID(s string) {
+	o.id = s
 }
 
 func (o *InternalOrder) SetName(s string) {
@@ -98,8 +98,8 @@ func (o *InternalOrder) SetErrors(errs map[string]string) {
 	o.errors = errs
 }
 
-func (o *InternalOrder) GetHREF() string {
-	return o.href
+func (o *InternalOrder) GetID() string {
+	return o.id
 }
 
 func (o *InternalOrder) GetName() string {

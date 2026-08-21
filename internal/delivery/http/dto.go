@@ -1,7 +1,7 @@
 package http
 
 type UpdateOrderRequest struct {
-	HREF                  string  `json:"href"`
+	ID                    string  `json:"id"`
 	Name                  string  `json:"name"`
 	ReceiverName          string  `json:"receiverName"`
 	ReceiverPhoneNumber   uint64  `json:"receiverPhoneNumber"`
@@ -22,9 +22,9 @@ type UpdateOrderRequest struct {
 }
 
 type UpdateFromMSRequest struct {
-	Href string `json:"href"`
+	ID string `json:"id"`
 }
 
 type PrintMultipleRequest struct {
-	Hrefs []string `json:"hrefs"`
+	IDs []string `json:"ids"`
 }
