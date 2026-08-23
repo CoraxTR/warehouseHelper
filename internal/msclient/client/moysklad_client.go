@@ -871,7 +871,14 @@ func (msac *MSAPIClient) FetchDemandNewTemplate(parentctx context.Context, id st
 		ctx, cancel := context.WithTimeout(parentctx, 300*time.Second)
 		defer cancel()
 
-		endpoint, err := msac.entityEndpoint("customerorder", id)
+		// PUT /entity/demand/new — эндпоинт шаблона отгрузки.
+		endpoint, err := msac.entityEndpoint("demand", "new")
+		if err != nil {
+			return nil, err
+		}
+
+		// href заказа, на который создаётся отгрузка (идёт в теле шаблона).
+		orderHref, err := msac.entityEndpoint("customerorder", id)
 		if err != nil {
 			return nil, err
 		}
@@ -879,7 +886,7 @@ func (msac *MSAPIClient) FetchDemandNewTemplate(parentctx context.Context, id st
 		reqBody, err := json.Marshal(demandNewRequest{
 			CustomerOrder: MSMetaRef{
 				Meta: Meta{
-					Href:      endpoint,
+					Href:      orderHref,
 					Type:      "customerorder",
 					MediaType: MSApplicationJSON,
 				},
