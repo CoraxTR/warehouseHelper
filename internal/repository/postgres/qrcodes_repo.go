@@ -6,11 +6,7 @@ import (
 	"time"
 
 	"warehouseHelper/internal/domain"
-	qucase "warehouseHelper/internal/qrcodes/usecase"
 )
-
-// Compile-time check: PGClient реализует контракт хранилища модуля «Честный знак».
-var _ qucase.QRRepository = (*PGClient)(nil)
 
 // UpsertOrderWithPhotos создаёт заказ по номеру (или находит существующий)
 // и добавляет к нему фотографии в одной транзакции. Возвращает id заказа.
