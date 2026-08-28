@@ -116,6 +116,9 @@
 <body>
     <div class="header">
         <h1>{{.Page.Title}}</h1>
+        {{if .Page.SupplierID}}
+        <a class="btn" href="/ms/suppliers/edit?id={{.Page.SupplierID}}">В справочнике поставщиков</a>
+        {{end}}
         <a class="btn" href="/wiki/edit?title={{.Page.Title|urlquery}}">Редактировать</a>
     </div>
 

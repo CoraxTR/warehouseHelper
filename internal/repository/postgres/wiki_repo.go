@@ -17,7 +17,7 @@ import (
 // Порядок должен совпадать с порядком Scan в scanWikiPage.
 const wikiPageColumns = `
     id, page_type, title, content, contacts, order_days, delivery_days,
-    average_weight, suppliers, products, (photo IS NOT NULL)`
+    average_weight, suppliers, products, supplier_id, (photo IS NOT NULL)`
 
 // GetPage возвращает вики-страницу по заголовку (без учёта регистра),
 // включая теги. Если страница не найдена, возвращает (nil, nil).
@@ -74,12 +74,13 @@ func scanWikiPage(row pgx.Row) (*domain.WikiPage, error) {
 		orderDays, deliveryDays  []int16
 		suppliers                []string
 		products                 []string
+		supplierID               *string
 		hasPhoto                 bool
 	)
 
 	err := row.Scan(
 		&id, &pageType, &title, &content, &contactsJSON,
-		&orderDays, &deliveryDays, &averageWeight, &suppliers, &products, &hasPhoto,
+		&orderDays, &deliveryDays, &averageWeight, &suppliers, &products, &supplierID, &hasPhoto,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -100,6 +101,9 @@ func scanWikiPage(row pgx.Row) (*domain.WikiPage, error) {
 		Suppliers:     suppliers,
 		Products:      products,
 		HasPhoto:      hasPhoto,
+	}
+	if supplierID != nil {
+		page.SupplierID = *supplierID
 	}
 
 	if len(contactsJSON) > 0 {
@@ -719,4 +723,72 @@ func (pg *PGClient) SavePage(ctx context.Context, page *domain.WikiPage, current
 	}
 
 	return tx.Commit(ctx)
+}
+
+// GetPageBySupplierID возвращает страницу поставщика по привязке
+// к справочнику (wiki_pages.supplier_id). Если страницы нет — (nil, nil).
+// Теги не подгружаются: для синка нужны только данные страницы.
+func (pg *PGClient) GetPageBySupplierID(ctx context.Context, supplierID string) (*domain.WikiPage, error) {
+	row := pg.Pool.QueryRow(ctx, `
+        SELECT `+wikiPageColumns+`
+        FROM wiki_pages
+        WHERE supplier_id = $1
+    `, supplierID)
+
+	return scanWikiPage(row)
+}
+
+// GetUnlinkedSupplierPageByTitle ищет страницу поставщика без привязки
+// к справочнику (создана вручную, supplier_id IS NULL). Если нет — (nil, nil).
+func (pg *PGClient) GetUnlinkedSupplierPageByTitle(ctx context.Context, title string) (*domain.WikiPage, error) {
+	row := pg.Pool.QueryRow(ctx, `
+        SELECT `+wikiPageColumns+`
+        FROM wiki_pages
+        WHERE page_type = 'supplier' AND supplier_id IS NULL AND lower(title) = lower($1)
+    `, title)
+
+	return scanWikiPage(row)
+}
+
+// CreateSupplierPage создаёт страницу поставщика с привязкой к справочнику.
+// Занятый заголовок (или уже существующая привязка) → domain.ErrTitleTaken.
+func (pg *PGClient) CreateSupplierPage(ctx context.Context, page *domain.WikiPage) error {
+	tag, err := pg.Pool.Exec(ctx, `
+        INSERT INTO wiki_pages (page_type, title, order_days, delivery_days, supplier_id)
+        VALUES ('supplier', $1, $2, $3, $4)
+        ON CONFLICT DO NOTHING
+    `, page.Title, intsToInt16(page.OrderDays), intsToInt16(page.DeliveryDays), page.SupplierID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return domain.ErrTitleTaken
+	}
+
+	return nil
+}
+
+// UpdateSupplierPage обновляет данные страницы поставщика из справочника:
+// заголовок (= name), дни заказа/доставки и привязку supplier_id (для
+// непривязанной вручную созданной страницы — claim). Занятый заголовок →
+// domain.ErrTitleTaken; страница удалена конкурентно → domain.ErrPageNotFound.
+func (pg *PGClient) UpdateSupplierPage(ctx context.Context, pageID int64, supplierID, title string, orderDays, deliveryDays []int) error {
+	tag, err := pg.Pool.Exec(ctx, `
+        UPDATE wiki_pages SET
+            title = $1, order_days = $2, delivery_days = $3, supplier_id = $4
+        WHERE id = $5
+    `, title, intsToInt16(orderDays), intsToInt16(deliveryDays), supplierID, pageID)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return domain.ErrTitleTaken
+		}
+
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return domain.ErrPageNotFound
+	}
+
+	return nil
 }

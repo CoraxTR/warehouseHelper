@@ -20,8 +20,16 @@ CREATE TABLE wiki_pages (
     suppliers      TEXT[] NOT NULL DEFAULT '{}',      -- названия страниц поставщиков
     photo          BYTEA,
     photo_type     TEXT NOT NULL DEFAULT '',
-    photo_name     TEXT NOT NULL DEFAULT ''
+    photo_name     TEXT NOT NULL DEFAULT '',
+    -- привязка к операционным таблицам (страница поставщика); данные (title, order_days,
+    -- delivery_days) синхронизируются при сохранении поставщика в справочнике «МойСклад»,
+    -- пользовательский контент страницы (текст, контакты, теги, фото) не трогается:
+    supplier_id    TEXT REFERENCES suppliers(id) ON DELETE SET NULL,  -- страница создана от поставщика; NULL — без привязки
+    product_id     TEXT REFERENCES products(id) ON DELETE SET NULL    -- страница создана от товара; NULL — без привязки
 );
+
+-- Один поставщик справочника = одна страница вики (частичный уникальный индекс).
+CREATE UNIQUE INDEX wiki_pages_supplier_id_uniq ON wiki_pages (supplier_id) WHERE supplier_id IS NOT NULL;
 
 -- Уникальность заголовка без учёта регистра: [[склад]] и [[Склад]] — одна страница.
 CREATE UNIQUE INDEX wiki_pages_title_uniq ON wiki_pages (lower(title));
