@@ -14,36 +14,41 @@
             font-size: 24px;
         }
 
-        #folder-tree {
-            list-style: none;
-            padding-left: 0;
+        .actions {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            margin-bottom: 16px;
         }
 
-        .folder-children,
-        .product-children {
-            list-style: none;
-            padding-left: 20px;
+        .actions input[type="text"] {
+            padding: 8px;
+            font-size: 15px;
+            width: 320px;
+            border: 1px solid #aaa;
+            border-radius: 4px;
         }
 
-        .folder-toggle {
+        .actions button {
+            padding: 8px 16px;
+            font-size: 15px;
             cursor: pointer;
-            user-select: none;
-            display: inline-block;
-            width: 1em;
-            color: #666;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
         }
 
-        .folder-toggle::before {
-            content: "▸";
+        .actions button:hover {
+            background-color: #0056b3;
         }
 
-        .folder-toggle.expanded::before {
-            content: "▾";
+        .add-btn {
+            background-color: #28a745 !important;
         }
 
-        .folder-children.hidden,
-        .product-children.hidden {
-            display: none;
+        .add-btn:hover {
+            background-color: #1e7e34 !important;
         }
 
         .error-banner {
@@ -54,187 +59,47 @@
             margin-bottom: 16px;
         }
 
-        .errors-report {
-            color: #b00020;
-            background: #fff3f3;
-            border: 1px solid #f0c0c0;
-            padding: 10px 16px;
-            border-radius: 4px;
-            margin: 16px 0;
+        .matches {
+            margin-top: 16px;
         }
 
-        .errors-report h2 {
-            margin: 4px 0 8px;
-            font-size: 16px;
+        .matches a {
+            display: block;
+            padding: 6px 0;
+            color: #0056b3;
         }
 
-        .errors-report li {
-            margin-bottom: 4px;
-        }
-
-        .export-btn {
-            position: fixed;
-            right: 20px;
-            bottom: 20px;
-            padding: 12px 24px;
-            font-size: 16px;
-            cursor: pointer;
-            background-color: #007bff;
-            color: white;
-            border: none;
-            border-radius: 4px;
-        }
-
-        .export-btn:hover {
-            background-color: #0056b3;
-        }
-
-        label {
-            cursor: pointer;
+        .matches .code {
+            color: #666;
+            margin-right: 8px;
         }
     </style>
 </head>
 
 <body>
     <h1>Продукция</h1>
-    <p>Отметьте товары (или целые группы/подгруппы) и нажмите «Выгрузить в каталог».
-        Товар выгружается только при полностью заполненных данных; по каждому неуспешному
-        товару показывается ошибка, остальные продолжают выгружаться.</p>
     <p><a href="/ms">← Назад в МойСклад</a></p>
 
     {{if .Error}}
     <div class="error-banner">{{.Error}}</div>
     {{end}}
 
-    {{if .Errors}}
-    <div class="errors-report">
-        <h2>Ошибки выгрузки ({{len .Errors}})</h2>
-        <ul>
-            {{range .Errors}}<li><b>{{.Name}}</b>: {{.Err}}</li>{{end}}
-        </ul>
+    <div class="actions">
+        <form method="post" action="/goods/search" style="display:flex;gap:8px;margin:0;">
+            <input type="text" name="q" value="{{.Query}}" placeholder="Код или название товара" autofocus>
+            <button type="submit">Поиск</button>
+        </form>
+        <a href="/goods/tree"><button class="add-btn">Добавление</button></a>
+    </div>
+
+    {{if .Matches}}
+    <div class="matches">
+        <h2>Найдено: {{len .Matches}}</h2>
+        {{range .Matches}}
+        <a href="/goods/edit?id={{.ID}}"><span class="code">{{.InternalCode}}</span>{{.Name}}</a>
+        {{end}}
     </div>
     {{end}}
-
-    <form method="post" action="/goods">
-        {{if .Tree}}
-        <ul id="folder-tree">
-            {{range .Tree}}{{template "folderNode" (folderCtx . $.Selected)}}{{end}}
-        </ul>
-        {{else}}
-        <p>Дерево пусто (или ещё не загружено). Нажмите «Выгрузить товары из МС».</p>
-        {{end}}
-
-        <button type="submit" class="export-btn">Выгрузить в каталог</button>
-    </form>
-
-    <script>
-        // Стрелка сворачивает/разворачивает содержимое папки: прямые дочерние
-        // ul (подпапки и товары). Вложенные ul сохраняют своё состояние.
-        // Намеренно без :scope и NodeList.forEach — совместимость со старыми
-        // браузерами (на складе может быть что угодно).
-        function toggleFolder(el) {
-            el.classList.toggle('expanded');
-
-            var li = el.parentNode;
-            while (li && li.tagName !== 'LI') { li = li.parentNode; }
-            if (!li) { return; }
-
-            var uls = li.getElementsByTagName('ul');
-            for (var i = 0; i < uls.length; i++) {
-                if (uls[i].parentNode === li) {
-                    uls[i].classList.toggle('hidden');
-                }
-            }
-        }
-
-        // ближайший <li> предок элемента (замена closest для старых браузеров)
-        function parentLi(el) {
-            var li = el.parentNode;
-            while (li && li.tagName !== 'LI') { li = li.parentNode; }
-            return li;
-        }
-
-        // Отмеченная папка = все её подпапки и товары; у частично отмеченной —
-        // промежуточное состояние.
-        function refreshFolderStates() {
-            var cbs = document.querySelectorAll('.folder-cb');
-            for (var i = 0; i < cbs.length; i++) {
-                var li = parentLi(cbs[i]);
-                if (!li) { continue; }
-
-                var nested = li.getElementsByTagName('li');
-                var total = 0, checked = 0;
-                for (var j = 0; j < nested.length; j++) {
-                    var inputs = nested[j].getElementsByTagName('input');
-                    for (var k = 0; k < inputs.length; k++) {
-                        if (inputs[k].type !== 'checkbox') { continue; }
-                        total++;
-                        if (inputs[k].checked) { checked++; }
-                    }
-                }
-                cbs[i].indeterminate = total > 0 && checked > 0 && checked < total;
-            }
-        }
-
-        function bindFolderChecks() {
-            var cbs = document.querySelectorAll('.folder-cb');
-            for (var i = 0; i < cbs.length; i++) {
-                cbs[i].addEventListener('change', function () {
-                    var li = parentLi(this);
-                    if (!li) { return; }
-
-                    var inputs = li.getElementsByTagName('input');
-                    for (var j = 0; j < inputs.length; j++) {
-                        if (inputs[j].type === 'checkbox' && inputs[j] !== this) {
-                            inputs[j].checked = this.checked;
-                        }
-                    }
-                    refreshFolderStates();
-                });
-            }
-        }
-
-        function bindProductChecks() {
-            var inputs = document.querySelectorAll('input[type="checkbox"]');
-            for (var i = 0; i < inputs.length; i++) {
-                if (inputs[i].className.indexOf('folder-cb') === -1) {
-                    inputs[i].addEventListener('change', refreshFolderStates);
-                }
-            }
-        }
-
-        bindFolderChecks();
-        bindProductChecks();
-        refreshFolderStates();
-    </script>
 </body>
 
 </html>
-
-{{define "folderNode"}}
-<li>
-    <span class="folder-toggle expanded" onclick="toggleFolder(this)"></span>
-    <label>
-        <input type="checkbox" name="folders" value="{{.Node.ID}}" class="folder-cb"
-            {{if index $.Selected .Node.ID}}checked{{end}}> {{.Node.Name}}
-    </label>
-    {{if .Node.Children}}
-    <ul class="folder-children">
-        {{range .Node.Children}}{{template "folderNode" (folderCtx . $.Selected)}}{{end}}
-    </ul>
-    {{end}}
-    {{if .Node.Products}}
-    <ul class="product-children">
-        {{range .Node.Products}}
-        <li>
-            <label>
-                <input type="checkbox" name="product" value="{{.ID}}" class="product-cb"
-                    {{if index $.Selected .ID}}checked{{end}}> {{.Name}}
-            </label>
-            <input type="hidden" name="path_{{.ID}}" value="{{.Path}}">
-        </li>
-        {{end}}
-    </ul>
-    {{end}}
-</li>
-{{end}}

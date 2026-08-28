@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Позиция: {{.Product.Name}}</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+        }
+
+        h1 {
+            font-size: 24px;
+        }
+
+        .topbar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+
+        .resync-btn {
+            padding: 8px 16px;
+            font-size: 15px;
+            cursor: pointer;
+            background-color: #ffc107;
+            color: #333;
+            border: none;
+            border-radius: 4px;
+        }
+
+        .resync-btn:hover {
+            background-color: #e0a800;
+        }
+
+        .banner {
+            padding: 10px;
+            border-radius: 4px;
+            margin-bottom: 16px;
+        }
+
+        .banner.ok {
+            color: #0a6b2d;
+            background: #e6ffe6;
+        }
+
+        .banner.err {
+            color: #b00020;
+            background: #ffe6e6;
+        }
+
+        form.fields {
+            max-width: 520px;
+        }
+
+        .field {
+            margin-bottom: 12px;
+        }
+
+        .field label {
+            display: block;
+            margin-bottom: 3px;
+            color: #444;
+            font-size: 14px;
+        }
+
+        .field input[type="text"],
+        .field input[type="number"] {
+            width: 100%;
+            padding: 7px;
+            font-size: 15px;
+            border: 1px solid #aaa;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+
+        .field input[readonly] {
+            background: #f0f0f0;
+            color: #555;
+        }
+
+        .field .hint {
+            font-size: 12px;
+            color: #888;
+        }
+
+        .save-btn {
+            margin-top: 8px;
+            padding: 10px 20px;
+            font-size: 15px;
+            cursor: pointer;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+        }
+
+        .save-btn:hover {
+            background-color: #0056b3;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="topbar">
+        <h1>{{.Product.Name}}</h1>
+        <form method="post" action="/goods/resync?id={{.Product.ID}}" style="margin:0;">
+            <button type="submit" class="resync-btn">Обновить до МС</button>
+        </form>
+    </div>
+    <p><a href="/goods">← Назад в Продукцию</a></p>
+
+    {{if .OK}}
+    <div class="banner ok">{{.OK}}</div>
+    {{end}}
+    {{if .Error}}
+    <div class="banner err">{{.Error}}</div>
+    {{end}}
+
+    <form class="fields" method="post" action="/goods/edit">
+        <input type="hidden" name="id" value="{{.Product.ID}}">
+
+        <div class="field">
+            <label>id (МойСклад)</label>
+            <input type="text" value="{{.Product.ID}}" readonly>
+        </div>
+        <div class="field">
+            <label>Внутренний код</label>
+            <input type="text" name="internal_code" value="{{.Product.InternalCode}}">
+        </div>
+        <div class="field">
+            <label>Название</label>
+            <input type="text" name="name" value="{{.Product.Name}}">
+        </div>
+        <div class="field">
+            <label>Единица измерения</label>
+            <input type="text" name="uom" value="{{.Product.UOM}}">
+        </div>
+        <div class="field">
+            <label>Группа</label>
+            <input type="text" name="group_name" value="{{.Product.GroupName}}">
+        </div>
+        <div class="field">
+            <label>Средний вес, кг</label>
+            <input type="number" step="0.0001" name="average_weight"
+                {{if .Product.AverageWeight}}value="{{printf "%.4f" .Product.AverageWeight}}"{{end}}>
+        </div>
+        <div class="field">
+            <label>Общий срок годности, дни</label>
+            <input type="number" step="1" name="shelf_life"
+                {{if .Product.ShelfLife}}value="{{.Product.ShelfLife}}"{{end}}>
+        </div>
+        <div class="field">
+            <label>Кол-во в упаковке</label>
+            <input type="number" step="1" name="pack_size"
+                {{if .Product.PackSize}}value="{{.Product.PackSize}}"{{end}}>
+        </div>
+        <div class="field">
+            <label>Вид инвентаризации</label>
+            <input type="text" name="inventory_type" value="{{.Product.InventoryType}}">
+        </div>
+        <div class="field">
+            <label><input type="checkbox" name="short_list" {{if .Product.ShortList}}checked{{end}}> Шорт лист</label>
+        </div>
+        <div class="field">
+            <label><input type="checkbox" name="track_weekly" {{if .Product.TrackWeekly}}checked{{end}}> Недельный</label>
+        </div>
+
+        <button type="submit" class="save-btn">Сохранить</button>
+    </form>
+</body>
+
+</html>
