@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Поставщики — МойСклад</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            max-width: 800px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        h1 {
+            text-align: center;
+        }
+
+        button {
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+        }
+
+        button:hover {
+            background-color: #0056b3;
+        }
+
+        .error {
+            color: #dc3545;
+            text-align: center;
+        }
+
+        ul {
+            list-style: none;
+            padding: 0;
+        }
+
+        li {
+            padding: 10px;
+            border-bottom: 1px solid #eee;
+            text-align: center;
+        }
+
+        li a {
+            color: #007bff;
+            text-decoration: none;
+            font-size: 18px;
+        }
+
+        li a:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Поставщики</h1>
+    {{if .Error}}<p class="error">{{.Error}}</p>{{end}}
+    <div style="text-align:center; margin-bottom: 20px;">
+        <a href="/ms/suppliers/new"><button>Добавить поставщика</button></a>
+    </div>
+    <ul>
+        {{range .Suppliers}}
+        <li><a href="/ms/suppliers/edit?id={{.ID}}">{{.Name}}</a></li>
+        {{else}}
+        <li>Пока нет ни одного поставщика</li>
+        {{end}}
+    </ul>
+    <p style="text-align:center;"><a href="/ms">← Назад в «МойСклад»</a></p>
+</body>
+
+</html>

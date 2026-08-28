@@ -46,6 +46,7 @@ type WikiPage struct {
 	AverageWeight string    // средний вес заказа
 	Suppliers     []string  // поставщики (для страницы товара)
 	Products      []string  // продукты (для страницы поставщика)
+	SupplierID    string    // привязка к справочнику поставщиков (mssuppliers); пусто — страница создана вручную
 	HasPhoto      bool      // есть ли фото
 }
 

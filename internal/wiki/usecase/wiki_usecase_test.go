@@ -26,6 +26,17 @@ type stubWikiRepo struct {
 	tagCloud     []domain.WikiTagCount
 	linkTargets  map[string]string
 	titles       []string
+	// синк страниц поставщиков:
+	linkedPage            *domain.WikiPage
+	unlinkedPage          *domain.WikiPage
+	createPageErr         error
+	updatePageErr         error
+	createdPage           *domain.WikiPage
+	lastUpdatedPageID     int64
+	lastUpdatedSupplierID string
+	lastUpdatedTitle      string
+	lastUpdatedOrderDays  []int
+	lastUpdatedDelivDays  []int
 
 	saveCalled        bool
 	resolveCalled     bool
@@ -87,6 +98,30 @@ func (s *stubWikiRepo) ResolveLinkTargets(_ context.Context, rawTitles []string)
 
 func (s *stubWikiRepo) ListPageTitlesByType(context.Context, domain.PageType) ([]string, error) {
 	return s.titles, nil
+}
+
+func (s *stubWikiRepo) GetPageBySupplierID(_ context.Context, _ string) (*domain.WikiPage, error) {
+	return s.linkedPage, nil
+}
+
+func (s *stubWikiRepo) GetUnlinkedSupplierPageByTitle(_ context.Context, _ string) (*domain.WikiPage, error) {
+	return s.unlinkedPage, nil
+}
+
+func (s *stubWikiRepo) CreateSupplierPage(_ context.Context, page *domain.WikiPage) error {
+	s.createdPage = page
+
+	return s.createPageErr
+}
+
+func (s *stubWikiRepo) UpdateSupplierPage(_ context.Context, pageID int64, supplierID, title string, orderDays, deliveryDays []int) error {
+	s.lastUpdatedPageID = pageID
+	s.lastUpdatedSupplierID = supplierID
+	s.lastUpdatedTitle = title
+	s.lastUpdatedOrderDays = orderDays
+	s.lastUpdatedDelivDays = deliveryDays
+
+	return s.updatePageErr
 }
 
 func TestWikiUseCaseSavePageValidation(t *testing.T) {
@@ -364,5 +399,94 @@ func TestWikiUseCaseResolveLinkTargetsEmpty(t *testing.T) {
 	}
 	if repo.resolveCalled {
 		t.Errorf("repo.ResolveLinkTargets вызван при пустом списке")
+	}
+}
+
+func TestSyncSupplierPage_UpdateExisting(t *testing.T) {
+	repo := &stubWikiRepo{linkedPage: &domain.WikiPage{ID: 42, Title: "Старое имя"}}
+	uc := NewWikiUseCase(repo)
+
+	err := uc.SyncSupplierPage(context.Background(), "uuid-1", "Мираторг", []int{1, 3}, []int{2, 5})
+	if err != nil {
+		t.Fatalf("SyncSupplierPage: %v", err)
+	}
+	if repo.lastUpdatedPageID != 42 || repo.lastUpdatedSupplierID != "uuid-1" || repo.lastUpdatedTitle != "Мираторг" {
+		t.Fatalf("UpdateSupplierPage вызван с неверными аргументами: %+v", repo)
+	}
+	if !reflect.DeepEqual(repo.lastUpdatedOrderDays, []int{1, 3}) || !reflect.DeepEqual(repo.lastUpdatedDelivDays, []int{2, 5}) {
+		t.Fatalf("дни переданы неверно: order=%v delivery=%v", repo.lastUpdatedOrderDays, repo.lastUpdatedDelivDays)
+	}
+	if repo.createdPage != nil {
+		t.Fatalf("страница не должна создаваться при существующей привязке")
+	}
+}
+
+func TestSyncSupplierPage_ClaimUnlinked(t *testing.T) {
+	repo := &stubWikiRepo{unlinkedPage: &domain.WikiPage{ID: 7, Title: "Мираторг", SupplierID: ""}}
+	uc := NewWikiUseCase(repo)
+
+	err := uc.SyncSupplierPage(context.Background(), "uuid-1", "Мираторг", []int{1, 3}, nil)
+	if err != nil {
+		t.Fatalf("SyncSupplierPage: %v", err)
+	}
+	if repo.lastUpdatedPageID != 7 || repo.lastUpdatedSupplierID != "uuid-1" {
+		t.Fatalf("claim: ожидался Update страницы 7 с привязкой uuid-1, получил %+v", repo)
+	}
+	if repo.createdPage != nil {
+		t.Fatalf("при наличии непривязанной страницы создание не нужно")
+	}
+}
+
+func TestSyncSupplierPage_CreateNew(t *testing.T) {
+	repo := &stubWikiRepo{}
+	uc := NewWikiUseCase(repo)
+
+	err := uc.SyncSupplierPage(context.Background(), "uuid-1", "Новый поставщик", []int{1}, []int{3, 4})
+	if err != nil {
+		t.Fatalf("SyncSupplierPage: %v", err)
+	}
+	if repo.createdPage == nil {
+		t.Fatalf("страница не создана")
+	}
+	if repo.createdPage.Type != domain.PageTypeSupplier || repo.createdPage.Title != "Новый поставщик" ||
+		repo.createdPage.SupplierID != "uuid-1" {
+		t.Fatalf("создана неверная страница: %+v", repo.createdPage)
+	}
+	if !reflect.DeepEqual(repo.createdPage.OrderDays, []int{1}) || !reflect.DeepEqual(repo.createdPage.DeliveryDays, []int{3, 4}) {
+		t.Fatalf("дни созданной страницы неверны: %+v", repo.createdPage)
+	}
+}
+
+func TestSyncSupplierPage_RecreateAfterManualDelete(t *testing.T) {
+	// Привязки нет и непривязанной страницы нет (пользователь удалил) — создаём заново.
+	repo := &stubWikiRepo{}
+	uc := NewWikiUseCase(repo)
+
+	if err := uc.SyncSupplierPage(context.Background(), "uuid-1", "Мираторг", nil, nil); err != nil {
+		t.Fatalf("SyncSupplierPage: %v", err)
+	}
+	if repo.createdPage == nil {
+		t.Fatalf("удалённая вручную страница должна пересоздаваться")
+	}
+}
+
+func TestSyncSupplierPage_TitleTakenOnCreate(t *testing.T) {
+	repo := &stubWikiRepo{createPageErr: domain.ErrTitleTaken}
+	uc := NewWikiUseCase(repo)
+
+	err := uc.SyncSupplierPage(context.Background(), "uuid-1", "Мираторг", nil, nil)
+	if !errors.Is(err, domain.ErrTitleTaken) {
+		t.Fatalf("ожидался ErrTitleTaken, получил %v", err)
+	}
+}
+
+func TestSyncSupplierPage_Validation(t *testing.T) {
+	uc := NewWikiUseCase(&stubWikiRepo{})
+
+	if err := uc.SyncSupplierPage(context.Background(), "", "Мираторг", nil, nil); err == nil {
+		t.Fatalf("пустой id поставщика должен давать ошибку")
+	}
+	if err := uc.SyncSupplierPage(context.Background(), "uuid-1", "  ", nil, nil); err == nil {
+		t.Fatalf("пустое имя должно давать ошибку")
 	}
 }

@@ -36,5 +36,13 @@ func NewRouter(h *Handler) *http.ServeMux {
 	mux.HandleFunc("/qrcodes/list", h.QRList)                     // GET — таблица заказов с фото
 	mux.Handle("/qrcodes/photos/", http.StripPrefix("/qrcodes/photos/", qrPhotosHandler(h.qrUC.PhotosDir())))
 
+	// Модуль «МойСклад»: хаб и справочник поставщиков.
+	mux.HandleFunc("/ms", h.MsPage)                          // GET — хаб
+	mux.HandleFunc("/ms/suppliers", h.SuppliersList)         // GET — список поставщиков
+	mux.HandleFunc("/ms/suppliers/new", h.SupplierNew)       // GET — форма создания
+	mux.HandleFunc("/ms/suppliers/edit", h.SupplierEdit)     // GET — форма редактирования
+	mux.HandleFunc("/ms/suppliers/save", h.SupplierSave)     // POST — создание/обновление
+	mux.HandleFunc("/ms/suppliers/delete", h.SupplierDelete) // POST — удаление
+
 	return mux
 }

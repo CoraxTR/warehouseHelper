@@ -4,6 +4,7 @@ package usecase
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -25,6 +26,11 @@ type WikiRepository interface {
 	TagCloud(ctx context.Context) ([]domain.WikiTagCount, error)
 	ResolveLinkTargets(ctx context.Context, rawTitles []string) (map[string]string, error)
 	ListPageTitlesByType(ctx context.Context, typ domain.PageType) ([]string, error)
+	// Синк страниц поставщиков из справочника (модуль mssuppliers).
+	GetPageBySupplierID(ctx context.Context, supplierID string) (*domain.WikiPage, error)
+	GetUnlinkedSupplierPageByTitle(ctx context.Context, title string) (*domain.WikiPage, error)
+	CreateSupplierPage(ctx context.Context, page *domain.WikiPage) error
+	UpdateSupplierPage(ctx context.Context, pageID int64, supplierID, title string, orderDays, deliveryDays []int) error
 }
 
 // WikiUseCase — сценарии работы с вики-страницами.
@@ -87,6 +93,61 @@ func (uc *WikiUseCase) ResolveLinkTargets(ctx context.Context, rawTitles []strin
 // ListPageTitlesByType возвращает заголовки страниц заданного типа.
 func (uc *WikiUseCase) ListPageTitlesByType(ctx context.Context, typ domain.PageType) ([]string, error) {
 	return uc.repo.ListPageTitlesByType(ctx, typ)
+}
+
+// SyncSupplierPage создаёт или обновляет страницу поставщика из данных
+// справочника поставщиков (модуль mssuppliers). Обновляются только привязка
+// supplier_id, заголовок (= name) и дни заказа/доставки; пользовательский
+// контент страницы (текст, контакты, теги, фото, ссылки) не трогается.
+// Синк идемпотентен: удалённую вручную страницу пересоздаёт, вручную
+// созданную страницу с тем же названием — привязывает к поставщику.
+// Занятый заголовок (страница другого типа) → domain.ErrTitleTaken.
+func (uc *WikiUseCase) SyncSupplierPage(ctx context.Context, supplierID, name string, orderDays, deliveryDays []int) error {
+	supplierID = strings.TrimSpace(supplierID)
+	name = strings.TrimSpace(name)
+	if supplierID == "" {
+		return errors.New("не передан id поставщика")
+	}
+	if name == "" {
+		return errors.New("не передано имя поставщика")
+	}
+
+	page, err := uc.repo.GetPageBySupplierID(ctx, supplierID)
+	if err != nil {
+		return fmt.Errorf("получить страницу вики поставщика %s: %w", supplierID, err)
+	}
+	if page != nil {
+		if err := uc.repo.UpdateSupplierPage(ctx, page.ID, supplierID, name, orderDays, deliveryDays); err != nil {
+			return fmt.Errorf("обновить страницу вики поставщика %s: %w", supplierID, err)
+		}
+
+		return nil
+	}
+
+	// Страницы с привязкой нет: привязываем вручную созданную с таким же названием.
+	unlinked, err := uc.repo.GetUnlinkedSupplierPageByTitle(ctx, name)
+	if err != nil {
+		return fmt.Errorf("найти непривязанную страницу %q: %w", name, err)
+	}
+	if unlinked != nil {
+		if err := uc.repo.UpdateSupplierPage(ctx, unlinked.ID, supplierID, name, orderDays, deliveryDays); err != nil {
+			return fmt.Errorf("привязать страницу вики %q к поставщику %s: %w", name, supplierID, err)
+		}
+
+		return nil
+	}
+
+	if err := uc.repo.CreateSupplierPage(ctx, &domain.WikiPage{
+		Type:         domain.PageTypeSupplier,
+		Title:        name,
+		OrderDays:    orderDays,
+		DeliveryDays: deliveryDays,
+		SupplierID:   supplierID,
+	}); err != nil {
+		return fmt.Errorf("создать страницу вики поставщика %s: %w", supplierID, err)
+	}
+
+	return nil
 }
 
 // DeletePage удаляет страницу по заголовку.

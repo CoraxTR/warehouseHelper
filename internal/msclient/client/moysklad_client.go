@@ -1101,3 +1101,62 @@ func (msac *MSAPIClient) productFolderListEndpoint(offset, limit int) (string, e
 
 	return u.String(), nil
 }
+
+// FetchCounterpartyName — получение названия контрагента МойСклад
+// (GET /entity/counterparty/{id}). Используется справочником поставщиков
+// при сохранении: имя всегда берётся из МС, а не из формы.
+func (msac *MSAPIClient) FetchCounterpartyName(parentctx context.Context, id string) (string, error) {
+	job := func(apiKey string) (any, error) {
+		ctx, cancel := context.WithTimeout(parentctx, 30*time.Second)
+		defer cancel()
+
+		endpoint, err := msac.entityEndpoint("counterparty", id)
+		if err != nil {
+			return nil, err
+		}
+
+		body, resp, err := msac.httpRequest(ctx, http.MethodGet, endpoint, apiKey, http.NoBody)
+		if err != nil {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			default:
+				return nil, err
+			}
+		}
+
+		err = resp.Body.Close()
+		if err != nil {
+			log.Printf("failed to close response body: %v", err)
+		}
+
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return nil, msAPIError(resp.Status, body)
+		}
+
+		var c MSCounterparty
+		if err := json.Unmarshal(body, &c); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal counterparty: %w", err)
+		}
+
+		return c.Name, nil
+	}
+
+	resCh := msac.workerpool.SubmitOther(job)
+
+	select {
+	case res := <-resCh:
+		if res.Err != nil {
+			return "", fmt.Errorf("FetchCounterpartyName failed: %w", res.Err)
+		}
+
+		name, ok := res.Value.(string)
+		if !ok {
+			return "", errors.New("FetchCounterpartyName failed: unexpected value type")
+		}
+
+		return name, nil
+	case <-parentctx.Done():
+		return "", parentctx.Err()
+	}
+}
