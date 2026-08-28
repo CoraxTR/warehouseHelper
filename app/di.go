@@ -10,6 +10,7 @@ import (
 	"warehouseHelper/internal/msclient/pdfpreloader"
 	msucase "warehouseHelper/internal/msclient/usecase"
 	"warehouseHelper/internal/msclient/workerpool"
+	msu "warehouseHelper/internal/mssuppliers/usecase"
 	photostore "warehouseHelper/internal/qrcodes/photostore"
 	qucase "warehouseHelper/internal/qrcodes/usecase"
 	"warehouseHelper/internal/refgo/export/excel"
@@ -50,6 +51,7 @@ type DIContainer struct {
 	wikiUC          *wucase.WikiUseCase
 	goodsUC         *gucase.GoodsUseCase
 	qrUC            *qucase.QRUseCase
+	msUC            *msu.MSSuppliersUseCase
 
 	// Хэндлеры
 	mux      *http.ServeMux
@@ -258,9 +260,19 @@ func (d *DIContainer) QRUC() *qucase.QRUseCase {
 	return d.qrUC
 }
 
+// SuppliersUC — сценарии справочника поставщиков «МойСклад»; PGClient реализует
+// msu.MSSuppliersRepository, MSClient — msu.CounterpartyClient.
+func (d *DIContainer) SuppliersUC() *msu.MSSuppliersUseCase {
+	if d.msUC == nil {
+		d.msUC = msu.NewMSSuppliersUseCase(d.OrdersRepository(), d.MSClient())
+	}
+
+	return d.msUC
+}
+
 func (d *DIContainer) Handler() *myhttp.Handler {
 	if d.handlers == nil {
-		d.handlers = myhttp.NewHandler(d.SyncUC(), d.OrdersUC(), d.ExcelExportUC(), d.PdfExportUC(), d.BarcodeExportUC(), d.RefGoCheckAgainstUC(), d.WikiUC(), d.GoodsUC(), d.QRUC())
+		d.handlers = myhttp.NewHandler(d.SyncUC(), d.OrdersUC(), d.ExcelExportUC(), d.PdfExportUC(), d.BarcodeExportUC(), d.RefGoCheckAgainstUC(), d.WikiUC(), d.GoodsUC(), d.QRUC(), d.SuppliersUC())
 	}
 
 	return d.handlers

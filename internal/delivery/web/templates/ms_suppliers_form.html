@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <title>{{if .IsEdit}}Поставщик: {{.Supplier.Name}}{{else}}Новый поставщик{{end}}</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            max-width: 600px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        h1 {
+            text-align: center;
+        }
+
+        .error {
+            color: #dc3545;
+            text-align: center;
+        }
+
+        label {
+            display: block;
+            margin-top: 16px;
+            font-weight: bold;
+        }
+
+        input[type="text"],
+        input[type="number"],
+        textarea {
+            width: 100%;
+            box-sizing: border-box;
+            padding: 8px;
+            font-size: 14px;
+            margin-top: 4px;
+        }
+
+        .day-row {
+            margin-top: 4px;
+        }
+
+        .day-row label {
+            display: inline;
+            font-weight: normal;
+            margin-right: 10px;
+        }
+
+        button {
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            margin-top: 20px;
+        }
+
+        button:hover {
+            background-color: #0056b3;
+        }
+
+        button.delete {
+            background-color: #dc3545;
+        }
+
+        button.delete:hover {
+            background-color: #b02a37;
+        }
+
+        .readonly-hint {
+            color: #888;
+            font-weight: normal;
+            font-size: 13px;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>{{if .IsEdit}}Поставщик: {{.Supplier.Name}}{{else}}Новый поставщик{{end}}</h1>
+
+    {{if .Error}}<p class="error">{{.Error}}</p>{{end}}
+
+    <form method="POST" action="/ms/suppliers/save">
+        <input type="hidden" name="mode" value="{{if .IsEdit}}edit{{else}}create{{end}}">
+
+        <label>Ссылка на контрагента в МойСклад
+            {{if .IsEdit}}<span class="readonly-hint">(id: {{.Supplier.ID}})</span>{{else}}<span class="readonly-hint">(вставьте ссылку вида https://online.moysklad.ru/app/#counterparty/edit?id=... — uuid вытащится сам)</span>{{end}}
+        </label>
+        {{if .IsEdit}}
+        <input type="text" name="id" value="{{.Supplier.ID}}" readonly>
+        {{else}}
+        <input type="text" name="id" value="{{.RawID}}" placeholder="https://online.moysklad.ru/app/#counterparty/edit?id=...">
+        {{end}}
+
+        <label>Название <span class="readonly-hint">(берётся из МойСклад при сохранении)</span></label>
+        <input type="text" value="{{with .Supplier}}{{.Name}}{{end}}" readonly>
+
+        <label>Правила вычитки штрихкодов <span class="readonly-hint">(по одному правилу на строку, формат 28-1-6-7-6-13-8-21-8)</span></label>
+        <textarea name="decode_rules" rows="3">{{.DecodeRulesText}}</textarea>
+
+        <label>Правила вычитки коробок <span class="readonly-hint">(формат 28-1-6-7-6-13-8-21-8)</span></label>
+        <textarea name="box_decode_rules" rows="3">{{.BoxDecodeRulesText}}</textarea>
+
+        <label>Дни заказа</label>
+        <div class="day-row">
+            {{range .OrderDays}}<label><input type="checkbox" name="order_days" value="{{.Day}}" {{if .Checked}}checked{{end}}> {{.Label}}</label>{{end}}
+        </div>
+
+        <label>Дни доставки</label>
+        <div class="day-row">
+            {{range .DeliveryDays}}<label><input type="checkbox" name="delivery_days" value="{{.Day}}" {{if .Checked}}checked{{end}}> {{.Label}}</label>{{end}}
+        </div>
+
+        <label>Макс. дней между заказом и доставкой</label>
+        <input type="number" name="delay_days" min="0" value="{{.DelayDaysText}}">
+
+        <label>Мин. сумма заказа, руб.</label>
+        <input type="number" name="min_order_amount" min="0" step="0.01" value="{{.MinOrderAmountText}}">
+
+        <label>Спец. дни заказа <span class="readonly-hint">(для товаров со спец. расписанием)</span></label>
+        <div class="day-row">
+            {{range .SpecialOrderDays}}<label><input type="checkbox" name="special_order_days" value="{{.Day}}" {{if .Checked}}checked{{end}}> {{.Label}}</label>{{end}}
+        </div>
+
+        <label>Спец. дни доставки</label>
+        <div class="day-row">
+            {{range .SpecialDeliveryDays}}<label><input type="checkbox" name="special_delivery_days" value="{{.Day}}" {{if .Checked}}checked{{end}}> {{.Label}}</label>{{end}}
+        </div>
+
+        <label>Спец. макс. дней</label>
+        <input type="number" name="special_delay_days" min="0" value="{{.SpecialDelayDaysText}}">
+
+        <div style="text-align:center;">
+            <button type="submit">Сохранить</button>
+        </div>
+    </form>
+
+    {{if .IsEdit}}
+    <form method="POST" action="/ms/suppliers/delete"
+        onsubmit="return confirm('Удалить поставщика «{{.Supplier.Name}}»? Удалятся и связанные данные (цены, штрихкоды).');">
+        <input type="hidden" name="id" value="{{.Supplier.ID}}">
+        <div style="text-align:center;">
+            <button type="submit" class="delete">Удалить поставщика</button>
+        </div>
+    </form>
+    {{end}}
+
+    <p style="text-align:center;"><a href="/ms/suppliers">← К списку поставщиков</a></p>
+</body>
+
+</html>
