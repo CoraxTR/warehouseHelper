@@ -240,11 +240,12 @@ func (d *DIContainer) WikiUC() *wucase.WikiUseCase {
 	return d.wikiUC
 }
 
-// GoodsUC — сценарий «выгрузить дерево папок товаров из МС»; MSClient реализует
-// gucase.ProductFolderClient.
+// GoodsUC — сценарии «Продукция»: дерево папок/товаров из МС и выгрузка
+// каталога; MSClient реализует gucase.ProductFolderClient и gucase.ProductClient,
+// PGClient — gucase.ProductsRepository.
 func (d *DIContainer) GoodsUC() *gucase.GoodsUseCase {
 	if d.goodsUC == nil {
-		d.goodsUC = gucase.NewGoodsUseCase(d.MSClient())
+		d.goodsUC = gucase.NewGoodsUseCase(d.MSClient(), d.MSClient(), d.OrdersRepository())
 	}
 
 	return d.goodsUC

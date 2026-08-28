@@ -19,7 +19,8 @@
             padding-left: 0;
         }
 
-        .folder-children {
+        .folder-children,
+        .product-children {
             list-style: none;
             padding-left: 20px;
         }
@@ -27,23 +28,21 @@
         .folder-toggle {
             cursor: pointer;
             user-select: none;
-        }
-
-        .folder-toggle::before {
-            content: "▸ ";
+            display: inline-block;
+            width: 1em;
             color: #666;
         }
 
+        .folder-toggle::before {
+            content: "▸";
+        }
+
         .folder-toggle.expanded::before {
-            content: "▾ ";
+            content: "▾";
         }
 
         .folder-children.hidden {
             display: none;
-        }
-
-        .folder-leaf label {
-            cursor: pointer;
         }
 
         .error-banner {
@@ -52,6 +51,24 @@
             padding: 10px;
             border-radius: 4px;
             margin-bottom: 16px;
+        }
+
+        .errors-report {
+            color: #b00020;
+            background: #fff3f3;
+            border: 1px solid #f0c0c0;
+            padding: 10px 16px;
+            border-radius: 4px;
+            margin: 16px 0;
+        }
+
+        .errors-report h2 {
+            margin: 4px 0 8px;
+            font-size: 16px;
+        }
+
+        .errors-report li {
+            margin-bottom: 4px;
         }
 
         .export-btn {
@@ -70,16 +87,31 @@
         .export-btn:hover {
             background-color: #0056b3;
         }
+
+        label {
+            cursor: pointer;
+        }
     </style>
 </head>
 
 <body>
     <h1>Продукция</h1>
-    <p>Нажмите «Выгрузить товары из МС», чтобы загрузить дерево папок товаров.
-        Галочками отмечаются только папки нижнего уровня.</p>
+    <p>Отметьте товары (или целые группы/подгруппы) и нажмите «Выгрузить в каталог».
+        Товар выгружается только при полностью заполненных данных; по каждому неуспешному
+        товару показывается ошибка, остальные продолжают выгружаться.</p>
+    <p><a href="/ms">← Назад в МойСклад</a></p>
 
     {{if .Error}}
     <div class="error-banner">{{.Error}}</div>
+    {{end}}
+
+    {{if .Errors}}
+    <div class="errors-report">
+        <h2>Ошибки выгрузки ({{len .Errors}})</h2>
+        <ul>
+            {{range .Errors}}<li><b>{{.Name}}</b>: {{.Err}}</li>{{end}}
+        </ul>
+    </div>
     {{end}}
 
     <form method="post" action="/goods">
@@ -87,9 +119,11 @@
         <ul id="folder-tree">
             {{range .Tree}}{{template "folderNode" (folderCtx . $.Selected)}}{{end}}
         </ul>
+        {{else}}
+        <p>Дерево пусто (или ещё не загружено). Нажмите «Выгрузить товары из МС».</p>
         {{end}}
 
-        <button type="submit" class="export-btn">Выгрузить товары из МС</button>
+        <button type="submit" class="export-btn">Выгрузить в каталог</button>
     </form>
 
     <script>
@@ -98,6 +132,35 @@
             var children = el.nextElementSibling;
             if (children) children.classList.toggle('hidden');
         }
+
+        // Отмеченная папка = все её подпапки и товары; у частично отмеченной —
+        // промежуточное состояние.
+        function refreshFolderStates() {
+            document.querySelectorAll('.folder-cb').forEach(function (cb) {
+                var li = cb.closest('li');
+                var all = li.querySelectorAll('li input[type="checkbox"]');
+                var checked = 0;
+                all.forEach(function (c) { if (c.checked) checked++; });
+                cb.indeterminate = all.length > 0 && checked > 0 && checked < all.length;
+            });
+        }
+
+        document.querySelectorAll('.folder-cb').forEach(function (cb) {
+            cb.addEventListener('change', function () {
+                this.closest('li').querySelectorAll('input[type="checkbox"]').forEach(function (c) {
+                    if (c !== cb) c.checked = cb.checked;
+                });
+                refreshFolderStates();
+            });
+        });
+
+        document.querySelectorAll('input[type="checkbox"]').forEach(function (cb) {
+            if (!cb.classList.contains('folder-cb')) {
+                cb.addEventListener('change', refreshFolderStates);
+            }
+        });
+
+        refreshFolderStates();
     </script>
 </body>
 
@@ -105,15 +168,28 @@
 
 {{define "folderNode"}}
 <li>
+    <span class="folder-toggle" onclick="toggleFolder(this)"></span>
+    <label>
+        <input type="checkbox" name="folders" value="{{.Node.ID}}" class="folder-cb"
+            {{if index $.Selected .Node.ID}}checked{{end}}> {{.Node.Name}}
+    </label>
     {{if .Node.Children}}
-    <span class="folder-toggle" onclick="toggleFolder(this)">{{.Node.Name}}</span>
     <ul class="folder-children hidden">
         {{range .Node.Children}}{{template "folderNode" (folderCtx . $.Selected)}}{{end}}
     </ul>
-    {{else}}
-    <label class="folder-leaf">
-        <input type="checkbox" name="folders" value="{{.Node.ID}}" {{if index $.Selected .Node.ID}}checked{{end}}> {{.Node.Name}}
-    </label>
+    {{end}}
+    {{if .Node.Products}}
+    <ul class="product-children">
+        {{range .Node.Products}}
+        <li>
+            <label>
+                <input type="checkbox" name="product" value="{{.ID}}" class="product-cb"
+                    {{if index $.Selected .ID}}checked{{end}}> {{.Name}}
+            </label>
+            <input type="hidden" name="path_{{.ID}}" value="{{.Path}}">
+        </li>
+        {{end}}
+    </ul>
     {{end}}
 </li>
 {{end}}

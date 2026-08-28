@@ -131,3 +131,39 @@ func (o *MSOrder) SuitableForDelivery() bool {
 type MSCounterparty struct {
 	Name string `json:"name"`
 }
+
+// MSProduct — товар МойСклад (entity/product), срез для каталога:
+// идентификация (id, code, name), единица измерения и кастомные атрибуты.
+type MSProduct struct {
+	ID   string `json:"id"`
+	Code string `json:"code"`
+	Name string `json:"name"`
+	Uom  struct {
+		Meta struct {
+			Href string `json:"href"`
+		} `json:"meta"`
+	} `json:"uom"`
+	Attributes []MSAttribute `json:"attributes"`
+}
+
+// MSAttribute — кастомный атрибут товара. Value — сырое JSON-значение
+// (строка, число или bool — зависит от типа атрибута в МС).
+type MSAttribute struct {
+	Name  string          `json:"name"`
+	Value json.RawMessage `json:"value"`
+}
+
+// MSProductList — ответ /entity/product. Пагинация по offset/limit.
+type MSProductList struct {
+	Meta struct {
+		Size   int `json:"size"`
+		Limit  int `json:"limit"`
+		Offset int `json:"offset"`
+	} `json:"meta"`
+	Rows []MSProduct `json:"rows"`
+}
+
+// MSUOM — единица измерения МойСклад (entity/uom): нужно только название.
+type MSUOM struct {
+	Name string `json:"name"`
+}

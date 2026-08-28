@@ -2,10 +2,14 @@ package usecase
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 
+	"warehouseHelper/internal/domain"
 	"warehouseHelper/internal/msclient/client"
 )
 
@@ -56,18 +60,20 @@ func TestBuildFolderTree(t *testing.T) {
 			},
 			want: []*FolderNode{
 				{
-					Name: "1 - Ассортимент на продажу",
-					ID: "id-root",
+					Name:     "1 - Ассортимент на продажу",
+					ID:       "id-root",
+					PathName: "1 - Ассортимент на продажу",
 					Children: []*FolderNode{
 						{
-							Name: "2 - Моторные масла",
-							ID: "id-2-motor",
+							Name:     "2 - Моторные масла",
+							ID:       "id-2-motor",
+							PathName: "1 - Ассортимент на продажу/2 - Моторные масла",
 							Children: []*FolderNode{
-								{Name: "020 - Синтетическое масло", ID: "id-020"},
-								{Name: "030 - Минеральное масло", ID: "id-030"},
+								{Name: "020 - Синтетическое масло", ID: "id-020", PathName: "1 - Ассортимент на продажу/2 - Моторные масла/020 - Синтетическое масло"},
+								{Name: "030 - Минеральное масло", ID: "id-030", PathName: "1 - Ассортимент на продажу/2 - Моторные масла/030 - Минеральное масло"},
 							},
 						},
-						{Name: "2 - Фильтры", ID: "id-2-filters"},
+						{Name: "2 - Фильтры", ID: "id-2-filters", PathName: "1 - Ассортимент на продажу/2 - Фильтры"},
 					},
 				},
 			},
@@ -80,9 +86,9 @@ func TestBuildFolderTree(t *testing.T) {
 				msFolder("id-root", "1 - Ассортимент на продажу", ""),
 			},
 			want: []*FolderNode{
-				{Name: "030 - Минеральное масло", ID: "id-orphan-030"},
-				{Name: "1 - Ассортимент на продажу", ID: "id-root"},
-				{Name: "2 - Моторные масла", ID: "id-orphan-2"},
+				{Name: "030 - Минеральное масло", ID: "id-orphan-030", PathName: "Нет такого корня/030 - Минеральное масло"},
+				{Name: "1 - Ассортимент на продажу", ID: "id-root", PathName: "1 - Ассортимент на продажу"},
+				{Name: "2 - Моторные масла", ID: "id-orphan-2", PathName: "1 - Ассортимент на продажу/2 - Моторные масла/2 - Моторные масла"},
 			},
 		},
 		{
@@ -96,15 +102,16 @@ func TestBuildFolderTree(t *testing.T) {
 				msFolder("id-alpha", "alpha", ""),
 			},
 			want: []*FolderNode{
-				{Name: "alpha", ID: "id-alpha"},
-				{Name: "Zeta", ID: "id-z"},
+				{Name: "alpha", ID: "id-alpha", PathName: "alpha"},
+				{Name: "Zeta", ID: "id-z", PathName: "Zeta"},
 				{
-					Name: "Корень",
-					ID: "id-root",
+					Name:     "Корень",
+					ID:       "id-root",
+					PathName: "Корень",
 					Children: []*FolderNode{
-						{Name: "A", ID: "id-A"},
-						{Name: "b", ID: "id-b"},
-						{Name: "c", ID: "id-c"},
+						{Name: "A", ID: "id-A", PathName: "Корень/A"},
+						{Name: "b", ID: "id-b", PathName: "Корень/b"},
+						{Name: "c", ID: "id-c", PathName: "Корень/c"},
 					},
 				},
 			},
@@ -118,10 +125,11 @@ func TestBuildFolderTree(t *testing.T) {
 			},
 			want: []*FolderNode{
 				{
-					Name: "1 - Ассортимент на продажу",
-					ID: "id-root",
+					Name:     "1 - Ассортимент на продажу",
+					ID:       "id-root",
+					PathName: "1 - Ассортимент на продажу",
 					Children: []*FolderNode{
-						{Name: "2 - Моторные масла", ID: "id-dup-1"},
+						{Name: "2 - Моторные масла", ID: "id-dup-1", PathName: "1 - Ассортимент на продажу/2 - Моторные масла"},
 					},
 				},
 			},
@@ -220,7 +228,7 @@ func TestGoodsUseCaseLoadFolderTree(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			uc := NewGoodsUseCase(tt.stub)
+			uc := NewGoodsUseCase(tt.stub, nil, nil)
 			roots, err := uc.LoadFolderTree(context.Background())
 
 			if tt.wantErr {
@@ -240,5 +248,318 @@ func TestGoodsUseCaseLoadFolderTree(t *testing.T) {
 				t.Errorf("ожидалось %d корней, получено %d", tt.wantLen, len(roots))
 			}
 		})
+	}
+}
+
+// msProduct собирает товар МС с атрибутами для тестов.
+func msProduct(id, code, name, uomHref string, attrs ...client.MSAttribute) client.MSProduct {
+	p := client.MSProduct{ID: id, Code: code, Name: name}
+	p.Uom.Meta.Href = uomHref
+	p.Attributes = attrs
+	return p
+}
+
+func strAttr(name, val string) client.MSAttribute {
+	return client.MSAttribute{Name: name, Value: json.RawMessage(fmt.Sprintf("%q", val))}
+}
+
+func boolAttr(name string, val bool) client.MSAttribute {
+	return client.MSAttribute{Name: name, Value: json.RawMessage(fmt.Sprintf("%t", val))}
+}
+
+func numAttr(name string, val float64) client.MSAttribute {
+	return client.MSAttribute{Name: name, Value: json.RawMessage(fmt.Sprintf("%v", val))}
+}
+
+// fullProductAttrs — полный набор атрибутов валидного товара.
+func fullProductAttrs() []client.MSAttribute {
+	return []client.MSAttribute{
+		strAttr("Вид инвентаризации", "охлаждёнка"),
+		boolAttr("Шорт лист", true),
+		boolAttr("Недельный", false),
+		numAttr("Средний вес", 12.5),
+		numAttr("Общий срок годности", 30),
+		numAttr("Кол-во в упаковке", 8),
+	}
+}
+
+// stubProductClient — заглушка клиента товаров МС.
+type stubProductClient struct {
+	byPath    map[string][]client.MSProduct
+	uomNames  map[string]string
+	pathErr   error
+	uomCalls  []string // запросы uom (для проверки кэша)
+	pathCalls []string // запросы групп
+}
+
+var _ ProductClient = (*stubProductClient)(nil)
+
+func (s *stubProductClient) FetchProductsByPathName(_ context.Context, pathName string) ([]client.MSProduct, error) {
+	s.pathCalls = append(s.pathCalls, pathName)
+	if s.pathErr != nil {
+		return nil, s.pathErr
+	}
+	return s.byPath[pathName], nil
+}
+
+func (s *stubProductClient) FetchUOMName(_ context.Context, href string) (string, error) {
+	s.uomCalls = append(s.uomCalls, href)
+	return s.uomNames[href], nil
+}
+
+// stubProductsRepo — заглушка хранилища каталога.
+type stubProductsRepo struct {
+	saved     []domain.Product
+	upsertErr error
+}
+
+var _ ProductsRepository = (*stubProductsRepo)(nil)
+
+func (s *stubProductsRepo) UpsertProduct(_ context.Context, p *domain.Product) error {
+	if s.upsertErr != nil {
+		return s.upsertErr
+	}
+	s.saved = append(s.saved, *p)
+	return nil
+}
+
+const (
+	uomKgHref = "https://api.moysklad.ru/api/remap/1.2/entity/uom/kg-uuid"
+	uomPcHref = "https://api.moysklad.ru/api/remap/1.2/entity/uom/pc-uuid"
+)
+
+func TestExportProducts_HappyPath(t *testing.T) {
+	prod1 := msProduct("p1", "11110001", "Говядина охл.", uomKgHref, fullProductAttrs()...)
+	prod2 := msProduct("p2", "11110002", "Масло моторное", uomPcHref, fullProductAttrs()...)
+
+	pc := &stubProductClient{
+		byPath: map[string][]client.MSProduct{
+			"Группа А": {prod1, prod2},
+		},
+		uomNames: map[string]string{uomKgHref: "кг", uomPcHref: "шт"},
+	}
+	repo := &stubProductsRepo{}
+	uc := NewGoodsUseCase(&stubProductFolderClient{}, pc, repo)
+
+	errs, err := uc.ExportProducts(context.Background(), []ExportItem{
+		{ProductID: "p1", GroupPath: "Группа А"},
+		{ProductID: "p2", GroupPath: "Группа А"},
+	})
+	if err != nil {
+		t.Fatalf("ExportProducts error: %v", err)
+	}
+	if len(errs) != 0 {
+		t.Fatalf("не ожидалось ошибок, получено: %v", errs)
+	}
+	if len(repo.saved) != 2 {
+		t.Fatalf("сохранено %d, ожидалось 2", len(repo.saved))
+	}
+
+	got := repo.saved[0]
+	if got.ID != "p1" || got.InternalCode != "11110001" || got.Name != "Говядина охл." {
+		t.Errorf("товар p1: %+v", got)
+	}
+	if got.UOM != "кг" || got.GroupName != "Группа А" {
+		t.Errorf("uom/группа p1: %+v", got)
+	}
+	if got.AverageWeight == nil || *got.AverageWeight != 12.5 {
+		t.Errorf("средний вес p1: %v", got.AverageWeight)
+	}
+	if got.ShelfLife == nil || *got.ShelfLife != 30 {
+		t.Errorf("срок годности p1: %v", got.ShelfLife)
+	}
+	if got.PackSize == nil || *got.PackSize != 8 {
+		t.Errorf("упаковка p1: %v", got.PackSize)
+	}
+	if got.InventoryType != "охлаждёнка" || !got.ShortList || got.TrackWeekly {
+		t.Errorf("атрибуты p1: %+v", got)
+	}
+
+	// Кэш uom: два товара, но разные href — два запроса; второй запуск одного href — один.
+	if len(pc.uomCalls) != 2 {
+		t.Errorf("запросов uom: %d, ожидалось 2 (по уникальным href)", len(pc.uomCalls))
+	}
+}
+
+func TestExportProducts_UOMCache(t *testing.T) {
+	pc := &stubProductClient{
+		byPath: map[string][]client.MSProduct{
+			"Группа А": {
+				msProduct("p1", "11110001", "Товар 1", uomKgHref, fullProductAttrs()...),
+				msProduct("p2", "11110002", "Товар 2", uomKgHref, fullProductAttrs()...),
+			},
+		},
+		uomNames: map[string]string{uomKgHref: "кг"},
+	}
+	uc := NewGoodsUseCase(&stubProductFolderClient{}, pc, &stubProductsRepo{})
+
+	_, err := uc.ExportProducts(context.Background(), []ExportItem{
+		{ProductID: "p1", GroupPath: "Группа А"},
+		{ProductID: "p2", GroupPath: "Группа А"},
+	})
+	if err != nil {
+		t.Fatalf("ExportProducts error: %v", err)
+	}
+	if len(pc.uomCalls) != 1 {
+		t.Errorf("запросов uom: %d, ожидалось 1 (кэш по href)", len(pc.uomCalls))
+	}
+}
+
+func TestExportProducts_MissingAttribute_FailsThatProduct(t *testing.T) {
+	ok := msProduct("p1", "11110001", "Хороший", uomKgHref, fullProductAttrs()...)
+	bad := msProduct("p2", "11110002", "Без веса", uomKgHref, fullProductAttrs()[:3]...)
+
+	pc := &stubProductClient{
+		byPath:   map[string][]client.MSProduct{"Группа А": {ok, bad}},
+		uomNames: map[string]string{uomKgHref: "кг"},
+	}
+	repo := &stubProductsRepo{}
+	uc := NewGoodsUseCase(&stubProductFolderClient{}, pc, repo)
+
+	errs, err := uc.ExportProducts(context.Background(), []ExportItem{
+		{ProductID: "p1", GroupPath: "Группа А"},
+		{ProductID: "p2", GroupPath: "Группа А"},
+	})
+	if err != nil {
+		t.Fatalf("ExportProducts error: %v", err)
+	}
+	if len(errs) != 1 {
+		t.Fatalf("ожидалась 1 ошибка, получено: %v", errs)
+	}
+	if errs[0].Name != "Без веса" {
+		t.Errorf("ошибка по товару: %q, ожидалось %q", errs[0].Name, "Без веса")
+	}
+	if !strings.Contains(errs[0].Err, "Средний вес") {
+		t.Errorf("сообщение ошибки: %q, ожидалось упоминание «Средний вес»", errs[0].Err)
+	}
+	if len(repo.saved) != 1 || repo.saved[0].ID != "p1" {
+		t.Errorf("сохранён только хороший товар, получено: %+v", repo.saved)
+	}
+}
+
+func TestExportProducts_InternalCodeTaken(t *testing.T) {
+	pc := &stubProductClient{
+		byPath: map[string][]client.MSProduct{
+			"Группа А": {msProduct("p1", "11110001", "Дубль кода", uomKgHref, fullProductAttrs()...)},
+		},
+		uomNames: map[string]string{uomKgHref: "кг"},
+	}
+	repo := &stubProductsRepo{upsertErr: domain.ErrInternalCodeTaken}
+	uc := NewGoodsUseCase(&stubProductFolderClient{}, pc, repo)
+
+	errs, err := uc.ExportProducts(context.Background(), []ExportItem{{ProductID: "p1", GroupPath: "Группа А"}})
+	if err != nil {
+		t.Fatalf("ExportProducts error: %v", err)
+	}
+	if len(errs) != 1 || errs[0].Name != "Дубль кода" || !strings.Contains(errs[0].Err, "код уже занят") {
+		t.Errorf("ошибки: %+v", errs)
+	}
+}
+
+func TestExportProducts_ProductNotFoundInGroup(t *testing.T) {
+	pc := &stubProductClient{
+		byPath:   map[string][]client.MSProduct{"Группа А": {}},
+		uomNames: map[string]string{},
+	}
+	uc := NewGoodsUseCase(&stubProductFolderClient{}, pc, &stubProductsRepo{})
+
+	errs, err := uc.ExportProducts(context.Background(), []ExportItem{{ProductID: "ghost", GroupPath: "Группа А"}})
+	if err != nil {
+		t.Fatalf("ExportProducts error: %v", err)
+	}
+	if len(errs) != 1 || !strings.Contains(errs[0].Err, "не найден") {
+		t.Errorf("ошибки: %+v", errs)
+	}
+}
+
+func TestExportProducts_GroupingByPath(t *testing.T) {
+	pc := &stubProductClient{
+		byPath: map[string][]client.MSProduct{
+			"Группа А": {msProduct("p1", "11110001", "Товар А", uomKgHref, fullProductAttrs()...)},
+			"Группа Б": {msProduct("p2", "11110002", "Товар Б", uomKgHref, fullProductAttrs()...)},
+		},
+		uomNames: map[string]string{uomKgHref: "кг"},
+	}
+	uc := NewGoodsUseCase(&stubProductFolderClient{}, pc, &stubProductsRepo{})
+
+	_, err := uc.ExportProducts(context.Background(), []ExportItem{
+		{ProductID: "p1", GroupPath: "Группа А"},
+		{ProductID: "p2", GroupPath: "Группа Б"},
+	})
+	if err != nil {
+		t.Fatalf("ExportProducts error: %v", err)
+	}
+	// Один запрос на группу.
+	if len(pc.pathCalls) != 2 || pc.pathCalls[0] != "Группа А" || pc.pathCalls[1] != "Группа Б" {
+		t.Errorf("запросы групп: %v", pc.pathCalls)
+	}
+}
+
+func TestLoadTreeWithProducts(t *testing.T) {
+	folderStub := &stubProductFolderClient{
+		folders: []client.MSProductFolder{
+			msFolder("id-root", "Группа А", ""),
+			msFolder("id-child", "Подгруппа", "Группа А"),
+		},
+	}
+	pc := &stubProductClient{
+		byPath: map[string][]client.MSProduct{
+			"Группа А": {
+				msProduct("p1", "11110001", "Товар 1", uomKgHref, fullProductAttrs()...),
+				msProduct("p2", "11110002", "Товар 2", uomKgHref, fullProductAttrs()...),
+			},
+			"Группа А/Подгруппа": {},
+		},
+		uomNames: map[string]string{uomKgHref: "кг"},
+	}
+	uc := NewGoodsUseCase(folderStub, pc, &stubProductsRepo{})
+
+	tree, err := uc.LoadTreeWithProducts(context.Background())
+	if err != nil {
+		t.Fatalf("LoadTreeWithProducts error: %v", err)
+	}
+	if len(tree) != 1 || len(tree[0].Products) != 2 {
+		t.Fatalf("товары корня: %+v", tree)
+	}
+	if tree[0].PathName != "Группа А" {
+		t.Errorf("PathName корня: %q", tree[0].PathName)
+	}
+	if len(tree[0].Children) != 1 || tree[0].Children[0].PathName != "Группа А/Подгруппа" {
+		t.Errorf("PathName подгруппы: %+v", tree[0].Children)
+	}
+	if tree[0].Products[0].Name != "Товар 1" || tree[0].Products[0].Path != "Группа А" {
+		t.Errorf("товар в дереве: %+v", tree[0].Products[0])
+	}
+}
+
+func TestAttrHelpers(t *testing.T) {
+	attrs := attributeMap([]client.MSAttribute{
+		strAttr("строка", "значение"),
+		boolAttr("булев", true),
+		numAttr("число", 12.5),
+		{Name: "число-строкой", Value: json.RawMessage(`"30"`)},
+		{Name: "булев-строкой", Value: json.RawMessage(`"true"`)},
+	})
+
+	if v, err := attrString(attrs, "строка"); err != nil || v != "значение" {
+		t.Errorf("attrString: %q, %v", v, err)
+	}
+	if _, err := attrString(attrs, "нет-такого"); err == nil {
+		t.Error("attrString отсутствующего атрибута — ожидалась ошибка")
+	}
+	if v, err := attrBool(attrs, "булев"); err != nil || !v {
+		t.Errorf("attrBool: %v, %v", v, err)
+	}
+	if v, err := attrBool(attrs, "булев-строкой"); err != nil || !v {
+		t.Errorf("attrBool из строки: %v, %v", v, err)
+	}
+	if v, err := attrFloat(attrs, "число"); err != nil || v != 12.5 {
+		t.Errorf("attrFloat: %v, %v", v, err)
+	}
+	if v, err := attrFloat(attrs, "число-строкой"); err != nil || v != 30 {
+		t.Errorf("attrFloat из строки: %v, %v", v, err)
+	}
+	if _, err := attrFloat(attrs, "булев"); err == nil {
+		t.Error("attrFloat от bool — ожидалась ошибка")
 	}
 }
