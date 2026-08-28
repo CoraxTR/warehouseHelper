@@ -125,3 +125,9 @@ func (o *MSOrder) SuitableForDelivery() bool {
 
 	return true
 }
+
+// MSCounterparty — контрагент МойСклад (entity/counterparty).
+// Минимальный срез для справочника поставщиков: нужно только название.
+type MSCounterparty struct {
+	Name string `json:"name"`
+}
