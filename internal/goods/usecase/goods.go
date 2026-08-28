@@ -22,16 +22,19 @@ type ProductFolderClient interface {
 	FetchProductFolders(ctx context.Context) ([]client.MSProductFolder, error)
 }
 
-// ProductClient — товары папки и единицы измерения из МС
+// ProductClient — товары папки, единицы измерения и товар по id из МС
 // (реализует *client.MSAPIClient).
 type ProductClient interface {
 	FetchProductsByPathName(ctx context.Context, pathName string) ([]client.MSProduct, error)
+	FetchProductByID(ctx context.Context, id string) (client.MSProduct, error)
 	FetchUOMName(ctx context.Context, href string) (string, error)
 }
 
 // ProductsRepository — хранилище каталога товаров (реализует PGClient).
 type ProductsRepository interface {
 	UpsertProduct(ctx context.Context, p *domain.Product) error
+	SearchProducts(ctx context.Context, query string) ([]domain.Product, error)
+	GetProduct(ctx context.Context, id string) (*domain.Product, error)
 }
 
 // FolderNode — узел дерева папок. PathName — полный путь папки
@@ -261,6 +264,67 @@ func (uc *GoodsUseCase) ExportProducts(ctx context.Context, items []ExportItem) 
 	}
 
 	return exportErrs, nil
+}
+
+// SearchProducts ищет товары каталога: точное совпадение internal_code
+// или подстрока name. Пустой запрос — ошибка.
+func (uc *GoodsUseCase) SearchProducts(ctx context.Context, query string) ([]domain.Product, error) {
+	q := strings.TrimSpace(query)
+	if q == "" {
+		return nil, errors.New("пустой запрос поиска")
+	}
+
+	products, err := uc.repo.SearchProducts(ctx, q)
+	if err != nil {
+		return nil, fmt.Errorf("поиск по каталогу: %w", err)
+	}
+
+	return products, nil
+}
+
+// GetProduct — товар каталога по id.
+func (uc *GoodsUseCase) GetProduct(ctx context.Context, id string) (*domain.Product, error) {
+	p, err := uc.repo.GetProduct(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	return p, nil
+}
+
+// SaveProduct сохраняет ручные правки позиции (upsert по id).
+func (uc *GoodsUseCase) SaveProduct(ctx context.Context, p *domain.Product) error {
+	if err := uc.repo.UpsertProduct(ctx, p); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// ResyncProduct перезаписывает позицию каталога данными из МС (по id):
+// все поля из МС заново, group_name остаётся текущий (из каталога).
+// Жёсткая валидация — как при выгрузке; при ошибке запись в БД не меняется.
+func (uc *GoodsUseCase) ResyncProduct(ctx context.Context, id string) (*domain.Product, error) {
+	existing, err := uc.repo.GetProduct(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+
+	ms, err := uc.products.FetchProductByID(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("не удалось получить товар из МойСклад: %w", err)
+	}
+
+	prod, err := uc.buildProduct(ctx, ms, existing.GroupName, make(map[string]string))
+	if err != nil {
+		return nil, err
+	}
+
+	if err := uc.repo.UpsertProduct(ctx, prod); err != nil {
+		return nil, err
+	}
+
+	return prod, nil
 }
 
 // buildProduct собирает domain.Product из данных МС и жёстко проверяет
