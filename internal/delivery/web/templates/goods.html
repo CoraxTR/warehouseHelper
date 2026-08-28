@@ -41,7 +41,8 @@
             content: "▾";
         }
 
-        .folder-children.hidden {
+        .folder-children.hidden,
+        .product-children.hidden {
             display: none;
         }
 
@@ -127,42 +128,83 @@
     </form>
 
     <script>
-        // Стрелка сворачивает/разворачивает СОДЕРЖИМОЕ папки: подпапки и товары
-        // (прямые дочерние ul элемента; вложенные сохраняют своё состояние).
+        // Стрелка сворачивает/разворачивает содержимое папки: прямые дочерние
+        // ul (подпапки и товары). Вложенные ul сохраняют своё состояние.
+        // Намеренно без :scope и NodeList.forEach — совместимость со старыми
+        // браузерами (на складе может быть что угодно).
         function toggleFolder(el) {
             el.classList.toggle('expanded');
-            el.closest('li').querySelectorAll(':scope > ul').forEach(function (ul) {
-                ul.classList.toggle('hidden');
-            });
+
+            var li = el.parentNode;
+            while (li && li.tagName !== 'LI') { li = li.parentNode; }
+            if (!li) { return; }
+
+            var uls = li.getElementsByTagName('ul');
+            for (var i = 0; i < uls.length; i++) {
+                if (uls[i].parentNode === li) {
+                    uls[i].classList.toggle('hidden');
+                }
+            }
+        }
+
+        // ближайший <li> предок элемента (замена closest для старых браузеров)
+        function parentLi(el) {
+            var li = el.parentNode;
+            while (li && li.tagName !== 'LI') { li = li.parentNode; }
+            return li;
         }
 
         // Отмеченная папка = все её подпапки и товары; у частично отмеченной —
         // промежуточное состояние.
         function refreshFolderStates() {
-            document.querySelectorAll('.folder-cb').forEach(function (cb) {
-                var li = cb.closest('li');
-                var all = li.querySelectorAll('li input[type="checkbox"]');
-                var checked = 0;
-                all.forEach(function (c) { if (c.checked) checked++; });
-                cb.indeterminate = all.length > 0 && checked > 0 && checked < all.length;
-            });
+            var cbs = document.querySelectorAll('.folder-cb');
+            for (var i = 0; i < cbs.length; i++) {
+                var li = parentLi(cbs[i]);
+                if (!li) { continue; }
+
+                var nested = li.getElementsByTagName('li');
+                var total = 0, checked = 0;
+                for (var j = 0; j < nested.length; j++) {
+                    var inputs = nested[j].getElementsByTagName('input');
+                    for (var k = 0; k < inputs.length; k++) {
+                        if (inputs[k].type !== 'checkbox') { continue; }
+                        total++;
+                        if (inputs[k].checked) { checked++; }
+                    }
+                }
+                cbs[i].indeterminate = total > 0 && checked > 0 && checked < total;
+            }
         }
 
-        document.querySelectorAll('.folder-cb').forEach(function (cb) {
-            cb.addEventListener('change', function () {
-                this.closest('li').querySelectorAll('input[type="checkbox"]').forEach(function (c) {
-                    if (c !== cb) c.checked = cb.checked;
+        function bindFolderChecks() {
+            var cbs = document.querySelectorAll('.folder-cb');
+            for (var i = 0; i < cbs.length; i++) {
+                cbs[i].addEventListener('change', function () {
+                    var li = parentLi(this);
+                    if (!li) { return; }
+
+                    var inputs = li.getElementsByTagName('input');
+                    for (var j = 0; j < inputs.length; j++) {
+                        if (inputs[j].type === 'checkbox' && inputs[j] !== this) {
+                            inputs[j].checked = this.checked;
+                        }
+                    }
+                    refreshFolderStates();
                 });
-                refreshFolderStates();
-            });
-        });
-
-        document.querySelectorAll('input[type="checkbox"]').forEach(function (cb) {
-            if (!cb.classList.contains('folder-cb')) {
-                cb.addEventListener('change', refreshFolderStates);
             }
-        });
+        }
 
+        function bindProductChecks() {
+            var inputs = document.querySelectorAll('input[type="checkbox"]');
+            for (var i = 0; i < inputs.length; i++) {
+                if (inputs[i].className.indexOf('folder-cb') === -1) {
+                    inputs[i].addEventListener('change', refreshFolderStates);
+                }
+            }
+        }
+
+        bindFolderChecks();
+        bindProductChecks();
         refreshFolderStates();
     </script>
 </body>
