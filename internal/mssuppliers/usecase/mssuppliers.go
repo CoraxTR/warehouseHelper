@@ -29,15 +29,24 @@ type CounterpartyClient interface {
 	FetchCounterpartyName(ctx context.Context, id string) (string, error)
 }
 
+// WikiSupplierSynchronizer — контракт синка страницы вики поставщика,
+// реализуется *wucase.WikiUseCase (вики — отдельный модуль, его таблицы
+// mssuppliers не трогает).
+type WikiSupplierSynchronizer interface {
+	SyncSupplierPage(ctx context.Context, supplierID, name string, orderDays, deliveryDays []int) error
+}
+
 // MSSuppliersUseCase — сценарии работы с поставщиками.
 type MSSuppliersUseCase struct {
 	repo MSSuppliersRepository
 	ms   CounterpartyClient
+	wiki WikiSupplierSynchronizer
 }
 
-// NewMSSuppliersUseCase создаёт сценарий с переданным хранилищем и MS-клиентом.
-func NewMSSuppliersUseCase(repo MSSuppliersRepository, ms CounterpartyClient) *MSSuppliersUseCase {
-	return &MSSuppliersUseCase{repo: repo, ms: ms}
+// NewMSSuppliersUseCase создаёт сценарий с переданным хранилищем, MS-клиентом
+// и синком вики.
+func NewMSSuppliersUseCase(repo MSSuppliersRepository, ms CounterpartyClient, wiki WikiSupplierSynchronizer) *MSSuppliersUseCase {
+	return &MSSuppliersUseCase{repo: repo, ms: ms, wiki: wiki}
 }
 
 // List возвращает всех поставщиков, отсортированных по алфавиту (ORDER BY lower(name)).
@@ -69,7 +78,11 @@ func (uc *MSSuppliersUseCase) Create(ctx context.Context, s *domain.Supplier) er
 		return err
 	}
 
-	return uc.repo.SaveSupplier(ctx, s)
+	if err := uc.repo.SaveSupplier(ctx, s); err != nil {
+		return err
+	}
+
+	return uc.syncWiki(ctx, s)
 }
 
 // Update нормализует и валидирует данные, перезапрашивает имя из МС
@@ -83,7 +96,11 @@ func (uc *MSSuppliersUseCase) Update(ctx context.Context, s *domain.Supplier) er
 		return err
 	}
 
-	return uc.repo.SaveSupplier(ctx, s)
+	if err := uc.repo.SaveSupplier(ctx, s); err != nil {
+		return err
+	}
+
+	return uc.syncWiki(ctx, s)
 }
 
 // Delete удаляет поставщика по id. Каскады на стороне БД:
@@ -97,6 +114,32 @@ func (uc *MSSuppliersUseCase) Delete(ctx context.Context, id string) error {
 // (сеть, WAF, несуществующий id). Хендлер оставляет форму с данными:
 // достаточно нажать «Сохранить» ещё раз.
 var ErrCounterpartyNameFetch = errors.New("не удалось получить имя контрагента из МС")
+
+// ErrWikiSync — поставщик сохранён, но не удалось создать/обновить его
+// страницу вики. Хендлер редиректит на список с сообщением.
+var ErrWikiSync = errors.New("поставщик сохранён, но не удалось обновить страницу вики")
+
+// syncWiki синхронизирует страницу вики поставщика после сохранения
+// в справочник. Ошибка не откатывает сохранение (контуры без
+// кросс-транзакций): поставщик уже в БД, ошибка оборачивается в
+// ErrWikiSync для показа пользователю.
+func (uc *MSSuppliersUseCase) syncWiki(ctx context.Context, s *domain.Supplier) error {
+	if err := uc.wiki.SyncSupplierPage(ctx, s.ID, s.Name, int16ToInt(s.OrderDays), int16ToInt(s.DeliveryDays)); err != nil {
+		return fmt.Errorf("%w: %v", ErrWikiSync, err)
+	}
+
+	return nil
+}
+
+// int16ToInt конвертирует дни (SMALLINT[] из БД) в []int — конвенцию вики.
+func int16ToInt(src []int16) []int {
+	res := make([]int, len(src))
+	for i, v := range src {
+		res[i] = int(v)
+	}
+
+	return res
+}
 
 // fetchName получает имя контрагента из МС и кладёт в s.Name.
 // Ошибка МС оборачивается в ErrCounterpartyNameFetch: форма остаётся

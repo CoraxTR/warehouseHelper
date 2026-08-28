@@ -65,13 +65,36 @@ func (f *fakeMS) FetchCounterpartyName(ctx context.Context, id string) (string, 
 	return name, nil
 }
 
+// fakeWiki — фейк синка вики: запоминает вызовы, умеет падать.
+type fakeWiki struct {
+	syncErr   error
+	calls     int
+	lastID    string
+	lastName  string
+	lastOrder []int
+	lastDeliv []int
+}
+
+func (f *fakeWiki) SyncSupplierPage(_ context.Context, supplierID, name string, orderDays, deliveryDays []int) error {
+	f.calls++
+	f.lastID = supplierID
+	f.lastName = name
+	f.lastOrder = orderDays
+	f.lastDeliv = deliveryDays
+
+	return f.syncErr
+}
+
 const testUUID = "c2f28fc8-a154-11f1-0a80-161200147fdc"
 
-func newUC(repo *fakeRepo, ms *fakeMS) *MSSuppliersUseCase {
+func newUC(repo *fakeRepo, ms *fakeMS, wiki *fakeWiki) *MSSuppliersUseCase {
 	if ms == nil {
 		ms = &fakeMS{names: map[string]string{testUUID: "ООО Тест"}}
 	}
-	return NewMSSuppliersUseCase(repo, ms)
+	if wiki == nil {
+		wiki = &fakeWiki{}
+	}
+	return NewMSSuppliersUseCase(repo, ms, wiki)
 }
 
 func validSupplier() *domain.Supplier {
@@ -121,7 +144,7 @@ func TestExtractCounterpartyID(t *testing.T) {
 
 func TestCreate_HappyPath(t *testing.T) {
 	repo := newFakeRepo()
-	uc := newUC(repo, nil)
+	uc := newUC(repo, nil, nil)
 
 	s := validSupplier()
 	if err := uc.Create(context.Background(), s); err != nil {
@@ -142,7 +165,7 @@ func TestCreate_HappyPath(t *testing.T) {
 
 func TestCreate_DuplicateID(t *testing.T) {
 	repo := newFakeRepo()
-	uc := newUC(repo, nil)
+	uc := newUC(repo, nil, nil)
 
 	first := validSupplier()
 	if err := uc.Create(context.Background(), first); err != nil {
@@ -159,7 +182,7 @@ func TestCreate_DuplicateID(t *testing.T) {
 func TestCreate_MSError_LeavesFormData(t *testing.T) {
 	repo := newFakeRepo()
 	ms := &fakeMS{err: errors.New("WAF 415")}
-	uc := newUC(repo, ms)
+	uc := newUC(repo, ms, nil)
 
 	s := validSupplier()
 	err := uc.Create(context.Background(), s)
@@ -175,7 +198,7 @@ func TestCreate_MSError_LeavesFormData(t *testing.T) {
 }
 
 func TestCreate_ValidationErrors(t *testing.T) {
-	uc := newUC(newFakeRepo(), nil)
+	uc := newUC(newFakeRepo(), nil, nil)
 
 	tests := []struct {
 		name string
@@ -213,7 +236,7 @@ func repoSuppliers(uc *MSSuppliersUseCase) []domain.Supplier {
 func TestUpdate_RefetchesName(t *testing.T) {
 	repo := newFakeRepo()
 	ms := &fakeMS{names: map[string]string{testUUID: "ООО Тест"}}
-	uc := newUC(repo, ms)
+	uc := newUC(repo, ms, nil)
 
 	if err := uc.Create(context.Background(), validSupplier()); err != nil {
 		t.Fatalf("Create error: %v", err)
@@ -235,12 +258,12 @@ func TestUpdate_RefetchesName(t *testing.T) {
 
 func TestUpdate_MSError(t *testing.T) {
 	repo := newFakeRepo()
-	uc := newUC(repo, nil)
+	uc := newUC(repo, nil, nil)
 	if err := uc.Create(context.Background(), validSupplier()); err != nil {
 		t.Fatalf("Create error: %v", err)
 	}
 
-	uc2 := newUC(repo, &fakeMS{err: errors.New("boom")})
+	uc2 := newUC(repo, &fakeMS{err: errors.New("boom")}, nil)
 	s := validSupplier()
 	err := uc2.Update(context.Background(), s)
 	if !errors.Is(err, ErrCounterpartyNameFetch) {
@@ -254,7 +277,7 @@ func TestUpdate_MSError(t *testing.T) {
 
 func TestDelete(t *testing.T) {
 	repo := newFakeRepo()
-	uc := newUC(repo, nil)
+	uc := newUC(repo, nil, nil)
 
 	if err := uc.Create(context.Background(), validSupplier()); err != nil {
 		t.Fatalf("Create error: %v", err)
@@ -287,5 +310,74 @@ func TestNormalizeDays(t *testing.T) {
 
 	if _, err := normalizeDays("тест", []int16{7, 0}); err == nil {
 		t.Fatal("normalizeDays([7 0]) = nil, want error")
+	}
+}
+
+func TestCreate_SyncsWiki(t *testing.T) {
+	repo := newFakeRepo()
+	wiki := &fakeWiki{}
+	uc := newUC(repo, nil, wiki)
+
+	if err := uc.Create(context.Background(), validSupplier()); err != nil {
+		t.Fatalf("Create error: %v", err)
+	}
+	if wiki.calls != 1 {
+		t.Fatalf("SyncSupplierPage вызван %d раз, want 1", wiki.calls)
+	}
+	if wiki.lastID != testUUID || wiki.lastName != "ООО Тест" {
+		t.Fatalf("синк: id=%q name=%q, want id=%q name=%q (имя из МС)", wiki.lastID, wiki.lastName, testUUID, "ООО Тест")
+	}
+	if len(wiki.lastOrder) != 2 || wiki.lastOrder[0] != 1 || wiki.lastOrder[1] != 3 {
+		t.Fatalf("orderDays синка = %v, want [1 3] (нормализованные)", wiki.lastOrder)
+	}
+	if len(wiki.lastDeliv) != 1 || wiki.lastDeliv[0] != 5 {
+		t.Fatalf("deliveryDays синка = %v, want [5]", wiki.lastDeliv)
+	}
+}
+
+func TestUpdate_SyncsWiki(t *testing.T) {
+	repo := newFakeRepo()
+	wiki := &fakeWiki{}
+	uc := newUC(repo, nil, wiki)
+
+	if err := uc.Create(context.Background(), validSupplier()); err != nil {
+		t.Fatalf("Create error: %v", err)
+	}
+	if err := uc.Update(context.Background(), validSupplier()); err != nil {
+		t.Fatalf("Update error: %v", err)
+	}
+	if wiki.calls != 2 {
+		t.Fatalf("SyncSupplierPage вызван %d раз, want 2 (create + update)", wiki.calls)
+	}
+}
+
+func TestCreate_WikiSyncError_SavedAnyway(t *testing.T) {
+	repo := newFakeRepo()
+	wiki := &fakeWiki{syncErr: errors.New("заголовок занят")}
+	uc := newUC(repo, nil, wiki)
+
+	err := uc.Create(context.Background(), validSupplier())
+	if !errors.Is(err, ErrWikiSync) {
+		t.Fatalf("Create = %v, want ErrWikiSync", err)
+	}
+	// Поставщик сохранён несмотря на ошибку синка (контуры без кросс-транзакций).
+	if _, ok := repo.suppliers[testUUID]; !ok {
+		t.Fatal("supplier должен быть сохранён, даже если синк вики упал")
+	}
+}
+
+func TestDelete_DoesNotSyncWiki(t *testing.T) {
+	repo := newFakeRepo()
+	wiki := &fakeWiki{}
+	uc := newUC(repo, nil, wiki)
+
+	if err := uc.Create(context.Background(), validSupplier()); err != nil {
+		t.Fatalf("Create error: %v", err)
+	}
+	if err := uc.Delete(context.Background(), testUUID); err != nil {
+		t.Fatalf("Delete error: %v", err)
+	}
+	if wiki.calls != 1 {
+		t.Fatalf("SyncSupplierPage вызван %d раз, want 1 (только create; удаление страницу не трогает)", wiki.calls)
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"log"
 	"math"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -187,6 +188,9 @@ func (h *Handler) SupplierSave(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, msu.ErrCounterpartyNameFetch):
 		h.renderSupplierForm(w, buildSupplierFormData(s, isEdit, rawID,
 			"не удалось получить имя контрагента из МойСклад — нажмите «Сохранить» ещё раз"))
+	case errors.Is(err, msu.ErrWikiSync):
+		// Поставщик уже сохранён — показываем сообщение на списке.
+		http.Redirect(w, r, "/ms/suppliers?err="+url.QueryEscape(err.Error()), http.StatusSeeOther)
 	default:
 		h.renderSupplierForm(w, buildSupplierFormData(s, isEdit, rawID, err.Error()))
 	}
@@ -203,6 +207,8 @@ func (h *Handler) SupplierDelete(w http.ResponseWriter, r *http.Request) {
 	id := r.FormValue("id")
 	if err := h.msUC.Delete(r.Context(), id); err != nil {
 		log.Printf("delete supplier %s: %v", id, err)
+		http.Redirect(w, r, "/ms/suppliers?err="+url.QueryEscape("не удалось удалить поставщика: "+err.Error()), http.StatusSeeOther)
+		return
 	}
 
 	http.Redirect(w, r, "/ms/suppliers", http.StatusSeeOther)

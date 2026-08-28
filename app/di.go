@@ -261,10 +261,11 @@ func (d *DIContainer) QRUC() *qucase.QRUseCase {
 }
 
 // SuppliersUC — сценарии справочника поставщиков «МойСклад»; PGClient реализует
-// msu.MSSuppliersRepository, MSClient — msu.CounterpartyClient.
+// msu.MSSuppliersRepository, MSClient — msu.CounterpartyClient, WikiUseCase —
+// msu.WikiSupplierSynchronizer (страница вики поставщика создаётся/обновляется синком).
 func (d *DIContainer) SuppliersUC() *msu.MSSuppliersUseCase {
 	if d.msUC == nil {
-		d.msUC = msu.NewMSSuppliersUseCase(d.OrdersRepository(), d.MSClient())
+		d.msUC = msu.NewMSSuppliersUseCase(d.OrdersRepository(), d.MSClient(), d.WikiUC())
 	}
 
 	return d.msUC
