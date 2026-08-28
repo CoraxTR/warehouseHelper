@@ -30,13 +30,13 @@ func NewRouter(h *Handler) *http.ServeMux {
 	mux.HandleFunc("/wiki/edit", h.WikiEdit)                      // GET — форма, POST — сохранение
 	mux.HandleFunc("/wiki/delete", h.WikiDelete)                  // POST
 	mux.HandleFunc("/wiki/photo", h.WikiPhoto)                    // GET
-	mux.HandleFunc("/goods", h.GoodsPage)                            // GET — хаб «Продукция» (поиск + добавление)
-	mux.HandleFunc("/goods/search", h.GoodsSearch)                   // POST — поиск позиции в каталоге
-	mux.HandleFunc("/goods/edit", h.GoodsEditPage)                   // GET — редактирование позиции
-	mux.HandleFunc("/goods/edit", h.GoodsEditSave)                   // POST — сохранение ручных правок
-	mux.HandleFunc("/goods/resync", h.GoodsResync)                   // POST — ресинк позиции из МС
-	mux.HandleFunc("/goods/tree", h.GoodsTreePage)                   // GET — дерево папок для добавления
-	mux.HandleFunc("/goods/tree", h.GoodsExport)                     // POST — выгрузка отмеченных товаров в каталог
+	mux.HandleFunc("GET /goods", h.GoodsPage)                     // хаб «Продукция» (поиск + добавление)
+	mux.HandleFunc("POST /goods/search", h.GoodsSearch)           // поиск позиции в каталоге
+	mux.HandleFunc("GET /goods/edit", h.GoodsEditPage)            // редактирование позиции
+	mux.HandleFunc("POST /goods/edit", h.GoodsEditSave)           // сохранение ручных правок
+	mux.HandleFunc("POST /goods/resync", h.GoodsResync)           // ресинк позиции из МС
+	mux.HandleFunc("GET /goods/tree", h.GoodsTreePage)            // дерево папок для добавления
+	mux.HandleFunc("POST /goods/tree", h.GoodsExport)             // выгрузка отмеченных товаров в каталог
 	mux.HandleFunc("/qrcodes", h.QRPage)                          // GET — модуль «Честный знак»
 	mux.HandleFunc("/qrcodes/add", h.QRAdd)                       // GET — форма, POST — сохранение фото
 	mux.HandleFunc("/qrcodes/list", h.QRList)                     // GET — таблица заказов с фото
