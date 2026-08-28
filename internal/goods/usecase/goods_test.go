@@ -286,10 +286,13 @@ func fullProductAttrs() []client.MSAttribute {
 // stubProductClient — заглушка клиента товаров МС.
 type stubProductClient struct {
 	byPath    map[string][]client.MSProduct
+	byID      map[string]client.MSProduct
 	uomNames  map[string]string
 	pathErr   error
+	idErr     error
 	uomCalls  []string // запросы uom (для проверки кэша)
 	pathCalls []string // запросы групп
+	idCalls   []string // запросы по id
 }
 
 var _ ProductClient = (*stubProductClient)(nil)
@@ -302,6 +305,18 @@ func (s *stubProductClient) FetchProductsByPathName(_ context.Context, pathName 
 	return s.byPath[pathName], nil
 }
 
+func (s *stubProductClient) FetchProductByID(_ context.Context, id string) (client.MSProduct, error) {
+	s.idCalls = append(s.idCalls, id)
+	if s.idErr != nil {
+		return client.MSProduct{}, s.idErr
+	}
+	p, ok := s.byID[id]
+	if !ok {
+		return client.MSProduct{}, errors.New("товар не найден в МС")
+	}
+	return p, nil
+}
+
 func (s *stubProductClient) FetchUOMName(_ context.Context, href string) (string, error) {
 	s.uomCalls = append(s.uomCalls, href)
 	return s.uomNames[href], nil
@@ -310,6 +325,10 @@ func (s *stubProductClient) FetchUOMName(_ context.Context, href string) (string
 // stubProductsRepo — заглушка хранилища каталога.
 type stubProductsRepo struct {
 	saved     []domain.Product
+	search    []domain.Product
+	searchErr error
+	get       *domain.Product
+	getErr    error
 	upsertErr error
 }
 
@@ -321,6 +340,20 @@ func (s *stubProductsRepo) UpsertProduct(_ context.Context, p *domain.Product) e
 	}
 	s.saved = append(s.saved, *p)
 	return nil
+}
+
+func (s *stubProductsRepo) SearchProducts(_ context.Context, _ string) ([]domain.Product, error) {
+	if s.searchErr != nil {
+		return nil, s.searchErr
+	}
+	return s.search, nil
+}
+
+func (s *stubProductsRepo) GetProduct(_ context.Context, _ string) (*domain.Product, error) {
+	if s.getErr != nil {
+		return nil, s.getErr
+	}
+	return s.get, nil
 }
 
 const (
@@ -561,5 +594,108 @@ func TestAttrHelpers(t *testing.T) {
 	}
 	if _, err := attrFloat(attrs, "булев"); err == nil {
 		t.Error("attrFloat от bool — ожидалась ошибка")
+	}
+}
+
+func TestSearchProducts(t *testing.T) {
+	repo := &stubProductsRepo{search: []domain.Product{{ID: "p1", Name: "Говядина", InternalCode: "11110001"}}}
+	uc := NewGoodsUseCase(&stubProductFolderClient{}, &stubProductClient{}, repo)
+
+	got, err := uc.SearchProducts(context.Background(), "говядина")
+	if err != nil {
+		t.Fatalf("SearchProducts error: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != "p1" {
+		t.Errorf("результат поиска: %+v", got)
+	}
+
+	if _, err := uc.SearchProducts(context.Background(), "   "); err == nil {
+		t.Error("пустой запрос — ожидалась ошибка")
+	}
+}
+
+func TestGetProduct(t *testing.T) {
+	repo := &stubProductsRepo{get: &domain.Product{ID: "p1", Name: "Говядина"}}
+	uc := NewGoodsUseCase(&stubProductFolderClient{}, &stubProductClient{}, repo)
+
+	got, err := uc.GetProduct(context.Background(), "p1")
+	if err != nil || got.ID != "p1" {
+		t.Errorf("GetProduct: %+v, %v", got, err)
+	}
+
+	repo.getErr = domain.ErrProductNotFound
+	if _, err := uc.GetProduct(context.Background(), "nope"); !errors.Is(err, domain.ErrProductNotFound) {
+		t.Errorf("ожидался ErrProductNotFound, получено: %v", err)
+	}
+}
+
+func TestSaveProduct(t *testing.T) {
+	repo := &stubProductsRepo{}
+	uc := NewGoodsUseCase(&stubProductFolderClient{}, &stubProductClient{}, repo)
+
+	p := &domain.Product{ID: "p1", Name: "Говядина"}
+	if err := uc.SaveProduct(context.Background(), p); err != nil {
+		t.Fatalf("SaveProduct error: %v", err)
+	}
+	if len(repo.saved) != 1 || repo.saved[0].Name != "Говядина" {
+		t.Errorf("сохранено: %+v", repo.saved)
+	}
+}
+
+func TestResyncProduct_HappyPath_KeepsGroupName(t *testing.T) {
+	repo := &stubProductsRepo{
+		get: &domain.Product{ID: "p1", GroupName: "1 - Ассортимент на продажу/013 - SaltLab"},
+	}
+	pc := &stubProductClient{
+		byID: map[string]client.MSProduct{
+			"p1": msProduct("p1", "11110001", "Говядина охл. (обновлено)", uomKgHref, fullProductAttrs()...),
+		},
+		uomNames: map[string]string{uomKgHref: "кг"},
+	}
+	uc := NewGoodsUseCase(&stubProductFolderClient{}, pc, repo)
+
+	got, err := uc.ResyncProduct(context.Background(), "p1")
+	if err != nil {
+		t.Fatalf("ResyncProduct error: %v", err)
+	}
+	if got.Name != "Говядина охл. (обновлено)" {
+		t.Errorf("имя не обновилось: %q", got.Name)
+	}
+	if got.GroupName != "1 - Ассортимент на продажу/013 - SaltLab" {
+		t.Errorf("group_name изменился: %q", got.GroupName)
+	}
+	if len(repo.saved) != 1 || repo.saved[0].Name != "Говядина охл. (обновлено)" {
+		t.Errorf("upsert не вызван: %+v", repo.saved)
+	}
+	if len(pc.idCalls) != 1 || pc.idCalls[0] != "p1" {
+		t.Errorf("запрос по id: %v", pc.idCalls)
+	}
+}
+
+func TestResyncProduct_MissingAttr_NoUpsert(t *testing.T) {
+	repo := &stubProductsRepo{get: &domain.Product{ID: "p1", GroupName: "Группа А"}}
+	pc := &stubProductClient{
+		byID: map[string]client.MSProduct{
+			"p1": msProduct("p1", "11110001", "Без веса", uomKgHref, fullProductAttrs()[:3]...),
+		},
+		uomNames: map[string]string{uomKgHref: "кг"},
+	}
+	uc := NewGoodsUseCase(&stubProductFolderClient{}, pc, repo)
+
+	_, err := uc.ResyncProduct(context.Background(), "p1")
+	if err == nil || !strings.Contains(err.Error(), "Средний вес") {
+		t.Fatalf("ожидалась ошибка про «Средний вес», получено: %v", err)
+	}
+	if len(repo.saved) != 0 {
+		t.Errorf("upsert не должен был вызваться: %+v", repo.saved)
+	}
+}
+
+func TestResyncProduct_NotFound(t *testing.T) {
+	repo := &stubProductsRepo{getErr: domain.ErrProductNotFound}
+	uc := NewGoodsUseCase(&stubProductFolderClient{}, &stubProductClient{}, repo)
+
+	if _, err := uc.ResyncProduct(context.Background(), "nope"); !errors.Is(err, domain.ErrProductNotFound) {
+		t.Errorf("ожидался ErrProductNotFound, получено: %v", err)
 	}
 }

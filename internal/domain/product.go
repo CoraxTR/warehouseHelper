@@ -5,6 +5,9 @@ import "errors"
 // ErrInternalCodeTaken — внутренний код (code из МС) уже занят другим товаром.
 var ErrInternalCodeTaken = errors.New("внутренний код уже используется другим товаром")
 
+// ErrProductNotFound — товар не найден в каталоге.
+var ErrProductNotFound = errors.New("товар не найден в каталоге")
+
 // Product — товар из справочника МойСклад (таблица products).
 // Каталог — владелец записи; приёмка читает и передаёт average_weight.
 type Product struct {

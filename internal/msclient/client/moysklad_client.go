@@ -1327,3 +1327,61 @@ func (msac *MSAPIClient) FetchUOMName(parentctx context.Context, href string) (s
 		return "", parentctx.Err()
 	}
 }
+
+// FetchProductByID — товар МойСклад по id (GET /entity/product/{id}).
+// Используется для ресинка конкретной позиции каталога.
+func (msac *MSAPIClient) FetchProductByID(parentctx context.Context, id string) (MSProduct, error) {
+	job := func(apiKey string) (any, error) {
+		ctx, cancel := context.WithTimeout(parentctx, 30*time.Second)
+		defer cancel()
+
+		endpoint, err := msac.entityEndpoint("product", id)
+		if err != nil {
+			return nil, err
+		}
+
+		body, resp, err := msac.httpRequest(ctx, http.MethodGet, endpoint, apiKey, http.NoBody)
+		if err != nil {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			default:
+				return nil, err
+			}
+		}
+
+		err = resp.Body.Close()
+		if err != nil {
+			log.Printf("failed to close response body: %v", err)
+		}
+
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return nil, msAPIError(resp.Status, body)
+		}
+
+		var product MSProduct
+		if err := json.Unmarshal(body, &product); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal product: %w", err)
+		}
+
+		return product, nil
+	}
+
+	resCh := msac.workerpool.SubmitOther(job)
+
+	select {
+	case res := <-resCh:
+		if res.Err != nil {
+			return MSProduct{}, fmt.Errorf("FetchProductByID failed: %w", res.Err)
+		}
+
+		product, ok := res.Value.(MSProduct)
+		if !ok {
+			return MSProduct{}, errors.New("FetchProductByID failed: unexpected value type")
+		}
+
+		return product, nil
+	case <-parentctx.Done():
+		return MSProduct{}, parentctx.Err()
+	}
+}
