@@ -127,10 +127,13 @@
     </form>
 
     <script>
+        // Стрелка сворачивает/разворачивает СОДЕРЖИМОЕ папки: подпапки и товары
+        // (прямые дочерние ul элемента; вложенные сохраняют своё состояние).
         function toggleFolder(el) {
             el.classList.toggle('expanded');
-            var children = el.nextElementSibling;
-            if (children) children.classList.toggle('hidden');
+            el.closest('li').querySelectorAll(':scope > ul').forEach(function (ul) {
+                ul.classList.toggle('hidden');
+            });
         }
 
         // Отмеченная папка = все её подпапки и товары; у частично отмеченной —
@@ -168,13 +171,13 @@
 
 {{define "folderNode"}}
 <li>
-    <span class="folder-toggle" onclick="toggleFolder(this)"></span>
+    <span class="folder-toggle expanded" onclick="toggleFolder(this)"></span>
     <label>
         <input type="checkbox" name="folders" value="{{.Node.ID}}" class="folder-cb"
             {{if index $.Selected .Node.ID}}checked{{end}}> {{.Node.Name}}
     </label>
     {{if .Node.Children}}
-    <ul class="folder-children hidden">
+    <ul class="folder-children">
         {{range .Node.Children}}{{template "folderNode" (folderCtx . $.Selected)}}{{end}}
     </ul>
     {{end}}
