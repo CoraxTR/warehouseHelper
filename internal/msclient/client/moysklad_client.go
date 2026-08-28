@@ -1160,3 +1160,170 @@ func (msac *MSAPIClient) FetchCounterpartyName(parentctx context.Context, id str
 		return "", parentctx.Err()
 	}
 }
+
+// productPageLimit — размер страницы при пагинации товаров.
+const productPageLimit = 1000
+
+// FetchProductsByPathName — товары папки МойСклад по её полному пути
+// (GET /entity/product?filter=pathName=<путь>). Пагинация по offset,
+// как в FetchProductFolders.
+func (msac *MSAPIClient) FetchProductsByPathName(parentctx context.Context, pathName string) ([]MSProduct, error) {
+	job := func(apiKey string) (any, error) {
+		ctx, cancel := context.WithTimeout(parentctx, 300*time.Second)
+		defer cancel()
+
+		var products []MSProduct
+
+		for offset := 0; ; offset += productPageLimit {
+			if err := parentctx.Err(); err != nil {
+				return nil, err
+			}
+
+			endpoint, err := msac.productListEndpoint(pathName, offset, productPageLimit)
+			if err != nil {
+				return nil, err
+			}
+
+			body, resp, err := msac.httpRequest(ctx, http.MethodGet, endpoint, apiKey, http.NoBody)
+			if err != nil {
+				select {
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				default:
+					return nil, err
+				}
+			}
+
+			err = resp.Body.Close()
+			if err != nil {
+				log.Printf("failed to close response body: %v", err)
+			}
+
+			if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+				return nil, msAPIError(resp.Status, body)
+			}
+
+			var list MSProductList
+			if err := json.Unmarshal(body, &list); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal products: %w", err)
+			}
+
+			products = append(products, list.Rows...)
+
+			if offset+productPageLimit >= list.Meta.Size {
+				break
+			}
+		}
+
+		return products, nil
+	}
+
+	resCh := msac.workerpool.SubmitOther(job)
+
+	select {
+	case res := <-resCh:
+		if res.Err != nil {
+			return nil, fmt.Errorf("FetchProductsByPathName failed: %w", res.Err)
+		}
+
+		products, ok := res.Value.([]MSProduct)
+		if !ok {
+			return nil, errors.New("FetchProductsByPathName failed: unexpected value type")
+		}
+
+		return products, nil
+	case <-parentctx.Done():
+		return nil, parentctx.Err()
+	}
+}
+
+// productListEndpoint — URL списка товаров папки с фильтром pathName
+// и пагинацией.
+func (msac *MSAPIClient) productListEndpoint(pathName string, offset, limit int) (string, error) {
+	endpoint, err := msac.entityEndpoint("product")
+	if err != nil {
+		return "", err
+	}
+
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse product endpoint: %w", err)
+	}
+
+	q := u.Query()
+	if pathName != "" {
+		q.Set("filter", "pathName="+pathName)
+	}
+	q.Set("limit", strconv.Itoa(limit))
+	q.Set("offset", strconv.Itoa(offset))
+	u.RawQuery = q.Encode()
+
+	return u.String(), nil
+}
+
+// FetchUOMName — название единицы измерения по href из uom.meta.href товара
+// (GET /entity/uom/{id}). id вытаскивается из href.
+func (msac *MSAPIClient) FetchUOMName(parentctx context.Context, href string) (string, error) {
+	u, err := url.Parse(href)
+	if err != nil {
+		return "", fmt.Errorf("FetchUOMName: failed to parse uom href: %w", err)
+	}
+	id := path.Base(u.Path)
+	if id == "" || id == "/" {
+		return "", errors.New("FetchUOMName: empty uom id in href " + href)
+	}
+
+	job := func(apiKey string) (any, error) {
+		ctx, cancel := context.WithTimeout(parentctx, 30*time.Second)
+		defer cancel()
+
+		endpoint, err := msac.entityEndpoint("uom", id)
+		if err != nil {
+			return nil, err
+		}
+
+		body, resp, err := msac.httpRequest(ctx, http.MethodGet, endpoint, apiKey, http.NoBody)
+		if err != nil {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			default:
+				return nil, err
+			}
+		}
+
+		err = resp.Body.Close()
+		if err != nil {
+			log.Printf("failed to close response body: %v", err)
+		}
+
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return nil, msAPIError(resp.Status, body)
+		}
+
+		var uom MSUOM
+		if err := json.Unmarshal(body, &uom); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal uom: %w", err)
+		}
+
+		return uom.Name, nil
+	}
+
+	resCh := msac.workerpool.SubmitOther(job)
+
+	select {
+	case res := <-resCh:
+		if res.Err != nil {
+			return "", fmt.Errorf("FetchUOMName failed: %w", res.Err)
+		}
+
+		name, ok := res.Value.(string)
+		if !ok {
+			return "", errors.New("FetchUOMName failed: unexpected value type")
+		}
+
+		return name, nil
+	case <-parentctx.Done():
+		return "", parentctx.Err()
+	}
+}
