@@ -49,14 +49,13 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 
-	code := m.Run()
+	m.Run()
 	_ = os.RemoveAll(tempdir.Dir)
-	os.Exit(code)
 }
 
 // pdfCachePath повторяет логику построения пути кэша из юзкейса.
-func pdfCachePath(id string) string {
-	return filepath.Join(tempdir.Dir, id+".pdf")
+func pdfCachePath() string {
+	return filepath.Join(tempdir.Dir, testID+".pdf")
 }
 
 const testID = "abc-123"
@@ -68,7 +67,7 @@ func newTestPDFUseCase(fetcher *fakePDFFetcher) *ExportOrderPDFUseCase {
 func TestGetMultipleOrdersPDF_EmptyCachedFileRefetched(t *testing.T) {
 	// Пустой файл в кэше (след прерванной загрузки) не должен попасть в merge:
 	// его нужно удалить и перекачать заново.
-	emptyFile := pdfCachePath(testID)
+	emptyFile := pdfCachePath()
 	if err := os.WriteFile(emptyFile, nil, 0o600); err != nil {
 		t.Fatalf("failed to create empty cached file: %v", err)
 	}
@@ -100,7 +99,7 @@ func TestGetMultipleOrdersPDF_EmptyCachedFileRefetched(t *testing.T) {
 func TestGetMultipleOrdersPDF_FetchErrorRemovesEmptyFile(t *testing.T) {
 	// Если загрузка прервана (отмена контекста), пустой файл должен быть удалён,
 	// а не остаться в кэше — иначе следующий merge упадёт на нём.
-	emptyFile := pdfCachePath(testID)
+	emptyFile := pdfCachePath()
 	if err := os.WriteFile(emptyFile, nil, 0o600); err != nil {
 		t.Fatalf("failed to create empty cached file: %v", err)
 	}
@@ -121,7 +120,7 @@ func TestGetMultipleOrdersPDF_FetchErrorRemovesEmptyFile(t *testing.T) {
 func TestGetMultipleOrdersPDF_NoEmptyFileOnCancel(t *testing.T) {
 	// Фетчер вернул ошибку (как делает FetchOrderPDF при отмене контекста) —
 	// файл не должен создаваться вовсе.
-	filePath := pdfCachePath(testID)
+	filePath := pdfCachePath()
 
 	fetcher := &fakePDFFetcher{err: context.Canceled}
 	uc := newTestPDFUseCase(fetcher)
@@ -136,7 +135,7 @@ func TestGetMultipleOrdersPDF_NoEmptyFileOnCancel(t *testing.T) {
 }
 
 func TestGetOrderPDF_EmptyCachedFileRefetched(t *testing.T) {
-	emptyFile := pdfCachePath(testID)
+	emptyFile := pdfCachePath()
 	if err := os.WriteFile(emptyFile, nil, 0o600); err != nil {
 		t.Fatalf("failed to create empty cached file: %v", err)
 	}
@@ -166,7 +165,7 @@ func TestGetOrderPDF_EmptyCachedFileRefetched(t *testing.T) {
 }
 
 func TestGetOrderPDF_FetchErrorRemovesEmptyFile(t *testing.T) {
-	emptyFile := pdfCachePath(testID)
+	emptyFile := pdfCachePath()
 	if err := os.WriteFile(emptyFile, nil, 0o600); err != nil {
 		t.Fatalf("failed to create empty cached file: %v", err)
 	}
@@ -184,7 +183,7 @@ func TestGetOrderPDF_FetchErrorRemovesEmptyFile(t *testing.T) {
 }
 
 func TestGetOrderPDF_NoFileCreatedOnCancel(t *testing.T) {
-	filePath := pdfCachePath(testID)
+	filePath := pdfCachePath()
 
 	fetcher := &fakePDFFetcher{err: context.Canceled}
 	uc := newTestPDFUseCase(fetcher)

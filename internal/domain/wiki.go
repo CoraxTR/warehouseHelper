@@ -27,10 +27,10 @@ var WeekdayNames = []string{"", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб", 
 
 // Contact — контакт поставщика.
 type Contact struct {
-	Name  string // имя контакта
-	Phone string // телефон
-	Email string // электронная почта
-	Site  string // сайт
+	Name  string `json:"name"`  // имя контакта
+	Phone string `json:"phone"` // телефон
+	Email string `json:"email"` // электронная почта
+	Site  string `json:"site"`  // сайт
 }
 
 // WikiPage — вики-страница поставщика или товара.

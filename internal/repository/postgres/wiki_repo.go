@@ -29,8 +29,11 @@ func (pg *PGClient) GetPage(ctx context.Context, title string) (*domain.WikiPage
     `, title)
 
 	page, err := scanWikiPage(row)
-	if err != nil || page == nil {
-		return page, err
+	if err != nil {
+		return nil, err
+	}
+	if page == nil {
+		return nil, nil
 	}
 
 	// Теги страницы — отдельным запросом.
@@ -49,14 +52,14 @@ func (pg *PGClient) GetPage(ctx context.Context, title string) (*domain.WikiPage
 	for tagRows.Next() {
 		var name string
 
-		if err = tagRows.Scan(&name); err != nil {
+		if err := tagRows.Scan(&name); err != nil {
 			return nil, err
 		}
 
 		page.Tags = append(page.Tags, name)
 	}
 
-	if err = tagRows.Err(); err != nil {
+	if err := tagRows.Err(); err != nil {
 		return nil, err
 	}
 
@@ -65,6 +68,8 @@ func (pg *PGClient) GetPage(ctx context.Context, title string) (*domain.WikiPage
 
 // scanWikiPage читает строку результата запроса в WikiPage.
 // Если строк нет (pgx.ErrNoRows), возвращает (nil, nil).
+//
+//nolint:nilnil // контракт репозитория: (nil, nil) = страница не найдена
 func scanWikiPage(row pgx.Row) (*domain.WikiPage, error) {
 	var (
 		id                       int64
@@ -129,6 +134,7 @@ func int16ToInt(src []int16) []int {
 func intsToInt16(src []int) []int16 {
 	res := make([]int16, len(src))
 	for i, v := range src {
+		//nolint:gosec // G115: значения валидируются до записи (дни недели 1..7), переполнение невозможно
 		res[i] = int16(v)
 	}
 
@@ -199,19 +205,19 @@ func (pg *PGClient) GetBacklinks(ctx context.Context, title string) ([]string, e
 	}
 	defer rows.Close()
 
-	var titles []string
+	titles := make([]string, 0)
 
 	for rows.Next() {
 		var t string
 
-		if err = rows.Scan(&t); err != nil {
+		if err := rows.Scan(&t); err != nil {
 			return nil, err
 		}
 
 		titles = append(titles, t)
 	}
 
-	if err = rows.Err(); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 
@@ -221,6 +227,8 @@ func (pg *PGClient) GetBacklinks(ctx context.Context, title string) ([]string, e
 // ResolveLinkTargets сопоставляет сырые заголовки ссылок с существующими
 // страницами: ключ — заголовок в нижнем регистре, значение — фактический.
 // Пустой вход возвращает (nil, nil).
+//
+//nolint:nilnil // контракт репозитория: пустой вход = (nil, nil)
 func (pg *PGClient) ResolveLinkTargets(ctx context.Context, rawTitles []string) (map[string]string, error) {
 	if len(rawTitles) == 0 {
 		return nil, nil
@@ -247,14 +255,14 @@ func (pg *PGClient) ResolveLinkTargets(ctx context.Context, rawTitles []string) 
 	for rows.Next() {
 		var title string
 
-		if err = rows.Scan(&title); err != nil {
+		if err := rows.Scan(&title); err != nil {
 			return nil, err
 		}
 
 		resolved[strings.ToLower(title)] = title
 	}
 
-	if err = rows.Err(); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 
@@ -275,19 +283,19 @@ func (pg *PGClient) ListPageTitlesByType(ctx context.Context, typ domain.PageTyp
 	}
 	defer rows.Close()
 
-	var titles []string
+	titles := make([]string, 0)
 
 	for rows.Next() {
 		var title string
 
-		if err = rows.Scan(&title); err != nil {
+		if err := rows.Scan(&title); err != nil {
 			return nil, err
 		}
 
 		titles = append(titles, title)
 	}
 
-	if err = rows.Err(); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 
@@ -309,7 +317,7 @@ func (pg *PGClient) TagCloud(ctx context.Context) ([]domain.WikiTagCount, error)
 	}
 	defer rows.Close()
 
-	var cloud []domain.WikiTagCount
+	cloud := make([]domain.WikiTagCount, 0)
 
 	for rows.Next() {
 		var (
@@ -317,14 +325,14 @@ func (pg *PGClient) TagCloud(ctx context.Context) ([]domain.WikiTagCount, error)
 			count int64
 		)
 
-		if err = rows.Scan(&name, &count); err != nil {
+		if err := rows.Scan(&name, &count); err != nil {
 			return nil, err
 		}
 
 		cloud = append(cloud, domain.WikiTagCount{Name: name, Count: int(count)})
 	}
 
-	if err = rows.Err(); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 
@@ -438,10 +446,8 @@ func (pg *PGClient) ListIndex(ctx context.Context, query string, tags []string, 
 	}
 	defer rows.Close()
 
-	var (
-		pageIDs []int64
-		entries []domain.WikiIndexEntry
-	)
+	pageIDs := make([]int64, 0)
+	entries := make([]domain.WikiIndexEntry, 0)
 
 	for rows.Next() {
 		var (
@@ -450,7 +456,7 @@ func (pg *PGClient) ListIndex(ctx context.Context, query string, tags []string, 
 			title    string
 		)
 
-		if err = rows.Scan(&id, &pageType, &title); err != nil {
+		if err := rows.Scan(&id, &pageType, &title); err != nil {
 			return nil, err
 		}
 
@@ -458,7 +464,7 @@ func (pg *PGClient) ListIndex(ctx context.Context, query string, tags []string, 
 		entries = append(entries, domain.WikiIndexEntry{Type: domain.PageType(pageType), Title: title})
 	}
 
-	if err = rows.Err(); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 
@@ -487,14 +493,14 @@ func (pg *PGClient) ListIndex(ctx context.Context, query string, tags []string, 
 			name   string
 		)
 
-		if err = tagRows.Scan(&pageID, &name); err != nil {
+		if err := tagRows.Scan(&pageID, &name); err != nil {
 			return nil, err
 		}
 
 		tagsByPage[pageID] = append(tagsByPage[pageID], name)
 	}
 
-	if err = tagRows.Err(); err != nil {
+	if err := tagRows.Err(); err != nil {
 		return nil, err
 	}
 
@@ -509,6 +515,8 @@ func (pg *PGClient) ListIndex(ctx context.Context, query string, tags []string, 
 // currentTitle == "" — создание; иначе — обновление, в том числе
 // переименование. При занятом заголовке возвращает domain.ErrTitleTaken.
 // photo != nil — обновить фото страницы.
+//
+//nolint:gocognit // ветки создания/обновления со своими SQL и кросс-синхронизацией — декомпозиция отдельной задачей
 func (pg *PGClient) SavePage(ctx context.Context, page *domain.WikiPage, currentTitle string, photo *domain.PhotoUpload) error {
 	tx, err := pg.Pool.Begin(ctx)
 	if err != nil {
@@ -537,6 +545,7 @@ func (pg *PGClient) SavePage(ctx context.Context, page *domain.WikiPage, current
 		products = []string{}
 	}
 
+	//nolint:nestif // создание/обновление — вложенные ветки SQL, декомпозиция отдельной задачей
 	if currentTitle == "" {
 		// Создание новой страницы. ON CONFLICT DO NOTHING без целевого
 		// индекса: единственный уникальный индекс — lower(title), поэтому

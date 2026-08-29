@@ -42,12 +42,12 @@ func NewxlsxImporter() *xlsximporter {
 //
 // Возвращает количество заборов и заказы, сгруппированные по номеру строки
 // реестра (ключ мапы — номер строки листа).
-func (x *xlsximporter) ParseRefGoCheckFile(data []byte) (int64, map[int64]RefGoCheckAgainstOrder, error) {
+func (x *xlsximporter) ParseRefGoCheckFile(data []byte) (picked int64, orders map[int64]RefGoCheckAgainstOrder, err error) {
 	file, err := excelize.OpenReader(bytes.NewReader(data))
 	if err != nil {
 		return 0, nil, fmt.Errorf("не удалось открыть xlsx: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	sheets := file.GetSheetList()
 	if len(sheets) == 0 {
@@ -60,7 +60,7 @@ func (x *xlsximporter) ParseRefGoCheckFile(data []byte) (int64, map[int64]RefGoC
 	}
 
 	var retrievesCount int64
-	orders := make(map[int64]RefGoCheckAgainstOrder)
+	orders = make(map[int64]RefGoCheckAgainstOrder)
 
 	emptyStreak := 0
 	for i := 2; i < len(rows); i++ {

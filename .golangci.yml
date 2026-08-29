@@ -31,8 +31,7 @@ linters:
         - fatcontext
         - forbidigo
         - forcetypeassert
-        - funcorder
-        #    - funlen # не лучшая метрика качества кода. Лучше в gocyclo, gocognit, maintidx. Например, табличные тесты всегда будут большими.
+        #    - funcorder # порядок методов — стиль; исторические файлы не переставляем, новые модули пишем в правильном порядке
         - ginkgolinter
         - gocheckcompilerdirectives
         #    - gochecknoglobals # не позволяет добавлять исключения (time.Date, regex.Must, etc). reassign с настройкой * частично решает проблему https://github.com/tommy-muehle/go-mnd/issues/14
@@ -57,7 +56,7 @@ linters:
         - importas
         - inamedparam
         - ineffassign
-        - interfacebloat
+        #    - interfacebloat # интерфейсы репозиториев >10 методов — норма для границ БД
         #    - intrange # обычный трехкомпонентный for довольно стандартен, чтобы заставлять менять на for i := range n
         - iotamixing
         #    - ireturn # существуют ситуации, когда нужно возвращать интерфейсы: паттерн фабрика или какие-то внешние либы подразумевают это (ogen, otel)
@@ -146,6 +145,11 @@ linters:
         gocognit:
             # Когнитивная сложность: 30 — низко для кода с бизнес-логикой и длинных тестов.
             min-complexity: 40
+        gocyclo:
+            # Цикломатическая сложность: синхронизируем с cyclop (20) и revive cyclomatic.
+            min-complexity: 40
+        nestif:
+            min-complexity: 7
         nolintlint:
             allow-unused: false
             require-explanation: true
@@ -163,10 +167,7 @@ linters:
             # Default: false
             for-loops: true
         nilnil:
-            # In addition, detect opposite situation (simultaneous return of non-nil error and valid value).
-            # E.g, `return clone, fh.indexer.Update(clone)` will be considered as invalid.
             # Default: false
-            detect-opposite: true
         revive:
             enable-all-rules: true
             rules:

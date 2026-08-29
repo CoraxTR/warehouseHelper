@@ -13,6 +13,9 @@ import (
 	"warehouseHelper/internal/msclient/client"
 )
 
+// testGroupA — имя группы товаров в тестах экспорта (goconst).
+const testGroupA = "Группа А"
+
 // msFolder собирает папку МС в стиле ответа /entity/productfolder:
 // id, name, pathName.
 func msFolder(id, name, pathName string) client.MSProductFolder {
@@ -367,7 +370,7 @@ func TestExportProducts_HappyPath(t *testing.T) {
 
 	pc := &stubProductClient{
 		byPath: map[string][]client.MSProduct{
-			"Группа А": {prod1, prod2},
+			testGroupA: {prod1, prod2},
 		},
 		uomNames: map[string]string{uomKgHref: "кг", uomPcHref: "шт"},
 	}
@@ -375,8 +378,8 @@ func TestExportProducts_HappyPath(t *testing.T) {
 	uc := NewGoodsUseCase(&stubProductFolderClient{}, pc, repo)
 
 	errs, err := uc.ExportProducts(context.Background(), []ExportItem{
-		{ProductID: "p1", GroupPath: "Группа А"},
-		{ProductID: "p2", GroupPath: "Группа А"},
+		{ProductID: "p1", GroupPath: testGroupA},
+		{ProductID: "p2", GroupPath: testGroupA},
 	})
 	if err != nil {
 		t.Fatalf("ExportProducts error: %v", err)
@@ -392,7 +395,7 @@ func TestExportProducts_HappyPath(t *testing.T) {
 	if got.ID != "p1" || got.InternalCode != "11110001" || got.Name != "Говядина охл." {
 		t.Errorf("товар p1: %+v", got)
 	}
-	if got.UOM != "кг" || got.GroupName != "Группа А" {
+	if got.UOM != "кг" || got.GroupName != testGroupA {
 		t.Errorf("uom/группа p1: %+v", got)
 	}
 	if got.AverageWeight == nil || *got.AverageWeight != 12.5 {
@@ -417,7 +420,7 @@ func TestExportProducts_HappyPath(t *testing.T) {
 func TestExportProducts_UOMCache(t *testing.T) {
 	pc := &stubProductClient{
 		byPath: map[string][]client.MSProduct{
-			"Группа А": {
+			testGroupA: {
 				msProduct("p1", "11110001", "Товар 1", uomKgHref, fullProductAttrs()...),
 				msProduct("p2", "11110002", "Товар 2", uomKgHref, fullProductAttrs()...),
 			},
@@ -427,8 +430,8 @@ func TestExportProducts_UOMCache(t *testing.T) {
 	uc := NewGoodsUseCase(&stubProductFolderClient{}, pc, &stubProductsRepo{})
 
 	_, err := uc.ExportProducts(context.Background(), []ExportItem{
-		{ProductID: "p1", GroupPath: "Группа А"},
-		{ProductID: "p2", GroupPath: "Группа А"},
+		{ProductID: "p1", GroupPath: testGroupA},
+		{ProductID: "p2", GroupPath: testGroupA},
 	})
 	if err != nil {
 		t.Fatalf("ExportProducts error: %v", err)
@@ -443,15 +446,15 @@ func TestExportProducts_MissingAttribute_FailsThatProduct(t *testing.T) {
 	bad := msProduct("p2", "11110002", "Без веса", uomKgHref, fullProductAttrs()[:3]...)
 
 	pc := &stubProductClient{
-		byPath:   map[string][]client.MSProduct{"Группа А": {ok, bad}},
+		byPath:   map[string][]client.MSProduct{testGroupA: {ok, bad}},
 		uomNames: map[string]string{uomKgHref: "кг"},
 	}
 	repo := &stubProductsRepo{}
 	uc := NewGoodsUseCase(&stubProductFolderClient{}, pc, repo)
 
 	errs, err := uc.ExportProducts(context.Background(), []ExportItem{
-		{ProductID: "p1", GroupPath: "Группа А"},
-		{ProductID: "p2", GroupPath: "Группа А"},
+		{ProductID: "p1", GroupPath: testGroupA},
+		{ProductID: "p2", GroupPath: testGroupA},
 	})
 	if err != nil {
 		t.Fatalf("ExportProducts error: %v", err)
@@ -473,14 +476,14 @@ func TestExportProducts_MissingAttribute_FailsThatProduct(t *testing.T) {
 func TestExportProducts_InternalCodeTaken(t *testing.T) {
 	pc := &stubProductClient{
 		byPath: map[string][]client.MSProduct{
-			"Группа А": {msProduct("p1", "11110001", "Дубль кода", uomKgHref, fullProductAttrs()...)},
+			testGroupA: {msProduct("p1", "11110001", "Дубль кода", uomKgHref, fullProductAttrs()...)},
 		},
 		uomNames: map[string]string{uomKgHref: "кг"},
 	}
 	repo := &stubProductsRepo{upsertErr: domain.ErrInternalCodeTaken}
 	uc := NewGoodsUseCase(&stubProductFolderClient{}, pc, repo)
 
-	errs, err := uc.ExportProducts(context.Background(), []ExportItem{{ProductID: "p1", GroupPath: "Группа А"}})
+	errs, err := uc.ExportProducts(context.Background(), []ExportItem{{ProductID: "p1", GroupPath: testGroupA}})
 	if err != nil {
 		t.Fatalf("ExportProducts error: %v", err)
 	}
@@ -491,12 +494,12 @@ func TestExportProducts_InternalCodeTaken(t *testing.T) {
 
 func TestExportProducts_ProductNotFoundInGroup(t *testing.T) {
 	pc := &stubProductClient{
-		byPath:   map[string][]client.MSProduct{"Группа А": {}},
+		byPath:   map[string][]client.MSProduct{testGroupA: {}},
 		uomNames: map[string]string{},
 	}
 	uc := NewGoodsUseCase(&stubProductFolderClient{}, pc, &stubProductsRepo{})
 
-	errs, err := uc.ExportProducts(context.Background(), []ExportItem{{ProductID: "ghost", GroupPath: "Группа А"}})
+	errs, err := uc.ExportProducts(context.Background(), []ExportItem{{ProductID: "ghost", GroupPath: testGroupA}})
 	if err != nil {
 		t.Fatalf("ExportProducts error: %v", err)
 	}
@@ -508,7 +511,7 @@ func TestExportProducts_ProductNotFoundInGroup(t *testing.T) {
 func TestExportProducts_GroupingByPath(t *testing.T) {
 	pc := &stubProductClient{
 		byPath: map[string][]client.MSProduct{
-			"Группа А": {msProduct("p1", "11110001", "Товар А", uomKgHref, fullProductAttrs()...)},
+			testGroupA: {msProduct("p1", "11110001", "Товар А", uomKgHref, fullProductAttrs()...)},
 			"Группа Б": {msProduct("p2", "11110002", "Товар Б", uomKgHref, fullProductAttrs()...)},
 		},
 		uomNames: map[string]string{uomKgHref: "кг"},
@@ -516,14 +519,14 @@ func TestExportProducts_GroupingByPath(t *testing.T) {
 	uc := NewGoodsUseCase(&stubProductFolderClient{}, pc, &stubProductsRepo{})
 
 	_, err := uc.ExportProducts(context.Background(), []ExportItem{
-		{ProductID: "p1", GroupPath: "Группа А"},
+		{ProductID: "p1", GroupPath: testGroupA},
 		{ProductID: "p2", GroupPath: "Группа Б"},
 	})
 	if err != nil {
 		t.Fatalf("ExportProducts error: %v", err)
 	}
 	// Один запрос на группу.
-	if len(pc.pathCalls) != 2 || pc.pathCalls[0] != "Группа А" || pc.pathCalls[1] != "Группа Б" {
+	if len(pc.pathCalls) != 2 || pc.pathCalls[0] != testGroupA || pc.pathCalls[1] != "Группа Б" {
 		t.Errorf("запросы групп: %v", pc.pathCalls)
 	}
 }
@@ -531,13 +534,13 @@ func TestExportProducts_GroupingByPath(t *testing.T) {
 func TestLoadTreeWithProducts(t *testing.T) {
 	folderStub := &stubProductFolderClient{
 		folders: []client.MSProductFolder{
-			msFolder("id-root", "Группа А", ""),
-			msFolder("id-child", "Подгруппа", "Группа А"),
+			msFolder("id-root", testGroupA, ""),
+			msFolder("id-child", "Подгруппа", testGroupA),
 		},
 	}
 	pc := &stubProductClient{
 		byPath: map[string][]client.MSProduct{
-			"Группа А": {
+			testGroupA: {
 				msProduct("p1", "11110001", "Товар 1", uomKgHref, fullProductAttrs()...),
 				msProduct("p2", "11110002", "Товар 2", uomKgHref, fullProductAttrs()...),
 			},
@@ -554,13 +557,13 @@ func TestLoadTreeWithProducts(t *testing.T) {
 	if len(tree) != 1 || len(tree[0].Products) != 2 {
 		t.Fatalf("товары корня: %+v", tree)
 	}
-	if tree[0].PathName != "Группа А" {
+	if tree[0].PathName != testGroupA {
 		t.Errorf("PathName корня: %q", tree[0].PathName)
 	}
 	if len(tree[0].Children) != 1 || tree[0].Children[0].PathName != "Группа А/Подгруппа" {
 		t.Errorf("PathName подгруппы: %+v", tree[0].Children)
 	}
-	if tree[0].Products[0].Name != "Товар 1" || tree[0].Products[0].Path != "Группа А" {
+	if tree[0].Products[0].Name != "Товар 1" || tree[0].Products[0].Path != testGroupA {
 		t.Errorf("товар в дереве: %+v", tree[0].Products[0])
 	}
 }
@@ -673,7 +676,7 @@ func TestResyncProduct_HappyPath_KeepsGroupName(t *testing.T) {
 }
 
 func TestResyncProduct_MissingAttr_NoUpsert(t *testing.T) {
-	repo := &stubProductsRepo{get: &domain.Product{ID: "p1", GroupName: "Группа А"}}
+	repo := &stubProductsRepo{get: &domain.Product{ID: "p1", GroupName: testGroupA}}
 	pc := &stubProductClient{
 		byID: map[string]client.MSProduct{
 			"p1": msProduct("p1", "11110001", "Без веса", uomKgHref, fullProductAttrs()[:3]...),

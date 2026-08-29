@@ -130,7 +130,7 @@ func (h *Handler) RefGoCheckAgainst(w http.ResponseWriter, r *http.Request) {
 
 		return
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	data, err := io.ReadAll(file)
 	if err != nil {

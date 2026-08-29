@@ -12,7 +12,7 @@ func buildTestRegistry(t *testing.T, rows [][]any) []byte {
 	t.Helper()
 
 	f := excelize.NewFile()
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	sheet := f.GetSheetName(0)
 	for i, row := range rows {
@@ -93,7 +93,7 @@ func TestParseRefGoCheckFile(t *testing.T) {
 
 	second, ok := orders[6]
 	if !ok {
-		t.Fatalf("order with row 6 not found")
+		t.Fatal("order with row 6 not found")
 	}
 	if second.RefGoNumber != "1002" {
 		t.Errorf("RefGoNumber = %q, want 1002", second.RefGoNumber)
@@ -136,7 +136,7 @@ func TestParseRefGoCheckFileStopsAfterThreeEmptyRows(t *testing.T) {
 	}
 
 	if _, ok := orders[3]; !ok {
-		t.Errorf("order on row 3 not found")
+		t.Error("order on row 3 not found")
 	}
 }
 

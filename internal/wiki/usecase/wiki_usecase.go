@@ -72,7 +72,7 @@ func (uc *WikiUseCase) GetPageWithBacklinks(ctx context.Context, title string) (
 }
 
 // GetPhoto возвращает данные фото страницы и его MIME-тип.
-func (uc *WikiUseCase) GetPhoto(ctx context.Context, title string) ([]byte, string, error) {
+func (uc *WikiUseCase) GetPhoto(ctx context.Context, title string) (data []byte, contentType string, err error) {
 	return uc.repo.GetPhoto(ctx, title)
 }
 
@@ -85,6 +85,7 @@ func (uc *WikiUseCase) TagCloud(ctx context.Context) ([]domain.WikiTagCount, err
 // страниц; пустой список не требует обращения к хранилищу.
 func (uc *WikiUseCase) ResolveLinkTargets(ctx context.Context, rawTitles []string) (map[string]string, error) {
 	if len(rawTitles) == 0 {
+		//nolint:nilnil // контракт: пустой вход — нет ссылок для разрешения
 		return nil, nil
 	}
 	return uc.repo.ResolveLinkTargets(ctx, rawTitles)

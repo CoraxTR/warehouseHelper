@@ -50,6 +50,7 @@ func (pg *PGClient) GetSupplier(ctx context.Context, id string) (*domain.Supplie
 
 	s, err := scanSupplier(row)
 	if errors.Is(err, pgx.ErrNoRows) {
+		//nolint:nilnil // контракт: поставщик не найден
 		return nil, nil
 	}
 	if err != nil {

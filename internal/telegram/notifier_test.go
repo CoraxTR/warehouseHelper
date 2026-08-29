@@ -60,7 +60,7 @@ func TestNotifyWarehouseSendsMessage(t *testing.T) {
 }
 
 func TestNotifyWarehouseNon2xxReturnsError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		_, _ = w.Write([]byte(`{"ok":false}`))
 	}))
@@ -79,7 +79,7 @@ func TestNotifyWarehouseNon2xxReturnsError(t *testing.T) {
 func TestNotifyWarehouseDisabledWithoutConfig(t *testing.T) {
 	hit := false
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		hit = true
 		w.WriteHeader(http.StatusOK)
 	}))

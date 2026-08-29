@@ -78,7 +78,7 @@ func (u *QRUseCase) SavePhotos(ctx context.Context, orderNumber string, uploads 
 	}
 
 	photos := make([]domain.QRPhoto, 0, len(uploads))
-	var savedNames []string
+	savedNames := make([]string, 0, len(uploads))
 	// rollback удаляет файлы фото, созданные в рамках этого вызова. Контекст
 	// берём без отмены: при обрыве клиента (отмена ctx) файлы всё равно
 	// должны подчиститься, а не остаться сиротами до очистки.

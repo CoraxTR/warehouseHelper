@@ -34,16 +34,6 @@ func TestParseEnvFloat(t *testing.T) {
 }
 
 func TestEnvFilePath(t *testing.T) {
-	orig, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := os.Chdir(orig); err != nil {
-			t.Errorf("восстановление рабочего каталога: %v", err)
-		}
-	})
-
 	dir := t.TempDir()
 	envAbs := filepath.Join(dir, ".env")
 	if err := os.WriteFile(envAbs, []byte("TEST=1\n"), 0o600); err != nil {
@@ -51,9 +41,7 @@ func TestEnvFilePath(t *testing.T) {
 	}
 
 	t.Run("запуск из корня репозитория", func(t *testing.T) {
-		if err := os.Chdir(dir); err != nil {
-			t.Fatal(err)
-		}
+		t.Chdir(dir)
 		if got := envFilePath(); got != envAbs {
 			t.Fatalf("envFilePath() = %q, want %q", got, envAbs)
 		}
@@ -64,9 +52,7 @@ func TestEnvFilePath(t *testing.T) {
 		if err := os.MkdirAll(cmdDir, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.Chdir(cmdDir); err != nil {
-			t.Fatal(err)
-		}
+		t.Chdir(cmdDir)
 		if got := envFilePath(); got != envAbs {
 			t.Fatalf("envFilePath() = %q, want %q", got, envAbs)
 		}
@@ -74,9 +60,7 @@ func TestEnvFilePath(t *testing.T) {
 
 	t.Run("файл .env не найден", func(t *testing.T) {
 		emptyDir := t.TempDir()
-		if err := os.Chdir(emptyDir); err != nil {
-			t.Fatal(err)
-		}
+		t.Chdir(emptyDir)
 		if got := envFilePath(); got != "" {
 			t.Fatalf("envFilePath() = %q, want пустую строку", got)
 		}

@@ -171,7 +171,7 @@ func (pg *PGClient) GetAllOrders(ctx context.Context) ([]*domain.InternalOrder, 
 	}
 	defer rows.Close()
 
-	var orders []*domain.InternalOrder
+	orders := make([]*domain.InternalOrder, 0)
 
 	for rows.Next() {
 		var (
@@ -425,7 +425,7 @@ func (pg *PGClient) GetOrdersByIDs(ctx context.Context, ids []string) ([]*domain
 	}
 	defer rows.Close()
 
-	var orders []*domain.InternalOrder
+	orders := make([]*domain.InternalOrder, 0, len(ids))
 
 	for rows.Next() {
 		order, err := scanOrderRow(rows)
@@ -503,6 +503,7 @@ func scanOrderRow(row pgx.Row) (*domain.InternalOrder, error) {
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
+			//nolint:nilnil // контракт: заказ не найден
 			return nil, nil
 		}
 

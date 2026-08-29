@@ -105,6 +105,7 @@ func (uc *ExportToExcelUseCase) ExportOrders(ctx context.Context) (summary *Expo
 	// Отметка «отгружен в Реф» и создание отгрузок — в фоне: страница с итогами
 	// не должна ждать обработки всех заказов. Контекст запроса тут не годится
 	// (отменяется после ответа), поэтому берём context.Background().
+	//nolint:contextcheck // фоновый запуск после ответа — контекст запроса уже отменён
 	go uc.processOrdersShipments(context.Background(), orders)
 
 	return summary, nil

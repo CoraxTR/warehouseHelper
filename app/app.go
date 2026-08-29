@@ -25,7 +25,7 @@ func New() *App {
 
 	a.initDeps()
 
-	a.RefGoCheckAgainstModule = a.di.Config().RefGoConfig.CheckAgainstModule
+	a.RefGoCheckAgainstModule = a.di.Config().CheckAgainstModule
 
 	return a
 }
