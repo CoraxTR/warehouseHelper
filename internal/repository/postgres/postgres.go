@@ -358,7 +358,7 @@ func (pg *PGClient) GetRefGoCheckOrdersByDateRange(ctx context.Context, dateFrom
 		}
 
 		if refgoNumber == "" {
-			log.Printf("GetRefGoCheckOrdersByDateRange: order with empty refgo_number skipped")
+			log.Print("GetRefGoCheckOrdersByDateRange: order with empty refgo_number skipped")
 
 			continue
 		}

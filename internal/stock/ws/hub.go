@@ -87,45 +87,6 @@ func (h *Hub) PublishStockChange(e stock.Event) {
 	h.broadcast(msg)
 }
 
-func (h *Hub) broadcast(msg []byte) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	for c := range h.clients {
-		select {
-		case c.send <- msg:
-		default:
-			// Медленный клиент: пропускаем сообщение, соединение не рвём.
-			log.Printf("ws: send buffer full, dropping message for %s", c.conn.RemoteAddr())
-		}
-	}
-}
-
-// readPump читает (и игнорирует) сообщения клиента: держит соединение живым
-// (ping/pong), завершается при разрыве и снимает клиента с хаба.
-// Клиент не шлёт данных по ws — все записи идут POST /ms/dates/discount.
-func (c *Client) readPump() {
-	defer func() {
-		c.hub.Unregister(c)
-		c.conn.Close()
-	}()
-	c.conn.SetReadLimit(1024)
-	for {
-		if _, _, err := c.conn.ReadMessage(); err != nil {
-			return
-		}
-	}
-}
-
-// writePump пишет очередь в соединение.
-func (c *Client) writePump() {
-	defer c.conn.Close()
-	for msg := range c.send {
-		if err := c.conn.WriteMessage(websocket.TextMessage, msg); err != nil {
-			return
-		}
-	}
-}
-
 // ServeConn обслуживает одно соединение: регистрирует клиента со снапшотом
 // и запускает read/write-горутины.
 func (h *Hub) ServeConn(w http.ResponseWriter, r *http.Request, snapshot []byte) {
@@ -138,4 +99,44 @@ func (h *Hub) ServeConn(w http.ResponseWriter, r *http.Request, snapshot []byte)
 	h.Register(c, snapshot)
 	go c.writePump()
 	go c.readPump()
+}
+
+// broadcast рассылает сообщение всем клиентам. Медленный клиент (полный
+// буфер) сообщение теряет, но соединение не рвётся.
+func (h *Hub) broadcast(msg []byte) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for c := range h.clients {
+		select {
+		case c.send <- msg:
+		default:
+			log.Printf("ws: send buffer full, dropping message for %s", c.conn.RemoteAddr())
+		}
+	}
+}
+
+// readPump читает (и игнорирует) сообщения клиента: держит соединение живым
+// (ping/pong), завершается при разрыве и снимает клиента с хаба.
+// Клиент не шлёт данных по ws — все записи идут POST /ms/dates/discount.
+func (c *Client) readPump() {
+	defer func() {
+		c.hub.Unregister(c)
+		_ = c.conn.Close()
+	}()
+	c.conn.SetReadLimit(1024)
+	for {
+		if _, _, err := c.conn.ReadMessage(); err != nil {
+			return
+		}
+	}
+}
+
+// writePump пишет очередь в соединение.
+func (c *Client) writePump() {
+	defer func() { _ = c.conn.Close() }()
+	for msg := range c.send {
+		if err := c.conn.WriteMessage(websocket.TextMessage, msg); err != nil {
+			return
+		}
+	}
 }

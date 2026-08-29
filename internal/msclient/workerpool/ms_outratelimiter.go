@@ -1,4 +1,4 @@
-//nolint:revive //i do what i have to do
+// Пакет workerpool — рейт-лимит исходящих запросов к МойСклад.
 package workerpool
 
 import (

@@ -165,23 +165,23 @@ func (uc *WikiUseCase) RemovePhoto(ctx context.Context, title string) error {
 // Внимание: метод мутирует переданный page (нормализация полей).
 func (uc *WikiUseCase) SavePage(ctx context.Context, currentTitle string, page *domain.WikiPage, photo *domain.PhotoUpload) error {
 	if page == nil {
-		return fmt.Errorf("страница не передана")
+		return errors.New("страница не передана")
 	}
 	if !domain.ValidPageType(string(page.Type)) {
-		return fmt.Errorf("неизвестный тип страницы")
+		return errors.New("неизвестный тип страницы")
 	}
 
 	page.Title = strings.TrimSpace(page.Title)
 	if page.Title == "" {
-		return fmt.Errorf("заголовок не может быть пустым")
+		return errors.New("заголовок не может быть пустым")
 	}
 	if utf8.RuneCountInString(page.Title) > 255 {
-		return fmt.Errorf("заголовок слишком длинный (максимум 255 символов)")
+		return errors.New("заголовок слишком длинный (максимум 255 символов)")
 	}
 	// Управляющие символы ломают рендер [[ссылок]] и URL.
 	for _, r := range page.Title {
 		if unicode.IsControl(r) {
-			return fmt.Errorf("заголовок содержит недопустимые символы")
+			return errors.New("заголовок содержит недопустимые символы")
 		}
 	}
 
@@ -193,7 +193,7 @@ func (uc *WikiUseCase) SavePage(ctx context.Context, currentTitle string, page *
 		}
 		if existing != nil {
 			if existing.Type != page.Type {
-				return fmt.Errorf("тип страницы менять нельзя")
+				return errors.New("тип страницы менять нельзя")
 			}
 		} else {
 			// Страница не найдена — считаем созданием.
@@ -202,7 +202,7 @@ func (uc *WikiUseCase) SavePage(ctx context.Context, currentTitle string, page *
 	}
 
 	if len(page.Contacts) > 20 {
-		return fmt.Errorf("слишком много контактов (максимум 20)")
+		return errors.New("слишком много контактов (максимум 20)")
 	}
 	for i := range page.Contacts {
 		c := &page.Contacts[i]
@@ -231,13 +231,13 @@ func (uc *WikiUseCase) SavePage(ctx context.Context, currentTitle string, page *
 
 	page.AverageWeight = strings.TrimSpace(page.AverageWeight)
 	if utf8.RuneCountInString(page.AverageWeight) > 100 {
-		return fmt.Errorf("средний вес слишком длинный (максимум 100 символов)")
+		return errors.New("средний вес слишком длинный (максимум 100 символов)")
 	}
 
 	// Ограничение размера содержимого: каждая страница рендерится
 	// goldmark+bluemonday при каждом просмотре.
 	if len(page.Content) > 256<<10 {
-		return fmt.Errorf("содержимое слишком большое (максимум 256 КБ)")
+		return errors.New("содержимое слишком большое (максимум 256 КБ)")
 	}
 
 	page.Suppliers, err = normalizeStrings(page.Suppliers, 50, "поставщиков", 100)
@@ -259,10 +259,10 @@ func (uc *WikiUseCase) SavePage(ctx context.Context, currentTitle string, page *
 	}
 	if photo != nil {
 		if len(photo.Data) > 5<<20 {
-			return fmt.Errorf("фото больше 5 МБ")
+			return errors.New("фото больше 5 МБ")
 		}
 		if !strings.HasPrefix(photo.ContentType, "image/") {
-			return fmt.Errorf("фото должно быть изображением")
+			return errors.New("фото должно быть изображением")
 		}
 	}
 
@@ -294,7 +294,7 @@ func normalizeDays(days []int) ([]int, error) {
 // normalizeStrings обрезает строки по пробелам, выкидывает пустые,
 // убирает дубли без учёта регистра (сохраняя первый вариант),
 // проверяет максимальное количество элементов и длину каждого.
-func normalizeStrings(items []string, max int, kind string, maxLen int) ([]string, error) {
+func normalizeStrings(items []string, maxCount int, kind string, maxLen int) ([]string, error) {
 	if len(items) == 0 {
 		return nil, nil
 	}
@@ -315,8 +315,8 @@ func normalizeStrings(items []string, max int, kind string, maxLen int) ([]strin
 		seen[key] = struct{}{}
 		out = append(out, it)
 	}
-	if len(out) > max {
-		return nil, fmt.Errorf("слишком много %s (максимум %d)", kind, max)
+	if len(out) > maxCount {
+		return nil, fmt.Errorf("слишком много %s (максимум %d)", kind, maxCount)
 	}
 	return out, nil
 }

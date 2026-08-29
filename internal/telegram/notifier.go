@@ -3,6 +3,7 @@ package telegram
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -72,7 +73,7 @@ func (n *Notifier) sendMessage(chatID int64, text string) error {
 
 	url := fmt.Sprintf("%s/bot%s/sendMessage", n.apiBaseURL, n.botToken)
 
-	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, url, bytes.NewReader(payload))
 	if err != nil {
 		return fmt.Errorf("failed to create telegram request: %w", err)
 	}
