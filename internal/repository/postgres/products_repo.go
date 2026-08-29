@@ -80,7 +80,7 @@ func (pg *PGClient) SearchProducts(ctx context.Context, query string) ([]domain.
 	}
 	defer rows.Close()
 
-	var products []domain.Product
+	products := make([]domain.Product, 0)
 	for rows.Next() {
 		p, err := scanProduct(rows)
 		if err != nil {

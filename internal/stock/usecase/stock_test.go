@@ -145,7 +145,7 @@ func TestSetManualDiscount(t *testing.T) {
 	}
 	up := repo.updates[0]
 	if up.productID != "p1" || !up.bestBefore.Equal(d(2026, 9, 1)) {
-		t.Errorf("UPDATE args: (%s, %s)", up.productID, up.bestBefore.Format("2006-01-02"))
+		t.Errorf("UPDATE args: (%s, %s)", up.productID, up.bestBefore.Format(time.DateOnly))
 	}
 	if up.generalManual == nil || *up.generalManual != 7 {
 		t.Errorf("generalManual = %v, want 7", up.generalManual)

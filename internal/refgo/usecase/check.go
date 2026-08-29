@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -69,7 +70,7 @@ func (uc *RefGoCheckAgainstUseCase) Check(ctx context.Context, dateFrom, dateTo 
 	for row := range fileOrders {
 		rowNumbers = append(rowNumbers, row)
 	}
-	sort.Slice(rowNumbers, func(i, j int) bool { return rowNumbers[i] < rowNumbers[j] })
+	slices.Sort(rowNumbers)
 
 	for _, row := range rowNumbers {
 		order := fileOrders[row]
@@ -86,6 +87,8 @@ func (uc *RefGoCheckAgainstUseCase) Check(ctx context.Context, dateFrom, dateTo 
 			if !sumsMatch(dbOrder.Sum, order.CashFact+order.TerminalFact) {
 				errorsList = append(errorsList, fmt.Sprintf("Ошибка на строке %d: Сумма оплаты не совпадает с базой", row))
 			}
+		default:
+			// Прочие способы оплаты суммой не сверяются.
 		}
 
 		if diff := order.ValidateTaxFact(uc.cfg.RGCashtax, uc.cfg.RGCardtax); diff != 0 {

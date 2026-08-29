@@ -181,11 +181,11 @@ func TestStoreListOlderThan(t *testing.T) {
 	if err := os.MkdirAll(oldDir, 0o750); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(oldDir, "photo.jpg"), jpgData("старое фото"), 0o640); err != nil {
+	if err := os.WriteFile(filepath.Join(oldDir, "photo.jpg"), jpgData("старое фото"), 0o600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 	// Посторонний файл в корне хранилища должен пропускаться.
-	if err := os.WriteFile(filepath.Join(root, "QRCodes", "readme.txt"), []byte("x"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "QRCodes", "readme.txt"), []byte("x"), 0o600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 	// Состариваем файл oldID и папку oldDirID (mtime = now - 2 часа).
@@ -248,7 +248,7 @@ func TestStoreRemoveAll(t *testing.T) {
 	if err := os.MkdirAll(oldDir, 0o750); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(oldDir, "photo.jpg"), jpgData("старое"), 0o640); err != nil {
+	if err := os.WriteFile(filepath.Join(oldDir, "photo.jpg"), jpgData("старое"), 0o600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 	if err := s.RemoveAll(ctx, testID); err != nil {

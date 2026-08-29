@@ -90,7 +90,7 @@ func (pg *PGClient) SetManualDiscount(ctx context.Context, productID string, bes
 		productID, bestBefore, generalManual, telegramManual,
 	)
 	if err != nil {
-		return fmt.Errorf("set manual discount (%s, %s): %w", productID, bestBefore.Format("2006-01-02"), err)
+		return fmt.Errorf("set manual discount (%s, %s): %w", productID, bestBefore.Format(time.DateOnly), err)
 	}
 	if tag.RowsAffected() == 0 {
 		return stock.ErrLotNotFound

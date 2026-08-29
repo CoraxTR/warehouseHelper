@@ -20,14 +20,14 @@ type stockPageData struct {
 }
 
 // StockDatesPage — GET /ms/dates: страница «Сроки».
-func (h *Handler) StockDatesPage(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) StockDatesPage(w http.ResponseWriter, _ *http.Request) {
 	if err := stockDatesTmpl.Execute(w, stockPageData{}); err != nil {
 		log.Printf("stock_dates template: %v", err)
 	}
 }
 
 // StockShortPage — GET /ms/dates/short: «Шорт-лист» (только short_list=true).
-func (h *Handler) StockShortPage(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) StockShortPage(w http.ResponseWriter, _ *http.Request) {
 	if err := stockDatesTmpl.Execute(w, stockPageData{ShortList: true}); err != nil {
 		log.Printf("stock_dates template: %v", err)
 	}
@@ -66,7 +66,7 @@ func (h *Handler) StockDiscount(w http.ResponseWriter, r *http.Request) {
 
 		return
 	}
-	bb, err := time.Parse("2006-01-02", req.BestBefore)
+	bb, err := time.Parse(time.DateOnly, req.BestBefore)
 	if err != nil {
 		http.Error(w, "best_before должен быть YYYY-MM-DD", http.StatusBadRequest)
 

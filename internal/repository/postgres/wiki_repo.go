@@ -29,8 +29,12 @@ func (pg *PGClient) GetPage(ctx context.Context, title string) (*domain.WikiPage
     `, title)
 
 	page, err := scanWikiPage(row)
-	if err != nil || page == nil {
-		return page, err
+	if err != nil {
+		return nil, err
+	}
+	if page == nil {
+		//nolint:nilnil // контракт: страница не найдена
+		return nil, nil
 	}
 
 	// Теги страницы — отдельным запросом.
@@ -49,14 +53,14 @@ func (pg *PGClient) GetPage(ctx context.Context, title string) (*domain.WikiPage
 	for tagRows.Next() {
 		var name string
 
-		if err = tagRows.Scan(&name); err != nil {
+		if err := tagRows.Scan(&name); err != nil {
 			return nil, err
 		}
 
 		page.Tags = append(page.Tags, name)
 	}
 
-	if err = tagRows.Err(); err != nil {
+	if err := tagRows.Err(); err != nil {
 		return nil, err
 	}
 
@@ -65,6 +69,8 @@ func (pg *PGClient) GetPage(ctx context.Context, title string) (*domain.WikiPage
 
 // scanWikiPage читает строку результата запроса в WikiPage.
 // Если строк нет (pgx.ErrNoRows), возвращает (nil, nil).
+//
+//nolint:nilnil // контракт репозитория: (nil, nil) = страница не найдена
 func scanWikiPage(row pgx.Row) (*domain.WikiPage, error) {
 	var (
 		id                       int64
@@ -129,6 +135,7 @@ func int16ToInt(src []int16) []int {
 func intsToInt16(src []int) []int16 {
 	res := make([]int16, len(src))
 	for i, v := range src {
+		//nolint:gosec // G115: значения валидируются до записи (дни недели 1..7), переполнение невозможно
 		res[i] = int16(v)
 	}
 
@@ -199,19 +206,19 @@ func (pg *PGClient) GetBacklinks(ctx context.Context, title string) ([]string, e
 	}
 	defer rows.Close()
 
-	var titles []string
+	titles := make([]string, 0)
 
 	for rows.Next() {
 		var t string
 
-		if err = rows.Scan(&t); err != nil {
+		if err := rows.Scan(&t); err != nil {
 			return nil, err
 		}
 
 		titles = append(titles, t)
 	}
 
-	if err = rows.Err(); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 
@@ -221,6 +228,8 @@ func (pg *PGClient) GetBacklinks(ctx context.Context, title string) ([]string, e
 // ResolveLinkTargets сопоставляет сырые заголовки ссылок с существующими
 // страницами: ключ — заголовок в нижнем регистре, значение — фактический.
 // Пустой вход возвращает (nil, nil).
+//
+//nolint:nilnil // контракт репозитория: пустой вход = (nil, nil)
 func (pg *PGClient) ResolveLinkTargets(ctx context.Context, rawTitles []string) (map[string]string, error) {
 	if len(rawTitles) == 0 {
 		return nil, nil
@@ -247,14 +256,14 @@ func (pg *PGClient) ResolveLinkTargets(ctx context.Context, rawTitles []string) 
 	for rows.Next() {
 		var title string
 
-		if err = rows.Scan(&title); err != nil {
+		if err := rows.Scan(&title); err != nil {
 			return nil, err
 		}
 
 		resolved[strings.ToLower(title)] = title
 	}
 
-	if err = rows.Err(); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 
@@ -275,19 +284,19 @@ func (pg *PGClient) ListPageTitlesByType(ctx context.Context, typ domain.PageTyp
 	}
 	defer rows.Close()
 
-	var titles []string
+	titles := make([]string, 0)
 
 	for rows.Next() {
 		var title string
 
-		if err = rows.Scan(&title); err != nil {
+		if err := rows.Scan(&title); err != nil {
 			return nil, err
 		}
 
 		titles = append(titles, title)
 	}
 
-	if err = rows.Err(); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 
@@ -309,7 +318,7 @@ func (pg *PGClient) TagCloud(ctx context.Context) ([]domain.WikiTagCount, error)
 	}
 	defer rows.Close()
 
-	var cloud []domain.WikiTagCount
+	cloud := make([]domain.WikiTagCount, 0)
 
 	for rows.Next() {
 		var (
@@ -317,14 +326,14 @@ func (pg *PGClient) TagCloud(ctx context.Context) ([]domain.WikiTagCount, error)
 			count int64
 		)
 
-		if err = rows.Scan(&name, &count); err != nil {
+		if err := rows.Scan(&name, &count); err != nil {
 			return nil, err
 		}
 
 		cloud = append(cloud, domain.WikiTagCount{Name: name, Count: int(count)})
 	}
 
-	if err = rows.Err(); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 
@@ -438,10 +447,8 @@ func (pg *PGClient) ListIndex(ctx context.Context, query string, tags []string, 
 	}
 	defer rows.Close()
 
-	var (
-		pageIDs []int64
-		entries []domain.WikiIndexEntry
-	)
+	pageIDs := make([]int64, 0)
+	entries := make([]domain.WikiIndexEntry, 0)
 
 	for rows.Next() {
 		var (
@@ -450,7 +457,7 @@ func (pg *PGClient) ListIndex(ctx context.Context, query string, tags []string, 
 			title    string
 		)
 
-		if err = rows.Scan(&id, &pageType, &title); err != nil {
+		if err := rows.Scan(&id, &pageType, &title); err != nil {
 			return nil, err
 		}
 
@@ -458,7 +465,7 @@ func (pg *PGClient) ListIndex(ctx context.Context, query string, tags []string, 
 		entries = append(entries, domain.WikiIndexEntry{Type: domain.PageType(pageType), Title: title})
 	}
 
-	if err = rows.Err(); err != nil {
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 
@@ -487,14 +494,14 @@ func (pg *PGClient) ListIndex(ctx context.Context, query string, tags []string, 
 			name   string
 		)
 
-		if err = tagRows.Scan(&pageID, &name); err != nil {
+		if err := tagRows.Scan(&pageID, &name); err != nil {
 			return nil, err
 		}
 
 		tagsByPage[pageID] = append(tagsByPage[pageID], name)
 	}
 
-	if err = tagRows.Err(); err != nil {
+	if err := tagRows.Err(); err != nil {
 		return nil, err
 	}
 
@@ -541,58 +548,18 @@ func (pg *PGClient) SavePage(ctx context.Context, page *domain.WikiPage, current
 		// Создание новой страницы. ON CONFLICT DO NOTHING без целевого
 		// индекса: единственный уникальный индекс — lower(title), поэтому
 		// 0 затронутых строк означает занятый заголовок.
-		tag, err := tx.Exec(ctx, `
-            INSERT INTO wiki_pages (
-                page_type, title, content, contacts, order_days, delivery_days,
-                average_weight, suppliers, products
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-            ON CONFLICT DO NOTHING
-        `,
-			string(page.Type), page.Title, page.Content, contactsJSON,
-			orderDays, deliveryDays, page.AverageWeight, suppliers, products,
-		)
-		if err != nil {
+		if err := insertPage(ctx, tx, page, contactsJSON, orderDays, deliveryDays, suppliers, products); err != nil {
 			return err
-		}
-
-		if tag.RowsAffected() == 0 {
-			return domain.ErrTitleTaken
 		}
 	} else {
 		// Обновление или переименование существующей страницы.
-		tag, err := tx.Exec(ctx, `
-            UPDATE wiki_pages SET
-                page_type = $1, title = $2, content = $3, contacts = $4,
-                order_days = $5, delivery_days = $6, average_weight = $7,
-                suppliers = $8, products = $9
-            WHERE lower(title) = lower($10)
-        `,
-			string(page.Type), page.Title, page.Content, contactsJSON,
-			orderDays, deliveryDays, page.AverageWeight, suppliers, products, currentTitle,
-		)
-		if err != nil {
-			var pgErr *pgconn.PgError
-			if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-				return domain.ErrTitleTaken
-			}
-
+		if err := updatePage(ctx, tx, page, currentTitle, contactsJSON, orderDays, deliveryDays, suppliers, products); err != nil {
 			return err
-		}
-
-		// Гонка: страница удалена между проверкой в usecase и UPDATE.
-		// Не продолжаем — иначе SELECT id ниже попадёт на чужую страницу
-		// и перезапишет её теги.
-		if tag.RowsAffected() == 0 {
-			return domain.ErrPageNotFound
 		}
 	}
 
 	if photo != nil {
-		if _, err = tx.Exec(ctx, `
-            UPDATE wiki_pages
-            SET photo = $2, photo_type = $3, photo_name = ''
-            WHERE lower(title) = lower($1)
-        `, page.Title, photo.Data, photo.ContentType); err != nil {
+		if err := setPagePhoto(ctx, tx, page.Title, photo); err != nil {
 			return err
 		}
 	}
@@ -611,17 +578,95 @@ func (pg *PGClient) SavePage(ctx context.Context, page *domain.WikiPage, current
 		return err
 	}
 
-	// Кросс-синхронизация связей «поставщик ⇄ продукт».
-	// Инвариант: title в products у поставщика ⟺ title в suppliers у продукта.
-	// Синхронизация сеточная, без чтения старого состояния: добавление
-	// идемпотентно (заголовок не дублируется), удаление действует на все
-	// страницы противоположного типа, не попавшие в выбранный список.
-	// Сама сохраняемая страница не задевается: условия фильтруют по
-	// page_type противоположного типа, а lower(title) уникален по таблице.
+	if err := syncPageLinks(ctx, tx, page, currentTitle); err != nil {
+		return err
+	}
+
+	if err := replacePageTags(ctx, tx, pageID, page.Tags); err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
+}
+
+// insertPage создаёт новую страницу; занятый заголовок → domain.ErrTitleTaken.
+func insertPage(ctx context.Context, tx pgx.Tx, page *domain.WikiPage, contactsJSON []byte, orderDays, deliveryDays []int16, suppliers, products []string) error {
+	tag, err := tx.Exec(ctx, `
+        INSERT INTO wiki_pages (
+            page_type, title, content, contacts, order_days, delivery_days,
+            average_weight, suppliers, products
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        ON CONFLICT DO NOTHING
+    `,
+		string(page.Type), page.Title, page.Content, contactsJSON,
+		orderDays, deliveryDays, page.AverageWeight, suppliers, products,
+	)
+	if err != nil {
+		return err
+	}
+
+	if tag.RowsAffected() == 0 {
+		return domain.ErrTitleTaken
+	}
+
+	return nil
+}
+
+// updatePage обновляет страницу; занятый заголовок → domain.ErrTitleTaken,
+// страница удалена конкурентно → domain.ErrPageNotFound.
+func updatePage(ctx context.Context, tx pgx.Tx, page *domain.WikiPage, currentTitle string, contactsJSON []byte, orderDays, deliveryDays []int16, suppliers, products []string) error {
+	tag, err := tx.Exec(ctx, `
+        UPDATE wiki_pages SET
+            page_type = $1, title = $2, content = $3, contacts = $4,
+            order_days = $5, delivery_days = $6, average_weight = $7,
+            suppliers = $8, products = $9
+        WHERE lower(title) = lower($10)
+    `,
+		string(page.Type), page.Title, page.Content, contactsJSON,
+		orderDays, deliveryDays, page.AverageWeight, suppliers, products, currentTitle,
+	)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return domain.ErrTitleTaken
+		}
+
+		return err
+	}
+
+	// Гонка: страница удалена между проверкой в usecase и UPDATE.
+	// Не продолжаем — иначе SELECT id ниже попадёт на чужую страницу
+	// и перезапишет её теги.
+	if tag.RowsAffected() == 0 {
+		return domain.ErrPageNotFound
+	}
+
+	return nil
+}
+
+// setPagePhoto записывает фото страницы (при photo != nil).
+func setPagePhoto(ctx context.Context, tx pgx.Tx, title string, photo *domain.PhotoUpload) error {
+	if _, err := tx.Exec(ctx, `
+        UPDATE wiki_pages
+        SET photo = $2, photo_type = $3, photo_name = ''
+        WHERE lower(title) = lower($1)
+    `, title, photo.Data, photo.ContentType); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// syncPageLinks поддерживает инвариант «поставщик ⇄ продукт»: при
+// переименовании заменяет старый заголовок в массивах остальных страниц,
+// затем зеркально синхронизирует suppliers/products с выбранным списком.
+// Сама сохраняемая страница не задевается: условия фильтруют по
+// page_type противоположного типа, а lower(title) уникален по таблице.
+func syncPageLinks(ctx context.Context, tx pgx.Tx, page *domain.WikiPage, currentTitle string) error {
 	// Переименование: старый заголовок заменяется новым в массивах
 	// остальных страниц — иначе ссылки после переименования гниют.
 	if currentTitle != "" && !strings.EqualFold(currentTitle, page.Title) {
-		if _, err = tx.Exec(ctx, `
+		if _, err := tx.Exec(ctx, `
             UPDATE wiki_pages SET
                 suppliers = ARRAY(SELECT CASE WHEN lower(x) = lower($1) THEN $2 ELSE x END
                                   FROM unnest(suppliers) x)
@@ -630,7 +675,7 @@ func (pg *PGClient) SavePage(ctx context.Context, page *domain.WikiPage, current
 			return err
 		}
 
-		if _, err = tx.Exec(ctx, `
+		if _, err := tx.Exec(ctx, `
             UPDATE wiki_pages SET
                 products = ARRAY(SELECT CASE WHEN lower(x) = lower($1) THEN $2 ELSE x END
                                  FROM unnest(products) x)
@@ -642,7 +687,7 @@ func (pg *PGClient) SavePage(ctx context.Context, page *domain.WikiPage, current
 
 	if page.Type == domain.PageTypeProduct {
 		// Добавление: продукт в products каждого выбранного поставщика.
-		if _, err = tx.Exec(ctx, `
+		if _, err := tx.Exec(ctx, `
             UPDATE wiki_pages SET products = products || ARRAY[$1]
             WHERE page_type = 'supplier'
               AND lower(title) = ANY(COALESCE($2::text[], '{}'))
@@ -654,7 +699,7 @@ func (pg *PGClient) SavePage(ctx context.Context, page *domain.WikiPage, current
 		// Удаление: продукт из products всех поставщиков, не выбранных.
 		// COALESCE: пустой выбор (nil -> NULL у pgx) должен удалять
 		// из ВСЕХ, а не молча не срабатывать (ANY(NULL) = NULL).
-		if _, err = tx.Exec(ctx, `
+		if _, err := tx.Exec(ctx, `
             UPDATE wiki_pages SET
                 products = ARRAY(SELECT x FROM unnest(products) x WHERE lower(x) <> lower($1))
             WHERE page_type = 'supplier'
@@ -665,7 +710,7 @@ func (pg *PGClient) SavePage(ctx context.Context, page *domain.WikiPage, current
 		}
 	} else {
 		// Зеркально: поставщик в suppliers каждого выбранного продукта.
-		if _, err = tx.Exec(ctx, `
+		if _, err := tx.Exec(ctx, `
             UPDATE wiki_pages SET suppliers = suppliers || ARRAY[$1]
             WHERE page_type = 'product'
               AND lower(title) = ANY(COALESCE($2::text[], '{}'))
@@ -675,7 +720,7 @@ func (pg *PGClient) SavePage(ctx context.Context, page *domain.WikiPage, current
 		}
 
 		// Удаление: поставщик из suppliers всех продуктов, не выбранных.
-		if _, err = tx.Exec(ctx, `
+		if _, err := tx.Exec(ctx, `
             UPDATE wiki_pages SET
                 suppliers = ARRAY(SELECT x FROM unnest(suppliers) x WHERE lower(x) <> lower($1))
             WHERE page_type = 'product'
@@ -686,18 +731,24 @@ func (pg *PGClient) SavePage(ctx context.Context, page *domain.WikiPage, current
 		}
 	}
 
-	tags := page.Tags
+	return nil
+}
+
+// replacePageTags пересоздаёт связи страницы с тегами и подчищает
+// осиротевшие теги.
+func replacePageTags(ctx context.Context, tx pgx.Tx, pageID int64, pageTags []string) error {
+	tags := pageTags
 	if tags == nil {
 		tags = []string{}
 	}
 
-	if _, err = tx.Exec(ctx, `
+	if _, err := tx.Exec(ctx, `
         DELETE FROM wiki_page_tags WHERE page_id = $1
     `, pageID); err != nil {
 		return err
 	}
 
-	if _, err = tx.Exec(ctx, `
+	if _, err := tx.Exec(ctx, `
         INSERT INTO wiki_tags (name)
         SELECT n FROM unnest($1::text[]) AS n
         ON CONFLICT DO NOTHING
@@ -705,7 +756,7 @@ func (pg *PGClient) SavePage(ctx context.Context, page *domain.WikiPage, current
 		return err
 	}
 
-	if _, err = tx.Exec(ctx, `
+	if _, err := tx.Exec(ctx, `
         INSERT INTO wiki_page_tags (page_id, tag_id)
         SELECT $1, t.id
         FROM unnest($2::text[]) AS n(name)
@@ -715,14 +766,14 @@ func (pg *PGClient) SavePage(ctx context.Context, page *domain.WikiPage, current
 	}
 
 	// Подчистка осиротевших тегов (не связанных ни с одной страницей).
-	if _, err = tx.Exec(ctx, `
+	if _, err := tx.Exec(ctx, `
         DELETE FROM wiki_tags
         WHERE id NOT IN (SELECT tag_id FROM wiki_page_tags)
     `); err != nil {
 		return err
 	}
 
-	return tx.Commit(ctx)
+	return nil
 }
 
 // GetPageBySupplierID возвращает страницу поставщика по привязке

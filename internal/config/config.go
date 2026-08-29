@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -378,7 +379,7 @@ func parseEnvFloat(name string) (float64, bool) {
 func (rgc *RefGoConfig) ChangeRefGoLatest(latestOrder int64) error {
 	envFile := envFilePath()
 	if envFile == "" {
-		return fmt.Errorf("файл .env не найден")
+		return errors.New("файл .env не найден")
 	}
 
 	content, err := os.ReadFile(envFile)

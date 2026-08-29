@@ -11,7 +11,7 @@ import (
 	msucase "warehouseHelper/internal/msclient/usecase"
 	"warehouseHelper/internal/msclient/workerpool"
 	msu "warehouseHelper/internal/mssuppliers/usecase"
-	photostore "warehouseHelper/internal/qrcodes/photostore"
+	"warehouseHelper/internal/qrcodes/photostore"
 	qucase "warehouseHelper/internal/qrcodes/usecase"
 	"warehouseHelper/internal/refgo/export/excel"
 	"warehouseHelper/internal/refgo/export/pdf"
@@ -21,7 +21,7 @@ import (
 	sucase "warehouseHelper/internal/stock/usecase"
 	stockws "warehouseHelper/internal/stock/ws"
 	"warehouseHelper/internal/telegram"
-	tempcleaner "warehouseHelper/internal/tempcleaner"
+	"warehouseHelper/internal/tempcleaner"
 	"warehouseHelper/internal/tempdir"
 	wucase "warehouseHelper/internal/wiki/usecase"
 )

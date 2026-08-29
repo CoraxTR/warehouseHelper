@@ -59,7 +59,7 @@ var (
 )
 
 // MsPage — GET /ms: хаб модуля «МойСклад» (кнопки подмодулей).
-func (h *Handler) MsPage(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) MsPage(w http.ResponseWriter, _ *http.Request) {
 	if err := msIndexTmpl.Execute(w, nil); err != nil {
 		log.Printf("ms_index template: %v", err)
 	}
@@ -86,7 +86,7 @@ func (h *Handler) SuppliersList(w http.ResponseWriter, r *http.Request) {
 }
 
 // SupplierNew — GET /ms/suppliers/new: пустая форма создания.
-func (h *Handler) SupplierNew(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) SupplierNew(w http.ResponseWriter, _ *http.Request) {
 	h.renderSupplierForm(w, buildSupplierFormData(nil, false, "", ""))
 }
 
@@ -290,6 +290,7 @@ func parseDays(vals []string) ([]int16, error) {
 func parseNullableInt16(v string) (*int16, error) {
 	v = strings.TrimSpace(v)
 	if v == "" {
+		//nolint:nilnil // контракт: пустая строка = отсутствующее значение
 		return nil, nil
 	}
 	n, err := strconv.ParseInt(v, 10, 16)
@@ -305,6 +306,7 @@ func parseNullableInt16(v string) (*int16, error) {
 func parseRublesToKopecks(v string) (*int64, error) {
 	v = strings.TrimSpace(strings.ReplaceAll(v, ",", "."))
 	if v == "" {
+		//nolint:nilnil // контракт: пустая строка = отсутствующее значение
 		return nil, nil
 	}
 	rub, err := strconv.ParseFloat(v, 64)

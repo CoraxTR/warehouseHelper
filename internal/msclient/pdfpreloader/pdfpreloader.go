@@ -44,10 +44,7 @@ func (p *PDFPreloader) StartPreloading(orders []*domain.InternalOrder) {
 	ctx, cancel := context.WithCancel(context.Background())
 	p.cancel = cancel
 
-	p.wg.Add(1)
-	go func() {
-		defer p.wg.Done()
-
+	p.wg.Go(func() {
 		for {
 			select {
 			case <-p.stopchan:
@@ -58,7 +55,7 @@ func (p *PDFPreloader) StartPreloading(orders []*domain.InternalOrder) {
 				return
 			}
 		}
-	}()
+	})
 
 	for _, order := range orders {
 		p.wg.Add(1)

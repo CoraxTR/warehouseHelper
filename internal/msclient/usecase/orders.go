@@ -79,7 +79,7 @@ func (uc *OrdersUseCase) UpdateOrderFromMS(ctx context.Context, id string) error
 		return fmt.Errorf("failed to update order in DB: %w", err)
 	}
 
-	uc.pdf.StartPreloading([]*domain.InternalOrder{domainOrder})
+	uc.pdf.StartPreloading([]*domain.InternalOrder{domainOrder}) //nolint:contextcheck // PDFPreloader управляется собственным cancel (StopPreloading), не контекстом запроса
 
 	return nil
 }

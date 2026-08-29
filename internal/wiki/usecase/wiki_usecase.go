@@ -72,7 +72,7 @@ func (uc *WikiUseCase) GetPageWithBacklinks(ctx context.Context, title string) (
 }
 
 // GetPhoto возвращает данные фото страницы и его MIME-тип.
-func (uc *WikiUseCase) GetPhoto(ctx context.Context, title string) ([]byte, string, error) {
+func (uc *WikiUseCase) GetPhoto(ctx context.Context, title string) (data []byte, contentType string, err error) {
 	return uc.repo.GetPhoto(ctx, title)
 }
 
@@ -85,6 +85,7 @@ func (uc *WikiUseCase) TagCloud(ctx context.Context) ([]domain.WikiTagCount, err
 // страниц; пустой список не требует обращения к хранилищу.
 func (uc *WikiUseCase) ResolveLinkTargets(ctx context.Context, rawTitles []string) (map[string]string, error) {
 	if len(rawTitles) == 0 {
+		//nolint:nilnil // контракт: пустой вход — нет ссылок для разрешения
 		return nil, nil
 	}
 	return uc.repo.ResolveLinkTargets(ctx, rawTitles)
@@ -164,25 +165,8 @@ func (uc *WikiUseCase) RemovePhoto(ctx context.Context, title string) error {
 // Ошибки хранилища (в т.ч. domain.ErrTitleTaken) возвращаются как есть.
 // Внимание: метод мутирует переданный page (нормализация полей).
 func (uc *WikiUseCase) SavePage(ctx context.Context, currentTitle string, page *domain.WikiPage, photo *domain.PhotoUpload) error {
-	if page == nil {
-		return fmt.Errorf("страница не передана")
-	}
-	if !domain.ValidPageType(string(page.Type)) {
-		return fmt.Errorf("неизвестный тип страницы")
-	}
-
-	page.Title = strings.TrimSpace(page.Title)
-	if page.Title == "" {
-		return fmt.Errorf("заголовок не может быть пустым")
-	}
-	if utf8.RuneCountInString(page.Title) > 255 {
-		return fmt.Errorf("заголовок слишком длинный (максимум 255 символов)")
-	}
-	// Управляющие символы ломают рендер [[ссылок]] и URL.
-	for _, r := range page.Title {
-		if unicode.IsControl(r) {
-			return fmt.Errorf("заголовок содержит недопустимые символы")
-		}
+	if err := validatePageBasics(page); err != nil {
+		return err
 	}
 
 	// Тип страницы неизменяем при редактировании.
@@ -193,7 +177,7 @@ func (uc *WikiUseCase) SavePage(ctx context.Context, currentTitle string, page *
 		}
 		if existing != nil {
 			if existing.Type != page.Type {
-				return fmt.Errorf("тип страницы менять нельзя")
+				return errors.New("тип страницы менять нельзя")
 			}
 		} else {
 			// Страница не найдена — считаем созданием.
@@ -201,11 +185,93 @@ func (uc *WikiUseCase) SavePage(ctx context.Context, currentTitle string, page *
 		}
 	}
 
-	if len(page.Contacts) > 20 {
-		return fmt.Errorf("слишком много контактов (максимум 20)")
+	if err := normalizeAndValidatePage(page); err != nil {
+		return err
 	}
-	for i := range page.Contacts {
-		c := &page.Contacts[i]
+
+	// Пустое фото считаем отсутствующим.
+	if photo != nil && len(photo.Data) == 0 {
+		photo = nil
+	}
+	if err := validatePhoto(photo); err != nil {
+		return err
+	}
+
+	return uc.repo.SavePage(ctx, page, currentTitle, photo)
+}
+
+// validatePageBasics проверяет переданную страницу и её тип.
+func validatePageBasics(page *domain.WikiPage) error {
+	if page == nil {
+		return errors.New("страница не передана")
+	}
+	if !domain.ValidPageType(string(page.Type)) {
+		return errors.New("неизвестный тип страницы")
+	}
+	return nil
+}
+
+// normalizeAndValidatePage приводит поля страницы к нормальному виду и
+// проверяет ограничения. Порядок валидации: заголовок, контакты,
+// дни заказа/доставки, средний вес, содержимое, списки.
+func normalizeAndValidatePage(page *domain.WikiPage) error {
+	page.Title = strings.TrimSpace(page.Title)
+	if page.Title == "" {
+		return errors.New("заголовок не может быть пустым")
+	}
+	if utf8.RuneCountInString(page.Title) > 255 {
+		return errors.New("заголовок слишком длинный (максимум 255 символов)")
+	}
+	// Управляющие символы ломают рендер [[ссылок]] и URL.
+	for _, r := range page.Title {
+		if unicode.IsControl(r) {
+			return errors.New("заголовок содержит недопустимые символы")
+		}
+	}
+
+	if err := normalizeContacts(page.Contacts); err != nil {
+		return err
+	}
+
+	var err error
+	if page.OrderDays, err = normalizeDays(page.OrderDays); err != nil {
+		return err
+	}
+	if page.DeliveryDays, err = normalizeDays(page.DeliveryDays); err != nil {
+		return err
+	}
+
+	page.AverageWeight = strings.TrimSpace(page.AverageWeight)
+	if utf8.RuneCountInString(page.AverageWeight) > 100 {
+		return errors.New("средний вес слишком длинный (максимум 100 символов)")
+	}
+
+	// Ограничение размера содержимого: каждая страница рендерится
+	// goldmark+bluemonday при каждом просмотре.
+	if len(page.Content) > 256<<10 {
+		return errors.New("содержимое слишком большое (максимум 256 КБ)")
+	}
+
+	if page.Suppliers, err = normalizeStrings(page.Suppliers, 50, "поставщиков", 100); err != nil {
+		return err
+	}
+	if page.Products, err = normalizeStrings(page.Products, 50, "продуктов", 100); err != nil {
+		return err
+	}
+	if page.Tags, err = normalizeStrings(page.Tags, 50, "тегов", 100); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// normalizeContacts нормализует и валидирует контакты страницы.
+func normalizeContacts(contacts []domain.Contact) error {
+	if len(contacts) > 20 {
+		return errors.New("слишком много контактов (максимум 20)")
+	}
+	for i := range contacts {
+		c := &contacts[i]
 		c.Name = strings.TrimSpace(c.Name)
 		c.Phone = strings.TrimSpace(c.Phone)
 		c.Email = strings.TrimSpace(c.Email)
@@ -220,53 +286,21 @@ func (uc *WikiUseCase) SavePage(ctx context.Context, currentTitle string, page *
 			return fmt.Errorf("поле контакта %d слишком длинное (максимум 255 символов)", i+1)
 		}
 	}
+	return nil
+}
 
-	var err error
-	if page.OrderDays, err = normalizeDays(page.OrderDays); err != nil {
-		return err
+// validatePhoto проверяет загружаемое фото страницы.
+func validatePhoto(photo *domain.PhotoUpload) error {
+	if photo == nil {
+		return nil
 	}
-	if page.DeliveryDays, err = normalizeDays(page.DeliveryDays); err != nil {
-		return err
+	if len(photo.Data) > 5<<20 {
+		return errors.New("фото больше 5 МБ")
 	}
-
-	page.AverageWeight = strings.TrimSpace(page.AverageWeight)
-	if utf8.RuneCountInString(page.AverageWeight) > 100 {
-		return fmt.Errorf("средний вес слишком длинный (максимум 100 символов)")
+	if !strings.HasPrefix(photo.ContentType, "image/") {
+		return errors.New("фото должно быть изображением")
 	}
-
-	// Ограничение размера содержимого: каждая страница рендерится
-	// goldmark+bluemonday при каждом просмотре.
-	if len(page.Content) > 256<<10 {
-		return fmt.Errorf("содержимое слишком большое (максимум 256 КБ)")
-	}
-
-	page.Suppliers, err = normalizeStrings(page.Suppliers, 50, "поставщиков", 100)
-	if err != nil {
-		return err
-	}
-	page.Products, err = normalizeStrings(page.Products, 50, "продуктов", 100)
-	if err != nil {
-		return err
-	}
-	page.Tags, err = normalizeStrings(page.Tags, 50, "тегов", 100)
-	if err != nil {
-		return err
-	}
-
-	// Пустое фото считаем отсутствующим.
-	if photo != nil && len(photo.Data) == 0 {
-		photo = nil
-	}
-	if photo != nil {
-		if len(photo.Data) > 5<<20 {
-			return fmt.Errorf("фото больше 5 МБ")
-		}
-		if !strings.HasPrefix(photo.ContentType, "image/") {
-			return fmt.Errorf("фото должно быть изображением")
-		}
-	}
-
-	return uc.repo.SavePage(ctx, page, currentTitle, photo)
+	return nil
 }
 
 // normalizeDays валидирует дни недели (1..7), убирает дубли
@@ -294,7 +328,7 @@ func normalizeDays(days []int) ([]int, error) {
 // normalizeStrings обрезает строки по пробелам, выкидывает пустые,
 // убирает дубли без учёта регистра (сохраняя первый вариант),
 // проверяет максимальное количество элементов и длину каждого.
-func normalizeStrings(items []string, max int, kind string, maxLen int) ([]string, error) {
+func normalizeStrings(items []string, maxCount int, kind string, maxLen int) ([]string, error) {
 	if len(items) == 0 {
 		return nil, nil
 	}
@@ -315,8 +349,8 @@ func normalizeStrings(items []string, max int, kind string, maxLen int) ([]strin
 		seen[key] = struct{}{}
 		out = append(out, it)
 	}
-	if len(out) > max {
-		return nil, fmt.Errorf("слишком много %s (максимум %d)", kind, max)
+	if len(out) > maxCount {
+		return nil, fmt.Errorf("слишком много %s (максимум %d)", kind, maxCount)
 	}
 	return out, nil
 }

@@ -1,4 +1,3 @@
-//nolint:revive //we alias the package to avoid conflict with the standard library "http" package
 package http
 
 import (
@@ -53,7 +52,7 @@ func NewRouter(h *Handler) *http.ServeMux {
 	// Модуль «Сроки» (остатки по срокам годности).
 	mux.HandleFunc("GET /ms/dates", h.StockDatesPage)          // страница «Сроки»
 	mux.HandleFunc("GET /ms/dates/short", h.StockShortPage)    // страница «Шорт-лист»
-	mux.HandleFunc("GET /ms/dates/ws", h.StockDatesWS)         // вебсокет (снапшот + дельты)
+	mux.HandleFunc("GET /ms/dates/ws", h.StockDatesWS)         // вебсокет: снапшот и дельты
 	mux.HandleFunc("POST /ms/dates/discount", h.StockDiscount) // запись ручной скидки
 
 	return mux

@@ -21,10 +21,10 @@ func writeAgedFile(t *testing.T, dir, name string, age time.Duration) {
 	t.Helper()
 
 	path := filepath.Join(dir, name)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatalf("failed to create parent dir for %s: %v", path, err)
 	}
-	if err := os.WriteFile(path, []byte("temp"), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte("temp"), 0o600); err != nil {
 		t.Fatalf("failed to write file %s: %v", path, err)
 	}
 
@@ -34,6 +34,7 @@ func writeAgedFile(t *testing.T, dir, name string, age time.Duration) {
 	}
 }
 
+//nolint:gocognit // табличный тест с множеством кейсов — декомпозиция ухудшит читаемость
 func TestCleanOlderThan(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -114,7 +115,7 @@ func TestCleanOlderThan(t *testing.T) {
 
 			for _, f := range tt.files {
 				if f.isDir {
-					if err := os.MkdirAll(filepath.Join(dir, f.name), 0o755); err != nil {
+					if err := os.MkdirAll(filepath.Join(dir, f.name), 0o700); err != nil {
 						t.Fatalf("failed to create dir %s: %v", f.name, err)
 					}
 					continue
@@ -127,7 +128,7 @@ func TestCleanOlderThan(t *testing.T) {
 				// «Директорией» делаем обычный файл: NewTempCleaner не сможет его
 				// создать как каталог, а CleanOlderThan получит ошибку от ReadDir.
 				blocker := filepath.Join(dir, "not-a-dir")
-				if err := os.WriteFile(blocker, []byte("x"), 0o644); err != nil {
+				if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
 					t.Fatalf("failed to write blocker file: %v", err)
 				}
 				cleanerDir = blocker

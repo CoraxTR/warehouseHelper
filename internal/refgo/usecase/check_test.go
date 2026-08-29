@@ -31,7 +31,7 @@ func buildCheckRegistry(t *testing.T, rows [][]any) []byte {
 	t.Helper()
 
 	f := excelize.NewFile()
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	sheet := f.GetSheetName(0)
 	for i, row := range rows {

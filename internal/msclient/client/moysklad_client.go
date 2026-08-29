@@ -962,6 +962,7 @@ func (msac *MSAPIClient) CreateDemand(parentctx context.Context, template json.R
 			return nil, msAPIError(resp.Status, body)
 		}
 
+		//nolint:nilnil // контракт: успешный ответ без тела
 		return nil, nil
 	}
 

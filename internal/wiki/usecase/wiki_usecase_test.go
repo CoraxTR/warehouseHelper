@@ -11,6 +11,9 @@ import (
 	"warehouseHelper/internal/domain"
 )
 
+// testSupplierUUID — id поставщика в тестах синка вики (goconst).
+const testSupplierUUID = "uuid-1"
+
 // stubWikiRepo — заглушка WikiRepository для тестов: возвращает
 // предзаданные значения и запоминает последние аргументы вызовов.
 type stubWikiRepo struct {
@@ -81,7 +84,7 @@ func (s *stubWikiRepo) RemovePhoto(context.Context, string) error {
 	return nil
 }
 
-func (s *stubWikiRepo) GetPhoto(context.Context, string) ([]byte, string, error) {
+func (s *stubWikiRepo) GetPhoto(context.Context, string) (data []byte, contentType string, err error) {
 	return s.photoData, s.photoContent, s.photoErr
 }
 
@@ -220,13 +223,13 @@ func TestWikiUseCaseSavePageValidation(t *testing.T) {
 
 			err := uc.SavePage(context.Background(), tt.current, tt.page, tt.photo)
 			if err == nil {
-				t.Fatalf("SavePage: ожидалась ошибка, получен nil")
+				t.Fatal("SavePage: ожидалась ошибка, получен nil")
 			}
 			if !strings.Contains(err.Error(), tt.wantError) {
 				t.Errorf("SavePage error = %q, want содержит %q", err.Error(), tt.wantError)
 			}
 			if repo.saveCalled {
-				t.Errorf("repo.SavePage вызван при ошибке валидации")
+				t.Error("repo.SavePage вызван при ошибке валидации")
 			}
 		})
 	}
@@ -252,7 +255,7 @@ func TestWikiUseCaseSavePageNormalization(t *testing.T) {
 		t.Fatalf("SavePage error: %v", err)
 	}
 	if !repo.saveCalled {
-		t.Fatalf("repo.SavePage не вызван")
+		t.Fatal("repo.SavePage не вызван")
 	}
 
 	got := repo.lastSavedPage
@@ -296,7 +299,7 @@ func TestWikiUseCaseSavePageTypeChangeForbidden(t *testing.T) {
 		t.Fatalf("SavePage error = %v, want «тип страницы менять нельзя»", err)
 	}
 	if repo.saveCalled {
-		t.Errorf("repo.SavePage не должен вызываться при смене типа")
+		t.Error("repo.SavePage не должен вызываться при смене типа")
 	}
 	if repo.lastGetPageTitle != "Старый" {
 		t.Errorf("GetPage вызван с %q, want %q", repo.lastGetPageTitle, "Старый")
@@ -317,7 +320,7 @@ func TestWikiUseCaseSavePageEditMissingPageIsCreate(t *testing.T) {
 		t.Fatalf("SavePage error: %v", err)
 	}
 	if !repo.saveCalled {
-		t.Fatalf("repo.SavePage не вызван")
+		t.Fatal("repo.SavePage не вызван")
 	}
 	if repo.lastCurrentTitle != "" {
 		t.Errorf("currentTitle = %q, want \"\" (создание)", repo.lastCurrentTitle)
@@ -398,7 +401,7 @@ func TestWikiUseCaseResolveLinkTargetsEmpty(t *testing.T) {
 		t.Fatalf("ResolveLinkTargets = %v, want пустая map", targets)
 	}
 	if repo.resolveCalled {
-		t.Errorf("repo.ResolveLinkTargets вызван при пустом списке")
+		t.Error("repo.ResolveLinkTargets вызван при пустом списке")
 	}
 }
 
@@ -406,18 +409,18 @@ func TestSyncSupplierPage_UpdateExisting(t *testing.T) {
 	repo := &stubWikiRepo{linkedPage: &domain.WikiPage{ID: 42, Title: "Старое имя"}}
 	uc := NewWikiUseCase(repo)
 
-	err := uc.SyncSupplierPage(context.Background(), "uuid-1", "Мираторг", []int{1, 3}, []int{2, 5})
+	err := uc.SyncSupplierPage(context.Background(), testSupplierUUID, "Мираторг", []int{1, 3}, []int{2, 5})
 	if err != nil {
 		t.Fatalf("SyncSupplierPage: %v", err)
 	}
-	if repo.lastUpdatedPageID != 42 || repo.lastUpdatedSupplierID != "uuid-1" || repo.lastUpdatedTitle != "Мираторг" {
+	if repo.lastUpdatedPageID != 42 || repo.lastUpdatedSupplierID != testSupplierUUID || repo.lastUpdatedTitle != "Мираторг" {
 		t.Fatalf("UpdateSupplierPage вызван с неверными аргументами: %+v", repo)
 	}
 	if !reflect.DeepEqual(repo.lastUpdatedOrderDays, []int{1, 3}) || !reflect.DeepEqual(repo.lastUpdatedDelivDays, []int{2, 5}) {
 		t.Fatalf("дни переданы неверно: order=%v delivery=%v", repo.lastUpdatedOrderDays, repo.lastUpdatedDelivDays)
 	}
 	if repo.createdPage != nil {
-		t.Fatalf("страница не должна создаваться при существующей привязке")
+		t.Fatal("страница не должна создаваться при существующей привязке")
 	}
 }
 
@@ -425,15 +428,15 @@ func TestSyncSupplierPage_ClaimUnlinked(t *testing.T) {
 	repo := &stubWikiRepo{unlinkedPage: &domain.WikiPage{ID: 7, Title: "Мираторг", SupplierID: ""}}
 	uc := NewWikiUseCase(repo)
 
-	err := uc.SyncSupplierPage(context.Background(), "uuid-1", "Мираторг", []int{1, 3}, nil)
+	err := uc.SyncSupplierPage(context.Background(), testSupplierUUID, "Мираторг", []int{1, 3}, nil)
 	if err != nil {
 		t.Fatalf("SyncSupplierPage: %v", err)
 	}
-	if repo.lastUpdatedPageID != 7 || repo.lastUpdatedSupplierID != "uuid-1" {
+	if repo.lastUpdatedPageID != 7 || repo.lastUpdatedSupplierID != testSupplierUUID {
 		t.Fatalf("claim: ожидался Update страницы 7 с привязкой uuid-1, получил %+v", repo)
 	}
 	if repo.createdPage != nil {
-		t.Fatalf("при наличии непривязанной страницы создание не нужно")
+		t.Fatal("при наличии непривязанной страницы создание не нужно")
 	}
 }
 
@@ -441,15 +444,15 @@ func TestSyncSupplierPage_CreateNew(t *testing.T) {
 	repo := &stubWikiRepo{}
 	uc := NewWikiUseCase(repo)
 
-	err := uc.SyncSupplierPage(context.Background(), "uuid-1", "Новый поставщик", []int{1}, []int{3, 4})
+	err := uc.SyncSupplierPage(context.Background(), testSupplierUUID, "Новый поставщик", []int{1}, []int{3, 4})
 	if err != nil {
 		t.Fatalf("SyncSupplierPage: %v", err)
 	}
 	if repo.createdPage == nil {
-		t.Fatalf("страница не создана")
+		t.Fatal("страница не создана")
 	}
 	if repo.createdPage.Type != domain.PageTypeSupplier || repo.createdPage.Title != "Новый поставщик" ||
-		repo.createdPage.SupplierID != "uuid-1" {
+		repo.createdPage.SupplierID != testSupplierUUID {
 		t.Fatalf("создана неверная страница: %+v", repo.createdPage)
 	}
 	if !reflect.DeepEqual(repo.createdPage.OrderDays, []int{1}) || !reflect.DeepEqual(repo.createdPage.DeliveryDays, []int{3, 4}) {
@@ -462,11 +465,11 @@ func TestSyncSupplierPage_RecreateAfterManualDelete(t *testing.T) {
 	repo := &stubWikiRepo{}
 	uc := NewWikiUseCase(repo)
 
-	if err := uc.SyncSupplierPage(context.Background(), "uuid-1", "Мираторг", nil, nil); err != nil {
+	if err := uc.SyncSupplierPage(context.Background(), testSupplierUUID, "Мираторг", nil, nil); err != nil {
 		t.Fatalf("SyncSupplierPage: %v", err)
 	}
 	if repo.createdPage == nil {
-		t.Fatalf("удалённая вручную страница должна пересоздаваться")
+		t.Fatal("удалённая вручную страница должна пересоздаваться")
 	}
 }
 
@@ -474,7 +477,7 @@ func TestSyncSupplierPage_TitleTakenOnCreate(t *testing.T) {
 	repo := &stubWikiRepo{createPageErr: domain.ErrTitleTaken}
 	uc := NewWikiUseCase(repo)
 
-	err := uc.SyncSupplierPage(context.Background(), "uuid-1", "Мираторг", nil, nil)
+	err := uc.SyncSupplierPage(context.Background(), testSupplierUUID, "Мираторг", nil, nil)
 	if !errors.Is(err, domain.ErrTitleTaken) {
 		t.Fatalf("ожидался ErrTitleTaken, получил %v", err)
 	}
@@ -484,9 +487,9 @@ func TestSyncSupplierPage_Validation(t *testing.T) {
 	uc := NewWikiUseCase(&stubWikiRepo{})
 
 	if err := uc.SyncSupplierPage(context.Background(), "", "Мираторг", nil, nil); err == nil {
-		t.Fatalf("пустой id поставщика должен давать ошибку")
+		t.Fatal("пустой id поставщика должен давать ошибку")
 	}
-	if err := uc.SyncSupplierPage(context.Background(), "uuid-1", "  ", nil, nil); err == nil {
-		t.Fatalf("пустое имя должно давать ошибку")
+	if err := uc.SyncSupplierPage(context.Background(), testSupplierUUID, "  ", nil, nil); err == nil {
+		t.Fatal("пустое имя должно давать ошибку")
 	}
 }

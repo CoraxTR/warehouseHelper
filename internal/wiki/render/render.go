@@ -69,6 +69,7 @@ func Render(md string, targets map[string]string) (template.HTML, error) {
 	}
 
 	sanitized := sanitizer.SanitizeBytes(buf.Bytes())
+	//nolint:gosec // G203: sanitized уже прошёл bluemonday-санитайзер — это не сырой ввод
 	return template.HTML(sanitized), nil
 }
 

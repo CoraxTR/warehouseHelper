@@ -8,7 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
-	"sort"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -125,7 +125,7 @@ var ErrWikiSync = errors.New("поставщик сохранён, но не у�
 // ErrWikiSync для показа пользователю.
 func (uc *MSSuppliersUseCase) syncWiki(ctx context.Context, s *domain.Supplier) error {
 	if err := uc.wiki.SyncSupplierPage(ctx, s.ID, s.Name, int16ToInt(s.OrderDays), int16ToInt(s.DeliveryDays)); err != nil {
-		return fmt.Errorf("%w: %v", ErrWikiSync, err)
+		return fmt.Errorf("%w: %w", ErrWikiSync, err)
 	}
 
 	return nil
@@ -147,7 +147,7 @@ func int16ToInt(src []int16) []int {
 func (uc *MSSuppliersUseCase) fetchName(ctx context.Context, s *domain.Supplier) error {
 	name, err := uc.ms.FetchCounterpartyName(ctx, s.ID)
 	if err != nil {
-		return fmt.Errorf("%w (id %s): %v", ErrCounterpartyNameFetch, s.ID, err)
+		return fmt.Errorf("%w (id %s): %w", ErrCounterpartyNameFetch, s.ID, err)
 	}
 
 	name = strings.TrimSpace(name)
@@ -265,6 +265,6 @@ func normalizeDays(label string, days []int16) ([]int16, error) {
 		seen[d] = struct{}{}
 		out = append(out, d)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	slices.Sort(out)
 	return out, nil
 }

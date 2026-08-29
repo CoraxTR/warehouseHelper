@@ -142,9 +142,9 @@ func TestFetchProductFoldersPagination(t *testing.T) {
 
 		q := r.URL.Query()
 		offset := 0
-		fmt.Sscanf(q.Get("offset"), "%d", &offset)
+		_, _ = fmt.Sscanf(q.Get("offset"), "%d", &offset)
 		limit := pageLimit
-		fmt.Sscanf(q.Get("limit"), "%d", &limit)
+		_, _ = fmt.Sscanf(q.Get("limit"), "%d", &limit)
 
 		if limit != pageLimit {
 			t.Errorf("limit = %d, want %d", limit, pageLimit)

@@ -284,7 +284,7 @@ func (h *Handler) wikiSave(w http.ResponseWriter, r *http.Request) {
 	if page.Type == domain.PageTypeSupplier {
 		// Собираем все строки контактов (до 20), пустые пропускаем —
 		// серверная логика не должна полагаться на порядок строк из JS.
-		for n := 0; n < 20; n++ {
+		for n := range 20 {
 			contact := domain.Contact{
 				Name:  r.FormValue(fmt.Sprintf("contacts_name_%d", n)),
 				Phone: r.FormValue(fmt.Sprintf("contacts_phone_%d", n)),

@@ -179,15 +179,15 @@ func parseQty(s string) (int, error) {
 
 // parseDates разбирает даты выработки и срока годности (ДДММГГГГ) и проверяет,
 // что срок годности не раньше даты выработки.
-func parseDates(s string) (time.Time, time.Time, error) {
+func parseDates(s string) (prod, exp time.Time, err error) {
 	if len(s) != 2*dateLen {
 		return time.Time{}, time.Time{}, fmt.Errorf("%w: dates %q: bad length", ErrInvalid, s)
 	}
-	prod, err := parseDate(s[:dateLen])
+	prod, err = parseDate(s[:dateLen])
 	if err != nil {
 		return time.Time{}, time.Time{}, err
 	}
-	exp, err := parseDate(s[dateLen:])
+	exp, err = parseDate(s[dateLen:])
 	if err != nil {
 		return time.Time{}, time.Time{}, err
 	}
@@ -207,7 +207,7 @@ func parseDate(s string) (time.Time, error) {
 	}
 	d, err := time.Parse("02012006", s)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("%w: date %q: %v", ErrInvalid, s, err)
+		return time.Time{}, fmt.Errorf("%w: date %q: %w", ErrInvalid, s, err)
 	}
 	return d, nil
 }

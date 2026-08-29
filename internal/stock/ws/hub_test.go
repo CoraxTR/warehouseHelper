@@ -34,12 +34,15 @@ func TestHubSnapshotThenDelta(t *testing.T) {
 	defer srv.Close()
 
 	url := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws"
-	conn, _, err := websocket.DefaultDialer.Dial(url, nil)
+	conn, resp, err := websocket.DefaultDialer.Dial(url, nil)
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	defer conn.Close()
-	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if resp != nil {
+		_ = resp.Body.Close()
+	}
+	defer func() { _ = conn.Close() }()
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
 
 	// 1) Снапшот.
 	_, data, err := conn.ReadMessage()
@@ -58,7 +61,7 @@ func TestHubSnapshotThenDelta(t *testing.T) {
 	hub.PublishStockChange(stock.Event{
 		Kind:      stock.EventLotUpsert,
 		ProductID: "p1",
-		Lot:       &stock.Lot{BestBefore: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC), Qty: 3, GeneralManual: i16(7)},
+		Lot:       &stock.Lot{BestBefore: time.Date(2026, time.September, 1, 0, 0, 0, 0, time.UTC), Qty: 3, GeneralManual: i16(7)},
 	})
 	_, data, err = conn.ReadMessage()
 	if err != nil {
@@ -84,15 +87,18 @@ func TestHubUnregister(t *testing.T) {
 	defer srv.Close()
 
 	url := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws"
-	conn, _, err := websocket.DefaultDialer.Dial(url, nil)
+	conn, resp, err := websocket.DefaultDialer.Dial(url, nil)
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if resp != nil {
+		_ = resp.Body.Close()
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
 	if _, _, err := conn.ReadMessage(); err != nil {
 		t.Fatalf("read snapshot: %v", err)
 	}
-	conn.Close() // клиент ушёл
+	_ = conn.Close() // клиент ушёл
 
 	time.Sleep(50 * time.Millisecond)
 	hub.PublishStockChange(stock.Event{Kind: stock.EventLotUpsert, ProductID: "p1"})

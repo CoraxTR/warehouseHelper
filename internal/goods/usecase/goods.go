@@ -294,11 +294,7 @@ func (uc *GoodsUseCase) GetProduct(ctx context.Context, id string) (*domain.Prod
 
 // SaveProduct сохраняет ручные правки позиции (upsert по id).
 func (uc *GoodsUseCase) SaveProduct(ctx context.Context, p *domain.Product) error {
-	if err := uc.repo.UpsertProduct(ctx, p); err != nil {
-		return err
-	}
-
-	return nil
+	return uc.repo.UpsertProduct(ctx, p)
 }
 
 // ResyncProduct перезаписывает позицию каталога данными из МС (по id):

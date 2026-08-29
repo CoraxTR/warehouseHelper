@@ -291,6 +291,7 @@ func productFromForm(r *http.Request) (*domain.Product, error) {
 	parseNullableFloat := func(v string) (*float64, error) {
 		v = strings.TrimSpace(v)
 		if v == "" {
+			//nolint:nilnil // контракт: пустая строка = отсутствующее значение
 			return nil, nil
 		}
 		f, err := strconv.ParseFloat(v, 64)
@@ -302,6 +303,7 @@ func productFromForm(r *http.Request) (*domain.Product, error) {
 	parseNullableInt := func(v string) (*int16, error) {
 		v = strings.TrimSpace(v)
 		if v == "" {
+			//nolint:nilnil // контракт: пустая строка = отсутствующее значение
 			return nil, nil
 		}
 		n, err := strconv.ParseInt(v, 10, 16)

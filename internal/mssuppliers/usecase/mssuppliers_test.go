@@ -18,7 +18,7 @@ func newFakeRepo() *fakeRepo {
 	return &fakeRepo{suppliers: make(map[string]domain.Supplier)}
 }
 
-func (f *fakeRepo) ListSuppliers(ctx context.Context) ([]domain.Supplier, error) {
+func (f *fakeRepo) ListSuppliers(_ context.Context) ([]domain.Supplier, error) {
 	out := make([]domain.Supplier, 0, len(f.suppliers))
 	for _, s := range f.suppliers {
 		out = append(out, s)
@@ -26,20 +26,21 @@ func (f *fakeRepo) ListSuppliers(ctx context.Context) ([]domain.Supplier, error)
 	return out, nil
 }
 
-func (f *fakeRepo) GetSupplier(ctx context.Context, id string) (*domain.Supplier, error) {
+func (f *fakeRepo) GetSupplier(_ context.Context, id string) (*domain.Supplier, error) {
 	s, ok := f.suppliers[id]
 	if !ok {
+		//nolint:nilnil // стаб: не найдено
 		return nil, nil
 	}
 	return &s, nil
 }
 
-func (f *fakeRepo) SaveSupplier(ctx context.Context, s *domain.Supplier) error {
+func (f *fakeRepo) SaveSupplier(_ context.Context, s *domain.Supplier) error {
 	f.suppliers[s.ID] = *s
 	return nil
 }
 
-func (f *fakeRepo) DeleteSupplier(ctx context.Context, id string) error {
+func (f *fakeRepo) DeleteSupplier(_ context.Context, id string) error {
 	if _, ok := f.suppliers[id]; !ok {
 		return domain.ErrSupplierNotFound
 	}
@@ -54,7 +55,7 @@ type fakeMS struct {
 	err   error
 }
 
-func (f *fakeMS) FetchCounterpartyName(ctx context.Context, id string) (string, error) {
+func (f *fakeMS) FetchCounterpartyName(_ context.Context, id string) (string, error) {
 	if f.err != nil {
 		return "", f.err
 	}
@@ -87,9 +88,12 @@ func (f *fakeWiki) SyncSupplierPage(_ context.Context, supplierID, name string, 
 
 const testUUID = "c2f28fc8-a154-11f1-0a80-161200147fdc"
 
+// testSupplierName — имя контрагента в фейках МС (goconst).
+const testSupplierName = "ООО Тест"
+
 func newUC(repo *fakeRepo, ms *fakeMS, wiki *fakeWiki) *MSSuppliersUseCase {
 	if ms == nil {
-		ms = &fakeMS{names: map[string]string{testUUID: "ООО Тест"}}
+		ms = &fakeMS{names: map[string]string{testUUID: testSupplierName}}
 	}
 	if wiki == nil {
 		wiki = &fakeWiki{}
@@ -155,8 +159,8 @@ func TestCreate_HappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get error: %v", err)
 	}
-	if got.Name != "ООО Тест" {
-		t.Fatalf("Name = %q, want %q (из МС)", got.Name, "ООО Тест")
+	if got.Name != testSupplierName {
+		t.Fatalf("Name = %q, want %q (из МС)", got.Name, testSupplierName)
 	}
 	if len(got.OrderDays) != 2 || got.OrderDays[0] != 1 || got.OrderDays[1] != 3 {
 		t.Fatalf("OrderDays = %v, want [1 3] (дубли убраны, сортировка)", got.OrderDays)
@@ -235,7 +239,7 @@ func repoSuppliers(uc *MSSuppliersUseCase) []domain.Supplier {
 
 func TestUpdate_RefetchesName(t *testing.T) {
 	repo := newFakeRepo()
-	ms := &fakeMS{names: map[string]string{testUUID: "ООО Тест"}}
+	ms := &fakeMS{names: map[string]string{testUUID: testSupplierName}}
 	uc := newUC(repo, ms, nil)
 
 	if err := uc.Create(context.Background(), validSupplier()); err != nil {
@@ -270,7 +274,7 @@ func TestUpdate_MSError(t *testing.T) {
 		t.Fatalf("Update = %v, want ErrCounterpartyNameFetch", err)
 	}
 	got, _ := uc.Get(context.Background(), testUUID)
-	if got.Name != "ООО Тест" {
+	if got.Name != testSupplierName {
 		t.Fatalf("Name = %q, want старое имя (обновление не прошло)", got.Name)
 	}
 }
@@ -324,8 +328,8 @@ func TestCreate_SyncsWiki(t *testing.T) {
 	if wiki.calls != 1 {
 		t.Fatalf("SyncSupplierPage вызван %d раз, want 1", wiki.calls)
 	}
-	if wiki.lastID != testUUID || wiki.lastName != "ООО Тест" {
-		t.Fatalf("синк: id=%q name=%q, want id=%q name=%q (имя из МС)", wiki.lastID, wiki.lastName, testUUID, "ООО Тест")
+	if wiki.lastID != testUUID || wiki.lastName != testSupplierName {
+		t.Fatalf("синк: id=%q name=%q, want id=%q name=%q (имя из МС)", wiki.lastID, wiki.lastName, testUUID, testSupplierName)
 	}
 	if len(wiki.lastOrder) != 2 || wiki.lastOrder[0] != 1 || wiki.lastOrder[1] != 3 {
 		t.Fatalf("orderDays синка = %v, want [1 3] (нормализованные)", wiki.lastOrder)
