@@ -166,8 +166,6 @@ linters:
             # Report pre-allocation suggestions on for loops.
             # Default: false
             for-loops: true
-        nilnil:
-            # Default: false
         revive:
             enable-all-rules: true
             rules:
@@ -268,22 +266,6 @@ linters:
                 - all
                 - -S1008
                 - -ST1003  # Poorly chosen identifier. Like camel_case
-        tagliatelle:
-            case:
-                rules:
-                    avro: snake
-                    bson: snake
-                    env: snake
-                    envconfig: upperSnake
-                    json: snake # протокол ws и API — snake_case, совпадает с колонками БД
-                    mapstructure: snake
-                    toml: snake
-                    whatever: snake
-                    xml: snake
-                    yaml: snake
-
-        wsl_v5:
-            allow-first-in-block: false
 
     exclusions:
         presets:
