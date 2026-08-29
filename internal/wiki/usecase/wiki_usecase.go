@@ -164,27 +164,9 @@ func (uc *WikiUseCase) RemovePhoto(ctx context.Context, title string) error {
 // SavePage валидирует и нормализует страницу, затем сохраняет её.
 // Ошибки хранилища (в т.ч. domain.ErrTitleTaken) возвращаются как есть.
 // Внимание: метод мутирует переданный page (нормализация полей).
-//nolint:revive // cyclomatic: валидация со множеством независимых проверок — декомпозиция отдельной задачей
 func (uc *WikiUseCase) SavePage(ctx context.Context, currentTitle string, page *domain.WikiPage, photo *domain.PhotoUpload) error {
-	if page == nil {
-		return errors.New("страница не передана")
-	}
-	if !domain.ValidPageType(string(page.Type)) {
-		return errors.New("неизвестный тип страницы")
-	}
-
-	page.Title = strings.TrimSpace(page.Title)
-	if page.Title == "" {
-		return errors.New("заголовок не может быть пустым")
-	}
-	if utf8.RuneCountInString(page.Title) > 255 {
-		return errors.New("заголовок слишком длинный (максимум 255 символов)")
-	}
-	// Управляющие символы ломают рендер [[ссылок]] и URL.
-	for _, r := range page.Title {
-		if unicode.IsControl(r) {
-			return errors.New("заголовок содержит недопустимые символы")
-		}
+	if err := validatePageBasics(page); err != nil {
+		return err
 	}
 
 	// Тип страницы неизменяем при редактировании.
@@ -200,6 +182,50 @@ func (uc *WikiUseCase) SavePage(ctx context.Context, currentTitle string, page *
 		} else {
 			// Страница не найдена — считаем созданием.
 			currentTitle = ""
+		}
+	}
+
+	if err := normalizeAndValidatePage(page); err != nil {
+		return err
+	}
+
+	// Пустое фото считаем отсутствующим.
+	if photo != nil && len(photo.Data) == 0 {
+		photo = nil
+	}
+	if err := validatePhoto(photo); err != nil {
+		return err
+	}
+
+	return uc.repo.SavePage(ctx, page, currentTitle, photo)
+}
+
+// validatePageBasics проверяет переданную страницу и её тип.
+func validatePageBasics(page *domain.WikiPage) error {
+	if page == nil {
+		return errors.New("страница не передана")
+	}
+	if !domain.ValidPageType(string(page.Type)) {
+		return errors.New("неизвестный тип страницы")
+	}
+	return nil
+}
+
+// normalizeAndValidatePage приводит поля страницы к нормальному виду и
+// проверяет ограничения. Порядок валидации: заголовок, контакты,
+// дни заказа/доставки, средний вес, содержимое, списки.
+func normalizeAndValidatePage(page *domain.WikiPage) error {
+	page.Title = strings.TrimSpace(page.Title)
+	if page.Title == "" {
+		return errors.New("заголовок не может быть пустым")
+	}
+	if utf8.RuneCountInString(page.Title) > 255 {
+		return errors.New("заголовок слишком длинный (максимум 255 символов)")
+	}
+	// Управляющие символы ломают рендер [[ссылок]] и URL.
+	for _, r := range page.Title {
+		if unicode.IsControl(r) {
+			return errors.New("заголовок содержит недопустимые символы")
 		}
 	}
 
@@ -242,33 +268,31 @@ func (uc *WikiUseCase) SavePage(ctx context.Context, currentTitle string, page *
 		return errors.New("содержимое слишком большое (максимум 256 КБ)")
 	}
 
-	page.Suppliers, err = normalizeStrings(page.Suppliers, 50, "поставщиков", 100)
-	if err != nil {
+	if page.Suppliers, err = normalizeStrings(page.Suppliers, 50, "поставщиков", 100); err != nil {
 		return err
 	}
-	page.Products, err = normalizeStrings(page.Products, 50, "продуктов", 100)
-	if err != nil {
+	if page.Products, err = normalizeStrings(page.Products, 50, "продуктов", 100); err != nil {
 		return err
 	}
-	page.Tags, err = normalizeStrings(page.Tags, 50, "тегов", 100)
-	if err != nil {
+	if page.Tags, err = normalizeStrings(page.Tags, 50, "тегов", 100); err != nil {
 		return err
 	}
 
-	// Пустое фото считаем отсутствующим.
-	if photo != nil && len(photo.Data) == 0 {
-		photo = nil
-	}
-	if photo != nil {
-		if len(photo.Data) > 5<<20 {
-			return errors.New("фото больше 5 МБ")
-		}
-		if !strings.HasPrefix(photo.ContentType, "image/") {
-			return errors.New("фото должно быть изображением")
-		}
-	}
+	return nil
+}
 
-	return uc.repo.SavePage(ctx, page, currentTitle, photo)
+// validatePhoto проверяет загружаемое фото страницы.
+func validatePhoto(photo *domain.PhotoUpload) error {
+	if photo == nil {
+		return nil
+	}
+	if len(photo.Data) > 5<<20 {
+		return errors.New("фото больше 5 МБ")
+	}
+	if !strings.HasPrefix(photo.ContentType, "image/") {
+		return errors.New("фото должно быть изображением")
+	}
+	return nil
 }
 
 // normalizeDays валидирует дни недели (1..7), убирает дубли
