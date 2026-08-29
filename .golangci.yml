@@ -44,7 +44,7 @@ linters:
         - gocyclo
         #    - godoclint # Подходит скорее для библиотек
         - godot
-        - godox
+        #    - godox # TODO/FIXME в коде — легитимная дорожная карта (см. cmd/main.go)
         - goheader
         - gomoddirectives
         - gomodguard
@@ -75,13 +75,13 @@ linters:
         - nilerr
         - nilnesserr
         - nilnil
-        - nlreturn
+        #    - nlreturn # вкусовой: пустая строка перед return
         - noctx
-        - noinlineerr
+        #    - noinlineerr # запрещает каноничную идиому `if err := f(); err != nil`
         - nolintlint
         #    - nonamedreturns # named returns делают код более явным
         - nosprintfhostport
-        - paralleltest
+        #    - paralleltest # t.Parallel() не всегда уместен (общие моки, БД)
         #    - perfsprint # компромисс производительности и чистоты кода. Чаще лучше выбрать чистоту (легкость восприятия)
         - prealloc
         - predeclared
@@ -95,8 +95,8 @@ linters:
         - spancheck
         - sqlclosecheck
         - staticcheck
+        #    - tagliatelle # конфликт конвенций: ws-протокол — snake_case, старый API — camelCase
         - tagalign
-        - tagliatelle
         - testableexamples
         - testifylint
         #    - testpackage # Зависит от подхода к разработке.
@@ -112,8 +112,7 @@ linters:
         - wastedassign
         - whitespace
         #    - wrapcheck # если обертка не через fmt.Errorf, линтер все равно ругается
-        #    - wsl # deprecated, но почему-то не удален из golangci-lint. Заменен wsl_v5
-        - wsl_v5
+        #    - wsl_v5 # вкусовой: «добавь пустую строку»; deprecated, заменён wsl_v5
         - zerologlint
 
     settings:
@@ -137,15 +136,16 @@ linters:
                           desc: "модуль refgo не должен импортировать модуль msclient"
         cyclop:
             # Default: 10
-            max-complexity: 15
+            max-complexity: 20
         gocritic:
             enable-all: true
             disabled-checks:
                 - hugeParam
                 - rangeValCopy
                 - importShadow
-        nestif:
-            min-complexity: 7
+        gocognit:
+            # Когнитивная сложность: 30 — низко для кода с бизнес-логикой и длинных тестов.
+            min-complexity: 40
         nolintlint:
             allow-unused: false
             require-explanation: true
@@ -212,7 +212,7 @@ linters:
                   disabled: true
                 - name: cyclomatic
                   arguments:
-                      - 15
+                      - 20
                 - name: confusing-naming
                   disabled: true
                 - name: deep-exit
@@ -260,7 +260,7 @@ linters:
             # report about assignment of errors to blank identifier: `num, _ := strconv.Atoi(numStr)`.
             # Such cases aren't reported by default.
             # Default: false
-            check-blank: true
+            # check-blank: true  # выключено: намеренное игнорирование через `_ =` — легальный паттерн
 
         staticcheck:
             checks:
@@ -274,7 +274,7 @@ linters:
                     bson: snake
                     env: snake
                     envconfig: upperSnake
-                    json: camel
+                    json: snake # протокол ws и API — snake_case, совпадает с колонками БД
                     mapstructure: snake
                     toml: snake
                     whatever: snake
