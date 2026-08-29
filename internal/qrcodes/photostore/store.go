@@ -79,7 +79,7 @@ func (s *Store) Save(ctx context.Context, id, ext string, data io.Reader) error 
 		return fmt.Errorf("photostore: создание директории хранилища: %w", err)
 	}
 	path := filepath.Join(s.dir, id+"."+ext)
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o640)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		s.removeCreated(id, ext)
 		return fmt.Errorf("photostore: создание файла фото %s: %w", id, err)

@@ -49,7 +49,7 @@ func TestEnvFilePath(t *testing.T) {
 
 	t.Run("запуск из каталога cmd/", func(t *testing.T) {
 		cmdDir := filepath.Join(dir, "cmd")
-		if err := os.MkdirAll(cmdDir, 0o755); err != nil {
+		if err := os.MkdirAll(cmdDir, 0o700); err != nil {
 			t.Fatal(err)
 		}
 		t.Chdir(cmdDir)

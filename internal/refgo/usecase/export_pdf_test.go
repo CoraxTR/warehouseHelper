@@ -45,8 +45,7 @@ func (p *fakePreloader) StopPreloading() {}
 
 func TestMain(m *testing.M) {
 	if err := os.MkdirAll(tempdir.Dir, 0o750); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to create temp dir: %v\n", err)
-		os.Exit(1)
+		panic(fmt.Sprintf("failed to create temp dir: %v", err))
 	}
 
 	m.Run()

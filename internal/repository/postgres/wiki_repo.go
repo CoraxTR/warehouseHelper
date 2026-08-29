@@ -33,6 +33,7 @@ func (pg *PGClient) GetPage(ctx context.Context, title string) (*domain.WikiPage
 		return nil, err
 	}
 	if page == nil {
+		//nolint:nilnil // контракт: страница не найдена
 		return nil, nil
 	}
 
@@ -516,7 +517,7 @@ func (pg *PGClient) ListIndex(ctx context.Context, query string, tags []string, 
 // переименование. При занятом заголовке возвращает domain.ErrTitleTaken.
 // photo != nil — обновить фото страницы.
 //
-//nolint:gocognit // ветки создания/обновления со своими SQL и кросс-синхронизацией — декомпозиция отдельной задачей
+//nolint:gocognit,revive // ветки создания/обновления со своими SQL и кросс-синхронизацией — декомпозиция отдельной задачей
 func (pg *PGClient) SavePage(ctx context.Context, page *domain.WikiPage, currentTitle string, photo *domain.PhotoUpload) error {
 	tx, err := pg.Pool.Begin(ctx)
 	if err != nil {

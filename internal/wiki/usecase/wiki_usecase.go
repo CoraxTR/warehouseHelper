@@ -164,6 +164,7 @@ func (uc *WikiUseCase) RemovePhoto(ctx context.Context, title string) error {
 // SavePage валидирует и нормализует страницу, затем сохраняет её.
 // Ошибки хранилища (в т.ч. domain.ErrTitleTaken) возвращаются как есть.
 // Внимание: метод мутирует переданный page (нормализация полей).
+//nolint:revive // cyclomatic: валидация со множеством независимых проверок — декомпозиция отдельной задачей
 func (uc *WikiUseCase) SavePage(ctx context.Context, currentTitle string, page *domain.WikiPage, photo *domain.PhotoUpload) error {
 	if page == nil {
 		return errors.New("страница не передана")

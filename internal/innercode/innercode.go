@@ -179,7 +179,7 @@ func parseQty(s string) (int, error) {
 
 // parseDates разбирает даты выработки и срока годности (ДДММГГГГ) и проверяет,
 // что срок годности не раньше даты выработки.
-func parseDates(s string) (prod time.Time, exp time.Time, err error) {
+func parseDates(s string) (prod, exp time.Time, err error) {
 	if len(s) != 2*dateLen {
 		return time.Time{}, time.Time{}, fmt.Errorf("%w: dates %q: bad length", ErrInvalid, s)
 	}
