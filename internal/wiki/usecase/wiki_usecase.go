@@ -229,24 +229,8 @@ func normalizeAndValidatePage(page *domain.WikiPage) error {
 		}
 	}
 
-	if len(page.Contacts) > 20 {
-		return errors.New("слишком много контактов (максимум 20)")
-	}
-	for i := range page.Contacts {
-		c := &page.Contacts[i]
-		c.Name = strings.TrimSpace(c.Name)
-		c.Phone = strings.TrimSpace(c.Phone)
-		c.Email = strings.TrimSpace(c.Email)
-		c.Site = strings.TrimSpace(c.Site)
-		if c.Phone == "" && c.Email == "" && c.Site == "" {
-			return fmt.Errorf("заполните телефон, email или сайт в контакте %d", i+1)
-		}
-		if utf8.RuneCountInString(c.Name) > 255 ||
-			utf8.RuneCountInString(c.Phone) > 255 ||
-			utf8.RuneCountInString(c.Email) > 255 ||
-			utf8.RuneCountInString(c.Site) > 255 {
-			return fmt.Errorf("поле контакта %d слишком длинное (максимум 255 символов)", i+1)
-		}
+	if err := normalizeContacts(page.Contacts); err != nil {
+		return err
 	}
 
 	var err error
@@ -278,6 +262,30 @@ func normalizeAndValidatePage(page *domain.WikiPage) error {
 		return err
 	}
 
+	return nil
+}
+
+// normalizeContacts нормализует и валидирует контакты страницы.
+func normalizeContacts(contacts []domain.Contact) error {
+	if len(contacts) > 20 {
+		return errors.New("слишком много контактов (максимум 20)")
+	}
+	for i := range contacts {
+		c := &contacts[i]
+		c.Name = strings.TrimSpace(c.Name)
+		c.Phone = strings.TrimSpace(c.Phone)
+		c.Email = strings.TrimSpace(c.Email)
+		c.Site = strings.TrimSpace(c.Site)
+		if c.Phone == "" && c.Email == "" && c.Site == "" {
+			return fmt.Errorf("заполните телефон, email или сайт в контакте %d", i+1)
+		}
+		if utf8.RuneCountInString(c.Name) > 255 ||
+			utf8.RuneCountInString(c.Phone) > 255 ||
+			utf8.RuneCountInString(c.Email) > 255 ||
+			utf8.RuneCountInString(c.Site) > 255 {
+			return fmt.Errorf("поле контакта %d слишком длинное (максимум 255 символов)", i+1)
+		}
+	}
 	return nil
 }
 

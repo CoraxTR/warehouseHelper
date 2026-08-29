@@ -548,18 +548,18 @@ func (pg *PGClient) SavePage(ctx context.Context, page *domain.WikiPage, current
 		// Создание новой страницы. ON CONFLICT DO NOTHING без целевого
 		// индекса: единственный уникальный индекс — lower(title), поэтому
 		// 0 затронутых строк означает занятый заголовок.
-		if err = insertPage(ctx, tx, page, contactsJSON, orderDays, deliveryDays, suppliers, products); err != nil {
+		if err := insertPage(ctx, tx, page, contactsJSON, orderDays, deliveryDays, suppliers, products); err != nil {
 			return err
 		}
 	} else {
 		// Обновление или переименование существующей страницы.
-		if err = updatePage(ctx, tx, page, currentTitle, contactsJSON, orderDays, deliveryDays, suppliers, products); err != nil {
+		if err := updatePage(ctx, tx, page, currentTitle, contactsJSON, orderDays, deliveryDays, suppliers, products); err != nil {
 			return err
 		}
 	}
 
 	if photo != nil {
-		if err = setPagePhoto(ctx, tx, page.Title, photo); err != nil {
+		if err := setPagePhoto(ctx, tx, page.Title, photo); err != nil {
 			return err
 		}
 	}
@@ -578,11 +578,11 @@ func (pg *PGClient) SavePage(ctx context.Context, page *domain.WikiPage, current
 		return err
 	}
 
-	if err = syncPageLinks(ctx, tx, page, currentTitle); err != nil {
+	if err := syncPageLinks(ctx, tx, page, currentTitle); err != nil {
 		return err
 	}
 
-	if err = replacePageTags(ctx, tx, pageID, page.Tags); err != nil {
+	if err := replacePageTags(ctx, tx, pageID, page.Tags); err != nil {
 		return err
 	}
 
