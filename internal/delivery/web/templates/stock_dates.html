@@ -1,0 +1,633 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <title>{{if .ShortList}}Шорт-лист — Сроки{{else}}Сроки{{end}}</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 12px;
+            background: #f7f8fa;
+        }
+
+        .topbar {
+            text-align: center;
+            margin-bottom: 12px;
+            position: relative;
+        }
+
+        .topbar h1 {
+            margin: 0 0 8px 0;
+            font-size: 22px;
+        }
+
+        .top-actions .btn {
+            display: inline-block;
+            padding: 8px 22px;
+            font-size: 15px;
+            text-decoration: none;
+            color: #fff;
+            background: #007bff;
+            border-radius: 4px;
+        }
+
+        .top-actions .btn:hover {
+            background: #0056b3;
+        }
+
+        #ws-status {
+            position: absolute;
+            right: 4px;
+            top: 4px;
+            font-size: 12px;
+            color: #999;
+        }
+
+        #ws-status.online {
+            color: #1a7f37;
+        }
+
+        #ws-status.offline {
+            color: #c62828;
+        }
+
+        table {
+            border-collapse: collapse;
+            width: 100%;
+            background: #fff;
+        }
+
+        th,
+        td {
+            border: 1px solid #c9ced6;
+            padding: 4px 8px;
+            font-size: 14px;
+        }
+
+        th {
+            background: #e8ecf1;
+            text-align: center;
+            white-space: nowrap;
+        }
+
+        tr.group-row td {
+            background: #d9e2f3;
+            font-weight: bold;
+            text-align: left;
+            padding: 6px 8px;
+        }
+
+        td.col-name {
+            white-space: nowrap;
+            min-width: 180px;
+        }
+
+        td.cell-pair {
+            text-align: center;
+            cursor: pointer;
+            white-space: nowrap;
+            min-width: 56px;
+        }
+
+        td.cell-pair.has-discount {
+            background: #ffe066;
+        }
+
+        td.cell-pair:hover {
+            outline: 2px solid #007bff;
+            outline-offset: -2px;
+        }
+
+        td.cell-empty {
+            background: #f0f1f3;
+        }
+
+        td.cell-discount {
+            text-align: center;
+            white-space: nowrap;
+        }
+
+        .overlay {
+            position: fixed;
+            left: 0;
+            top: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.4);
+            z-index: 100;
+        }
+
+        .modal {
+            position: fixed;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+            background: #fff;
+            border-radius: 6px;
+            padding: 16px;
+            min-width: 320px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+            z-index: 101;
+        }
+
+        .modal-title {
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+
+        .modal-line {
+            margin-bottom: 10px;
+        }
+
+        .modal-hint {
+            font-size: 12px;
+            color: #777;
+            margin: 8px 0;
+        }
+
+        .discount-table {
+            width: auto;
+        }
+
+        .discount-table td,
+        .discount-table th {
+            border: 1px solid #c9ced6;
+            padding: 4px 10px;
+            text-align: center;
+        }
+
+        .discount-table td.dl {
+            text-align: left;
+            background: #f0f1f3;
+        }
+
+        .discount-table input {
+            width: 64px;
+            padding: 3px;
+            font-size: 14px;
+        }
+
+        .modal-actions {
+            margin-top: 12px;
+            text-align: right;
+        }
+
+        .modal-actions button {
+            padding: 6px 16px;
+            font-size: 14px;
+            cursor: pointer;
+            border: none;
+            border-radius: 4px;
+            background: #007bff;
+            color: #fff;
+            margin-left: 8px;
+        }
+
+        .modal-actions button:hover {
+            background: #0056b3;
+        }
+
+        .hidden {
+            display: none;
+        }
+    </style>
+</head>
+
+<body data-short="{{if .ShortList}}1{{else}}0{{end}}">
+
+    <div class="topbar">
+        <h1>{{if .ShortList}}Шорт-лист{{else}}Сроки{{end}}</h1>
+        <div class="top-actions">
+            {{if .ShortList}}<a class="btn" href="/ms/dates">← Сроки</a>{{else}}<a class="btn" href="/ms/dates/short">Шорт-лист</a>{{end}}
+        </div>
+        <div id="ws-status">подключение…</div>
+    </div>
+
+    <table id="stock-table">
+        <thead>
+            <tr id="head-row"></tr>
+        </thead>
+        <tbody id="stock-body"></tbody>
+    </table>
+
+    <div id="modal-overlay" class="overlay hidden">
+        <div class="modal">
+            <div id="modal-content"></div>
+        </div>
+    </div>
+
+    <script>
+        // Модуль «Сроки»: таблица остатков по срокам годности, обновление по вебсокету.
+        // Только ES5 (старые браузеры склада): без :scope, NodeList.forEach, стрелок и шаблонных строк.
+
+        var STOCK = {
+            products: [],   // упорядоченный список (group_name, name, best_before — от сервера)
+            index: {},      // product_id -> индекс в products
+            shortList: false,
+            ws: null,
+            reconnTimer: null,
+            renderTimer: null
+        };
+
+        var MODAL = { productID: null, bb: null };
+
+        function initStock() {
+            STOCK.shortList = (document.body.getAttribute('data-short') === '1');
+            document.getElementById('stock-body').addEventListener('click', onBodyClick);
+            var overlay = document.getElementById('modal-overlay');
+            overlay.addEventListener('click', function (ev) {
+                if (ev.target === overlay) {
+                    closeModal();
+                }
+            });
+            connect();
+        }
+
+        // --- вебсокет ---
+
+        function connect() {
+            var proto = (window.location.protocol === 'https:') ? 'wss://' : 'ws://';
+            STOCK.ws = new WebSocket(proto + window.location.host + '/ms/dates/ws');
+            STOCK.ws.onopen = function () {
+                setStatus('онлайн', 'online');
+            };
+            STOCK.ws.onmessage = function (ev) {
+                var msg;
+                try {
+                    msg = JSON.parse(ev.data);
+                } catch (e) {
+                    return;
+                }
+                onMessage(msg);
+            };
+            STOCK.ws.onclose = function () {
+                setStatus('переподключение…', 'offline');
+                scheduleReconnect();
+            };
+            STOCK.ws.onerror = function () {
+                try {
+                    STOCK.ws.close();
+                } catch (e) { /* noop */ }
+            };
+        }
+
+        function scheduleReconnect() {
+            if (STOCK.reconnTimer) {
+                return;
+            }
+            STOCK.reconnTimer = setTimeout(function () {
+                STOCK.reconnTimer = null;
+                connect();
+            }, 3000);
+        }
+
+        function setStatus(text, cls) {
+            var el = document.getElementById('ws-status');
+            el.textContent = text;
+            el.className = cls || '';
+        }
+
+        function onMessage(msg) {
+            if (msg.type === 'snapshot') {
+                applySnapshot(msg.rows || []);
+            } else if (msg.type === 'lot_upsert') {
+                applyLotUpsert(msg);
+            } else if (msg.type === 'lot_delete') {
+                applyLotDelete(msg);
+            } else if (msg.type === 'product_delete') {
+                applyProductDelete(msg);
+            }
+            scheduleRender();
+        }
+
+        function applySnapshot(rows) {
+            STOCK.products = rows;
+            reindex();
+        }
+
+        // Дельта для известного товара; неизвестный игнорируем —
+        // снапшот всегда приходит первым, новых товаров эта версия не добавляет.
+        function applyLotUpsert(msg) {
+            var p = findProduct(msg.product_id);
+            if (!p || !msg.lot) {
+                return;
+            }
+            var lot = msg.lot;
+            for (var i = 0; i < p.lots.length; i++) {
+                if (p.lots[i].best_before === lot.best_before) {
+                    p.lots[i] = lot;
+                    return;
+                }
+            }
+            p.lots.push(lot);
+            p.lots.sort(function (a, b) {
+                return a.best_before < b.best_before ? -1 : (a.best_before > b.best_before ? 1 : 0);
+            });
+        }
+
+        function applyLotDelete(msg) {
+            var p = findProduct(msg.product_id);
+            if (!p) {
+                return;
+            }
+            for (var i = 0; i < p.lots.length; i++) {
+                if (p.lots[i].best_before === msg.best_before) {
+                    p.lots.splice(i, 1);
+                    return;
+                }
+            }
+        }
+
+        function applyProductDelete(msg) {
+            var i = STOCK.index[msg.product_id];
+            if (i === undefined) {
+                return;
+            }
+            STOCK.products.splice(i, 1);
+            reindex();
+        }
+
+        function reindex() {
+            STOCK.index = {};
+            for (var i = 0; i < STOCK.products.length; i++) {
+                STOCK.index[STOCK.products[i].id] = i;
+            }
+        }
+
+        function findProduct(id) {
+            var i = STOCK.index[id];
+            return (i === undefined) ? null : STOCK.products[i];
+        }
+
+        // --- рендер ---
+
+        function scheduleRender() {
+            if (STOCK.renderTimer) {
+                return;
+            }
+            STOCK.renderTimer = setTimeout(function () {
+                STOCK.renderTimer = null;
+                render();
+            }, 80);
+        }
+
+        // Пары показываем только для лотов с остатком (qty > 0).
+        function visibleLots(p) {
+            var out = [];
+            for (var i = 0; i < p.lots.length; i++) {
+                if (p.lots[i].qty > 0) {
+                    out.push(p.lots[i]);
+                }
+            }
+            return out;
+        }
+
+        function render() {
+            var i, k;
+            var prods = [];
+            for (i = 0; i < STOCK.products.length; i++) {
+                var p = STOCK.products[i];
+                if (STOCK.shortList && !p.short_list) {
+                    continue;
+                }
+                prods.push(p);
+            }
+
+            // Ширина таблицы: максимум видимых пар по строкам.
+            var n = 0;
+            for (i = 0; i < prods.length; i++) {
+                var cnt = visibleLots(prods[i]).length;
+                if (cnt > n) {
+                    n = cnt;
+                }
+            }
+
+            var head = '<tr><th class="col-name">Наименование</th>';
+            for (k = 0; k < n; k++) {
+                head += '<th>Кол-во</th><th>Срок</th>';
+            }
+            head += '<th>Скидка сайт</th><th>Скидка ТГ</th></tr>';
+            document.getElementById('head-row').innerHTML = head;
+
+            var html = '';
+            var lastGroup = null;
+            var colspan = 2 * n + 3;
+            for (i = 0; i < prods.length; i++) {
+                var g = prods[i].group_name || 'Без группы';
+                if (g !== lastGroup) {
+                    html += '<tr class="group-row"><td colspan="' + colspan + '">' + esc(g) + '</td></tr>';
+                    lastGroup = g;
+                }
+                html += productRow(prods[i], n);
+            }
+            document.getElementById('stock-body').innerHTML = html;
+        }
+
+        function productRow(p, n) {
+            var lots = visibleLots(p);
+            var html = '<tr>';
+            html += '<td class="col-name">' + esc(p.name) + '</td>';
+            for (var k = 0; k < n; k++) {
+                if (k < lots.length) {
+                    var lot = lots[k];
+                    var yellow = hasDiscount(lot) ? ' has-discount' : '';
+                    html += '<td class="cell-pair' + yellow + '" data-lot="1" data-product="' + esc(p.id) + '" data-bb="' + lot.best_before + '" data-field="qty">' + lot.qty + '</td>';
+                    html += '<td class="cell-pair' + yellow + '" data-lot="1" data-product="' + esc(p.id) + '" data-bb="' + lot.best_before + '" data-field="date">' + fmtDate(lot.best_before) + '</td>';
+                } else {
+                    html += '<td class="cell-empty"></td><td class="cell-empty"></td>';
+                }
+            }
+            html += '<td class="cell-discount">' + fmtDiscount(rightDiscount(lots, 'general')) + '</td>';
+            html += '<td class="cell-discount">' + fmtDiscount(rightDiscount(lots, 'telegram')) + '</td>';
+            html += '</tr>';
+            return html;
+        }
+
+        // Жёлтая подсветка: у пары задана любая скидка (ручная или «просто»).
+        function hasDiscount(lot) {
+            return lot.discount_general != null ||
+                lot.discount_telegram != null ||
+                lot.discount_general_manual != null ||
+                lot.discount_telegram_manual != null;
+        }
+
+        // Ручная скидка всегда важнее «просто».
+        function effectiveDiscount(lot, channel) {
+            var manual = (channel === 'general') ? lot.discount_general_manual : lot.discount_telegram_manual;
+            var plain = (channel === 'general') ? lot.discount_general : lot.discount_telegram;
+            return (manual != null) ? manual : plain;
+        }
+
+        // Правая колонка канала: значение самой левой пары, у которой оно заполнено.
+        function rightDiscount(lots, channel) {
+            for (var i = 0; i < lots.length; i++) {
+                var v = effectiveDiscount(lots[i], channel);
+                if (v != null) {
+                    return v;
+                }
+            }
+            return null;
+        }
+
+        function fmtDiscount(v) {
+            return (v == null) ? '' : v + '%';
+        }
+
+        function fmtDate(s) {
+            s = String(s).slice(0, 10);
+            var parts = s.split('-');
+            if (parts.length !== 3) {
+                return s;
+            }
+            return parts[2] + '.' + parts[1] + '.' + parts[0];
+        }
+
+        function esc(s) {
+            return String(s)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;');
+        }
+
+        // --- клики по ячейкам ---
+
+        function onBodyClick(ev) {
+            var el = ev.target || ev.srcElement;
+            while (el && el !== this && el.nodeType === 1) {
+                if (el.getAttribute && el.getAttribute('data-lot') === '1') {
+                    var field = el.getAttribute('data-field');
+                    var productID = el.getAttribute('data-product');
+                    var bb = el.getAttribute('data-bb');
+                    if (field === 'qty') {
+                        openDiscountModal(productID, bb);
+                    } else if (field === 'date') {
+                        openDateModal(productID, bb);
+                    }
+                    return;
+                }
+                el = el.parentNode;
+            }
+        }
+
+        // --- модальные окна ---
+
+        function showModal(html) {
+            document.getElementById('modal-content').innerHTML = html;
+            document.getElementById('modal-overlay').className = 'overlay';
+        }
+
+        function closeModal() {
+            document.getElementById('modal-overlay').className = 'overlay hidden';
+            document.getElementById('modal-content').innerHTML = '';
+            MODAL.productID = null;
+            MODAL.bb = null;
+        }
+
+        // Клик по количеству: факт (текущая скидка) / Ставим (ручная).
+        function openDiscountModal(productID, bb) {
+            var p = findProduct(productID);
+            if (!p) {
+                return;
+            }
+            var lot = findLot(p, bb);
+            if (!lot) {
+                return;
+            }
+            MODAL.productID = productID;
+            MODAL.bb = bb;
+
+            var genFact = fmtDiscount(effectiveDiscount(lot, 'general'));
+            var tgFact = fmtDiscount(effectiveDiscount(lot, 'telegram'));
+            var genVal = (lot.discount_general_manual != null) ? lot.discount_general_manual : '';
+            var tgVal = (lot.discount_telegram_manual != null) ? lot.discount_telegram_manual : '';
+
+            var html = '<div class="modal-title">' + esc(p.name) + ' — годен до ' + fmtDate(bb) + '</div>';
+            html += '<table class="discount-table">';
+            html += '<tr><th></th><th>general</th><th>telegram</th></tr>';
+            html += '<tr><td class="dl">факт</td><td>' + genFact + '</td><td>' + tgFact + '</td></tr>';
+            html += '<tr><td class="dl">Ставим</td>';
+            html += '<td><input type="number" id="d-gen" min="0" max="100" value="' + genVal + '"></td>';
+            html += '<td><input type="number" id="d-tg" min="0" max="100" value="' + tgVal + '"></td></tr>';
+            html += '</table>';
+            html += '<div class="modal-hint">Пустое поле = сброс ручной скидки</div>';
+            html += '<div class="modal-actions">';
+            html += '<button type="button" onclick="closeModal()">Отмена</button>';
+            html += '<button type="button" onclick="saveDiscount()">Сохранить</button>';
+            html += '</div>';
+            showModal(html);
+        }
+
+        function saveDiscount() {
+            var gen = parseDiscountInput(document.getElementById('d-gen').value);
+            var tg = parseDiscountInput(document.getElementById('d-tg').value);
+            var body = JSON.stringify({
+                product_id: MODAL.productID,
+                best_before: MODAL.bb,
+                discount_general_manual: gen,
+                discount_telegram_manual: tg
+            });
+            var xhr = new XMLHttpRequest();
+            xhr.open('POST', '/ms/dates/discount', true);
+            xhr.setRequestHeader('Content-Type', 'application/json');
+            xhr.onreadystatechange = function () {
+                if (xhr.readyState !== 4) {
+                    return;
+                }
+                if (xhr.status === 204) {
+                    closeModal();
+                } else {
+                    alert('Не удалось сохранить скидку (HTTP ' + xhr.status + ')');
+                }
+            };
+            xhr.send(body);
+        }
+
+        function parseDiscountInput(v) {
+            v = String(v).trim();
+            if (v === '') {
+                return null;
+            }
+            var n = parseInt(v, 10);
+            if (isNaN(n)) {
+                return null;
+            }
+            return n;
+        }
+
+        // Клик по сроку: дата выработки.
+        function openDateModal(productID, bb) {
+            var p = findProduct(productID);
+            if (!p) {
+                return;
+            }
+            var lot = findLot(p, bb);
+            if (!lot) {
+                return;
+            }
+            var produced = lot.produced_on ? fmtDate(lot.produced_on) : 'не известна';
+            var html = '<div class="modal-title">' + esc(p.name) + ' — годен до ' + fmtDate(bb) + '</div>';
+            html += '<div class="modal-line">Дата выработки: ' + produced + '</div>';
+            html += '<div class="modal-actions">';
+            html += '<button type="button" onclick="closeModal()">Закрыть</button>';
+            html += '</div>';
+            showModal(html);
+        }
+
+        function findLot(p, bb) {
+            for (var i = 0; i < p.lots.length; i++) {
+                if (p.lots[i].best_before === bb) {
+                    return p.lots[i];
+                }
+            }
+            return null;
+        }
+
+        initStock();
+    </script>
+
+</body>
+
+</html>

@@ -19,6 +19,8 @@ import (
 	msu "warehouseHelper/internal/mssuppliers/usecase"
 	qucase "warehouseHelper/internal/qrcodes/usecase"
 	rgucase "warehouseHelper/internal/refgo/usecase"
+	sucase "warehouseHelper/internal/stock/usecase"
+	stockws "warehouseHelper/internal/stock/ws"
 	"warehouseHelper/internal/tempdir"
 	wucase "warehouseHelper/internal/wiki/usecase"
 )
@@ -34,9 +36,11 @@ type Handler struct {
 	goodsUC   *gucase.GoodsUseCase
 	qrUC      *qucase.QRUseCase
 	msUC      *msu.MSSuppliersUseCase
+	stockUC   *sucase.StockUseCase
+	stockHub  *stockws.Hub
 }
 
-func NewHandler(syncUC *msucase.SyncUseCase, ordersUC *msucase.OrdersUseCase, exportUC *rgucase.ExportToExcelUseCase, pdfUC *rgucase.ExportOrderPDFUseCase, barcodeUC *rgucase.ExportBarcodesToExcelUseCase, refGoUC *rgucase.RefGoCheckAgainstUseCase, wikiUC *wucase.WikiUseCase, goodsUC *gucase.GoodsUseCase, qrUC *qucase.QRUseCase, msUC *msu.MSSuppliersUseCase) *Handler {
+func NewHandler(syncUC *msucase.SyncUseCase, ordersUC *msucase.OrdersUseCase, exportUC *rgucase.ExportToExcelUseCase, pdfUC *rgucase.ExportOrderPDFUseCase, barcodeUC *rgucase.ExportBarcodesToExcelUseCase, refGoUC *rgucase.RefGoCheckAgainstUseCase, wikiUC *wucase.WikiUseCase, goodsUC *gucase.GoodsUseCase, qrUC *qucase.QRUseCase, msUC *msu.MSSuppliersUseCase, stockUC *sucase.StockUseCase, stockHub *stockws.Hub) *Handler {
 	return &Handler{
 		syncUC:    syncUC,
 		ordersUC:  ordersUC,
@@ -48,6 +52,8 @@ func NewHandler(syncUC *msucase.SyncUseCase, ordersUC *msucase.OrdersUseCase, ex
 		goodsUC:   goodsUC,
 		qrUC:      qrUC,
 		msUC:      msUC,
+		stockUC:   stockUC,
+		stockHub:  stockHub,
 	}
 }
 
