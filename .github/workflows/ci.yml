@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: wh
+          POSTGRES_PASSWORD: wh
+          POSTGRES_DB: wh
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U wh"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Сборка
+        run: go build ./...
+
+      - name: Вет
+        run: go vet ./...
+
+      - name: Тесты
+        run: go test ./...
+
+      - name: Линт (golangci-lint, конфиг .golangci.yml)
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v2.6.0
+          args: run ./...
+
+      - name: Сборка под прод-таргет (Windows)
+        run: GOOS=windows GOARCH=amd64 go build ./...
+
+      - name: Применение схем БД против свежей Postgres
+        # Порядок = порядок зависимостей (карта AGENTS.md «Схемы БД»):
+        # база (products, suppliers, refgo_orders) → зависимые (stock, связи, подбор, вики).
+        run: |
+          apt-get update -qq && apt-get install -y -qq postgresql-client
+          export PGPASSWORD=wh
+          for f in \
+            products_schema.sql \
+            suppliers_schema.sql \
+            refgo_orders_schema.sql \
+            product_stock_schema.sql \
+            product_supplier_barcodes_schema.sql \
+            product_supplier_prices_schema.sql \
+            order_picking_schema.sql \
+            product_day_state_schema.sql \
+            product_received_weights_schema.sql \
+            product_weekly_turnover_schema.sql \
+            product_monthly_turnover_schema.sql \
+            qrcodes_schema.sql \
+            wiki_schema.sql; do
+            psql -h localhost -U wh -d wh -v ON_ERROR_STOP=1 -f "internal/repository/postgres/$f" > /dev/null || exit 1
+          done
+          echo "Схемы применены: 13/13"
