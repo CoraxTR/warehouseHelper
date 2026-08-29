@@ -50,5 +50,11 @@ func NewRouter(h *Handler) *http.ServeMux {
 	mux.HandleFunc("/ms/suppliers/save", h.SupplierSave)     // POST — создание/обновление
 	mux.HandleFunc("/ms/suppliers/delete", h.SupplierDelete) // POST — удаление
 
+	// Модуль «Сроки» (остатки по срокам годности).
+	mux.HandleFunc("GET /ms/dates", h.StockDatesPage)          // страница «Сроки»
+	mux.HandleFunc("GET /ms/dates/short", h.StockShortPage)    // страница «Шорт-лист»
+	mux.HandleFunc("GET /ms/dates/ws", h.StockDatesWS)         // вебсокет (снапшот + дельты)
+	mux.HandleFunc("POST /ms/dates/discount", h.StockDiscount) // запись ручной скидки
+
 	return mux
 }

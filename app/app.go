@@ -1,8 +1,11 @@
 package app
 
 import (
+	"context"
+	"log"
 	"net/http"
 	"time"
+
 	"warehouseHelper/internal/config"
 )
 
@@ -34,10 +37,23 @@ func (a *App) Run() error {
 func (a *App) initDeps() {
 	inits := []func(){
 		a.initHTTPServer,
+		a.initStockCache,
 	}
 
 	for _, init := range inits {
 		init()
+	}
+}
+
+// initStockCache прогревает кэш остатков модуля «Сроки» всеми лотами.
+// Ошибка не роняет приложение: без схемы product_stock страницы «Сроки»
+// покажут пустую таблицу (примените схему и перезапустите).
+func (a *App) initStockCache() {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := a.di.StockUC().WarmUp(ctx); err != nil {
+		log.Printf("прогрев кэша остатков: %v (страницы «Сроки» пусты, примените product_stock_schema.sql и перезапустите)", err)
 	}
 }
 

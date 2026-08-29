@@ -18,6 +18,8 @@ import (
 	"warehouseHelper/internal/refgo/registry"
 	rgucase "warehouseHelper/internal/refgo/usecase"
 	"warehouseHelper/internal/repository/postgres"
+	sucase "warehouseHelper/internal/stock/usecase"
+	stockws "warehouseHelper/internal/stock/ws"
 	"warehouseHelper/internal/telegram"
 	tempcleaner "warehouseHelper/internal/tempcleaner"
 	"warehouseHelper/internal/tempdir"
@@ -52,6 +54,8 @@ type DIContainer struct {
 	goodsUC         *gucase.GoodsUseCase
 	qrUC            *qucase.QRUseCase
 	msUC            *msu.MSSuppliersUseCase
+	stockUC         *sucase.StockUseCase
+	stockHub        *stockws.Hub
 
 	// Хэндлеры
 	mux      *http.ServeMux
@@ -272,9 +276,29 @@ func (d *DIContainer) SuppliersUC() *msu.MSSuppliersUseCase {
 	return d.msUC
 }
 
+// StockHub — вебсокет-хаб модуля «Сроки» (клиенты обеих страниц).
+func (d *DIContainer) StockHub() *stockws.Hub {
+	if d.stockHub == nil {
+		d.stockHub = stockws.NewHub()
+	}
+
+	return d.stockHub
+}
+
+// StockUC — сценарии модуля «Сроки»: кэш остатков и ручные скидки.
+// PGClient реализует sucase.Repository, StockHub — sucase.Publisher.
+// Кэш прогревается при старте (app.initStockCache).
+func (d *DIContainer) StockUC() *sucase.StockUseCase {
+	if d.stockUC == nil {
+		d.stockUC = sucase.NewStockUseCase(d.OrdersRepository(), d.StockHub())
+	}
+
+	return d.stockUC
+}
+
 func (d *DIContainer) Handler() *myhttp.Handler {
 	if d.handlers == nil {
-		d.handlers = myhttp.NewHandler(d.SyncUC(), d.OrdersUC(), d.ExcelExportUC(), d.PdfExportUC(), d.BarcodeExportUC(), d.RefGoCheckAgainstUC(), d.WikiUC(), d.GoodsUC(), d.QRUC(), d.SuppliersUC())
+		d.handlers = myhttp.NewHandler(d.SyncUC(), d.OrdersUC(), d.ExcelExportUC(), d.PdfExportUC(), d.BarcodeExportUC(), d.RefGoCheckAgainstUC(), d.WikiUC(), d.GoodsUC(), d.QRUC(), d.SuppliersUC(), d.StockUC(), d.StockHub())
 	}
 
 	return d.handlers
