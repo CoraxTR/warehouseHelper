@@ -9,29 +9,29 @@ import (
 )
 
 // Lot — партия товара с одним сроком годности (строка product_stock).
-// BestBefore + product_id — PK.
+// Даты сериализуются в RFC3339, клиент берёт первые 10 символов (YYYY-MM-DD).
 type Lot struct {
-	BestBefore time.Time // годен до (DATE), без времени
-	Qty        int64     // остаток, штук (весовые — по среднему весу)
-	ProducedOn *time.Time // дата выработки; nil — не известна
+	BestBefore time.Time  `json:"best_before"` // годен до (DATE), PK-компонент
+	Qty        int64      `json:"qty"`         // остаток, штук (весовые — по среднему весу)
+	ProducedOn *time.Time `json:"produced_on"` // дата выработки; null — не известна
 
 	// General/Telegram — «просто» скидки, пишет будущий модуль расчёта скидок.
-	// GeneralManual/TelegramManual — ручные, пишет UI сроков (всегда важнее «просто»).
-	// nil = не задана; 0 = заданная скидка ноль.
-	General         *int16
-	Telegram        *int16
-	GeneralManual   *int16
-	TelegramManual  *int16
+	// GeneralManual/TelegramManual — ручные, пишет UI сроков.
+	// null = не задана; 0 = заданная скидка ноль.
+	General        *int16 `json:"discount_general"`
+	Telegram       *int16 `json:"discount_telegram"`
+	GeneralManual  *int16 `json:"discount_general_manual"`
+	TelegramManual *int16 `json:"discount_telegram_manual"`
 }
 
 // Product — товар с остатками по лотам (кэш модуля).
 type Product struct {
-	ID           string // uuid товара МС
-	InternalCode string // 8 цифр из МС code; индекс для будущей приёмки
-	Name         string
-	GroupName    string
-	ShortList    bool
-	Lots         []Lot // по возрастанию BestBefore
+	ID           string `json:"id"`
+	InternalCode string `json:"internal_code"`
+	Name         string `json:"name"`
+	GroupName    string `json:"group_name"`
+	ShortList    bool   `json:"short_list"`
+	Lots         []Lot  `json:"lots"` // по возрастанию BestBefore
 }
 
 // Event — факт изменения остатков, публикуется владельцем данных (usecase)

@@ -64,13 +64,13 @@ func (pg *PGClient) LoadAllStock(ctx context.Context) ([]stock.Product, error) {
 			})
 		}
 		products[i].Lots = append(products[i].Lots, stock.Lot{
-			BestBefore:      bestBefore,
-			Qty:             qty,
-			ProducedOn:      producedOn,
-			General:         general,
-			Telegram:        telegram,
-			GeneralManual:   generalManual,
-			TelegramManual:  telegramManual,
+			BestBefore:     bestBefore,
+			Qty:            qty,
+			ProducedOn:     producedOn,
+			General:        general,
+			Telegram:       telegram,
+			GeneralManual:  generalManual,
+			TelegramManual: telegramManual,
 		})
 	}
 	if err := rows.Err(); err != nil {

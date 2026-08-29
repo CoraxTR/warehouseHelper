@@ -11,10 +11,10 @@ import (
 
 // mockRepo — хранилище-заглушка: возвращает фикс. лоты, запоминает UPDATE-вызовы.
 type mockRepo struct {
-	products   []stock.Product
-	updates    []updateCall
-	err        error // ошибка LoadAllStock (WarmUp)
-	updateErr  error // ошибка SetManualDiscount
+	products  []stock.Product
+	updates   []updateCall
+	err       error // ошибка LoadAllStock (WarmUp)
+	updateErr error // ошибка SetManualDiscount
 }
 
 type updateCall struct {
@@ -200,9 +200,9 @@ func TestSetManualDiscountValidation(t *testing.T) {
 	}
 
 	cases := []struct {
-		name  string
-		gen   *int16
-		tg    *int16
+		name string
+		gen  *int16
+		tg   *int16
 	}{
 		{"генерал больше 100", i16(101), nil},
 		{"телеграм меньше 0", nil, i16(-1)},
