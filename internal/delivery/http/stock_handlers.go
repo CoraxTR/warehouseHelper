@@ -111,9 +111,11 @@ func (h *Handler) StockUpdateSave(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		switch {
 		case errors.Is(err, stock.ErrScanNotInternal), errors.Is(err, stock.ErrScanInvalid),
-			errors.Is(err, stock.ErrScanGroupMismatch), errors.Is(err, stock.ErrScanProductMismatch),
-			errors.Is(err, stock.ErrProductNotFound):
+			errors.Is(err, stock.ErrScanGroupMismatch), errors.Is(err, stock.ErrScanProductMismatch):
 			http.Error(w, err.Error(), http.StatusBadRequest)
+		case errors.Is(err, stock.ErrProductNotFound):
+			// Товар не заведён в каталог — оператору подсказка, как дозавести.
+			http.Error(w, err.Error()+" — заведите его в МС и выгрузите каталог", http.StatusBadRequest)
 		default:
 			log.Printf("stock update save: %v", err)
 			http.Error(w, "не удалось обновить сроки", http.StatusInternalServerError)
