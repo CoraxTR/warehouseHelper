@@ -310,9 +310,8 @@ type agg struct {
 
 // groupScans группирует сканы по (товар, срок) и проверяет ограничение
 // страницы по товару. Возвращает батчи по товарам и порядок их появления.
-func groupScans(parsed []parsedScan, byCode map[string]stock.Product, expectedProductID string) (map[string]map[time.Time]*agg, []string, error) {
-	batches := map[string]map[time.Time]*agg{}
-	var order []string
+func groupScans(parsed []parsedScan, byCode map[string]stock.Product, expectedProductID string) (batches map[string]map[time.Time]*agg, order []string, err error) {
+	batches = map[string]map[time.Time]*agg{}
 	for _, s := range parsed {
 		p, ok := byCode[s.code]
 		if !ok {
@@ -371,8 +370,11 @@ func (uc *StockUseCase) buildReplacePlans(batches map[string]map[time.Time]*agg,
 		batch := batches[pid]
 		for _, bb := range sortedDates(batch) {
 			a := batch[bb]
-			ex, hasEx := existing[bb]
-			lot, write := targetLot(ex, hasEx, a, bb, today)
+			var ex *stock.Lot
+			if cur, has := existing[bb]; has {
+				ex = &cur
+			}
+			lot, write := targetLot(ex, a, bb, today)
 			pl.upserts = append(pl.upserts, lot)
 			pl.writes = append(pl.writes, write)
 		}
@@ -384,26 +386,31 @@ func (uc *StockUseCase) buildReplacePlans(batches map[string]map[time.Time]*agg,
 // targetLot собирает финальный лот и целевое значение для репозитория:
 // qty из сканов, produced_on — COALESCE(существующего, нового), ручные
 // скидки сохраняются только у лотов со сроком не раньше сегодня.
-func targetLot(ex stock.Lot, hasEx bool, a *agg, bb, today time.Time) (stock.Lot, stock.LotWrite) {
-	var genMan, tgMan *int16
-	if hasEx && !bb.Before(today) {
-		genMan = cloneInt16(ex.GeneralManual)
-		tgMan = cloneInt16(ex.TelegramManual)
+// ex == nil — лота ещё нет (создаётся с нуля).
+func targetLot(ex *stock.Lot, a *agg, bb, today time.Time) (lot stock.Lot, write stock.LotWrite) {
+	var genMan, tgMan, general, telegram *int16
+	if ex != nil {
+		if !bb.Before(today) {
+			genMan = cloneInt16(ex.GeneralManual)
+			tgMan = cloneInt16(ex.TelegramManual)
+		}
+		general = cloneInt16(ex.General)
+		telegram = cloneInt16(ex.Telegram)
 	}
 	produced := a.producedOn
-	if hasEx && ex.ProducedOn != nil {
+	if ex != nil && ex.ProducedOn != nil {
 		produced = *ex.ProducedOn
 	}
-	lot := stock.Lot{
+	lot = stock.Lot{
 		BestBefore:     bb,
 		Qty:            a.qty,
 		ProducedOn:     &produced,
-		General:        cloneInt16(ex.General),
-		Telegram:       cloneInt16(ex.Telegram),
+		General:        general,
+		Telegram:       telegram,
 		GeneralManual:  genMan,
 		TelegramManual: tgMan,
 	}
-	write := stock.LotWrite{
+	write = stock.LotWrite{
 		BestBefore:     bb,
 		Qty:            a.qty,
 		ProducedOn:     a.producedOn,
