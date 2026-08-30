@@ -146,6 +146,39 @@ func (pg *PGClient) LoadCatalogProductsByCodes(ctx context.Context, codes []stri
 
 	for rows.Next() {
 		var (
+			ref  receiving.ProductRef
+			uom  string
+		)
+		if err := rows.Scan(&ref.ProductID, &ref.InternalCode, &ref.Name, &uom); err != nil {
+			return nil, err
+		}
+		ref.Weighted = weightedUOM(uom)
+		out[ref.InternalCode] = ref
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return out, nil
+}
+
+// LoadCatalogAllRefs возвращает все товары каталога с внутренними кодами
+// (для кеша страницы приёмки).
+func (pg *PGClient) LoadCatalogAllRefs(ctx context.Context) ([]receiving.ProductRef, error) {
+	rows, err := pg.Pool.Query(ctx, `
+        SELECT id, internal_code, name, uom
+        FROM products
+        WHERE internal_code <> ''
+        ORDER BY name
+    `)
+	if err != nil {
+		return nil, fmt.Errorf("load catalog refs: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]receiving.ProductRef, 0)
+	for rows.Next() {
+		var (
 			ref receiving.ProductRef
 			uom string
 		)
@@ -153,7 +186,7 @@ func (pg *PGClient) LoadCatalogProductsByCodes(ctx context.Context, codes []stri
 			return nil, err
 		}
 		ref.Weighted = weightedUOM(uom)
-		out[ref.InternalCode] = ref
+		out = append(out, ref)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

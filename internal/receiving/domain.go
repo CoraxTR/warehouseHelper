@@ -12,42 +12,44 @@ import (
 
 // BarcodeRef — связка «внешний код поставщика → товар каталога».
 type BarcodeRef struct {
-	ExternalCode string // базовая часть штрих-кода, вычитываемая decode_rule
-	ProductID    string // товар каталога (products.id)
-	ProductName  string // имя товара (для отображения)
-	InternalCode string // внутренний код товара (products.internal_code)
-	Weighted     bool   // весовой товар (uom: кг/г/т)
+	ExternalCode string `json:"-"` // ключ карты ByExternal, внутри не нужен
+	ProductID    string `json:"product_id"`
+	ProductName  string `json:"name"`
+	InternalCode string `json:"internal_code"`
+	Weighted     bool   `json:"weighted"`
 }
 
 // ProductRef — товар каталога для кеша приёмки (по internal_code).
 type ProductRef struct {
-	ProductID    string
-	InternalCode string
-	Name         string
-	Weighted     bool
+	ProductID    string `json:"product_id"`
+	InternalCode string `json:"internal_code"`
+	Name         string `json:"name"`
+	Weighted     bool   `json:"weighted"`
 }
 
 // Cache — кеш приёмки поставщика: правила вычитки, маппинг внешних кодов,
 // товары каталога по внутренним кодам, позиции поставщика для ручного выбора.
+// Сериализуется целиком на страницу приёмки — JS резолвит сканы локально,
+// сервер перевалидирует при сохранении.
 type Cache struct {
-	ItemRules  []DecodeRule          // правила единичных товаров
-	BoxRules   []DecodeRule          // правила коробок
-	ByExternal map[string]BarcodeRef // external_code → товар
-	ByCode     map[string]ProductRef // internal_code → товар (внутренние штрих-коды)
-	Products   []ProductRef          // позиции поставщика (уникальные товары из связок)
+	ItemRules  []DecodeRule          `json:"item_rules"`
+	BoxRules   []DecodeRule          `json:"box_rules"`
+	ByExternal map[string]BarcodeRef `json:"by_external"`
+	ByCode     map[string]ProductRef `json:"by_code"`
+	Products   []ProductRef          `json:"products"`
 }
 
 // DecodeRule — распарсенное правило вычитки поставщика (decoderules.Rule
 // не экспортируем наружу: пакет decoderules — деталь реализации).
 type DecodeRule struct {
-	Length int
-	Fields []RuleField
+	Length int        `json:"length"`
+	Fields []RuleField `json:"fields"`
 }
 
 // RuleField — поле правила: позиция (1-based) и длина; Pos == 0 — поле не задано.
 type RuleField struct {
-	Pos int
-	Len int
+	Pos int `json:"pos"`
+	Len int `json:"len"`
 }
 
 // ScanKind — тип распознанного скана.
@@ -80,60 +82,60 @@ type DecodedScan struct {
 
 // ScanEntry — вход Save: сырой штрих-код + ручные дополнения.
 type ScanEntry struct {
-	Raw              string
-	ManualProductID  string      // ручной выбор товара (код не резолвнулся)
-	ManualWeightG    *int64      // ручной вес (не вычитывается из кода)
-	ManualProducedOn *time.Time  // ручная выработка
-	ManualBestBefore *time.Time  // ручной срок
-	Children         []ScanEntry // сканы внутри коробки
+	Raw              string      `json:"raw"`
+	ManualProductID  string      `json:"manual_product_id"`  // ручной выбор товара (код не резолвнулся)
+	ManualWeightG    *int64      `json:"manual_weight_g"`    // ручной вес (не вычитывается из кода)
+	ManualProducedOn *time.Time  `json:"manual_produced_on"` // ручная выработка
+	ManualBestBefore *time.Time  `json:"manual_best_before"` // ручной срок
+	Children         []ScanEntry `json:"children"`           // сканы внутри коробки
 }
 
 // SaveRequest — сохранить приёмку поставщика.
 type SaveRequest struct {
-	SupplierID string
-	Scans      []ScanEntry
+	SupplierID string      `json:"supplier_id"`
+	Scans      []ScanEntry `json:"scans"`
 }
 
 // SaveResult — результат приёмки: отчёт, куски и коробки (для будущей печати).
 type SaveResult struct {
-	Rows  []ReportRow // отчёт: товар — срок — принято (кг/шт)
-	Units []Unit      // индивидуальные куски
-	Boxes []Box       // собранные коробки
+	Rows  []ReportRow `json:"rows"`  // отчёт: товар — срок — принято (кг/шт)
+	Units []Unit      `json:"units"` // индивидуальные куски
+	Boxes []Box       `json:"boxes"` // собранные коробки
 }
 
 // ReportRow — строка отчёта приёмки.
 type ReportRow struct {
-	ProductName string
-	BestBefore  string // YYYY-MM-DD
-	Weighted    bool   // весовой: QtyKg в кг; иначе Qty штук
-	QtyKg       float64
-	Qty         int64
+	ProductName string  `json:"name"`
+	BestBefore  string  `json:"best_before"` // YYYY-MM-DD
+	Weighted    bool    `json:"weighted"`    // весовой: QtyKg в кг; иначе Qty штук
+	QtyKg       float64 `json:"qty_kg"`
+	Qty         int64   `json:"qty"`
 }
 
 // Unit — принятый индивидуальный кусок.
 type Unit struct {
-	ProductID    string
-	InternalCode string
-	ProductName  string
-	WeightG      int64
-	ProducedOn   *time.Time
-	BestBefore   time.Time
-	InBox        bool // лежал в коробке (в подсписке)
-	BoxMismatch  bool // коробка-родитель с расхождением
+	ProductID    string     `json:"product_id"`
+	InternalCode string     `json:"internal_code"`
+	ProductName  string     `json:"name"`
+	WeightG      int64      `json:"weight_g"`
+	ProducedOn   *time.Time `json:"produced_on"`
+	BestBefore   time.Time  `json:"best_before"`
+	InBox        bool       `json:"in_box"`       // лежал в коробке (в подсписке)
+	BoxMismatch  bool       `json:"box_mismatch"` // коробка-родитель с расхождением
 }
 
 // Box — принятая коробка (для печати): факт по кускам.
 type Box struct {
-	ProductID       string
-	InternalCode    string
-	ProductName     string
-	WeightG         int64 // Σ весов кусков
-	Qty             int64
-	ProducedOn      *time.Time
-	BestBefore      *time.Time // nil — срок не вычитывается из кода коробки
-	DeclaredQty     *int64     // заявленное из кода (nil — не резолвнуто)
-	DeclaredWeightG *int64
-	Mismatch        bool
+	ProductID       string     `json:"product_id"`
+	InternalCode    string     `json:"internal_code"`
+	ProductName     string     `json:"name"`
+	WeightG         int64      `json:"weight_g"` // Σ весов кусков
+	Qty             int64      `json:"qty"`
+	ProducedOn      *time.Time `json:"produced_on"`
+	BestBefore      *time.Time `json:"best_before"` // nil — срок не вычитывается из кода коробки
+	DeclaredQty     *int64     `json:"declared_qty"`
+	DeclaredWeightG *int64     `json:"declared_weight_g"`
+	Mismatch        bool       `json:"mismatch"`
 }
 
 // WeightRow — вес принятой единицы (граммы) для product_received_weights.

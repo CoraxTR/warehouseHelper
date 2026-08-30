@@ -42,6 +42,14 @@ func (s *stubReceiveRepo) LoadCatalogProductsByCodes(_ context.Context, codes []
 	return out, nil
 }
 
+func (s *stubReceiveRepo) LoadCatalogAllRefs(_ context.Context) ([]receiving.ProductRef, error) {
+	out := make([]receiving.ProductRef, 0, len(s.catalog))
+	for _, p := range s.catalog {
+		out = append(out, p)
+	}
+	return out, nil
+}
+
 func (s *stubReceiveRepo) InsertReceivedWeights(_ context.Context, rows []receiving.WeightRow) error {
 	s.inserted = append(s.inserted, rows...)
 	return nil

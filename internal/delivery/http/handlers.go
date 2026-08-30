@@ -27,36 +27,38 @@ import (
 )
 
 type Handler struct {
-	syncUC    *msucase.SyncUseCase
-	ordersUC  *msucase.OrdersUseCase
-	exportUC  *rgucase.ExportToExcelUseCase
-	pdfUC     *rgucase.ExportOrderPDFUseCase
-	barcodeUC *rgucase.ExportBarcodesToExcelUseCase
-	refGoUC   *rgucase.RefGoCheckAgainstUseCase
-	wikiUC    *wucase.WikiUseCase
-	goodsUC   *gucase.GoodsUseCase
-	qrUC      *qucase.QRUseCase
-	msUC      *msu.MSSuppliersUseCase
-	stockUC   *sucase.StockUseCase
-	stockHub  *stockws.Hub
-	receiveUC *rucase.BarcodeEditor
+	syncUC      *msucase.SyncUseCase
+	ordersUC    *msucase.OrdersUseCase
+	exportUC    *rgucase.ExportToExcelUseCase
+	pdfUC       *rgucase.ExportOrderPDFUseCase
+	barcodeUC   *rgucase.ExportBarcodesToExcelUseCase
+	refGoUC     *rgucase.RefGoCheckAgainstUseCase
+	wikiUC      *wucase.WikiUseCase
+	goodsUC     *gucase.GoodsUseCase
+	qrUC        *qucase.QRUseCase
+	msUC        *msu.MSSuppliersUseCase
+	stockUC     *sucase.StockUseCase
+	stockHub    *stockws.Hub
+	receiveUC   *rucase.BarcodeEditor
+	receivingUC *rucase.ReceivingUseCase
 }
 
-func NewHandler(syncUC *msucase.SyncUseCase, ordersUC *msucase.OrdersUseCase, exportUC *rgucase.ExportToExcelUseCase, pdfUC *rgucase.ExportOrderPDFUseCase, barcodeUC *rgucase.ExportBarcodesToExcelUseCase, refGoUC *rgucase.RefGoCheckAgainstUseCase, wikiUC *wucase.WikiUseCase, goodsUC *gucase.GoodsUseCase, qrUC *qucase.QRUseCase, msUC *msu.MSSuppliersUseCase, stockUC *sucase.StockUseCase, stockHub *stockws.Hub, receiveUC *rucase.BarcodeEditor) *Handler {
+func NewHandler(syncUC *msucase.SyncUseCase, ordersUC *msucase.OrdersUseCase, exportUC *rgucase.ExportToExcelUseCase, pdfUC *rgucase.ExportOrderPDFUseCase, barcodeUC *rgucase.ExportBarcodesToExcelUseCase, refGoUC *rgucase.RefGoCheckAgainstUseCase, wikiUC *wucase.WikiUseCase, goodsUC *gucase.GoodsUseCase, qrUC *qucase.QRUseCase, msUC *msu.MSSuppliersUseCase, stockUC *sucase.StockUseCase, stockHub *stockws.Hub, receiveUC *rucase.BarcodeEditor, receivingUC *rucase.ReceivingUseCase) *Handler {
 	return &Handler{
-		syncUC:    syncUC,
-		ordersUC:  ordersUC,
-		exportUC:  exportUC,
-		pdfUC:     pdfUC,
-		barcodeUC: barcodeUC,
-		refGoUC:   refGoUC,
-		wikiUC:    wikiUC,
-		goodsUC:   goodsUC,
-		qrUC:      qrUC,
-		msUC:      msUC,
-		stockUC:   stockUC,
-		stockHub:  stockHub,
-		receiveUC: receiveUC,
+		syncUC:      syncUC,
+		ordersUC:    ordersUC,
+		exportUC:    exportUC,
+		pdfUC:       pdfUC,
+		barcodeUC:   barcodeUC,
+		refGoUC:     refGoUC,
+		wikiUC:      wikiUC,
+		goodsUC:     goodsUC,
+		qrUC:        qrUC,
+		msUC:        msUC,
+		stockUC:     stockUC,
+		stockHub:    stockHub,
+		receiveUC:   receiveUC,
+		receivingUC: receivingUC,
 	}
 }
 

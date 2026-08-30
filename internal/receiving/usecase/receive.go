@@ -27,6 +27,9 @@ type ReceiveRepository interface {
 	GetSupplier(ctx context.Context, id string) (*domain.Supplier, error)
 	// LoadCatalogProductsByCodes — товары каталога по внутренним кодам.
 	LoadCatalogProductsByCodes(ctx context.Context, codes []string) (map[string]receiving.ProductRef, error)
+	// LoadCatalogAllRefs — все товары каталога по внутренним кодам
+	// (для кеша страницы приёмки: внутренние коды 29/33 распознаются сразу).
+	LoadCatalogAllRefs(ctx context.Context) ([]receiving.ProductRef, error)
 	// InsertReceivedWeights — запись весов принятых единиц (граммы).
 	InsertReceivedWeights(ctx context.Context, rows []receiving.WeightRow) error
 	// TrimReceivedWeights — оставить последние keep весов товара (FIFO по id).
@@ -106,6 +109,24 @@ func (uc *ReceivingUseCase) GetCache(ctx context.Context, supplierID string) (*r
 	})
 
 	return cache, nil
+}
+
+// AddCatalogCodes заполняет кеш приёмки картой «internal_code → товар» по
+// всему каталогу — внутренние штрих-коды (29/33) распознаются «на лету»
+// даже для товаров, не заведённых у поставщика. Вызывается только при
+// отдаче кеша странице; Save резолвит внутренние коды лениво.
+func (uc *ReceivingUseCase) AddCatalogCodes(ctx context.Context, cache *receiving.Cache) error {
+	refs, err := uc.repo.LoadCatalogAllRefs(ctx)
+	if err != nil {
+		return fmt.Errorf("каталог для кеша: %w", err)
+	}
+	if cache.ByCode == nil {
+		cache.ByCode = make(map[string]receiving.ProductRef, len(refs))
+	}
+	for _, r := range refs {
+		cache.ByCode[r.InternalCode] = r
+	}
+	return nil
 }
 
 // parseRules разбирает правила поставщика в кеш приёмки.
