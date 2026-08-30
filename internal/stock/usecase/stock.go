@@ -1,5 +1,6 @@
 // Пакет usecase — сценарии модуля «Сроки»: кэш остатков (прогрев при старте),
-// чтение снапшота для страниц, запись ручных скидок из UI.
+// чтение снапшота для страниц, запись ручных скидок из UI, замена остатков
+// по сканам («Обновить сроки»).
 //
 // Модуль — единственный владелец product_stock: все записи идут через него
 // по цепочке «БД → кэш → публикация события». Приёмка и подбор будут ходить
@@ -9,12 +10,14 @@ package usecase
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"warehouseHelper/internal/innercode"
 	"warehouseHelper/internal/stock"
 )
 
@@ -25,6 +28,18 @@ type Repository interface {
 	LoadAllStock(ctx context.Context) ([]stock.Product, error)
 	// SetManualDiscount обновляет ручные скидки лота по PK; строки нет — stock.ErrLotNotFound.
 	SetManualDiscount(ctx context.Context, productID string, bestBefore time.Time, generalManual, telegramManual *int16) error
+	// LoadProductsByCodes возвращает товары каталога по internal_code
+	// (включая товары без остатков) — карта code → товар.
+	LoadProductsByCodes(ctx context.Context, codes []string) (map[string]stock.Product, error)
+	// LoadProductByID возвращает товар каталога по id; строки нет — stock.ErrProductNotFound.
+	LoadProductByID(ctx context.Context, productID string) (stock.Product, error)
+	// LoadGroupNameByCode возвращает название первой группы с кодом
+	// internal_code[1:4]; пустая строка — группы нет.
+	LoadGroupNameByCode(ctx context.Context, groupCode string) (string, error)
+	// ReplaceStockLots применяет замену остатков товаров в одной транзакции:
+	// upsert лотов (qty = целевое, produced_on = COALESCE(существующего, нового),
+	// ручные скидки — целевые) и удаление лотов вне сканов.
+	ReplaceStockLots(ctx context.Context, writes []stock.ProductWrite) error
 }
 
 // Publisher — получатель событий об изменениях остатков (вебсокет-хаб).
@@ -148,6 +163,399 @@ func (uc *StockUseCase) SetManualDiscount(ctx context.Context, productID string,
 	}
 
 	return nil
+}
+
+// ValidLengths возвращает допустимые длины внутренних штрих-кодов — правила
+// разбирателя для клиентского фильтра страницы сканирования (без дублирования
+// формата в JS; значение приходит от владельца формата).
+func (uc *StockUseCase) ValidLengths() []int {
+	return innercode.ValidLengths()
+}
+
+// PageContext — контекст страницы «Обновить сроки»: ограничение сканов,
+// баннер и ожидаемый код.
+type PageContext struct {
+	ProductID string // ограничение по товару (пусто — нет)
+	GroupCode string // ограничение по группе (пусто — нет)
+	Name      string // отображаемое имя (баннер)
+	Code      string // ожидаемый internal_code (для ограничения по товару)
+}
+
+// UpdatePageContext собирает контекст страницы «Обновить сроки» по параметрам
+// перехода: product_id — ограничение по товару (ожидаемый internal_code
+// резолвится из каталога), group — ограничение по коду группы (3 цифры).
+// Без параметров — полное обновление без ограничений.
+func (uc *StockUseCase) UpdatePageContext(ctx context.Context, productID, groupCode string) (PageContext, error) {
+	pc := PageContext{}
+	switch {
+	case productID != "":
+		p, err := uc.repo.LoadProductByID(ctx, productID)
+		if err != nil {
+			return PageContext{}, err
+		}
+		if p.InternalCode == "" {
+			return PageContext{}, fmt.Errorf("у товара %q нет внутреннего кода", p.Name)
+		}
+		pc.ProductID, pc.Name, pc.Code = p.ID, p.Name, p.InternalCode
+	case groupCode != "":
+		name, err := uc.repo.LoadGroupNameByCode(ctx, groupCode)
+		if err != nil {
+			return PageContext{}, err
+		}
+		pc.GroupCode = groupCode
+		pc.Name = name
+	default:
+		// Полное обновление — без ограничений и ожидаемого кода.
+	}
+	return pc, nil
+}
+
+// ReplaceRequest — замена остатков по сканам «Обновить сроки».
+// Scans — сырые штрих-коды; ExpectedProductID/ExpectedGroupCode — ограничения
+// страницы (пусто = нет ограничения, полное обновление).
+type ReplaceRequest struct {
+	Scans             []string
+	ExpectedProductID string
+	ExpectedGroupCode string
+}
+
+// ReplaceStock заменяет остатки сканированных товаров ровно по сканам:
+// лоты из сканов апсертятся (qty = сумма сканов по лоту), лоты, которых нет
+// в сканах, удаляются. Ручные скидки сохраняются у неистёкших лотов
+// (best_before >= сегодня), у истёкших — сбрасываются; «просто»-скидки
+// не трогаются. Валидация и запись атомарны: любая ошибка → ничего не меняется.
+func (uc *StockUseCase) ReplaceStock(ctx context.Context, req ReplaceRequest) error {
+	if len(req.Scans) == 0 {
+		return errors.New("нет сканов")
+	}
+
+	parsed, err := parseScans(req.Scans, req.ExpectedGroupCode)
+	if err != nil {
+		return err
+	}
+	byCode, err := uc.repo.LoadProductsByCodes(ctx, uniqueCodes(parsed))
+	if err != nil {
+		return fmt.Errorf("load products by codes: %w", err)
+	}
+	byID := make(map[string]stock.Product, len(byCode))
+	for _, p := range byCode {
+		byID[p.ID] = p
+	}
+	batches, order, err := groupScans(parsed, byCode, req.ExpectedProductID)
+	if err != nil {
+		return err
+	}
+	plans, err := uc.buildReplacePlans(batches, order)
+	if err != nil {
+		return err
+	}
+	return uc.applyReplacePlans(ctx, order, plans, byID)
+}
+
+// parsedScan — разобранный штрих-код одного скана.
+type parsedScan struct {
+	code       string
+	qty        int64
+	producedOn time.Time
+	bestBefore time.Time
+}
+
+// parseScans разбирает сырые штрих-коды разбирателем и проверяет
+// ограничение страницы по группе (3 цифры internal_code[1:4]).
+func parseScans(raws []string, expectedGroup string) ([]parsedScan, error) {
+	parsed := make([]parsedScan, 0, len(raws))
+	for _, raw := range raws {
+		raw = strings.TrimSpace(raw)
+		c, err := innercode.Parse(raw)
+		if err != nil {
+			if errors.Is(err, innercode.ErrNotInternal) {
+				return nil, stock.ErrScanNotInternal
+			}
+			return nil, stock.ErrScanInvalid
+		}
+		if expectedGroup != "" && c.InternalCode[1:4] != expectedGroup {
+			return nil, stock.ErrScanGroupMismatch
+		}
+		parsed = append(parsed, parsedScan{
+			code:       c.InternalCode,
+			qty:        int64(c.Qty),
+			producedOn: c.ProdDate,
+			// Нормализация к UTC-полуночи: ключи map time.Time с разными
+			// зонами (кэш из БД vs разбор innercode) не совпадают — лоты
+			// «теряются», скидки сбрасываются, всё уходит в deletes.
+			bestBefore: normalizeDate(c.ExpDate),
+		})
+	}
+	return parsed, nil
+}
+
+// uniqueCodes собирает уникальные internal_code в порядке появления.
+func uniqueCodes(parsed []parsedScan) []string {
+	seen := map[string]struct{}{}
+	codes := make([]string, 0, len(parsed))
+	for _, s := range parsed {
+		if _, ok := seen[s.code]; !ok {
+			seen[s.code] = struct{}{}
+			codes = append(codes, s.code)
+		}
+	}
+	return codes
+}
+
+// agg — сумма сканов одного лота (товар, срок).
+type agg struct {
+	qty        int64
+	producedOn time.Time
+}
+
+// groupScans группирует сканы по (товар, срок) и проверяет ограничение
+// страницы по товару. Возвращает батчи по товарам и порядок их появления.
+func groupScans(parsed []parsedScan, byCode map[string]stock.Product, expectedProductID string) (batches map[string]map[time.Time]*agg, order []string, err error) {
+	batches = map[string]map[time.Time]*agg{}
+	for _, s := range parsed {
+		p, ok := byCode[s.code]
+		if !ok {
+			return nil, nil, fmt.Errorf("%w: код %s", stock.ErrProductNotFound, s.code)
+		}
+		if expectedProductID != "" && p.ID != expectedProductID {
+			return nil, nil, stock.ErrScanProductMismatch
+		}
+		m := batches[p.ID]
+		if m == nil {
+			m = map[time.Time]*agg{}
+			batches[p.ID] = m
+			order = append(order, p.ID)
+		}
+		a := m[s.bestBefore]
+		if a == nil {
+			a = &agg{}
+			m[s.bestBefore] = a
+		}
+		a.qty += s.qty
+		if a.producedOn.IsZero() {
+			a.producedOn = s.producedOn
+		}
+	}
+	return batches, order, nil
+}
+
+// replacePlan — целевое состояние одного товара после замены.
+type replacePlan struct {
+	inCache bool
+	upserts []stock.Lot      // финальные лоты (кэш + события)
+	writes  []stock.LotWrite // целевые значения для репозитория
+	deletes []time.Time      // best_before удаляемых лотов
+}
+
+// buildReplacePlans вычисляет целевое состояние товаров: ручные скидки
+// неистёкших лотов сохраняются, истёкшие сбрасываются; лоты вне сканов
+// уходят в deletes. Читает кэш под RLock.
+func (uc *StockUseCase) buildReplacePlans(batches map[string]map[time.Time]*agg, order []string) ([]replacePlan, error) {
+	today := normalizeDate(time.Now())
+	plans := make([]replacePlan, len(order))
+
+	uc.mu.RLock()
+	defer uc.mu.RUnlock()
+	for i, pid := range order {
+		pl := &plans[i]
+		cur, ok := uc.cache[pid]
+		pl.inCache = ok
+
+		existing := map[time.Time]stock.Lot{}
+		if ok {
+			for _, l := range cur.Lots {
+				existing[normalizeDate(l.BestBefore)] = l
+			}
+		}
+		batch := batches[pid]
+		for _, bb := range sortedDates(batch) {
+			a := batch[bb]
+			var ex *stock.Lot
+			if cur, has := existing[bb]; has {
+				ex = &cur
+			}
+			lot, write := targetLot(ex, a, bb, today)
+			pl.upserts = append(pl.upserts, lot)
+			pl.writes = append(pl.writes, write)
+		}
+		pl.deletes = deletedLots(existing, batch)
+	}
+	return plans, nil
+}
+
+// targetLot собирает финальный лот и целевое значение для репозитория:
+// qty из сканов, produced_on — COALESCE(существующего, нового), ручные
+// скидки сохраняются только у лотов со сроком не раньше сегодня.
+// ex == nil — лота ещё нет (создаётся с нуля).
+func targetLot(ex *stock.Lot, a *agg, bb, today time.Time) (lot stock.Lot, write stock.LotWrite) {
+	var genMan, tgMan, general, telegram *int16
+	if ex != nil {
+		if !bb.Before(today) {
+			genMan = cloneInt16(ex.GeneralManual)
+			tgMan = cloneInt16(ex.TelegramManual)
+		}
+		general = cloneInt16(ex.General)
+		telegram = cloneInt16(ex.Telegram)
+	}
+	produced := a.producedOn
+	if ex != nil && ex.ProducedOn != nil {
+		produced = *ex.ProducedOn
+	}
+	lot = stock.Lot{
+		BestBefore:     bb,
+		Qty:            a.qty,
+		ProducedOn:     &produced,
+		General:        general,
+		Telegram:       telegram,
+		GeneralManual:  genMan,
+		TelegramManual: tgMan,
+	}
+	write = stock.LotWrite{
+		BestBefore:     bb,
+		Qty:            a.qty,
+		ProducedOn:     a.producedOn,
+		GeneralManual:  genMan,
+		TelegramManual: tgMan,
+	}
+	return lot, write
+}
+
+// deletedLots — существующие лоты товара, которых нет в батче сканов.
+func deletedLots(existing map[time.Time]stock.Lot, batch map[time.Time]*agg) []time.Time {
+	var deletes []time.Time
+	for bb := range existing {
+		if _, in := batch[bb]; !in {
+			deletes = append(deletes, bb)
+		}
+	}
+	sort.Slice(deletes, func(a, b int) bool { return deletes[a].Before(deletes[b]) })
+	return deletes
+}
+
+// sortedDates — сроки батча, отсортированные по возрастанию.
+func sortedDates(batch map[time.Time]*agg) []time.Time {
+	bbs := make([]time.Time, 0, len(batch))
+	for bb := range batch {
+		bbs = append(bbs, bb)
+	}
+	sort.Slice(bbs, func(a, b int) bool { return bbs[a].Before(bbs[b]) })
+	return bbs
+}
+
+// applyReplacePlans применяет замену: одна транзакция в БД, затем кэш,
+// затем события (сначала удаления, потом upsert'ы — клиент применяет
+// к своему состоянию последовательно).
+func (uc *StockUseCase) applyReplacePlans(ctx context.Context, order []string, plans []replacePlan, byID map[string]stock.Product) error {
+	if err := uc.repo.ReplaceStockLots(ctx, replaceWrites(order, plans)); err != nil {
+		return fmt.Errorf("replace stock lots: %w", err)
+	}
+
+	uc.mu.Lock()
+	err := uc.applyCacheLocked(order, plans, byID)
+	uc.mu.Unlock()
+	if err != nil {
+		return err
+	}
+
+	uc.publishReplaceEvents(order, plans)
+	return nil
+}
+
+// replaceWrites собирает правки для репозитория.
+func replaceWrites(order []string, plans []replacePlan) []stock.ProductWrite {
+	writes := make([]stock.ProductWrite, 0, len(plans))
+	for i := range plans {
+		writes = append(writes, stock.ProductWrite{
+			ProductID: order[i],
+			Upserts:   plans[i].writes,
+			Deletes:   plans[i].deletes,
+		})
+	}
+	return writes
+}
+
+// applyCacheLocked применяет замену к кэшу. Вызывается только под mu.Lock.
+func (uc *StockUseCase) applyCacheLocked(order []string, plans []replacePlan, byID map[string]stock.Product) error {
+	for i := range plans {
+		pl := &plans[i]
+		pid := order[i]
+		cur, ok := uc.cache[pid]
+		if !ok {
+			cat, ok := byID[pid]
+			if !ok {
+				return fmt.Errorf("%w: %s", stock.ErrProductNotFound, pid)
+			}
+			cp := cat
+			cur = &cp
+			uc.cache[pid] = cur
+			if cur.InternalCode != "" {
+				uc.byCode[cur.InternalCode] = pid
+			}
+		}
+		cur.Lots = mergeLots(cur.Lots, pl)
+	}
+	return nil
+}
+
+// mergeLots убирает удаляемые лоты и применяет целевые (замена или добавление).
+func mergeLots(lots []stock.Lot, pl *replacePlan) []stock.Lot {
+	out := lots[:0]
+	for _, l := range lots {
+		if containsTime(pl.deletes, l.BestBefore) {
+			continue
+		}
+		out = append(out, l)
+	}
+	for _, lot := range pl.upserts {
+		idx := -1
+		for j := range out {
+			if out[j].BestBefore.Equal(lot.BestBefore) {
+				idx = j
+				break
+			}
+		}
+		if idx >= 0 {
+			out[idx] = lot
+		} else {
+			out = append(out, lot)
+		}
+	}
+	sort.Slice(out, func(a, b int) bool { return out[a].BestBefore.Before(out[b].BestBefore) })
+	return out
+}
+
+// publishReplaceEvents рассылает события замены: lot_delete для удалённых
+// лотов, lot_upsert для целевых.
+func (uc *StockUseCase) publishReplaceEvents(order []string, plans []replacePlan) {
+	if uc.pub == nil {
+		return
+	}
+	for i := range plans {
+		pid := order[i]
+		for _, bb := range plans[i].deletes {
+			uc.pub.PublishStockChange(stock.Event{Kind: stock.EventLotDelete, ProductID: pid, BestBefore: bb})
+		}
+		for j := range plans[i].upserts {
+			lot := plans[i].upserts[j]
+			uc.pub.PublishStockChange(stock.Event{Kind: stock.EventLotUpsert, ProductID: pid, Lot: &lot})
+		}
+	}
+}
+
+// normalizeDate приводит дату к UTC-полуночи: единое представление DATE
+// для ключей map и сравнений, независимо от зоны источника (БД, innercode).
+func normalizeDate(t time.Time) time.Time {
+	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
+}
+
+// containsTime проверяет наличие даты в отсортированном списке.
+func containsTime(list []time.Time, t time.Time) bool {
+	for _, v := range list {
+		if v.Equal(t) {
+			return true
+		}
+	}
+	return false
 }
 
 // findLot ищет лот по сроку годности в товаре (без блокировок — вызывает

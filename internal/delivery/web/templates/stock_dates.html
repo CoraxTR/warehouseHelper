@@ -37,6 +37,14 @@
             background: #0056b3;
         }
 
+        .top-actions .btn-green {
+            background: #1a7f37;
+        }
+
+        .top-actions .btn-green:hover {
+            background: #14642d;
+        }
+
         #ws-status {
             position: absolute;
             right: 4px;
@@ -77,11 +85,17 @@
             font-weight: bold;
             text-align: left;
             padding: 6px 8px;
+            cursor: pointer;
         }
 
         td.col-name {
             white-space: nowrap;
             min-width: 180px;
+            cursor: pointer;
+        }
+
+        td.col-name:hover {
+            background: #eef4ff;
         }
 
         td.cell-pair {
@@ -93,6 +107,11 @@
 
         td.cell-pair.has-discount {
             background: #ffe066;
+        }
+
+        /* Срок годности заканчивается сегодня — пора замораживать (перебивает жёлтую скидочную). */
+        td.cell-pair.expires-today {
+            background: #b3e5fc;
         }
 
         td.cell-pair:hover {
@@ -201,6 +220,7 @@
         <h1>{{if .ShortList}}Шорт-лист{{else}}Сроки{{end}}</h1>
         <div class="top-actions">
             {{if .ShortList}}<a class="btn" href="/ms/dates">← Сроки</a>{{else}}<a class="btn" href="/ms/dates/short">Шорт-лист</a>{{end}}
+            <a class="btn btn-green" href="/ms/dates/update">Обновить сроки</a>
         </div>
         <div id="ws-status">подключение…</div>
     </div>
@@ -232,6 +252,7 @@
         };
 
         var MODAL = { productID: null, bb: null };
+        var UPDATE_CTX = null; // контекст кнопки «Обновить сроки …» в модалке
 
         function initStock() {
             STOCK.shortList = (document.body.getAttribute('data-short') === '1');
@@ -240,6 +261,18 @@
             overlay.addEventListener('click', function (ev) {
                 if (ev.target === overlay) {
                     closeModal();
+                }
+            });
+            // Кнопка «Обновить сроки …» в модалке (делегирование, без inline-обработчиков с данными).
+            var mc = document.getElementById('modal-content');
+            mc.addEventListener('click', function (ev) {
+                var t = ev.target || ev.srcElement;
+                while (t && t !== mc) {
+                    if (t.getAttribute && t.getAttribute('data-update') === '1') {
+                        goUpdate();
+                        return;
+                    }
+                    t = t.parentNode;
                 }
             });
             connect();
@@ -417,7 +450,7 @@
             for (i = 0; i < prods.length; i++) {
                 var g = prods[i].group_name || 'Без группы';
                 if (g !== lastGroup) {
-                    html += '<tr class="group-row"><td colspan="' + colspan + '">' + esc(g) + '</td></tr>';
+                    html += '<tr class="group-row"><td colspan="' + colspan + '" data-role="group" data-group="' + esc(prods[i].group_name || '') + '">' + esc(g) + '</td></tr>';
                     lastGroup = g;
                 }
                 html += productRow(prods[i], n);
@@ -428,13 +461,14 @@
         function productRow(p, n) {
             var lots = visibleLots(p);
             var html = '<tr>';
-            html += '<td class="col-name">' + esc(p.name) + '</td>';
+            html += '<td class="col-name" data-role="name" data-product="' + esc(p.id) + '">' + esc(p.name) + '</td>';
             for (var k = 0; k < n; k++) {
                 if (k < lots.length) {
                     var lot = lots[k];
                     var yellow = hasDiscount(lot) ? ' has-discount' : '';
-                    html += '<td class="cell-pair' + yellow + '" data-lot="1" data-product="' + esc(p.id) + '" data-bb="' + lot.best_before + '" data-field="qty">' + lot.qty + '</td>';
-                    html += '<td class="cell-pair' + yellow + '" data-lot="1" data-product="' + esc(p.id) + '" data-bb="' + lot.best_before + '" data-field="date">' + fmtDate(lot.best_before) + '</td>';
+                    var blue = expiresToday(lot.best_before) ? ' expires-today' : '';
+                    html += '<td class="cell-pair' + yellow + blue + '" data-lot="1" data-product="' + esc(p.id) + '" data-bb="' + lot.best_before + '" data-field="qty">' + lot.qty + '</td>';
+                    html += '<td class="cell-pair' + yellow + blue + '" data-lot="1" data-product="' + esc(p.id) + '" data-bb="' + lot.best_before + '" data-field="date">' + fmtDate(lot.best_before) + '</td>';
                 } else {
                     html += '<td class="cell-empty"></td><td class="cell-empty"></td>';
                 }
@@ -443,6 +477,18 @@
             html += '<td class="cell-discount">' + fmtDiscount(rightDiscount(lots, 'telegram')) + '</td>';
             html += '</tr>';
             return html;
+        }
+
+        // Срок годности заканчивается сегодня (локальная дата склада) — подсветить «на заморозку».
+        function expiresToday(bb) {
+            return String(bb).slice(0, 10) === todayStr();
+        }
+
+        function todayStr() {
+            var d = new Date();
+            var m = d.getMonth() + 1;
+            var day = d.getDate();
+            return d.getFullYear() + '-' + (m < 10 ? '0' + m : m) + '-' + (day < 10 ? '0' + day : day);
         }
 
         // Жёлтая подсветка: у пары задана любая скидка (ручная или «просто»).
@@ -497,16 +543,27 @@
         function onBodyClick(ev) {
             var el = ev.target || ev.srcElement;
             while (el && el !== this && el.nodeType === 1) {
-                if (el.getAttribute && el.getAttribute('data-lot') === '1') {
-                    var field = el.getAttribute('data-field');
-                    var productID = el.getAttribute('data-product');
-                    var bb = el.getAttribute('data-bb');
-                    if (field === 'qty') {
-                        openDiscountModal(productID, bb);
-                    } else if (field === 'date') {
-                        openDateModal(productID, bb);
+                if (el.getAttribute) {
+                    var role = el.getAttribute('data-role');
+                    if (role === 'name') {
+                        openNameModal(el.getAttribute('data-product'));
+                        return;
                     }
-                    return;
+                    if (role === 'group') {
+                        openGroupModal(el.getAttribute('data-group'));
+                        return;
+                    }
+                    if (el.getAttribute('data-lot') === '1') {
+                        var field = el.getAttribute('data-field');
+                        var productID = el.getAttribute('data-product');
+                        var bb = el.getAttribute('data-bb');
+                        if (field === 'qty') {
+                            openDiscountModal(productID, bb);
+                        } else if (field === 'date') {
+                            openDateModal(productID, bb);
+                        }
+                        return;
+                    }
                 }
                 el = el.parentNode;
             }
@@ -524,6 +581,7 @@
             document.getElementById('modal-content').innerHTML = '';
             MODAL.productID = null;
             MODAL.bb = null;
+            UPDATE_CTX = null;
         }
 
         // Клик по количеству: факт (текущая скидка) / Ставим (ручная).
@@ -614,6 +672,59 @@
             html += '<button type="button" onclick="closeModal()">Закрыть</button>';
             html += '</div>';
             showModal(html);
+        }
+
+        // Клик по названию: обновить сроки одной позиции (ограничение — код товара).
+        function openNameModal(productID) {
+            var p = findProduct(productID);
+            if (!p) {
+                return;
+            }
+            UPDATE_CTX = { kind: 'product', id: p.id, name: p.name, code: p.internal_code || '' };
+            var html = '<div class="modal-title">' + esc(p.name) + '</div>';
+            if (p.internal_code) {
+                html += '<div class="modal-line">Код: ' + esc(p.internal_code) + '</div>';
+            }
+            html += '<div class="modal-actions">';
+            html += '<button type="button" onclick="closeModal()">Отмена</button>';
+            html += '<button type="button" data-update="1">Обновить сроки ' + esc(p.name) + '</button>';
+            html += '</div>';
+            showModal(html);
+        }
+
+        // Клик по группе: обновить сроки группы (ограничение — 3 цифры кода группы).
+        function openGroupModal(groupName) {
+            var code = groupCode(groupName);
+            if (!code) {
+                return; // в названии нет номера группы — обновление по группе недоступно
+            }
+            var display = groupName || 'Без группы';
+            UPDATE_CTX = { kind: 'group', code: code, name: display };
+            var html = '<div class="modal-title">' + esc(display) + '</div>';
+            html += '<div class="modal-line">Группа: ' + code + '</div>';
+            html += '<div class="modal-actions">';
+            html += '<button type="button" onclick="closeModal()">Отмена</button>';
+            html += '<button type="button" data-update="1">Обновить сроки ' + esc(display) + '</button>';
+            html += '</div>';
+            showModal(html);
+        }
+
+        // Первые 3 цифры названия группы — номер группы в internal_code (индексы 1..3).
+        function groupCode(name) {
+            var m = /^(\d{3})/.exec(name || '');
+            return m ? m[1] : null;
+        }
+
+        function goUpdate() {
+            closeModal();
+            var c = UPDATE_CTX;
+            if (!c) {
+                return;
+            }
+            var url = (c.kind === 'product')
+                ? '/ms/dates/update?product_id=' + encodeURIComponent(c.id)
+                : '/ms/dates/update?group=' + encodeURIComponent(c.code);
+            window.location.href = url;
         }
 
         function findLot(p, bb) {
