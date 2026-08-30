@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"warehouseHelper/internal/domain"
 	msu "warehouseHelper/internal/mssuppliers/usecase"
@@ -48,6 +49,7 @@ type SupplierFormData struct {
 	DelayDaysText        string
 	SpecialDelayDaysText string
 	MinOrderAmountText   string
+	OrderCutoffTimeText  string // "HH:MM" или пусто
 
 	Barcodes []receiving.BarcodeRef // виджет «Внешние коды» (приёмка)
 
@@ -191,6 +193,10 @@ func (h *Handler) SupplierSave(w http.ResponseWriter, r *http.Request) {
 		h.renderSupplierForm(w, buildSupplierFormData(s, isEdit, rawID, err.Error()))
 		return
 	}
+	if s.OrderCutoffTime, err = parseCutoffTime(r.FormValue("order_cutoff_time")); err != nil {
+		h.renderSupplierForm(w, buildSupplierFormData(s, isEdit, rawID, err.Error()))
+		return
+	}
 
 	if isEdit {
 		err = h.msUC.Update(r.Context(), s)
@@ -266,6 +272,9 @@ func buildSupplierFormData(s *domain.Supplier, isEdit bool, rawID, errMsg string
 	}
 	if s.MinOrderAmount != nil {
 		d.MinOrderAmountText = kopecksToRubles(*s.MinOrderAmount)
+	}
+	if s.OrderCutoffTime != nil {
+		d.OrderCutoffTimeText = s.OrderCutoffTime.Format("15:04")
 	}
 
 	return d
@@ -347,4 +356,21 @@ func kopecksToRubles(k int64) string {
 		return strconv.FormatInt(rub, 10)
 	}
 	return fmt.Sprintf("%d.%02d", rub, kop)
+}
+
+// parseCutoffTime разбирает время дедлайна заказа из формы ("HH:MM").
+// Пустая строка — nil (не задано).
+func parseCutoffTime(v string) (*time.Time, error) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		//nolint:nilnil // контракт: пустая строка = отсутствующее значение
+		return nil, nil
+	}
+	t, err := time.Parse("15:04", v)
+	if err != nil {
+		return nil, fmt.Errorf("время дедлайна заказа %q — ожидается формат ЧЧ:ММ, например 14:00", v)
+	}
+	// Нормализуем к фиксированной дате — в БД хранится только время (TIME).
+	norm := time.Date(2000, time.January, 1, t.Hour(), t.Minute(), 0, 0, time.UTC)
+	return &norm, nil
 }

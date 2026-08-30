@@ -1,6 +1,9 @@
 package domain
 
-import "errors"
+import (
+	"errors"
+	"time"
+)
 
 // ErrSupplierExists — поставщик с таким id уже существует (создание вместо редактирования).
 var ErrSupplierExists = errors.New("поставщик с таким id уже существует")
@@ -24,6 +27,10 @@ type Supplier struct {
 	DeliveryDays   []int16 // дни доставки, 1..7
 	DelayDays      *int16  // макс. дней между заказом и доставкой; nil — не задано
 	MinOrderAmount *int64  // минимальная сумма заказа, копейки; nil — не задана
+
+	// OrderCutoffTime — время, до которого можно сделать заказ в дни заказа;
+	// общее для обычного и спец. расписания; nil — не задано.
+	OrderCutoffTime *time.Time
 
 	// Спец. расписание (для товаров с special_schedule = true).
 	SpecialOrderDays    []int16 // дни заказа, 1..7

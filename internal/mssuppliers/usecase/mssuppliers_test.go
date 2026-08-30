@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"warehouseHelper/internal/domain"
 )
@@ -164,6 +165,26 @@ func TestCreate_HappyPath(t *testing.T) {
 	}
 	if len(got.OrderDays) != 2 || got.OrderDays[0] != 1 || got.OrderDays[1] != 3 {
 		t.Fatalf("OrderDays = %v, want [1 3] (дубли убраны, сортировка)", got.OrderDays)
+	}
+}
+
+func TestCreate_CutoffTimeRoundTrip(t *testing.T) {
+	repo := newFakeRepo()
+	uc := newUC(repo, nil, nil)
+
+	cutoff := time.Date(2000, time.January, 1, 14, 0, 0, 0, time.UTC)
+	s := validSupplier()
+	s.OrderCutoffTime = &cutoff
+	if err := uc.Create(context.Background(), s); err != nil {
+		t.Fatalf("Create error: %v", err)
+	}
+
+	got, err := uc.Get(context.Background(), testUUID)
+	if err != nil {
+		t.Fatalf("Get error: %v", err)
+	}
+	if got.OrderCutoffTime == nil || got.OrderCutoffTime.Hour() != 14 || got.OrderCutoffTime.Minute() != 0 {
+		t.Fatalf("OrderCutoffTime = %v, want 14:00", got.OrderCutoffTime)
 	}
 }
 
