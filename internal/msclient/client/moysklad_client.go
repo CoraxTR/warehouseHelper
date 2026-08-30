@@ -1005,6 +1005,121 @@ func (msac *MSAPIClient) entityEndpoint(parts ...string) (string, error) {
 	return base.String(), nil
 }
 
+// profitPageLimit — размер страницы при пагинации отчёта прибыльности.
+const profitPageLimit = 1000
+
+// FetchProfitTurnover — продажи по товарам за период из отчёта прибыльности
+// (GET /report/profit/byproduct). Строки ответа — по товарам с продажами за
+// [from, to] (период в строке отсутствует: interval не разбивает на подпериоды,
+// проверено на живом API). Пагинация по offset (паттерн FetchProductFolders).
+// Фильтр: пачка товаров (ProductIDs) или группа (ProductFolderHref); ни один не
+// задан — все товары (тяжело: 237+ строк на месяц, точечные запросы — дефолт).
+// Рейт-лимит — воркерпул (SubmitOther), напрямую к МС не ходим.
+func (msac *MSAPIClient) FetchProfitTurnover(parentctx context.Context, from, to time.Time, interval string, filter ProfitFilter) ([]ProfitRow, error) {
+	job := func(apiKey string) (any, error) {
+		ctx, cancel := context.WithTimeout(parentctx, 300*time.Second)
+		defer cancel()
+
+		var rows []ProfitRow
+
+		for offset := 0; ; offset += profitPageLimit {
+			// Отмена контекста между страницами: не тратим запрос, если родитель уже отменил.
+			if err := parentctx.Err(); err != nil {
+				return nil, err
+			}
+
+			endpoint, err := msac.profitReportEndpoint(interval, from, to, filter, offset, profitPageLimit)
+			if err != nil {
+				return nil, err
+			}
+
+			body, resp, err := msac.httpRequest(ctx, http.MethodGet, endpoint, apiKey, http.NoBody)
+			if err != nil {
+				select {
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				default:
+					return nil, err
+				}
+			}
+
+			err = resp.Body.Close()
+			if err != nil {
+				log.Printf("failed to close response body: %v", err)
+			}
+
+			if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+				return nil, msAPIError(resp.Status, body)
+			}
+
+			var report ProfitReport
+			if err := json.Unmarshal(body, &report); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal profit report: %w", err)
+			}
+
+			rows = append(rows, report.Rows...)
+
+			if offset+profitPageLimit >= report.Meta.Size {
+				break
+			}
+		}
+
+		return rows, nil
+	}
+
+	resCh := msac.workerpool.SubmitOther(job)
+
+	select {
+	case res := <-resCh:
+		if res.Err != nil {
+			return nil, fmt.Errorf("FetchProfitTurnover failed: %w", res.Err)
+		}
+
+		rows, ok := res.Value.([]ProfitRow)
+		if !ok {
+			return nil, errors.New("FetchProfitTurnover failed: unexpected value type")
+		}
+
+		return rows, nil
+	case <-parentctx.Done():
+		return nil, parentctx.Err()
+	}
+}
+
+// profitReportEndpoint — URL отчёта прибыльности за период с фильтром и пагинацией.
+// URLstart заканчивается на /entity/ — для отчёта сегмент заменяется на /report/.
+// Фильтр собирается полными href'ами (filter принимает href, НЕ id — проверено).
+func (msac *MSAPIClient) profitReportEndpoint(interval string, from, to time.Time, filter ProfitFilter, offset, limit int) (string, error) {
+	base, err := url.Parse(msac.msConfig.URLstart)
+	if err != nil {
+		return "", fmt.Errorf("failed to parse MS API base URL: %w", err)
+	}
+
+	base.Path = strings.Replace(base.Path, "/entity/", "/report/", 1) + "profit/byproduct"
+
+	q := base.Query()
+	q.Set("interval", interval)
+	q.Set("momentFrom", from.Format("2006-01-02 15:04:05"))
+	q.Set("momentTo", to.Format("2006-01-02 15:04:05"))
+
+	switch {
+	case len(filter.ProductIDs) > 0:
+		parts := make([]string, 0, len(filter.ProductIDs))
+		for _, id := range filter.ProductIDs {
+			parts = append(parts, "product="+msac.refHref("product", id))
+		}
+		q.Set("filter", strings.Join(parts, ";"))
+	case filter.ProductFolderID != "":
+		q.Set("filter", "productFolder="+msac.refHref("productfolder", filter.ProductFolderID))
+	}
+
+	q.Set("limit", strconv.Itoa(limit))
+	q.Set("offset", strconv.Itoa(offset))
+	base.RawQuery = q.Encode()
+
+	return base.String(), nil
+}
+
 // productFolderPageLimit — размер страницы при пагинации папок товаров.
 const productFolderPageLimit = 1000
 
