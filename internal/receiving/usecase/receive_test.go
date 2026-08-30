@@ -105,10 +105,10 @@ func testCacheRepo() *stubReceiveRepo {
 	}
 }
 
-func newTestReceive() (*ReceivingUseCase, *stubReceiveRepo, *stubStockAccepter) {
+func newTestReceive() (*ReceivingUseCase, *stubStockAccepter) {
 	repo := testCacheRepo()
 	stock := &stubStockAccepter{}
-	return NewReceivingUseCase(repo, stock, &stubWeightRecorder{}), repo, stock
+	return NewReceivingUseCase(repo, stock, &stubWeightRecorder{}), stock
 }
 
 func d(y int, m time.Month, day int) time.Time {
@@ -118,7 +118,7 @@ func d(y int, m time.Month, day int) time.Time {
 // --- тесты ---
 
 func TestGetCache(t *testing.T) {
-	uc, _, _ := newTestReceive()
+	uc, _ := newTestReceive()
 
 	cache, err := uc.GetCache(context.Background(), "sup-1")
 	if err != nil {
@@ -136,7 +136,7 @@ func TestGetCache(t *testing.T) {
 }
 
 func TestResolveInternalItem(t *testing.T) {
-	uc, _, _ := newTestReceive()
+	uc, _ := newTestReceive()
 	cache, _ := uc.GetCache(context.Background(), "sup-1")
 
 	s, err := uc.Resolve(context.Background(), cache, receiving.ScanEntry{Raw: itemBarcode})
@@ -155,7 +155,7 @@ func TestResolveInternalItem(t *testing.T) {
 }
 
 func TestResolveInternalBox(t *testing.T) {
-	uc, _, _ := newTestReceive()
+	uc, _ := newTestReceive()
 	cache, _ := uc.GetCache(context.Background(), "sup-1")
 
 	s, err := uc.Resolve(context.Background(), cache, receiving.ScanEntry{Raw: boxBarcode})
@@ -174,7 +174,7 @@ func TestResolveInternalBox(t *testing.T) {
 }
 
 func TestResolveExternalItem(t *testing.T) {
-	uc, _, _ := newTestReceive()
+	uc, _ := newTestReceive()
 	cache, _ := uc.GetCache(context.Background(), "sup-1")
 
 	s, err := uc.Resolve(context.Background(), cache, receiving.ScanEntry{Raw: extBarcode})
@@ -190,7 +190,7 @@ func TestResolveExternalItem(t *testing.T) {
 }
 
 func TestResolveExternalCodeNotMapped(t *testing.T) {
-	uc, _, _ := newTestReceive()
+	uc, _ := newTestReceive()
 	cache, _ := uc.GetCache(context.Background(), "sup-1")
 
 	// Код не заведён у поставщика: правильная длина, но нет в маппинге.
@@ -202,7 +202,7 @@ func TestResolveExternalCodeNotMapped(t *testing.T) {
 }
 
 func TestResolveManualProduct(t *testing.T) {
-	uc, _, _ := newTestReceive()
+	uc, _ := newTestReceive()
 	repo, ok := uc.repo.(*stubReceiveRepo)
 	if !ok {
 		t.Fatal("ожидался stubReceiveRepo")
@@ -220,7 +220,7 @@ func TestResolveManualProduct(t *testing.T) {
 }
 
 func TestResolveUnknown(t *testing.T) {
-	uc, _, _ := newTestReceive()
+	uc, _ := newTestReceive()
 	cache, _ := uc.GetCache(context.Background(), "sup-1")
 
 	_, err := uc.Resolve(context.Background(), cache, receiving.ScanEntry{Raw: "12345"})
@@ -230,7 +230,7 @@ func TestResolveUnknown(t *testing.T) {
 }
 
 func TestSave(t *testing.T) {
-	uc, _, stock := newTestReceive()
+	uc, stock := newTestReceive()
 
 	res, err := uc.Save(context.Background(), receiving.SaveRequest{
 		SupplierID: "sup-1",
@@ -270,7 +270,7 @@ func TestSave(t *testing.T) {
 }
 
 func TestSaveWeightSyncWarnings(t *testing.T) {
-	uc, _, _ := newTestReceive()
+	uc, _ := newTestReceive()
 
 	// Модуль среднего веса вернул предупреждения синков — приёмка проходит,
 	// предупреждения уходят в отчёт с именем товара вместо id.
@@ -296,7 +296,7 @@ func TestSaveWeightSyncWarnings(t *testing.T) {
 }
 
 func TestSaveWeightRecorderFailure(t *testing.T) {
-	uc, _, _ := newTestReceive()
+	uc, _ := newTestReceive()
 
 	// Ядро модуля среднего веса (запись весов) упало — Save падает целиком.
 	weights, ok := uc.weights.(*stubWeightRecorder)
@@ -315,7 +315,7 @@ func TestSaveWeightRecorderFailure(t *testing.T) {
 }
 
 func TestSaveBoxMismatch(t *testing.T) {
-	uc, _, _ := newTestReceive()
+	uc, _ := newTestReceive()
 
 	// Коробка заявляет 10 вложений по 250 г (2.5 кг), внутри — только 2 куска.
 	res, err := uc.Save(context.Background(), receiving.SaveRequest{
@@ -349,7 +349,7 @@ func TestSaveBoxMismatch(t *testing.T) {
 }
 
 func TestSaveBoxDifferentProducts(t *testing.T) {
-	uc, _, _ := newTestReceive()
+	uc, _ := newTestReceive()
 
 	_, err := uc.Save(context.Background(), receiving.SaveRequest{
 		SupplierID: "sup-1",
@@ -369,7 +369,7 @@ func TestSaveBoxDifferentProducts(t *testing.T) {
 }
 
 func TestSaveMissingBestBefore(t *testing.T) {
-	uc, _, _ := newTestReceive()
+	uc, _ := newTestReceive()
 
 	// Правило без срока годности и без ручного ввода → ошибка.
 	repo, ok := uc.repo.(*stubReceiveRepo)

@@ -86,17 +86,24 @@ func (s *stubWikiUpdater) UpdateProductAverageWeight(_ context.Context, productI
 
 // --- фикстуры ---
 
-func newTestUseCase() (*UseCase, *stubAvgRepo, *stubProductUpdater, *stubWikiUpdater) {
+// testEnv — стабы одного теста (repo + оба синка).
+type testEnv struct {
+	repo     *stubAvgRepo
+	products *stubProductUpdater
+	wiki     *stubWikiUpdater
+}
+
+func newTestUseCase() (*UseCase, *testEnv) {
 	repo := &stubAvgRepo{avgBy: map[string]float64{"p1": 250, "p2": 1000}}
 	products := &stubProductUpdater{}
 	wiki := &stubWikiUpdater{}
-	return NewUseCase(repo, products, wiki, 100), repo, products, wiki
+	return NewUseCase(repo, products, wiki, 100), &testEnv{repo: repo, products: products, wiki: wiki}
 }
 
 // --- тесты ---
 
 func TestRecordWeights(t *testing.T) {
-	uc, repo, products, wiki := newTestUseCase()
+	uc, env := newTestUseCase()
 
 	warnings, err := uc.RecordWeights(context.Background(), []avgweight.WeightRow{
 		{ProductID: "p1", WeightG: 250},
@@ -111,56 +118,56 @@ func TestRecordWeights(t *testing.T) {
 	}
 
 	// Все веса записаны поштучно, одной партией.
-	if len(repo.inserted) != 3 {
-		t.Fatalf("записано весов: %d, want 3", len(repo.inserted))
+	if len(env.repo.inserted) != 3 {
+		t.Fatalf("записано весов: %d, want 3", len(env.repo.inserted))
 	}
 
 	// Trim по уникальным товарам партии с лимитом.
-	if len(repo.trimmed) != 2 || repo.trimmed["p1"] != 100 || repo.trimmed["p2"] != 100 {
-		t.Fatalf("trim: %+v", repo.trimmed)
+	if len(env.repo.trimmed) != 2 || env.repo.trimmed["p1"] != 100 || env.repo.trimmed["p2"] != 100 {
+		t.Fatalf("trim: %+v", env.repo.trimmed)
 	}
 
 	// Каталог: среднее в кг (граммы → /1000).
-	if len(products.updated) != 2 {
-		t.Fatalf("каталог обновлён: %d, want 2", len(products.updated))
+	if len(env.products.updated) != 2 {
+		t.Fatalf("каталог обновлён: %d, want 2", len(env.products.updated))
 	}
-	if products.updated[0].ProductID != "p1" || products.updated[0].AvgKg != 0.25 {
-		t.Fatalf("каталог p1: %+v", products.updated[0])
+	if env.products.updated[0].ProductID != "p1" || env.products.updated[0].AvgKg != 0.25 {
+		t.Fatalf("каталог p1: %+v", env.products.updated[0])
 	}
-	if products.updated[1].ProductID != "p2" || products.updated[1].AvgKg != 1.0 {
-		t.Fatalf("каталог p2: %+v", products.updated[1])
+	if env.products.updated[1].ProductID != "p2" || env.products.updated[1].AvgKg != 1.0 {
+		t.Fatalf("каталог p2: %+v", env.products.updated[1])
 	}
 
 	// Вики: то же значение строкой (кг).
-	if len(wiki.updated) != 2 {
-		t.Fatalf("вики обновлена: %d, want 2", len(wiki.updated))
+	if len(env.wiki.updated) != 2 {
+		t.Fatalf("вики обновлена: %d, want 2", len(env.wiki.updated))
 	}
-	if wiki.updated[0].ProductID != "p1" || wiki.updated[0].AverageWeight != "0.25" {
-		t.Fatalf("вики p1: %+v", wiki.updated[0])
+	if env.wiki.updated[0].ProductID != "p1" || env.wiki.updated[0].AverageWeight != "0.25" {
+		t.Fatalf("вики p1: %+v", env.wiki.updated[0])
 	}
-	if wiki.updated[1].ProductID != "p2" || wiki.updated[1].AverageWeight != "1" {
-		t.Fatalf("вики p2: %+v", wiki.updated[1])
+	if env.wiki.updated[1].ProductID != "p2" || env.wiki.updated[1].AverageWeight != "1" {
+		t.Fatalf("вики p2: %+v", env.wiki.updated[1])
 	}
 }
 
 func TestRecordWeightsEmpty(t *testing.T) {
-	uc, repo, products, wiki := newTestUseCase()
+	uc, env := newTestUseCase()
 
 	warnings, err := uc.RecordWeights(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("RecordWeights: %v", err)
 	}
-	if warnings != nil || repo.inserted != nil || repo.trimmed != nil {
-		t.Fatalf("пустая партия не должна ничего делать: %+v %+v", repo.inserted, repo.trimmed)
+	if warnings != nil || env.repo.inserted != nil || env.repo.trimmed != nil {
+		t.Fatalf("пустая партия не должна ничего делать: %+v %+v", env.repo.inserted, env.repo.trimmed)
 	}
-	if products.updated != nil || wiki.updated != nil {
-		t.Fatalf("пустая партия не должна трогать синки")
+	if env.products.updated != nil || env.wiki.updated != nil {
+		t.Fatal("пустая партия не должна трогать синки")
 	}
 }
 
 func TestRecordWeightsInsertFailure(t *testing.T) {
-	uc, repo, _, _ := newTestUseCase()
-	repo.insertErr = errors.New("база недоступна")
+	uc, env := newTestUseCase()
+	env.repo.insertErr = errors.New("база недоступна")
 
 	_, err := uc.RecordWeights(context.Background(), []avgweight.WeightRow{
 		{ProductID: "p1", WeightG: 250},
@@ -168,14 +175,14 @@ func TestRecordWeightsInsertFailure(t *testing.T) {
 	if err == nil {
 		t.Fatal("ожидалась ошибка записи")
 	}
-	if repo.trimmed != nil {
-		t.Fatalf("trim не должен вызываться при падении INSERT: %+v", repo.trimmed)
+	if env.repo.trimmed != nil {
+		t.Fatalf("trim не должен вызываться при падении INSERT: %+v", env.repo.trimmed)
 	}
 }
 
 func TestRecordWeightsTrimFailure(t *testing.T) {
-	uc, repo, products, _ := newTestUseCase()
-	repo.trimErr = errors.New("конфликт блокировок")
+	uc, env := newTestUseCase()
+	env.repo.trimErr = errors.New("конфликт блокировок")
 
 	_, err := uc.RecordWeights(context.Background(), []avgweight.WeightRow{
 		{ProductID: "p1", WeightG: 250},
@@ -183,14 +190,14 @@ func TestRecordWeightsTrimFailure(t *testing.T) {
 	if err == nil {
 		t.Fatal("ожидалась ошибка trim")
 	}
-	if products.updated != nil {
-		t.Fatalf("каталог не должен обновляться при падении trim")
+	if env.products.updated != nil {
+		t.Fatal("каталог не должен обновляться при падении trim")
 	}
 }
 
 func TestRecordWeightsAvgFailure(t *testing.T) {
-	uc, repo, products, wiki := newTestUseCase()
-	repo.avgErr = errors.New("чтение не удалось")
+	uc, env := newTestUseCase()
+	env.repo.avgErr = errors.New("чтение не удалось")
 
 	_, err := uc.RecordWeights(context.Background(), []avgweight.WeightRow{
 		{ProductID: "p1", WeightG: 250},
@@ -198,15 +205,15 @@ func TestRecordWeightsAvgFailure(t *testing.T) {
 	if err == nil {
 		t.Fatal("ожидалась ошибка расчёта среднего")
 	}
-	if products.updated != nil || wiki.updated != nil {
-		t.Fatalf("синки не должны вызываться без среднего")
+	if env.products.updated != nil || env.wiki.updated != nil {
+		t.Fatal("синки не должны вызываться без среднего")
 	}
 }
 
 func TestRecordWeightsSyncWarnings(t *testing.T) {
-	uc, _, products, wiki := newTestUseCase()
-	products.err = errors.New("товар не найден в каталоге")
-	wiki.err = errors.New("страница занята")
+	uc, env := newTestUseCase()
+	env.products.err = errors.New("товар не найден в каталоге")
+	env.wiki.err = errors.New("страница занята")
 
 	warnings, err := uc.RecordWeights(context.Background(), []avgweight.WeightRow{
 		{ProductID: "p1", WeightG: 250},
@@ -218,8 +225,8 @@ func TestRecordWeightsSyncWarnings(t *testing.T) {
 		t.Fatalf("предупреждений: %d, want 2 (%v)", len(warnings), warnings)
 	}
 	// Оба синка пытались (каталог упал — вики всё равно вызвана).
-	if len(products.updated) != 0 || len(wiki.updated) != 0 {
-		t.Fatalf("упавшие синки не записывают вызовы")
+	if len(env.products.updated) != 0 || len(env.wiki.updated) != 0 {
+		t.Fatal("упавшие синки не записывают вызовы")
 	}
 }
 

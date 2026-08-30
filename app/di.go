@@ -299,7 +299,7 @@ func (d *DIContainer) ReceiveBarcodes() *rucase.BarcodeEditor {
 // GoodsUC — aucase.ProductWeightUpdater, WikiUC — aucase.WikiWeightUpdater.
 func (d *DIContainer) AvgWeightUC() *aucase.UseCase {
 	if d.avgWeightUC == nil {
-		d.avgWeightUC = aucase.NewUseCase(d.OrdersRepository(), d.GoodsUC(), d.WikiUC(), d.Config().AppConfig.WeightsHistoryLimit)
+		d.avgWeightUC = aucase.NewUseCase(d.OrdersRepository(), d.GoodsUC(), d.WikiUC(), d.Config().WeightsHistoryLimit)
 	}
 
 	return d.avgWeightUC
