@@ -76,6 +76,53 @@
             font-weight: normal;
             font-size: 13px;
         }
+
+        .barcodes-widget {
+            margin-top: 24px;
+            text-align: center;
+        }
+
+        .barcodes-toggle {
+            background-color: #6c757d;
+        }
+
+        .barcodes-toggle:hover {
+            background-color: #565e64;
+        }
+
+        .barcodes-table {
+            margin: 12px auto;
+            border-collapse: collapse;
+            font-size: 14px;
+        }
+
+        .barcodes-table th,
+        .barcodes-table td {
+            border: 1px solid #ccc;
+            padding: 6px 10px;
+            text-align: left;
+        }
+
+        .barcodes-add {
+            margin-top: 12px;
+            text-align: left;
+        }
+
+        .product-hit {
+            padding: 6px 8px;
+            cursor: pointer;
+            border-bottom: 1px solid #eee;
+        }
+
+        .product-hit:hover {
+            background-color: #eef4ff;
+        }
+
+        button.small {
+            padding: 4px 10px;
+            font-size: 13px;
+            margin-top: 0;
+        }
     </style>
 </head>
 
@@ -147,9 +194,117 @@
             <button type="submit" class="delete">Удалить поставщика</button>
         </div>
     </form>
+
+    <div class="barcodes-widget">
+        <button type="button" class="barcodes-toggle" onclick="toggleBarcodes()">
+            Внешние коды поставщика ({{len .Barcodes}})
+        </button>
+        <div id="barcodes-section" style="display:none;">
+            {{if .Barcodes}}
+            <table class="barcodes-table">
+                <tr><th>Внешний код</th><th>Товар</th><th></th></tr>
+                {{range .Barcodes}}
+                <tr>
+                    <td>{{.ExternalCode}}</td>
+                    <td>{{.ProductName}}</td>
+                    <td>
+                        <form method="POST" action="/ms/receive/barcodes/delete"
+                            onsubmit="return confirm('Удалить код {{.ExternalCode}}?');">
+                            <input type="hidden" name="supplier_id" value="{{$.Supplier.ID}}">
+                            <input type="hidden" name="external_code" value="{{.ExternalCode}}">
+                            <button type="submit" class="delete small">Удалить</button>
+                        </form>
+                    </td>
+                </tr>
+                {{end}}
+            </table>
+            {{else}}
+            <p class="readonly-hint">Связок нет. Добавьте внешний код товара поставщика — по нему приёмка распознает штрихкоды.</p>
+            {{end}}
+
+            <form method="POST" action="/ms/receive/barcodes/add" class="barcodes-add">
+                <input type="hidden" name="supplier_id" value="{{.Supplier.ID}}">
+                <label>Внешний код (базовая часть штрихкода, вручную)</label>
+                <input type="text" name="external_code" required placeholder="например 123456">
+                <label>Товар (поиск по названию или внутреннему коду)</label>
+                <input type="text" id="product-search" autocomplete="off" placeholder="введите 3+ символа">
+                <input type="hidden" name="product_id" id="product-id">
+                <div id="product-results"></div>
+                <button type="submit">Добавить</button>
+            </form>
+        </div>
+    </div>
     {{end}}
 
     <p style="text-align:center;"><a href="/ms/suppliers">← К списку поставщиков</a></p>
+
+    {{if .IsEdit}}
+    <script>
+        function toggleBarcodes() {
+            var section = document.getElementById('barcodes-section');
+            section.style.display = section.style.display === 'none' ? 'block' : 'none';
+        }
+
+        (function () {
+            var search = document.getElementById('product-search');
+            var results = document.getElementById('product-results');
+            var productID = document.getElementById('product-id');
+            var xhr = null;
+
+            function doSearch() {
+                var q = search.value.trim();
+                if (q.length < 3) {
+                    results.innerHTML = '';
+                    return;
+                }
+                if (xhr) {
+                    xhr.abort();
+                }
+                xhr = new XMLHttpRequest();
+                xhr.open('GET', '/goods/search/json?q=' + encodeURIComponent(q), true);
+                xhr.onreadystatechange = function () {
+                    if (xhr.readyState !== 4 || xhr.status !== 200) {
+                        return;
+                    }
+                    var items;
+                    try {
+                        items = JSON.parse(xhr.responseText);
+                    } catch (e) {
+                        return;
+                    }
+                    var html = '';
+                    for (var i = 0; i < items.length; i++) {
+                        html += '<div class="product-hit" data-id="' + items[i].id + '">' +
+                            items[i].name + ' <span class="readonly-hint">[' + items[i].internal_code + ']</span></div>';
+                    }
+                    results.innerHTML = html || '<div class="readonly-hint">Ничего не найдено</div>';
+                };
+                xhr.send();
+            }
+
+            var timer = null;
+            search.addEventListener('input', function () {
+                if (timer) {
+                    clearTimeout(timer);
+                }
+                timer = setTimeout(doSearch, 300);
+            });
+
+            results.addEventListener('click', function (e) {
+                var hit = e.target;
+                while (hit && hit !== results && !hit.getAttribute('data-id')) {
+                    hit = hit.parentNode;
+                }
+                if (!hit || hit === results) {
+                    return;
+                }
+                productID.value = hit.getAttribute('data-id');
+                search.value = hit.textContent.replace(/\[[^\]]*\]/, '').trim();
+                results.innerHTML = '';
+            });
+        })();
+    </script>
+    {{end}}
 </body>
 
 </html>
