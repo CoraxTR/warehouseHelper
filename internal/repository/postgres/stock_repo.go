@@ -218,3 +218,33 @@ func (pg *PGClient) ReplaceStockLots(ctx context.Context, writes []stock.Product
 
 	return nil
 }
+
+// AcceptStockLots добавляет принятые модулем приёмки партии в одной
+// транзакции: существующий срок увеличивается (qty +=), новый — новая
+// строка; produced_on — COALESCE (известная дата не затирается).
+func (pg *PGClient) AcceptStockLots(ctx context.Context, lots []stock.LotIn) error {
+	tx, err := pg.Pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("accept stock begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }() // после Commit — no-op
+
+	for _, l := range lots {
+		if _, err := tx.Exec(ctx, `
+            INSERT INTO product_stock (product_id, best_before, qty, produced_on)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (product_id, best_before) DO UPDATE SET
+                qty = product_stock.qty + EXCLUDED.qty,
+                produced_on = COALESCE(product_stock.produced_on, EXCLUDED.produced_on)`,
+			l.ProductID, l.BestBefore, l.Qty, l.ProducedOn,
+		); err != nil {
+			return fmt.Errorf("accept stock upsert (%s, %s): %w", l.ProductID, l.BestBefore.Format(time.DateOnly), err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("accept stock commit: %w", err)
+	}
+
+	return nil
+}

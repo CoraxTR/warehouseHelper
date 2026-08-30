@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 
@@ -11,10 +12,10 @@ import (
 )
 
 // LoadSupplierBarcodes возвращает все связки «внешний код → товар» поставщика
-// с именами товаров (для виджета на карточке поставщика).
+// с данными товаров (виджет поставщика и кеш приёмки).
 func (pg *PGClient) LoadSupplierBarcodes(ctx context.Context, supplierID string) ([]receiving.BarcodeRef, error) {
 	rows, err := pg.Pool.Query(ctx, `
-        SELECT psb.external_code, psb.product_id, p.name
+        SELECT psb.external_code, psb.product_id, p.name, p.internal_code, p.uom
         FROM product_supplier_barcodes psb
         JOIN products p ON p.id = psb.product_id
         WHERE psb.supplier_id = $1
@@ -27,11 +28,14 @@ func (pg *PGClient) LoadSupplierBarcodes(ctx context.Context, supplierID string)
 
 	out := make([]receiving.BarcodeRef, 0)
 	for rows.Next() {
-		var b receiving.BarcodeRef
-
-		if err := rows.Scan(&b.ExternalCode, &b.ProductID, &b.ProductName); err != nil {
+		var (
+			b   receiving.BarcodeRef
+			uom string
+		)
+		if err := rows.Scan(&b.ExternalCode, &b.ProductID, &b.ProductName, &b.InternalCode, &uom); err != nil {
 			return nil, err
 		}
+		b.Weighted = weightedUOM(uom)
 
 		out = append(out, b)
 	}
@@ -47,20 +51,24 @@ func (pg *PGClient) LoadSupplierBarcodes(ctx context.Context, supplierID string)
 //nolint:nilnil // контракт репозитория: (nil, nil) = связка не найдена
 func (pg *PGClient) GetSupplierBarcode(ctx context.Context, supplierID, externalCode string) (*receiving.BarcodeRef, error) {
 	row := pg.Pool.QueryRow(ctx, `
-        SELECT psb.external_code, psb.product_id, p.name
+        SELECT psb.external_code, psb.product_id, p.name, p.internal_code, p.uom
         FROM product_supplier_barcodes psb
         JOIN products p ON p.id = psb.product_id
         WHERE psb.supplier_id = $1 AND psb.external_code = $2
     `, supplierID, externalCode)
 
-	var b receiving.BarcodeRef
-	if err := row.Scan(&b.ExternalCode, &b.ProductID, &b.ProductName); err != nil {
+	var (
+		b   receiving.BarcodeRef
+		uom string
+	)
+	if err := row.Scan(&b.ExternalCode, &b.ProductID, &b.ProductName, &b.InternalCode, &uom); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
 		}
 
 		return nil, err
 	}
+	b.Weighted = weightedUOM(uom)
 
 	return &b, nil
 }
@@ -105,4 +113,96 @@ func (pg *PGClient) CountSupplierProductCodes(ctx context.Context, supplierID, p
 	}
 
 	return n, nil
+}
+
+// weightedUOM — весовой ли товар по единице измерения (тип учёта из uom).
+func weightedUOM(uom string) bool {
+	switch strings.ToLower(strings.TrimSpace(uom)) {
+	case "кг", "г", "т":
+		return true
+	default:
+		return false
+	}
+}
+
+// LoadCatalogProductsByCodes возвращает товары каталога по внутренним кодам
+// (для резолва внутренних штрих-кодов 29/33; имя с префиксом Catalog, чтобы
+// не конфликтовать со stock.LoadProductsByCodes — другой тип результата).
+func (pg *PGClient) LoadCatalogProductsByCodes(ctx context.Context, codes []string) (map[string]receiving.ProductRef, error) {
+	out := make(map[string]receiving.ProductRef, len(codes))
+	if len(codes) == 0 {
+		return out, nil
+	}
+
+	rows, err := pg.Pool.Query(ctx, `
+        SELECT id, internal_code, name, uom
+        FROM products
+        WHERE internal_code = ANY($1)
+    `, codes)
+	if err != nil {
+		return nil, fmt.Errorf("load products by codes: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			ref receiving.ProductRef
+			uom string
+		)
+		if err := rows.Scan(&ref.ProductID, &ref.InternalCode, &ref.Name, &uom); err != nil {
+			return nil, err
+		}
+		ref.Weighted = weightedUOM(uom)
+		out[ref.InternalCode] = ref
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return out, nil
+}
+
+// InsertReceivedWeights записывает веса принятых единиц (граммы).
+func (pg *PGClient) InsertReceivedWeights(ctx context.Context, rows []receiving.WeightRow) error {
+	if len(rows) == 0 {
+		return nil
+	}
+
+	tx, err := pg.Pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("received weights begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	for _, r := range rows {
+		if _, err := tx.Exec(ctx, `
+            INSERT INTO product_received_weights (product_id, weight)
+            VALUES ($1, $2)
+        `, r.ProductID, r.WeightG); err != nil {
+			return fmt.Errorf("insert received weight %s: %w", r.ProductID, err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("received weights commit: %w", err)
+	}
+
+	return nil
+}
+
+// TrimReceivedWeights оставляет последние keep весов товара (FIFO по id).
+func (pg *PGClient) TrimReceivedWeights(ctx context.Context, productID string, keep int) error {
+	if _, err := pg.Pool.Exec(ctx, `
+        DELETE FROM product_received_weights
+        WHERE product_id = $1 AND id NOT IN (
+            SELECT id FROM product_received_weights
+            WHERE product_id = $1
+            ORDER BY id DESC
+            LIMIT $2
+        )
+    `, productID, keep); err != nil {
+		return fmt.Errorf("trim received weights %s: %w", productID, err)
+	}
+
+	return nil
 }
