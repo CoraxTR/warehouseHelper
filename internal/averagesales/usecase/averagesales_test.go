@@ -121,7 +121,7 @@ func TestAverageSales_Weekly(t *testing.T) {
 		}
 	}
 	if !hasCurrent {
-		t.Errorf("текущая неделя %v не дозапрошена (нет в апсёрте)", curWeek.Format("2006-01-02"))
+		t.Errorf("текущая неделя %v не дозапрошена (нет в апсёрте)", curWeek.Format(time.DateOnly))
 	}
 }
 

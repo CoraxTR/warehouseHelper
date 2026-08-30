@@ -15,8 +15,8 @@ import (
 )
 
 func TestProfitReportEndpoint(t *testing.T) {
-	from := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
-	to := time.Date(2026, 7, 31, 23, 59, 59, 0, time.UTC)
+	from := time.Date(2026, time.July, 1, 0, 0, 0, 0, time.UTC)
+	to := time.Date(2026, time.July, 31, 23, 59, 59, 0, time.UTC)
 
 	tests := []struct {
 		name       string
@@ -159,8 +159,8 @@ func TestFetchProfitTurnover(t *testing.T) {
 
 	msac := &MSAPIClient{workerpool: pool, msConfig: msCfg}
 
-	from := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
-	to := time.Date(2026, 7, 31, 23, 59, 59, 0, time.UTC)
+	from := time.Date(2026, time.July, 1, 0, 0, 0, 0, time.UTC)
+	to := time.Date(2026, time.July, 31, 23, 59, 59, 0, time.UTC)
 
 	rows, err := msac.FetchProfitTurnover(context.Background(), from, to, "month", ProfitFilter{ProductIDs: []string{"id-1", "id-2"}})
 	if err != nil {

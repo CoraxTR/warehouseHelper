@@ -1099,8 +1099,8 @@ func (msac *MSAPIClient) profitReportEndpoint(interval string, from, to time.Tim
 
 	q := base.Query()
 	q.Set("interval", interval)
-	q.Set("momentFrom", from.Format("2006-01-02 15:04:05"))
-	q.Set("momentTo", to.Format("2006-01-02 15:04:05"))
+	q.Set("momentFrom", from.Format(time.DateTime))
+	q.Set("momentTo", to.Format(time.DateTime))
 
 	switch {
 	case len(filter.ProductIDs) > 0:

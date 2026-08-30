@@ -100,7 +100,7 @@ func TestWindowAvg(t *testing.T) {
 				{PeriodStart: time.Date(2026, time.August, 17, 0, 0, 0, 0, time.UTC), Qty: 3},
 				{PeriodStart: time.Date(2026, time.August, 10, 0, 0, 0, 0, time.UTC), Qty: 2},
 				{PeriodStart: time.Date(2026, time.August, 3, 0, 0, 0, 0, time.UTC), Qty: 1},
-				{PeriodStart: time.Date(2026, 7, 27, 0, 0, 0, 0, time.UTC), Qty: 0},
+				{PeriodStart: time.Date(2026, time.July, 27, 0, 0, 0, 0, time.UTC), Qty: 0},
 			},
 			current: &averagesales.TurnoverRow{PeriodStart: time.Date(2026, time.August, 31, 0, 0, 0, 0, time.UTC), Qty: 100},
 			n:       5,
@@ -109,9 +109,9 @@ func TestWindowAvg(t *testing.T) {
 		{
 			name: "отрицательные qty (возврат задним числом) — учитываются честно",
 			finished: []averagesales.TurnoverRow{
-				{PeriodStart: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC), Qty: 10},
+				{PeriodStart: time.Date(2026, time.September, 1, 0, 0, 0, 0, time.UTC), Qty: 10},
 				{PeriodStart: time.Date(2026, time.August, 1, 0, 0, 0, 0, time.UTC), Qty: -3},
-				{PeriodStart: time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC), Qty: 5},
+				{PeriodStart: time.Date(2026, time.July, 1, 0, 0, 0, 0, time.UTC), Qty: 5},
 			},
 			current: nil,
 			n:       12,
