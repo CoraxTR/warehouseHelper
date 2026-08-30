@@ -157,6 +157,9 @@
             {{range .OrderDays}}<label><input type="checkbox" name="order_days" value="{{.Day}}" {{if .Checked}}checked{{end}}> {{.Label}}</label>{{end}}
         </div>
 
+        <label>Заказ можно сделать до <span class="readonly-hint">(время дедлайна в дни заказа; действует и для спец. дней заказа)</span></label>
+        <input type="time" name="order_cutoff_time" value="{{.OrderCutoffTimeText}}" placeholder="14:00">
+
         <label>Дни доставки</label>
         <div class="day-row">
             {{range .DeliveryDays}}<label><input type="checkbox" name="delivery_days" value="{{.Day}}" {{if .Checked}}checked{{end}}> {{.Label}}</label>{{end}}

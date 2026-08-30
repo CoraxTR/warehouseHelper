@@ -12,7 +12,7 @@ import (
 
 // supplierColumns — колонки suppliers в порядке SELECT/INSERT (без id/name уточнений).
 const supplierColumns = `id, name, decode_rules, box_decode_rules,
-	order_days, delivery_days, delay_days, min_order_amount,
+	order_days, delivery_days, delay_days, min_order_amount, order_cutoff_time,
 	special_order_days, special_delivery_days, special_delay_days`
 
 // ListSuppliers возвращает всех поставщиков по алфавиту без учёта регистра.
@@ -64,7 +64,7 @@ func (pg *PGClient) GetSupplier(ctx context.Context, id string) (*domain.Supplie
 func (pg *PGClient) SaveSupplier(ctx context.Context, s *domain.Supplier) error {
 	_, err := pg.Pool.Exec(ctx, `
 		INSERT INTO suppliers (`+supplierColumns+`)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		ON CONFLICT (id) DO UPDATE SET
 			name = EXCLUDED.name,
 			decode_rules = EXCLUDED.decode_rules,
@@ -73,11 +73,12 @@ func (pg *PGClient) SaveSupplier(ctx context.Context, s *domain.Supplier) error 
 			delivery_days = EXCLUDED.delivery_days,
 			delay_days = EXCLUDED.delay_days,
 			min_order_amount = EXCLUDED.min_order_amount,
+			order_cutoff_time = EXCLUDED.order_cutoff_time,
 			special_order_days = EXCLUDED.special_order_days,
 			special_delivery_days = EXCLUDED.special_delivery_days,
 			special_delay_days = EXCLUDED.special_delay_days`,
 		s.ID, s.Name, s.DecodeRules, s.BoxDecodeRules,
-		s.OrderDays, s.DeliveryDays, s.DelayDays, s.MinOrderAmount,
+		s.OrderDays, s.DeliveryDays, s.DelayDays, s.MinOrderAmount, s.OrderCutoffTime,
 		s.SpecialOrderDays, s.SpecialDeliveryDays, s.SpecialDelayDays,
 	)
 	if err != nil {
@@ -110,7 +111,7 @@ func scanSupplier(row rowScanner) (*domain.Supplier, error) {
 	var s domain.Supplier
 	err := row.Scan(
 		&s.ID, &s.Name, &s.DecodeRules, &s.BoxDecodeRules,
-		&s.OrderDays, &s.DeliveryDays, &s.DelayDays, &s.MinOrderAmount,
+		&s.OrderDays, &s.DeliveryDays, &s.DelayDays, &s.MinOrderAmount, &s.OrderCutoffTime,
 		&s.SpecialOrderDays, &s.SpecialDeliveryDays, &s.SpecialDelayDays,
 	)
 	if err != nil {

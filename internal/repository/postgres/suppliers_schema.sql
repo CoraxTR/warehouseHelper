@@ -16,6 +16,7 @@ CREATE TABLE suppliers (
     delivery_days         SMALLINT[] NOT NULL DEFAULT '{}',  -- дни доставки, 1..7
     delay_days            SMALLINT,                          -- макс. дней между заказом и доставкой; NULL — не задано
     min_order_amount      BIGINT CHECK (min_order_amount >= 0),  -- минимальная сумма заказа, копейки; NULL — не задана
+    order_cutoff_time     TIME,                              -- время, до которого можно сделать заказ в дни заказа (общее — и для обычного, и для спец. расписания); NULL — не задано
     -- спец. расписание (для ограниченного круга товаров):
     special_order_days    SMALLINT[] NOT NULL DEFAULT '{}',  -- дни заказа по спец. расписанию, 1..7
     special_delivery_days SMALLINT[] NOT NULL DEFAULT '{}',  -- дни доставки по спец. расписанию, 1..7
