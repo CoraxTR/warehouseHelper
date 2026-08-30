@@ -13,14 +13,14 @@ import (
 
 // productColumns — колонки products в порядке SELECT/INSERT (без id в INSERT
 // не обойтись, но сканирование идёт в этом порядке).
-const productColumns = `id, internal_code, name, uom, group_name, average_weight,
+const productColumns = `id, internal_code, name, uom, group_name, folder_id, average_weight,
     shelf_life, pack_size, inventory_type, short_list, track_weekly`
 
 // scanProduct сканирует строку в domain.Product (порядок productColumns).
 func scanProduct(row pgx.Row) (*domain.Product, error) {
 	var p domain.Product
 	if err := row.Scan(
-		&p.ID, &p.InternalCode, &p.Name, &p.UOM, &p.GroupName,
+		&p.ID, &p.InternalCode, &p.Name, &p.UOM, &p.GroupName, &p.FolderID,
 		&p.AverageWeight, &p.ShelfLife, &p.PackSize,
 		&p.InventoryType, &p.ShortList, &p.TrackWeekly,
 	); err != nil {
@@ -30,20 +30,49 @@ func scanProduct(row pgx.Row) (*domain.Product, error) {
 	return &p, nil
 }
 
+// GetProductsByIDs — товары каталога по списку id (для бэкфилла оборотов;
+// порядок не гарантирован).
+func (pg *PGClient) GetProductsByIDs(ctx context.Context, ids []string) ([]domain.Product, error) {
+	rows, err := pg.Pool.Query(ctx, `
+        SELECT `+productColumns+`
+        FROM products
+        WHERE id = ANY($1)`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var products []domain.Product
+	for rows.Next() {
+		p, err := scanProduct(rows)
+		if err != nil {
+			return nil, err
+		}
+		products = append(products, *p)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return products, nil
+}
+
 // UpsertProduct создаёт или обновляет товар каталога (upsert по id).
 // Дубль internal_code (уникальный индекс, занят другим товаром) →
 // domain.ErrInternalCodeTaken.
 func (pg *PGClient) UpsertProduct(ctx context.Context, p *domain.Product) error {
 	_, err := pg.Pool.Exec(ctx, `
         INSERT INTO products (
-            id, internal_code, name, uom, group_name, average_weight,
+            id, internal_code, name, uom, group_name, folder_id, average_weight,
             shelf_life, pack_size, inventory_type, short_list, track_weekly
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
         ON CONFLICT (id) DO UPDATE SET
             internal_code = EXCLUDED.internal_code,
             name          = EXCLUDED.name,
             uom           = EXCLUDED.uom,
             group_name    = EXCLUDED.group_name,
+            folder_id     = EXCLUDED.folder_id,
             average_weight = EXCLUDED.average_weight,
             shelf_life    = EXCLUDED.shelf_life,
             pack_size     = EXCLUDED.pack_size,
@@ -51,7 +80,7 @@ func (pg *PGClient) UpsertProduct(ctx context.Context, p *domain.Product) error 
             short_list    = EXCLUDED.short_list,
             track_weekly  = EXCLUDED.track_weekly
     `,
-		p.ID, p.InternalCode, p.Name, p.UOM, p.GroupName, p.AverageWeight,
+		p.ID, p.InternalCode, p.Name, p.UOM, p.GroupName, p.FolderID, p.AverageWeight,
 		p.ShelfLife, p.PackSize, p.InventoryType, p.ShortList, p.TrackWeekly,
 	)
 	if err != nil {

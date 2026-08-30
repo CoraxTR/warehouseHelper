@@ -359,6 +359,16 @@ func (s *stubProductsRepo) GetProduct(_ context.Context, _ string) (*domain.Prod
 	return s.get, nil
 }
 
+func (s *stubProductsRepo) GetProductsByIDs(_ context.Context, _ []string) ([]domain.Product, error) {
+	if s.getErr != nil {
+		return nil, s.getErr
+	}
+	if s.get != nil {
+		return []domain.Product{*s.get}, nil
+	}
+	return s.search, nil
+}
+
 const (
 	uomKgHref = "https://api.moysklad.ru/api/remap/1.2/entity/uom/kg-uuid"
 	uomPcHref = "https://api.moysklad.ru/api/remap/1.2/entity/uom/pc-uuid"

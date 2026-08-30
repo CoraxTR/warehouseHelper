@@ -38,11 +38,20 @@ func (a *App) initDeps() {
 	inits := []func(){
 		a.initHTTPServer,
 		a.initStockCache,
+		a.initAverageSales,
 	}
 
 	for _, init := range inits {
 		init()
 	}
+}
+
+// initAverageSales запускает стартовую дозаливку средних продаж: товары без
+// месячной истории заполняются в фоне (запросы к МС через воркерпул).
+// Ошибки не роняют приложение — дозаливка идемпотентна, повторится после
+// перезапуска (или при следующем сохранении/выгрузке товара).
+func (a *App) initAverageSales() {
+	a.di.AverageSalesUC().BackfillMissing()
 }
 
 // initStockCache прогревает кэш остатков модуля «Сроки» всеми лотами.

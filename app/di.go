@@ -2,6 +2,7 @@ package app
 
 import (
 	"net/http"
+	aucase "warehouseHelper/internal/averagesales/usecase"
 	"warehouseHelper/internal/config"
 	myhttp "warehouseHelper/internal/delivery/http"
 	gucase "warehouseHelper/internal/goods/usecase"
@@ -53,6 +54,7 @@ type DIContainer struct {
 	refGoCheckUC    *rgucase.RefGoCheckAgainstUseCase
 	wikiUC          *wucase.WikiUseCase
 	goodsUC         *gucase.GoodsUseCase
+	averageSalesUC  *aucase.UseCase
 	qrUC            *qucase.QRUseCase
 	msUC            *msu.MSSuppliersUseCase
 	stockUC         *sucase.StockUseCase
@@ -256,6 +258,19 @@ func (d *DIContainer) GoodsUC() *gucase.GoodsUseCase {
 	}
 
 	return d.goodsUC
+}
+
+// AverageSalesUC — сценарии «Средние продажи»: обороты из отчёта прибыльности МС
+// и средние продажи по окну. PGClient реализует aucase.Repository, MSClient —
+// aucase.SalesClient, GoodsUC — aucase.ProductReader. GoodsUC получает обратную
+// ссылку для фонового бэкфилла (интерфейс в goods, цикла пакетов нет).
+func (d *DIContainer) AverageSalesUC() *aucase.UseCase {
+	if d.averageSalesUC == nil {
+		d.averageSalesUC = aucase.NewUseCase(d.OrdersRepository(), d.MSClient(), d.GoodsUC())
+		d.GoodsUC().SetTurnoverBackfiller(d.averageSalesUC)
+	}
+
+	return d.averageSalesUC
 }
 
 // QRUC — сценарии модуля «Честный знак»; PGClient реализует qucase.QRRepository.
