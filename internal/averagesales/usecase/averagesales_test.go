@@ -67,7 +67,7 @@ func TestAverageSales_Monthly(t *testing.T) {
 		}
 	}
 	if !hasCurrent {
-		t.Errorf("текущий месяц %v не дозапрошен (нет в апсёрте)", curStart.Format("2006-01"))
+		t.Errorf("текущий месяц %v не дозапрошен (нет в апсёрте)", curStart.Format(time.DateOnly))
 	}
 }
 

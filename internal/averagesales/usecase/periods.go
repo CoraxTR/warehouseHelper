@@ -34,6 +34,6 @@ func weekStart(now time.Time) time.Time {
 // firstFullWeekStart — понедельник первой полной недели года: первый понедельник
 // не раньше 1 января (неделя, пересекающая границу года, неполная — не берём).
 func firstFullWeekStart(year int, loc *time.Location) time.Time {
-	jan1 := time.Date(year, 1, 1, 0, 0, 0, 0, loc)
+	jan1 := time.Date(year, time.January, 1, 0, 0, 0, 0, loc)
 	return jan1.AddDate(0, 0, (int(jan1.Weekday())+6)%7)
 }

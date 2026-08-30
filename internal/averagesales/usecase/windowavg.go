@@ -6,10 +6,10 @@ import (
 	"warehouseHelper/internal/averagesales"
 )
 
-// errNoData — у товара нет ни одного интервала продаж (продаж не было вообще).
-// windowAvg возвращает его, AverageSales конвертирует в (nil, nil) —
-// публичный контракт «нет данных» (потребители обязаны уметь пропускать).
-var errNoData = errors.New("нет данных о продажах")
+// ErrNoData — у товара нет ни одного интервала продаж (продаж не было вообще).
+// AverageSales возвращает его вместо среднего; потребители обязаны уметь
+// пропускать такие товары (пометка в AGENTS.md модуля).
+var ErrNoData = errors.New("нет данных о продажах")
 
 // windowAvg — среднее по правилу владельца.
 //
@@ -17,7 +17,7 @@ var errNoData = errors.New("нет данных о продажах")
 // (последний элемент — самая дальняя/самая старая), len <= n;
 // current — текущий незакрытый период (может быть nil). k = len(finished).
 //
-// (nil, errNoData) — ТОЛЬКО когда k == 0 И current == nil: продаж не было вообще
+// (nil, ErrNoData) — ТОЛЬКО когда k == 0 И current == nil: продаж не было вообще
 // (новый товар без единых продаж; потребители обязаны пропускать такие товары).
 //
 // Иначе считаем по имеющемуся (даже один текущий незакрытый → avg = current/1):
@@ -34,7 +34,7 @@ var errNoData = errors.New("нет данных о продажах")
 func windowAvg(finished []averagesales.TurnoverRow, current *averagesales.TurnoverRow, n int) (*float64, error) {
 	k := len(finished)
 	if k == 0 && current == nil {
-		return nil, errNoData
+		return nil, ErrNoData
 	}
 
 	includeCurrent := current != nil && (k < n || current.Qty > finished[k-1].Qty)

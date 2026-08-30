@@ -48,7 +48,7 @@ func TestWindowAvg(t *testing.T) {
 			current:  nil,
 			n:        12,
 			wantAvg:  nil,
-			wantErr:  errNoData,
+			wantErr:  ErrNoData,
 		},
 		{
 			name:     "только один текущий незакрытый — avg = current/1",
@@ -96,13 +96,13 @@ func TestWindowAvg(t *testing.T) {
 		{
 			name: "недельное окно 5, текущий больше дальней — 4 + текущий (/5)",
 			finished: []averagesales.TurnoverRow{
-				{PeriodStart: time.Date(2026, 8, 24, 0, 0, 0, 0, time.UTC), Qty: 4},
-				{PeriodStart: time.Date(2026, 8, 17, 0, 0, 0, 0, time.UTC), Qty: 3},
-				{PeriodStart: time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC), Qty: 2},
-				{PeriodStart: time.Date(2026, 8, 3, 0, 0, 0, 0, time.UTC), Qty: 1},
+				{PeriodStart: time.Date(2026, time.August, 24, 0, 0, 0, 0, time.UTC), Qty: 4},
+				{PeriodStart: time.Date(2026, time.August, 17, 0, 0, 0, 0, time.UTC), Qty: 3},
+				{PeriodStart: time.Date(2026, time.August, 10, 0, 0, 0, 0, time.UTC), Qty: 2},
+				{PeriodStart: time.Date(2026, time.August, 3, 0, 0, 0, 0, time.UTC), Qty: 1},
 				{PeriodStart: time.Date(2026, 7, 27, 0, 0, 0, 0, time.UTC), Qty: 0},
 			},
-			current: &averagesales.TurnoverRow{PeriodStart: time.Date(2026, 8, 31, 0, 0, 0, 0, time.UTC), Qty: 100},
+			current: &averagesales.TurnoverRow{PeriodStart: time.Date(2026, time.August, 31, 0, 0, 0, 0, time.UTC), Qty: 100},
 			n:       5,
 			wantAvg: qty((4 + 3 + 2 + 1 + 100) / 5.0),
 		},
@@ -110,7 +110,7 @@ func TestWindowAvg(t *testing.T) {
 			name: "отрицательные qty (возврат задним числом) — учитываются честно",
 			finished: []averagesales.TurnoverRow{
 				{PeriodStart: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC), Qty: 10},
-				{PeriodStart: time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC), Qty: -3},
+				{PeriodStart: time.Date(2026, time.August, 1, 0, 0, 0, 0, time.UTC), Qty: -3},
 				{PeriodStart: time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC), Qty: 5},
 			},
 			current: nil,
@@ -124,7 +124,7 @@ func TestWindowAvg(t *testing.T) {
 			got, err := windowAvg(tt.finished, tt.current, tt.n)
 			if tt.wantError {
 				if err == nil {
-					t.Fatalf("windowAvg() error = nil, want error")
+					t.Fatal("windowAvg() error = nil, want error")
 				}
 				return
 			}

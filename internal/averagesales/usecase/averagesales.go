@@ -99,7 +99,7 @@ func (uc *UseCase) AverageSales(ctx context.Context, productID string) (*float64
 		to := periodEnd(d, interval)
 		res, err := uc.ms.FetchProfitTurnover(ctx, d, to, interval, client.ProfitFilter{ProductIDs: []string{productID}})
 		if err != nil {
-			return nil, fmt.Errorf("перезапросить продажи %s за %s: %w", productID, d.Format("2006-01-02"), err)
+			return nil, fmt.Errorf("перезапросить продажи %s за %s: %w", productID, d.Format(time.DateOnly), err)
 		}
 		for _, r := range res {
 			qty, ok := uc.calcQty(r, *prod)
@@ -110,7 +110,13 @@ func (uc *UseCase) AverageSales(ctx context.Context, productID string) (*float64
 		}
 	}
 	if len(upsert) > 0 {
-		if err := uc.upsertRows(ctx, prod.TrackWeekly, upsert); err != nil {
+		var err error
+		if prod.TrackWeekly {
+			err = uc.repo.UpsertWeeklyTurnover(ctx, upsert)
+		} else {
+			err = uc.repo.UpsertMonthlyTurnover(ctx, upsert)
+		}
+		if err != nil {
 			return nil, fmt.Errorf("апсёрт оборотов товара %s: %w", productID, err)
 		}
 	}
@@ -138,10 +144,10 @@ func (uc *UseCase) AverageSales(ctx context.Context, productID string) (*float64
 	}
 
 	avg, err := windowAvg(finished, current, n)
-	if errors.Is(err, errNoData) {
+	if errors.Is(err, ErrNoData) {
 		// Публичный контракт «продаж не было вообще» (потребители обязаны
 		// уметь пропускать товары без данных).
-		return nil, nil
+		return nil, ErrNoData
 	}
 	return avg, err
 }
@@ -171,14 +177,6 @@ func (uc *UseCase) BackfillMissing() {
 // Stop останавливает фоновые задачи бэкфилла (при завершении приложения).
 func (uc *UseCase) Stop() {
 	uc.backfill.stop()
-}
-
-// upsertRows пишет батч в нужную таблицу по периодичности товара.
-func (uc *UseCase) upsertRows(ctx context.Context, weekly bool, rows []averagesales.TurnoverRow) error {
-	if weekly {
-		return uc.repo.UpsertWeeklyTurnover(ctx, rows)
-	}
-	return uc.repo.UpsertMonthlyTurnover(ctx, rows)
 }
 
 // calcQty переводит продажи из отчёта в штуки: весовые (uom кг/г/т) делятся на

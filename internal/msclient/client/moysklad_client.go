@@ -1111,6 +1111,8 @@ func (msac *MSAPIClient) profitReportEndpoint(interval string, from, to time.Tim
 		q.Set("filter", strings.Join(parts, ";"))
 	case filter.ProductFolderID != "":
 		q.Set("filter", "productFolder="+msac.refHref("productfolder", filter.ProductFolderID))
+	default:
+		// Без фильтра — весь каталог (только для полной заливки).
 	}
 
 	q.Set("limit", strconv.Itoa(limit))
