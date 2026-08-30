@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Обновить сроки</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 12px;
+            background: #f7f8fa;
+        }
+
+        .topbar {
+            text-align: center;
+            margin-bottom: 12px;
+            position: relative;
+        }
+
+        .topbar h1 {
+            margin: 0 0 8px 0;
+            font-size: 22px;
+        }
+
+        .topbar .cancel {
+            position: absolute;
+            left: 4px;
+            top: 4px;
+        }
+
+        .btn {
+            display: inline-block;
+            padding: 8px 22px;
+            font-size: 15px;
+            text-decoration: none;
+            color: #fff;
+            background: #007bff;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        .btn:hover {
+            background: #0056b3;
+        }
+
+        .btn-cancel {
+            background: #6c757d;
+        }
+
+        .btn-cancel:hover {
+            background: #545b62;
+        }
+
+        .btn-save {
+            font-size: 16px;
+            padding: 10px 44px;
+        }
+
+        .constraint {
+            font-size: 14px;
+            color: #444;
+            margin-bottom: 4px;
+        }
+
+        .scan-block {
+            max-width: 660px;
+            margin: 0 auto;
+        }
+
+        #scan-input {
+            width: 100%;
+            box-sizing: border-box;
+            font-size: 18px;
+            padding: 10px 12px;
+            border: 1px solid #c9ced6;
+            border-radius: 4px;
+        }
+
+        .hint {
+            font-size: 12px;
+            color: #777;
+            margin: 6px 0 10px;
+        }
+
+        .error {
+            background: #fdecea;
+            border: 1px solid #e0b4b0;
+            color: #a33;
+            padding: 8px 10px;
+            border-radius: 4px;
+            margin: 8px 0;
+            font-size: 14px;
+        }
+
+        #scan-list {
+            margin: 12px 0;
+        }
+
+        .scan-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: #fff;
+            border: 1px solid #c9ced6;
+            padding: 6px 10px;
+            margin-bottom: 4px;
+            font-size: 14px;
+        }
+
+        .scan-row .code {
+            font-family: monospace;
+            font-size: 16px;
+            word-break: break-all;
+        }
+
+        .scan-row .rm {
+            background: #dc3545;
+            color: #fff;
+            border: none;
+            border-radius: 3px;
+            padding: 2px 12px;
+            cursor: pointer;
+            font-size: 13px;
+            margin-left: 8px;
+        }
+
+        .scan-row .rm:hover {
+            background: #bd2130;
+        }
+
+        .save-row {
+            text-align: center;
+            margin-top: 14px;
+        }
+
+        .counter {
+            font-size: 12px;
+            color: #666;
+            margin-top: 8px;
+            text-align: center;
+        }
+    </style>
+</head>
+
+<body data-product-id="{{.ProductID}}" data-group="{{.GroupCode}}" data-code="{{.Code}}" data-lengths="{{.Lengths}}">
+
+    <div class="topbar">
+        <a class="btn btn-cancel cancel" href="javascript:history.back()">← Отменить</a>
+        <h1>Обновить сроки</h1>
+        {{if .Name}}<div class="constraint">Привязано: {{.Name}}{{if .Code}} — код {{.Code}}{{end}}</div>{{else if .GroupCode}}<div class="constraint">Группа: {{.GroupCode}}</div>{{end}}
+        <div class="constraint hint">Невалидный штрих-код не принимается: громкий бип и поле очищается.</div>
+    </div>
+
+    <div class="scan-block">
+        <input id="scan-input" type="text" autocomplete="off" placeholder="Отсканируйте штрих-код…">
+        <div class="hint">Сканер вводит код и жмёт Enter. Кусок — 29 цифр (+1 шт), коробка — 33 цифры (+N шт).</div>
+        <div id="scan-error" class="error" style="display:none;"></div>
+        <div id="scan-list"></div>
+        <div class="save-row">
+            <button id="save-btn" class="btn btn-save" type="button">Сохранить</button>
+        </div>
+        <div id="counter" class="counter"></div>
+    </div>
+
+    <audio id="beep" preload="auto" src="data:audio/wav;base64,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"></audio>
+
+    <script>
+        // Страница «Обновить сроки»: сканирование внутренних штрих-кодов и замена
+        // остатков батчем при «Сохранить». Только ES5 (старые браузеры склада).
+        // Локальная проверка на лету: допустимые длины (правила разбирателя) +
+        // ограничение страницы (код товара / группа). Не сошлось — бип и отказ.
+
+        var UPDATE = { scans: [], busy: false };
+
+        function el(id) {
+            return document.getElementById(id);
+        }
+
+        function showError(msg) {
+            var e = el('scan-error');
+            e.innerHTML = msg;
+            e.style.display = 'block';
+        }
+
+        function hideError() {
+            el('scan-error').style.display = 'none';
+        }
+
+        // Громкий бип: Web Audio (если есть), иначе скрытый <audio> с wav.
+        var beepCtx = null;
+        function beep() {
+            try {
+                var AC = window.AudioContext || window.webkitAudioContext;
+                if (AC) {
+                    if (!beepCtx) {
+                        beepCtx = new AC();
+                    }
+                    var osc = beepCtx.createOscillator();
+                    var gain = beepCtx.createGain();
+                    osc.connect(gain);
+                    gain.connect(beepCtx.destination);
+                    osc.frequency.value = 880;
+                    gain.gain.value = 0.5;
+                    osc.start(0);
+                    setTimeout(function () { osc.stop(0); }, 180);
+                    return;
+                }
+            } catch (e) { /* fallback ниже */ }
+            try {
+                var a = el('beep');
+                if (a) {
+                    a.currentTime = 0;
+                    a.play();
+                }
+            } catch (e) { /* звука нет — сообщение об ошибке всё равно покажется */ }
+        }
+
+        function validLengths() {
+            return (document.body.getAttribute('data-lengths') || '').split(',');
+        }
+
+        // Локальная проверка: длина + ограничение страницы. null — код принят.
+        function checkScan(raw) {
+            var lengths = validLengths();
+            var okLen = false;
+            for (var i = 0; i < lengths.length; i++) {
+                if (String(raw.length) === lengths[i]) {
+                    okLen = true;
+                    break;
+                }
+            }
+            if (!okLen) {
+                return 'Не внутренний штрих-код (ожидаются ' + lengths.join(' или ') + ' цифр)';
+            }
+            var code = document.body.getAttribute('data-code');
+            if (code && raw.slice(0, 8) !== code) {
+                return 'Код не соответствует позиции — ожидается ' + code;
+            }
+            var group = document.body.getAttribute('data-group');
+            if (group && raw.slice(1, 4) !== group) {
+                return 'Код не из группы ' + group + ' (цифры 1..3 штрих-кода)';
+            }
+            return null;
+        }
+
+        function submitScan() {
+            var input = el('scan-input');
+            var raw = input.value.replace(/^\s+|\s+$/g, '');
+            if (raw === '') {
+                return;
+            }
+            var err = checkScan(raw);
+            if (err) {
+                beep();
+                showError(err);
+                input.value = '';
+                input.focus();
+                return;
+            }
+            hideError();
+            UPDATE.scans.push(raw);
+            input.value = '';
+            input.focus();
+            renderList();
+        }
+
+        function renderList() {
+            var list = el('scan-list');
+            var html = '';
+            for (var i = 0; i < UPDATE.scans.length; i++) {
+                html += '<div class="scan-row"><span class="code">' + UPDATE.scans[i] + '</span>'
+                    + '<button type="button" class="rm" data-idx="' + i + '">✕</button></div>';
+            }
+            list.innerHTML = html;
+            el('counter').innerHTML = 'Сканов: ' + UPDATE.scans.length;
+        }
+
+        function removeScan(idx) {
+            UPDATE.scans.splice(idx, 1);
+            renderList();
+        }
+
+        function saveScans() {
+            if (UPDATE.busy) {
+                return;
+            }
+            if (UPDATE.scans.length === 0) {
+                showError('Нет сканов — сначала отсканируйте штрих-коды');
+                return;
+            }
+            UPDATE.busy = true;
+            el('save-btn').disabled = true;
+            var body = JSON.stringify({
+                scans: UPDATE.scans,
+                product_id: document.body.getAttribute('data-product-id'),
+                group: document.body.getAttribute('data-group')
+            });
+            var xhr = new XMLHttpRequest();
+            xhr.open('POST', '/ms/dates/update/save', true);
+            xhr.setRequestHeader('Content-Type', 'application/json');
+            xhr.onreadystatechange = function () {
+                if (xhr.readyState !== 4) {
+                    return;
+                }
+                UPDATE.busy = false;
+                el('save-btn').disabled = false;
+                if (xhr.status === 204) {
+                    el('save-btn').innerHTML = 'Сохранено';
+                    setTimeout(function () { history.back(); }, 700);
+                } else {
+                    var msg = 'Не удалось сохранить (HTTP ' + xhr.status + ')';
+                    if (xhr.responseText) {
+                        msg = xhr.responseText;
+                    }
+                    beep();
+                    showError(msg);
+                }
+            };
+            xhr.send(body);
+        }
+
+        function init() {
+            el('scan-input').addEventListener('keydown', function (ev) {
+                if (ev.keyCode === 13) {
+                    ev.preventDefault();
+                    submitScan();
+                }
+            });
+            el('scan-list').addEventListener('click', function (ev) {
+                var t = ev.target || ev.srcElement;
+                while (t && t !== el('scan-list')) {
+                    if (t.getAttribute && t.getAttribute('data-idx') !== null) {
+                        removeScan(parseInt(t.getAttribute('data-idx'), 10));
+                        return;
+                    }
+                    t = t.parentNode;
+                }
+            });
+            el('save-btn').addEventListener('click', saveScans);
+            el('scan-input').focus();
+        }
+
+        init();
+    </script>
+
+</body>
+
+</html>

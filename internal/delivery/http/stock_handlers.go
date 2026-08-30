@@ -6,13 +6,19 @@ import (
 	"html/template"
 	"log"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"warehouseHelper/internal/stock"
+	sucase "warehouseHelper/internal/stock/usecase"
 	stockws "warehouseHelper/internal/stock/ws"
 )
 
-var stockDatesTmpl = template.Must(template.ParseFiles("../internal/delivery/web/templates/stock_dates.html"))
+var (
+	stockDatesTmpl  = template.Must(template.ParseFiles("../internal/delivery/web/templates/stock_dates.html"))
+	stockUpdateTmpl = template.Must(template.ParseFiles("../internal/delivery/web/templates/stock_update.html"))
+)
 
 // stockPageData — флаг «Шорт-лист» для единого шаблона страниц «Сроки».
 type stockPageData struct {
@@ -44,6 +50,89 @@ func (h *Handler) StockDatesWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.stockHub.ServeConn(w, r, snapshot)
+}
+
+// StockUpdatePage — GET /ms/dates/update: страница «Обновить сроки» (сканирование
+// штрих-кодов и замена остатков). Ограничения: ?product_id= (одна позиция —
+// ожидаемый internal_code) или ?group= (группа — три цифры internal_code[1:4]).
+// Без параметров — полное обновление (без проверки кода).
+func (h *Handler) StockUpdatePage(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	pc, err := h.stockUC.UpdatePageContext(r.Context(), q.Get("product_id"), q.Get("group"))
+	if err != nil {
+		log.Printf("stock update page: %v", err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+
+		return
+	}
+	lengths := make([]string, 0, 2)
+	for _, l := range h.stockUC.ValidLengths() {
+		lengths = append(lengths, strconv.Itoa(l))
+	}
+	data := stockUpdateData{
+		ProductID: pc.ProductID,
+		GroupCode: pc.GroupCode,
+		Name:      pc.Name,
+		Code:      pc.Code,
+		Lengths:   strings.Join(lengths, ","),
+	}
+	if err := stockUpdateTmpl.Execute(w, data); err != nil {
+		log.Printf("stock_update template: %v", err)
+	}
+}
+
+// StockUpdateSave — POST /ms/dates/update/save: применить батч сканов.
+// body: {"scans":["0021...","0021..."],"product_id":"...","group":"021"}
+// Сервер сам разбирает все коды (авторитетно), резолвит каталог одним запросом,
+// проверяет ограничения и заменяет остатки сканированных товаров одной
+// транзакцией. Любая ошибка → ничего не записано (ответ 400 с сообщением).
+func (h *Handler) StockUpdateSave(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Scans     []string `json:"scans"`
+		ProductID string   `json:"product_id"`
+		Group     string   `json:"group"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "некорректный JSON", http.StatusBadRequest)
+
+		return
+	}
+	if len(req.Scans) == 0 {
+		http.Error(w, "нет сканов", http.StatusBadRequest)
+
+		return
+	}
+
+	err := h.stockUC.ReplaceStock(r.Context(), sucase.ReplaceRequest{
+		Scans:             req.Scans,
+		ExpectedProductID: req.ProductID,
+		ExpectedGroupCode: req.Group,
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, stock.ErrScanNotInternal), errors.Is(err, stock.ErrScanInvalid),
+			errors.Is(err, stock.ErrScanGroupMismatch), errors.Is(err, stock.ErrScanProductMismatch),
+			errors.Is(err, stock.ErrProductNotFound):
+			http.Error(w, err.Error(), http.StatusBadRequest)
+		default:
+			log.Printf("stock update save: %v", err)
+			http.Error(w, "не удалось обновить сроки", http.StatusInternalServerError)
+		}
+
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// stockUpdateData — данные страницы «Обновить сроки»: ограничения страницы,
+// баннер и допустимые длины штрих-кодов (правила разбирателя для клиента).
+type stockUpdateData struct {
+	ProductID string // ограничение: ожидаемый товар (пусто — нет)
+	GroupCode string // ограничение: ожидаемая группа (пусто — нет)
+	Name      string // отображаемое имя (товар/группа) для баннера
+	Code      string // ожидаемый internal_code (для ограничения по товару)
+	Lengths   string // допустимые длины, через запятую: "29,33"
 }
 
 // StockDiscount — POST /ms/dates/discount: запись ручной скидки лота.
