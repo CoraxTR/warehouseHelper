@@ -18,12 +18,12 @@ var receiveTmpl = template.Must(template.ParseFiles("../internal/delivery/web/te
 type receivePageData struct {
 	Suppliers []domain.Supplier // для выбора (когда поставщик ещё не выбран)
 	Supplier  *domain.Supplier  // выбранный поставщик (nil — выбор)
-	CacheJSON template.JS       // кеш приёмки для клиента (JSON в <script>)
 	Error     string
 }
 
 // ReceivePage — GET /ms/receive[?id=...]: выбор поставщика или страница
-// сканирования с кешем приёмки (правила, маппинг кодов, каталог).
+// сканирования (кеш приёмки клиент грузит отдельным JSON-запросом —
+// встраивать JSON в страницу нельзя: имена товаров пользовательские).
 func (h *Handler) ReceivePage(w http.ResponseWriter, r *http.Request) {
 	data := receivePageData{}
 
@@ -59,31 +59,33 @@ func (h *Handler) ReceivePage(w http.ResponseWriter, r *http.Request) {
 	}
 	data.Supplier = supplier
 
+	if err := receiveTmpl.Execute(w, data); err != nil {
+		log.Printf("receive template: %v", err)
+	}
+}
+
+// ReceiveCache — GET /ms/receive/cache?id=...: кеш приёмки поставщика
+// (правила, маппинг кодов, каталог) для резолва «на лету» в JS.
+func (h *Handler) ReceiveCache(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(r.URL.Query().Get("id"))
+	if id == "" {
+		http.Error(w, "не указан поставщик", http.StatusBadRequest)
+		return
+	}
+
 	cache, err := h.receivingUC.GetCache(r.Context(), id)
 	if err != nil {
-		data.Error = err.Error()
-		if err := receiveTmpl.Execute(w, data); err != nil {
-			log.Printf("receive template: %v", err)
-		}
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	if err := h.receivingUC.AddCatalogCodes(r.Context(), cache); err != nil {
-		data.Error = err.Error()
-		if err := receiveTmpl.Execute(w, data); err != nil {
-			log.Printf("receive template: %v", err)
-		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	cacheJSON, err := json.Marshal(cache)
-	if err != nil {
-		http.Error(w, "не удалось собрать кеш приёмки", http.StatusInternalServerError)
-		return
-	}
-	data.CacheJSON = template.JS(cacheJSON)
-
-	if err := receiveTmpl.Execute(w, data); err != nil {
-		log.Printf("receive template: %v", err)
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	if err := json.NewEncoder(w).Encode(cache); err != nil {
+		log.Printf("receive cache encode: %v", err)
 	}
 }
 
@@ -152,7 +154,7 @@ func parseSaveDate(s string) *time.Time {
 	if s == "" {
 		return nil
 	}
-	t, err := time.Parse("2006-01-02", s)
+	t, err := time.Parse(time.DateOnly, s)
 	if err != nil {
 		return nil
 	}

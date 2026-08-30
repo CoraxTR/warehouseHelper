@@ -96,7 +96,7 @@ func parse(s string, fields int, label string) (Rule, error) {
 	}
 
 	rule := Rule{Length: length, Fields: make([]Field, fields)}
-	for i := 0; i < fields; i++ {
+	for i := range fields {
 		posTok := strings.TrimSpace(parts[1+2*i])
 		lenTok := strings.TrimSpace(parts[2+2*i])
 

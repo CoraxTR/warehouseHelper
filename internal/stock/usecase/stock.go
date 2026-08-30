@@ -599,6 +599,39 @@ func cloneInt16(v *int16) *int16 {
 // produced_on — COALESCE (известная дата не затирается). После записи —
 // кэш и события lot_upsert (клиент «Сроков» обновляется в реальном времени).
 func (uc *StockUseCase) AcceptStock(ctx context.Context, lots []stock.LotIn) error {
+	if err := validateAcceptLots(lots); err != nil {
+		return err
+	}
+
+	if err := uc.repo.AcceptStockLots(ctx, lots); err != nil {
+		return fmt.Errorf("accept stock lots: %w", err)
+	}
+
+	// Товары вне кэша (не было остатков) — подгружаем из каталога до
+	// блокировки кэша; ошибка не откатывает запись в БД (как в applyReplacePlans).
+	byID, err := uc.loadAcceptCatalog(ctx, lots)
+	if err != nil {
+		return err
+	}
+
+	uc.mu.Lock()
+	events, err := uc.applyAcceptCacheLocked(lots, byID)
+	uc.mu.Unlock()
+	if err != nil {
+		return err
+	}
+
+	if uc.pub != nil {
+		for _, e := range events {
+			uc.pub.PublishStockChange(e)
+		}
+	}
+
+	return nil
+}
+
+// validateAcceptLots проверяет партии приёмки до записи.
+func validateAcceptLots(lots []stock.LotIn) error {
 	if len(lots) == 0 {
 		return errors.New("нет принятых позиций")
 	}
@@ -613,13 +646,12 @@ func (uc *StockUseCase) AcceptStock(ctx context.Context, lots []stock.LotIn) err
 			return fmt.Errorf("товар %s: не указан срок годности", l.ProductID)
 		}
 	}
+	return nil
+}
 
-	if err := uc.repo.AcceptStockLots(ctx, lots); err != nil {
-		return fmt.Errorf("accept stock lots: %w", err)
-	}
-
-	// Товары вне кэша (не было остатков) — подгружаем из каталога до
-	// блокировки кэша; ошибка не откатывает запись в БД (как в applyReplacePlans).
+// loadAcceptCatalog подгружает из каталога товары, которых нет в кэше
+// (не было остатков). Вызывается до блокировки кэша.
+func (uc *StockUseCase) loadAcceptCatalog(ctx context.Context, lots []stock.LotIn) (map[string]stock.Product, error) {
 	uc.mu.RLock()
 	var missing []string
 	for _, l := range lots {
@@ -633,20 +665,23 @@ func (uc *StockUseCase) AcceptStock(ctx context.Context, lots []stock.LotIn) err
 	for _, pid := range missing {
 		p, err := uc.repo.LoadProductByID(ctx, pid)
 		if err != nil {
-			return fmt.Errorf("%w: %s", stock.ErrProductNotFound, pid)
+			return nil, fmt.Errorf("%w: %s", stock.ErrProductNotFound, pid)
 		}
 		byID[pid] = p
 	}
+	return byID, nil
+}
 
-	uc.mu.Lock()
+// applyAcceptCacheLocked применяет приёмку к кэшу и собирает события.
+// Вызывается только под mu.Lock.
+func (uc *StockUseCase) applyAcceptCacheLocked(lots []stock.LotIn, byID map[string]stock.Product) ([]stock.Event, error) {
 	events := make([]stock.Event, 0, len(lots))
 	for _, l := range lots {
 		cur, ok := uc.cache[l.ProductID]
 		if !ok {
 			cat, ok := byID[l.ProductID]
 			if !ok {
-				uc.mu.Unlock()
-				return fmt.Errorf("%w: %s", stock.ErrProductNotFound, l.ProductID)
+				return nil, fmt.Errorf("%w: %s", stock.ErrProductNotFound, l.ProductID)
 			}
 			cp := cat
 			cur = &cp
@@ -685,13 +720,5 @@ func (uc *StockUseCase) AcceptStock(ctx context.Context, lots []stock.LotIn) err
 			Lot:        &lot,
 		})
 	}
-	uc.mu.Unlock()
-
-	if uc.pub != nil {
-		for _, e := range events {
-			uc.pub.PublishStockChange(e)
-		}
-	}
-
-	return nil
+	return events, nil
 }

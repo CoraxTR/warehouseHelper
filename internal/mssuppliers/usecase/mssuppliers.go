@@ -274,7 +274,7 @@ func normalizeRules(label string, rules []string, parse func(string) error) ([]s
 			continue
 		}
 		if err := parse(r); err != nil {
-			return nil, fmt.Errorf("%s %q: %v", label, r, err)
+			return nil, fmt.Errorf("%s %q: %w", label, r, err)
 		}
 		if utf8.RuneCountInString(r) > 255 {
 			return nil, fmt.Errorf("%s: правило %q слишком длинное (максимум 255 символов)", label, r)

@@ -82,6 +82,7 @@
             <div id="box-hint" style="display:none;" class="hint">
                 Идёт сбор коробки: сканируйте товары внутри. Введите <b>666</b>, когда коробка укомплектована.
             </div>
+            <div id="status-line" class="hint"></div>
 
             <div id="scans"></div>
 
@@ -92,7 +93,8 @@
     </div>
 
     <script>
-        var CACHE = {{.CacheJSON}};
+        var CACHE = null;         // кеш приёмки: грузится JSON-запросом ниже
+        var SUPPLIER_ID = {{if .Supplier}}'{{.Supplier.ID}}'{{else}}''{{end}};
         var items = [];           // карточки сканов: {type, scan, manual, children}
         var boxMode = false;      // идёт сбор содержимого коробки
 
@@ -100,6 +102,7 @@
         var scansBox = document.getElementById('scans');
         var boxHint = document.getElementById('box-hint');
         var reportBox = document.getElementById('report');
+        var statusLine = document.getElementById('status-line');
 
         function parseDate(s) {
             if (!s || s.length !== 8) { return null; }
@@ -516,6 +519,38 @@
                 if (raw) { handleScan(raw); }
             }
         });
+
+        // Кеш приёмки грузится отдельным запросом (страница без него работает:
+        // ввод заблокирован до загрузки).
+        function loadCache() {
+            if (!SUPPLIER_ID) { return; }
+            var xhr = new XMLHttpRequest();
+            xhr.open('GET', '/ms/receive/cache?id=' + encodeURIComponent(SUPPLIER_ID), true);
+            xhr.onreadystatechange = function () {
+                if (xhr.readyState !== 4) { return; }
+                if (xhr.status === 200) {
+                    try {
+                        CACHE = JSON.parse(xhr.responseText);
+                    } catch (e) {
+                        statusLine.textContent = 'Ошибка разбора кеша приёмки';
+                        return;
+                    }
+                    scanInput.disabled = false;
+                    statusLine.textContent = 'Кеш готов: ' + (CACHE.by_external ? Object.keys(CACHE.by_external).length : 0) + ' внешних кодов, ' +
+                        (CACHE.by_code ? Object.keys(CACHE.by_code).length : 0) + ' товаров каталога';
+                    render();
+                } else {
+                    statusLine.textContent = 'Не удалось загрузить кеш приёмки (HTTP ' + xhr.status + ')';
+                }
+            };
+            xhr.send();
+        }
+
+        if (SUPPLIER_ID) {
+            scanInput.disabled = true;
+            statusLine.textContent = 'Загружаю кеш приёмки…';
+            loadCache();
+        }
 
         render();
     </script>

@@ -53,8 +53,9 @@ func NewRouter(h *Handler) *http.ServeMux {
 	// Приёмка: виджет «Внешние коды» на карточке поставщика.
 	mux.HandleFunc("POST /ms/receive/barcodes/add", h.ReceiveBarcodesAdd)
 	mux.HandleFunc("POST /ms/receive/barcodes/delete", h.ReceiveBarcodesDelete)
-	mux.HandleFunc("GET /ms/receive", h.ReceivePage)       // страница приёмки (выбор поставщика / сканирование)
-	mux.HandleFunc("POST /ms/receive/save", h.ReceiveSave) // сохранить приёмку (JSON) → отчёт
+	mux.HandleFunc("GET /ms/receive", h.ReceivePage)        // страница приёмки (выбор поставщика / сканирование)
+	mux.HandleFunc("GET /ms/receive/cache", h.ReceiveCache) // кеш приёмки (JSON для резолва на клиенте)
+	mux.HandleFunc("POST /ms/receive/save", h.ReceiveSave)  // сохранить приёмку (JSON) → отчёт
 
 	// Модуль «Сроки» (остатки по срокам годности).
 	mux.HandleFunc("GET /ms/dates", h.StockDatesPage)               // страница «Сроки»

@@ -177,7 +177,7 @@ func (uc *ReceivingUseCase) Resolve(ctx context.Context, cache *receiving.Cache,
 }
 
 // resolveInternal разбирает внутренний штрих-код (29 — кусок, 33 — коробка).
-func (uc *ReceivingUseCase) resolveInternal(ctx context.Context, cache *receiving.Cache, raw string, e receiving.ScanEntry) (*receiving.DecodedScan, error) {
+func (uc *ReceivingUseCase) resolveInternal(ctx context.Context, cache *receiving.Cache, raw string, _ receiving.ScanEntry) (*receiving.DecodedScan, error) {
 	code, err := innercode.Parse(raw)
 	if err != nil {
 		return nil, fmt.Errorf("внутренний штрих-код: %w", err)
@@ -250,17 +250,17 @@ func (uc *ReceivingUseCase) resolveByRule(cache *receiving.Cache, rule receiving
 	if ok {
 		ref, refOK = cache.ByExternal[code]
 	}
-	if refOK {
+	switch {
+	case refOK:
 		scan.ProductID = ref.ProductID
 		scan.InternalCode = ref.InternalCode
 		scan.ProductName = ref.ProductName
-	} else if e.ManualProductID != "" {
+	case e.ManualProductID != "":
 		scan.ProductID = e.ManualProductID
-	} else {
-		if ok {
-			return nil, fmt.Errorf("внешний код %q не заведён у поставщика — добавьте его на карточке поставщика", code)
-		}
-		return nil, fmt.Errorf("в правиле не вычитывается код товара — выберите позицию вручную")
+	case ok:
+		return nil, fmt.Errorf("внешний код %q не заведён у поставщика — добавьте его на карточке поставщика", code)
+	default:
+		return nil, errors.New("в правиле не вычитывается код товара — выберите позицию вручную")
 	}
 
 	// Вес (граммы): правило или ручной ввод.

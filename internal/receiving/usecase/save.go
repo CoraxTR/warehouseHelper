@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -21,10 +22,8 @@ func (uc *ReceivingUseCase) Save(ctx context.Context, req receiving.SaveRequest)
 		return nil, err
 	}
 
-	var (
-		units []receiving.Unit
-		boxes []receiving.Box
-	)
+	units := make([]receiving.Unit, 0, len(req.Scans))
+	boxes := make([]receiving.Box, 0)
 	for _, e := range req.Scans {
 		scan, err := uc.Resolve(ctx, cache, e)
 		if err != nil {
@@ -50,11 +49,7 @@ func (uc *ReceivingUseCase) Save(ctx context.Context, req receiving.SaveRequest)
 	}
 
 	// Остатки: лоты (товар, срок) с суммой количества — через модуль сроков.
-	lots, err := buildLots(units)
-	if err != nil {
-		return nil, err
-	}
-	if err := uc.stock.AcceptStock(ctx, lots); err != nil {
+	if err := uc.stock.AcceptStock(ctx, buildLots(units)); err != nil {
 		return nil, fmt.Errorf("принять в остатки: %w", err)
 	}
 
@@ -88,11 +83,11 @@ func (uc *ReceivingUseCase) Save(ctx context.Context, req receiving.SaveRequest)
 // ОДНОГО товара; факт (кол-во, Σ вес) сверяется с заявленным из кода.
 func (uc *ReceivingUseCase) resolveBox(ctx context.Context, cache *receiving.Cache, box *receiving.DecodedScan, e receiving.ScanEntry) (*receiving.Box, []receiving.Unit, error) {
 	if len(e.Children) == 0 {
-		return nil, nil, fmt.Errorf("в коробке нет отсканированных товаров")
+		return nil, nil, errors.New("в коробке нет отсканированных товаров")
 	}
 
+	units := make([]receiving.Unit, 0, len(e.Children))
 	var (
-		units     []receiving.Unit
 		firstCode string
 	)
 	for _, child := range e.Children {
@@ -101,7 +96,7 @@ func (uc *ReceivingUseCase) resolveBox(ctx context.Context, cache *receiving.Cac
 			return nil, nil, err
 		}
 		if c.Kind == receiving.KindBox {
-			return nil, nil, fmt.Errorf("в коробке не может быть другая коробка")
+			return nil, nil, errors.New("в коробке не может быть другая коробка")
 		}
 		if err := validateUnitScan(c); err != nil {
 			return nil, nil, err
@@ -150,16 +145,16 @@ func (uc *ReceivingUseCase) resolveBox(ctx context.Context, cache *receiving.Cac
 // (правило/ручной ввод), для весового — вес.
 func validateUnitScan(s *receiving.DecodedScan) error {
 	if s.ProductID == "" || s.InternalCode == "" {
-		return fmt.Errorf("не определён товар")
+		return errors.New("не определён товар")
 	}
 	if s.BestBefore == nil {
-		return fmt.Errorf("не указан срок годности — задайте вручную")
+		return errors.New("не указан срок годности — задайте вручную")
 	}
 	if s.WeightG == nil {
-		return fmt.Errorf("не указан вес — задайте вручную")
+		return errors.New("не указан вес — задайте вручную")
 	}
 	if *s.WeightG <= 0 {
-		return fmt.Errorf("вес должен быть больше нуля")
+		return errors.New("вес должен быть больше нуля")
 	}
 	return nil
 }
@@ -187,7 +182,7 @@ func deref(v *int64) int64 {
 
 // buildLots группирует единицы по (товар, срок) и собирает партии для
 // AcceptStock. Производитель берётся из первой единицы партии.
-func buildLots(units []receiving.Unit) ([]stock.LotIn, error) {
+func buildLots(units []receiving.Unit) []stock.LotIn {
 	type key struct {
 		productID  string
 		bestBefore time.Time
@@ -207,7 +202,7 @@ func buildLots(units []receiving.Unit) ([]stock.LotIn, error) {
 	for _, k := range order {
 		lots = append(lots, *agg[k])
 	}
-	return lots, nil
+	return lots
 }
 
 // buildReport группирует единицы в строки отчёта:

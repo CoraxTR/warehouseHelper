@@ -146,9 +146,9 @@ type WeightRow struct {
 
 // Ошибки домена.
 var (
-	ErrScanUnknown = errScan("штрих-код не распознан: нет правила поставщика и это не внутренний формат")
+	ErrScanUnknown = scanError("штрих-код не распознан: нет правила поставщика и это не внутренний формат")
 )
 
-type errScan string
+type scanError string
 
-func (e errScan) Error() string { return string(e) }
+func (e scanError) Error() string { return string(e) }

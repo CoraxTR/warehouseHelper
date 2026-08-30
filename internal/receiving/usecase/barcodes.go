@@ -85,7 +85,7 @@ func (uc *BarcodeEditor) Add(ctx context.Context, supplierID, externalCode, prod
 		return errors.New("внешний код не может быть пустым")
 	}
 	if len(externalCode) > 64 {
-		return fmt.Errorf("внешний код слишком длинный (максимум 64 символа)")
+		return errors.New("внешний код слишком длинный (максимум 64 символа)")
 	}
 	if productID == "" {
 		return errors.New("товар не выбран")

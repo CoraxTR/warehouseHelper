@@ -205,7 +205,10 @@ func TestResolveExternalCodeNotMapped(t *testing.T) {
 
 func TestResolveManualProduct(t *testing.T) {
 	uc, _, _ := newTestReceive()
-	repo := uc.repo.(*stubReceiveRepo)
+	repo, ok := uc.repo.(*stubReceiveRepo)
+	if !ok {
+		t.Fatal("ожидался stubReceiveRepo")
+	}
 	repo.supplier.DecodeRules = []string{itemRuleNoCode}
 	cache, _ := uc.GetCache(context.Background(), "sup-1")
 
@@ -319,7 +322,10 @@ func TestSaveMissingBestBefore(t *testing.T) {
 	uc, _, _ := newTestReceive()
 
 	// Правило без срока годности и без ручного ввода → ошибка.
-	repo := uc.repo.(*stubReceiveRepo)
+	repo, ok := uc.repo.(*stubReceiveRepo)
+	if !ok {
+		t.Fatal("ожидался stubReceiveRepo")
+	}
 	repo.supplier.DecodeRules = []string{"28-1-6-7-6-13-8"}
 	_, err := uc.Save(context.Background(), receiving.SaveRequest{
 		SupplierID: "sup-1",
