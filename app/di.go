@@ -2,6 +2,8 @@ package app
 
 import (
 	"net/http"
+
+	aucase "warehouseHelper/internal/avgweight/usecase"
 	"warehouseHelper/internal/config"
 	myhttp "warehouseHelper/internal/delivery/http"
 	gucase "warehouseHelper/internal/goods/usecase"
@@ -58,6 +60,7 @@ type DIContainer struct {
 	stockUC         *sucase.StockUseCase
 	receiveBarcodes *rucase.BarcodeEditor
 	receivingUC     *rucase.ReceivingUseCase
+	avgWeightUC     *aucase.UseCase
 	stockHub        *stockws.Hub
 
 	// Хэндлеры
@@ -290,11 +293,24 @@ func (d *DIContainer) ReceiveBarcodes() *rucase.BarcodeEditor {
 	return d.receiveBarcodes
 }
 
+// AvgWeightUC — сценарии модуля «Средний вес»: приёмка передаёт единичные
+// веса (RecordWeights), модуль пишет их, обрезает историю до лимита и через
+// каталог (GoodsUC) и вики (WikiUC) обновляет средний вес. PGClient — aucase.Repository,
+// GoodsUC — aucase.ProductWeightUpdater, WikiUC — aucase.WikiWeightUpdater.
+func (d *DIContainer) AvgWeightUC() *aucase.UseCase {
+	if d.avgWeightUC == nil {
+		d.avgWeightUC = aucase.NewUseCase(d.OrdersRepository(), d.GoodsUC(), d.WikiUC(), d.Config().AppConfig.WeightsHistoryLimit)
+	}
+
+	return d.avgWeightUC
+}
+
 // ReceivingUC — сценарии приёмки (кеш поставщика, резолв сканов, сохранение);
-// PGClient реализует rucase.ReceiveRepository, StockUC — rucase.StockAccepter.
+// PGClient реализует rucase.ReceiveRepository, StockUC — rucase.StockAccepter,
+// AvgWeightUC — rucase.WeightRecorder.
 func (d *DIContainer) ReceivingUC() *rucase.ReceivingUseCase {
 	if d.receivingUC == nil {
-		d.receivingUC = rucase.NewReceivingUseCase(d.OrdersRepository(), d.StockUC())
+		d.receivingUC = rucase.NewReceivingUseCase(d.OrdersRepository(), d.StockUC(), d.AvgWeightUC())
 	}
 
 	return d.receivingUC

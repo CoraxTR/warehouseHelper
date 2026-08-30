@@ -3,9 +3,11 @@ package usecase
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
+	"warehouseHelper/internal/avgweight"
 	"warehouseHelper/internal/domain"
 	"warehouseHelper/internal/receiving"
 	"warehouseHelper/internal/stock"
@@ -17,8 +19,6 @@ type stubReceiveRepo struct {
 	supplier *domain.Supplier
 	barcodes []receiving.BarcodeRef
 	catalog  map[string]receiving.ProductRef
-	inserted []receiving.WeightRow
-	trimmed  map[string]int
 }
 
 func (s *stubReceiveRepo) GetSupplier(context.Context, string) (*domain.Supplier, error) {
@@ -50,17 +50,15 @@ func (s *stubReceiveRepo) LoadCatalogAllRefs(_ context.Context) ([]receiving.Pro
 	return out, nil
 }
 
-func (s *stubReceiveRepo) InsertReceivedWeights(_ context.Context, rows []receiving.WeightRow) error {
-	s.inserted = append(s.inserted, rows...)
-	return nil
+type stubWeightRecorder struct {
+	recorded []avgweight.WeightRow
+	warnings []string
+	err      error
 }
 
-func (s *stubReceiveRepo) TrimReceivedWeights(_ context.Context, productID string, keep int) error {
-	if s.trimmed == nil {
-		s.trimmed = make(map[string]int)
-	}
-	s.trimmed[productID] = keep
-	return nil
+func (s *stubWeightRecorder) RecordWeights(_ context.Context, rows []avgweight.WeightRow) ([]string, error) {
+	s.recorded = append(s.recorded, rows...)
+	return s.warnings, s.err
 }
 
 type stubStockAccepter struct {
@@ -110,7 +108,7 @@ func testCacheRepo() *stubReceiveRepo {
 func newTestReceive() (*ReceivingUseCase, *stubReceiveRepo, *stubStockAccepter) {
 	repo := testCacheRepo()
 	stock := &stubStockAccepter{}
-	return NewReceivingUseCase(repo, stock), repo, stock
+	return NewReceivingUseCase(repo, stock, &stubWeightRecorder{}), repo, stock
 }
 
 func d(y int, m time.Month, day int) time.Time {
@@ -232,7 +230,7 @@ func TestResolveUnknown(t *testing.T) {
 }
 
 func TestSave(t *testing.T) {
-	uc, repo, stock := newTestReceive()
+	uc, _, stock := newTestReceive()
 
 	res, err := uc.Save(context.Background(), receiving.SaveRequest{
 		SupplierID: "sup-1",
@@ -253,14 +251,66 @@ func TestSave(t *testing.T) {
 	if !stock.lots[0].BestBefore.Equal(d(2026, 9, 29)) {
 		t.Fatalf("срок лота: %v", stock.lots[0].BestBefore)
 	}
-	if len(repo.inserted) != 2 {
-		t.Fatalf("весов: %d, want 2", len(repo.inserted))
+	weights, ok := uc.weights.(*stubWeightRecorder)
+	if !ok {
+		t.Fatal("ожидался stubWeightRecorder")
+	}
+	if len(weights.recorded) != 2 {
+		t.Fatalf("весов передано: %d, want 2", len(weights.recorded))
+	}
+	if res.Warnings != nil {
+		t.Fatalf("предупреждений быть не должно: %v", res.Warnings)
 	}
 	if len(res.Rows) != 1 || res.Rows[0].ProductName != "Говядина охл." {
 		t.Fatalf("отчёт: %+v", res.Rows)
 	}
 	if res.Rows[0].QtyKg != 0.5 { // 250 г + 250 г
 		t.Fatalf("кг в отчёте: %v", res.Rows[0].QtyKg)
+	}
+}
+
+func TestSaveWeightSyncWarnings(t *testing.T) {
+	uc, _, _ := newTestReceive()
+
+	// Модуль среднего веса вернул предупреждения синков — приёмка проходит,
+	// предупреждения уходят в отчёт с именем товара вместо id.
+	weights, ok := uc.weights.(*stubWeightRecorder)
+	if !ok {
+		t.Fatal("ожидался stubWeightRecorder")
+	}
+	weights.warnings = []string{"товар p1: каталог не обновлён (ошибка)", "товар p1: вики не обновлена (ошибка)"}
+
+	res, err := uc.Save(context.Background(), receiving.SaveRequest{
+		SupplierID: "sup-1",
+		Scans:      []receiving.ScanEntry{{Raw: itemBarcode}},
+	})
+	if err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if len(res.Warnings) != 2 {
+		t.Fatalf("предупреждений: %d, want 2", len(res.Warnings))
+	}
+	if !strings.Contains(res.Warnings[0], "Говядина охл.") || strings.Contains(res.Warnings[0], "p1:") {
+		t.Fatalf("id товара должен быть заменён именем: %q", res.Warnings[0])
+	}
+}
+
+func TestSaveWeightRecorderFailure(t *testing.T) {
+	uc, _, _ := newTestReceive()
+
+	// Ядро модуля среднего веса (запись весов) упало — Save падает целиком.
+	weights, ok := uc.weights.(*stubWeightRecorder)
+	if !ok {
+		t.Fatal("ожидался stubWeightRecorder")
+	}
+	weights.err = errors.New("база недоступна")
+
+	_, err := uc.Save(context.Background(), receiving.SaveRequest{
+		SupplierID: "sup-1",
+		Scans:      []receiving.ScanEntry{{Raw: itemBarcode}},
+	})
+	if err == nil {
+		t.Fatal("ожидалась ошибка при падении записи весов")
 	}
 }
 

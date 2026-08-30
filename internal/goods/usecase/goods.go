@@ -36,6 +36,9 @@ type ProductsRepository interface {
 	UpsertProduct(ctx context.Context, p *domain.Product) error
 	SearchProducts(ctx context.Context, query string) ([]domain.Product, error)
 	GetProduct(ctx context.Context, id string) (*domain.Product, error)
+	// UpdateProductAverageWeight — обновление среднего веса (кг) по входу
+	// модуля среднего веса (products.average_weight пишет только каталог).
+	UpdateProductAverageWeight(ctx context.Context, productID string, avgKg float64) error
 }
 
 // ProductPageSynchronizer — контракт автосоздания страницы товара в вики
@@ -152,6 +155,18 @@ type GoodsUseCase struct {
 // и хранилищем каталога.
 func NewGoodsUseCase(f ProductFolderClient, products ProductClient, repo ProductsRepository, wiki ProductPageSynchronizer) *GoodsUseCase {
 	return &GoodsUseCase{folders: f, products: products, repo: repo, wiki: wiki}
+}
+
+// UpdateAverageWeight обновляет средний вес товара (кг) — контракт модуля
+// среднего веса (ProductWeightUpdater на его стороне): приёмка передаёт
+// единичные веса туда, модуль считает среднее и через каталог пишет
+// products.average_weight (граница: владелец products — каталог).
+func (uc *GoodsUseCase) UpdateAverageWeight(ctx context.Context, productID string, avgKg float64) error {
+	if avgKg <= 0 {
+		return errors.New("средний вес должен быть больше нуля")
+	}
+
+	return uc.repo.UpdateProductAverageWeight(ctx, productID, avgKg)
 }
 
 // LoadFolderTree тянет папки из МС и строит дерево (без товаров).

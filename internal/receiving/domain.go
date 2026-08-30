@@ -1,9 +1,10 @@
 // Пакет receiving — модуль приёмки.
 //
-// Владеет таблицами product_received_weights (веса принятых единиц, граммы)
-// и product_supplier_barcodes (связка «внешний код поставщика → товар»,
-// нужна только приёмке для резолва внешних штрих-кодов). Клиент модуля
-// сроков (AcceptStock) — шов пишется вместе с этим модулем.
+// Владеет таблицей product_supplier_barcodes (связка «внешний код поставщика
+// → товар», нужна только приёмке для резолва внешних штрих-кодов). Веса
+// принятых единиц передаёт модулю среднего веса (RecordWeights), остатки —
+// модулю сроков (AcceptStock): оба шва — интерфейсы на стороне приёмки,
+// реализация в корне композиции.
 package receiving
 
 import (
@@ -98,9 +99,10 @@ type SaveRequest struct {
 
 // SaveResult — результат приёмки: отчёт, куски и коробки (для будущей печати).
 type SaveResult struct {
-	Rows  []ReportRow `json:"rows"`  // отчёт: товар — срок — принято (кг/шт)
-	Units []Unit      `json:"units"` // индивидуальные куски
-	Boxes []Box       `json:"boxes"` // собранные коробки
+	Rows     []ReportRow `json:"rows"`     // отчёт: товар — срок — принято (кг/шт)
+	Units    []Unit      `json:"units"`    // индивидуальные куски
+	Boxes    []Box       `json:"boxes"`    // собранные коробки
+	Warnings []string    `json:"warnings"` // предупреждения синков среднего веса (не блокируют)
 }
 
 // ReportRow — строка отчёта приёмки.
@@ -136,12 +138,6 @@ type Box struct {
 	DeclaredQty     *int64     `json:"declared_qty"`
 	DeclaredWeightG *int64     `json:"declared_weight_g"`
 	Mismatch        bool       `json:"mismatch"`
-}
-
-// WeightRow — вес принятой единицы (граммы) для product_received_weights.
-type WeightRow struct {
-	ProductID string
-	WeightG   int64
 }
 
 // Ошибки домена.
