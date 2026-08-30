@@ -24,7 +24,7 @@ func (s *stubBarcodeRepo) LoadSupplierBarcodes(context.Context, string) ([]recei
 	return s.list, s.err
 }
 
-func (s *stubBarcodeRepo) GetSupplierBarcode(_ context.Context, _ string, _ string) (*receiving.BarcodeRef, error) {
+func (s *stubBarcodeRepo) GetSupplierBarcode(_ context.Context, _, _ string) (*receiving.BarcodeRef, error) {
 	return s.get, s.err
 }
 

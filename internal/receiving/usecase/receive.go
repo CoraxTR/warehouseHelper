@@ -243,13 +243,11 @@ func scanKindOf(k innercode.Kind) receiving.ScanKind {
 func (uc *ReceivingUseCase) resolveByRule(cache *receiving.Cache, rule receiving.DecodeRule, raw string, e receiving.ScanEntry, kind receiving.ScanKind) (*receiving.DecodedScan, error) {
 	scan := &receiving.DecodedScan{Kind: kind, Raw: raw}
 
-	pid, ic, name, err := resolveProductByRule(cache, rule, raw, e)
+	pr, err := resolveProductByRule(cache, rule, raw, e)
 	if err != nil {
 		return nil, err
 	}
-	scan.ProductID, scan.InternalCode, scan.ProductName = pid, ic, name
-
-	// Вес (граммы): правило или ручной ввод.
+	scan.ProductID, scan.InternalCode, scan.ProductName = pr.productID, pr.internalCode, pr.name
 	if w, ok := sliceRule(rule, raw, 1); ok {
 		g, err := strconv.ParseInt(w, 10, 64)
 		if err != nil || g <= 0 {
@@ -266,19 +264,23 @@ func (uc *ReceivingUseCase) resolveByRule(cache *receiving.Cache, rule receiving
 	if kind == receiving.KindBox {
 		dateField = 4
 	}
-	producedOn, err := resolveRuleDate(rule, raw, 2, "дата выработки")
+	producedOn, hasProduced, err := resolveRuleDate(rule, raw, 2, "дата выработки")
 	if err != nil {
 		return nil, err
 	}
-	scan.ProducedOn = producedOn
+	if hasProduced {
+		scan.ProducedOn = &producedOn
+	}
 	if e.ManualProducedOn != nil {
 		scan.ProducedOn = e.ManualProducedOn
 	}
-	bestBefore, err := resolveRuleDate(rule, raw, dateField, "срок годности")
+	bestBefore, hasBestBefore, err := resolveRuleDate(rule, raw, dateField, "срок годности")
 	if err != nil {
 		return nil, err
 	}
-	scan.BestBefore = bestBefore
+	if hasBestBefore {
+		scan.BestBefore = &bestBefore
+	}
 	if e.ManualBestBefore != nil {
 		scan.BestBefore = e.ManualBestBefore
 	}
@@ -302,40 +304,49 @@ func (uc *ReceivingUseCase) resolveByRule(cache *receiving.Cache, rule receiving
 	return scan, nil
 }
 
+// productResolve — результат определения товара по правилу (структура,
+// чтобы не плодить 4-значные сигнатуры).
+type productResolve struct {
+	productID    string
+	internalCode string
+	name         string
+}
+
 // resolveProductByRule определяет товар скана: внешний код из правила через
 // маппинг поставщика, либо ручной выбор позиции (с дополнением из списка
 // позиций — код товара в этом случае правилом не вычитывается).
-func resolveProductByRule(cache *receiving.Cache, rule receiving.DecodeRule, raw string, e receiving.ScanEntry) (productID, internalCode, name string, err error) {
+func resolveProductByRule(cache *receiving.Cache, rule receiving.DecodeRule, raw string, e receiving.ScanEntry) (productResolve, error) {
 	code, ok := sliceRule(rule, raw, 0)
 	if ok {
 		if ref, refOK := cache.ByExternal[code]; refOK {
-			return ref.ProductID, ref.InternalCode, ref.ProductName, nil
+			return productResolve{ref.ProductID, ref.InternalCode, ref.ProductName}, nil
 		}
-		return "", "", "", fmt.Errorf("внешний код %q не заведён у поставщика — добавьте его на карточке поставщика", code)
+		return productResolve{}, fmt.Errorf("внешний код %q не заведён у поставщика — добавьте его на карточке поставщика", code)
 	}
 	if e.ManualProductID != "" {
 		for i := range cache.Products {
 			if cache.Products[i].ProductID == e.ManualProductID {
 				p := cache.Products[i]
-				return p.ProductID, p.InternalCode, p.Name, nil
+				return productResolve{p.ProductID, p.InternalCode, p.Name}, nil
 			}
 		}
-		return e.ManualProductID, "", "", nil
+		return productResolve{productID: e.ManualProductID}, nil
 	}
-	return "", "", "", errors.New("в правиле не вычитывается код товара — выберите позицию вручную")
+	return productResolve{}, errors.New("в правиле не вычитывается код товара — выберите позицию вручную")
 }
 
-// resolveRuleDate вычитывает дату ДДММГГГГ из поля правила; nil — поле не задано.
-func resolveRuleDate(rule receiving.DecodeRule, raw string, field int, label string) (*time.Time, error) {
+// resolveRuleDate вычитывает дату ДДММГГГГ из поля правила; ok=false — поле
+// не задано (дата известна не всегда: у куска в правиле может не быть срока).
+func resolveRuleDate(rule receiving.DecodeRule, raw string, field int, label string) (time.Time, bool, error) {
 	d, ok := sliceRule(rule, raw, field)
 	if !ok {
-		return nil, nil
+		return time.Time{}, false, nil
 	}
 	t, err := time.Parse("02012006", d)
 	if err != nil {
-		return nil, fmt.Errorf("%s %q не распознана (ожидается ДДММГГГГ)", label, d)
+		return time.Time{}, false, fmt.Errorf("%s %q не распознана (ожидается ДДММГГГГ)", label, d)
 	}
-	return &t, nil
+	return t, true, nil
 }
 
 // sliceRule вырезает поле правила из штрих-кода; ok=false — поле не задано.
