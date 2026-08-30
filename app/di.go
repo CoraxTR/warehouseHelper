@@ -249,7 +249,7 @@ func (d *DIContainer) WikiUC() *wucase.WikiUseCase {
 // PGClient — gucase.ProductsRepository.
 func (d *DIContainer) GoodsUC() *gucase.GoodsUseCase {
 	if d.goodsUC == nil {
-		d.goodsUC = gucase.NewGoodsUseCase(d.MSClient(), d.MSClient(), d.OrdersRepository())
+		d.goodsUC = gucase.NewGoodsUseCase(d.MSClient(), d.MSClient(), d.OrdersRepository(), d.WikiUC())
 	}
 
 	return d.goodsUC
