@@ -71,6 +71,9 @@ func NewConfig() *Config {
 type AppConfig struct {
 	HTTPAddress       string
 	TempCleanupMaxAge time.Duration
+	// WeightsHistoryLimit — сколько последних весов единицы хранить на товар
+	// (FIFO, модуль среднего веса); настройка приложения, не в схеме.
+	WeightsHistoryLimit int
 }
 
 // QRConfig — модуль «Честный знак»: фото кодов маркировки по заказам.
@@ -116,9 +119,19 @@ func loadAppconfig() *AppConfig {
 		}
 	}
 
+	// Лимит истории весов единицы на товар (модуль среднего веса):
+	// по умолчанию 100; PRODUCT_WEIGHTS_HISTORY <= 0 — сброс на дефолт.
+	weightsHistoryLimit := 100
+	if nStr := os.Getenv("PRODUCT_WEIGHTS_HISTORY"); nStr != "" {
+		if n, err := strconv.Atoi(nStr); err == nil && n > 0 {
+			weightsHistoryLimit = n
+		}
+	}
+
 	return &AppConfig{
-		HTTPAddress:       httpAddress,
-		TempCleanupMaxAge: tempCleanupMaxAge,
+		HTTPAddress:         httpAddress,
+		TempCleanupMaxAge:   tempCleanupMaxAge,
+		WeightsHistoryLimit: weightsHistoryLimit,
 	}
 }
 

@@ -209,6 +209,31 @@ func (uc *WikiUseCase) EnsureProductPage(ctx context.Context, productID, name, a
 	return nil
 }
 
+// UpdateProductAverageWeight обновляет только средний вес страницы товара
+// (вызов модуля среднего веса: названия у модуля нет — страницу не создаёт).
+// Страницы с привязкой нет — пропуск без ошибки (создастся при выгрузке
+// из МС или добавлении кода поставщика).
+func (uc *WikiUseCase) UpdateProductAverageWeight(ctx context.Context, productID, averageWeight string) error {
+	productID = strings.TrimSpace(productID)
+	if productID == "" {
+		return errors.New("не передан id товара")
+	}
+
+	page, err := uc.repo.GetPageByProductID(ctx, productID)
+	if err != nil {
+		return fmt.Errorf("получить страницу вики товара %s: %w", productID, err)
+	}
+	if page == nil {
+		return nil
+	}
+
+	if err := uc.repo.UpdateProductPage(ctx, page.ID, productID, page.Title, averageWeight); err != nil {
+		return fmt.Errorf("обновить средний вес вики товара %s: %w", productID, err)
+	}
+
+	return nil
+}
+
 // AddTagToPage добавляет тег странице по заголовку (идемпотентно).
 func (uc *WikiUseCase) AddTagToPage(ctx context.Context, title, tag string) error {
 	page, err := uc.repo.GetPage(ctx, title)

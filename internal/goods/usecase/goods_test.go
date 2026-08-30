@@ -327,12 +327,14 @@ func (s *stubProductClient) FetchUOMName(_ context.Context, href string) (string
 
 // stubProductsRepo — заглушка хранилища каталога.
 type stubProductsRepo struct {
-	saved     []domain.Product
-	search    []domain.Product
-	searchErr error
-	get       *domain.Product
-	getErr    error
-	upsertErr error
+	saved        []domain.Product
+	search       []domain.Product
+	searchErr    error
+	get          *domain.Product
+	getErr       error
+	upsertErr    error
+	updateAvgErr error
+	updateAvg    []float64
 }
 
 var _ ProductsRepository = (*stubProductsRepo)(nil)
@@ -357,6 +359,38 @@ func (s *stubProductsRepo) GetProduct(_ context.Context, _ string) (*domain.Prod
 		return nil, s.getErr
 	}
 	return s.get, nil
+}
+
+func (s *stubProductsRepo) UpdateProductAverageWeight(_ context.Context, _ string, avgKg float64) error {
+	if s.updateAvgErr != nil {
+		return s.updateAvgErr
+	}
+	s.updateAvg = append(s.updateAvg, avgKg)
+	return nil
+}
+
+func TestUpdateAverageWeight(t *testing.T) {
+	repo := &stubProductsRepo{}
+	uc := NewGoodsUseCase(nil, nil, repo, nil)
+
+	if err := uc.UpdateAverageWeight(context.Background(), "p1", 0.25); err != nil {
+		t.Fatalf("UpdateAverageWeight: %v", err)
+	}
+	if len(repo.updateAvg) != 1 || repo.updateAvg[0] != 0.25 {
+		t.Fatalf("каталог не обновлён: %v", repo.updateAvg)
+	}
+
+	if err := uc.UpdateAverageWeight(context.Background(), "p1", 0); err == nil {
+		t.Fatal("ожидалась ошибка на неположительном весе")
+	}
+	if len(repo.updateAvg) != 1 {
+		t.Fatalf("невалидный вес не должен доходить до хранилища: %v", repo.updateAvg)
+	}
+
+	repo.updateAvgErr = errors.New("сбой БД")
+	if err := uc.UpdateAverageWeight(context.Background(), "p1", 0.3); !errors.Is(err, repo.updateAvgErr) {
+		t.Fatalf("ошибка хранилища должна пробрасываться: %v", err)
+	}
 }
 
 const (
