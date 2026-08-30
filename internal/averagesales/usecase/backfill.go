@@ -193,7 +193,7 @@ func (uc *UseCase) fillHistory(ctx context.Context, need int, interval string, p
 			if err != nil {
 				return err
 			}
-			if err := uc.upsertRows(ctx, true, rows); err != nil {
+			if err := uc.upsertByInterval(ctx, interval, rows); err != nil {
 				return err
 			}
 		}
@@ -214,7 +214,7 @@ func (uc *UseCase) fillHistory(ctx context.Context, need int, interval string, p
 				batch = append(batch, rows...)
 			}
 			if len(batch) > 0 {
-				if err := uc.upsertRows(ctx, false, batch); err != nil {
+				if err := uc.upsertByInterval(ctx, interval, batch); err != nil {
 					return err
 				}
 			}

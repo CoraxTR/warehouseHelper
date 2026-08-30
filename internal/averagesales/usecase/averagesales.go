@@ -179,6 +179,14 @@ func (uc *UseCase) Stop() {
 	uc.backfill.stop()
 }
 
+// upsertByInterval пишет батч в недельную или месячную таблицу по интервалу.
+func (uc *UseCase) upsertByInterval(ctx context.Context, interval string, rows []averagesales.TurnoverRow) error {
+	if interval == intervalWeek {
+		return uc.repo.UpsertWeeklyTurnover(ctx, rows)
+	}
+	return uc.repo.UpsertMonthlyTurnover(ctx, rows)
+}
+
 // calcQty переводит продажи из отчёта в штуки: весовые (uom кг/г/т) делятся на
 // средний вес штуки (нет веса — интервал пропускаем), штучные — как есть.
 func (uc *UseCase) calcQty(r client.ProfitRow, p averagesales.TurnoverProduct) (float64, bool) {
