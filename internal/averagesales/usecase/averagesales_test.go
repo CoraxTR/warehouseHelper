@@ -14,7 +14,7 @@ func TestAverageSales_Monthly(t *testing.T) {
 	curStart := currentPeriodStart("month", now)
 
 	// 12 завершённых месяцев до текущего: свежайший qty 1 … самый дальний qty 12.
-	var monthly []averagesales.TurnoverRow
+	monthly := make([]averagesales.TurnoverRow, 0, 12)
 	for i := 1; i <= 12; i++ {
 		monthly = append(monthly, averagesales.TurnoverRow{
 			ProductID:   "p1",
@@ -76,7 +76,7 @@ func TestAverageSales_Weekly(t *testing.T) {
 	curWeek := currentPeriodStart("week", now)
 
 	// 5 завершённых недель: свежайшая qty 5 … самая дальняя qty 1.
-	var weekly []averagesales.TurnoverRow
+	weekly := make([]averagesales.TurnoverRow, 0, 5)
 	for i := 1; i <= 5; i++ {
 		weekly = append(weekly, averagesales.TurnoverRow{
 			ProductID:   "p1",

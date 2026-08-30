@@ -3,6 +3,7 @@ package usecase
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path"
 	"time"
@@ -74,9 +75,9 @@ func (uc *UseCase) AverageSales(ctx context.Context, productID string) (*float64
 		return nil, fmt.Errorf("товар %s: %w", productID, err)
 	}
 
-	n, interval, last := 12, "month", uc.repo.LastMonthlyTurnover
+	n, interval, last := 12, intervalMonth, uc.repo.LastMonthlyTurnover
 	if prod.TrackWeekly {
-		n, interval = 5, "week"
+		n, interval = 5, intervalWeek
 		last = uc.repo.LastWeeklyTurnover
 	}
 
@@ -131,16 +132,32 @@ func (uc *UseCase) AverageSales(ctx context.Context, productID string) (*float64
 		case r.PeriodStart.Equal(periodStart):
 			c := r
 			current = &c
+		default:
+			// Строки за пределами окна (будущие/дубли) — пропуск.
 		}
 	}
 
-	return windowAvg(finished, current, n)
+	avg, err := windowAvg(finished, current, n)
+	if errors.Is(err, errNoData) {
+		// Публичный контракт «продаж не было вообще» (потребители обязаны
+		// уметь пропускать товары без данных).
+		return nil, nil
+	}
+	return avg, err
 }
+
+// Константы интервалов отчёта (goconst).
+const (
+	intervalMonth = "month"
+	intervalWeek  = "week"
+)
 
 // BackfillProducts ставит товары в очередь первичного бэкфилла (при первом
 // добавлении в каталог). Возвращается сразу — запросы к МС идут в фоне,
-// чтобы не задерживать выгрузку каталога.
-func (uc *UseCase) BackfillProducts(ctx context.Context, productIDs []string) {
+// чтобы не задерживать выгрузку каталога. Контекст намеренно не принимается:
+// очередь живёт своей жизнью (собственный context + cancel в раннере),
+// а не жизнью запроса, который её поставил.
+func (uc *UseCase) BackfillProducts(productIDs []string) {
 	uc.backfill.enqueue(productIDs)
 }
 

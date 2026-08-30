@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"warehouseHelper/internal/avgweight"
 	"warehouseHelper/internal/decoderules"
 	"warehouseHelper/internal/domain"
 	"warehouseHelper/internal/innercode"
@@ -30,10 +31,6 @@ type ReceiveRepository interface {
 	// LoadCatalogAllRefs — все товары каталога по внутренним кодам
 	// (для кеша страницы приёмки: внутренние коды 29/33 распознаются сразу).
 	LoadCatalogAllRefs(ctx context.Context) ([]receiving.ProductRef, error)
-	// InsertReceivedWeights — запись весов принятых единиц (граммы).
-	InsertReceivedWeights(ctx context.Context, rows []receiving.WeightRow) error
-	// TrimReceivedWeights — оставить последние keep весов товара (FIFO по id).
-	TrimReceivedWeights(ctx context.Context, productID string, keep int) error
 }
 
 // StockAccepter — адаптер модуля сроков: принятые партии добавляются к
@@ -42,20 +39,26 @@ type StockAccepter interface {
 	AcceptStock(ctx context.Context, lots []stock.LotIn) error
 }
 
+// WeightRecorder — модуль среднего веса: пишет единичные веса приёмки
+// поштучно, обрезает историю до лимита, пересчитывает среднее и обновляет
+// каталог и вики; предупреждения его синков — в отчёт. Реализует
+// *aucase.UseCase.
+type WeightRecorder interface {
+	RecordWeights(ctx context.Context, rows []avgweight.WeightRow) ([]string, error)
+}
+
 // ReceivingUseCase — сценарии приёмки.
 type ReceivingUseCase struct {
-	repo  ReceiveRepository
-	stock StockAccepter
+	repo    ReceiveRepository
+	stock   StockAccepter
+	weights WeightRecorder
 }
 
-// NewReceivingUseCase создаёт сценарий с хранилищем и адаптером сроков.
-func NewReceivingUseCase(repo ReceiveRepository, stock StockAccepter) *ReceivingUseCase {
-	return &ReceivingUseCase{repo: repo, stock: stock}
+// NewReceivingUseCase создаёт сценарий с хранилищем, адаптером сроков
+// и модулем среднего веса.
+func NewReceivingUseCase(repo ReceiveRepository, stock StockAccepter, weights WeightRecorder) *ReceivingUseCase {
+	return &ReceivingUseCase{repo: repo, stock: stock, weights: weights}
 }
-
-// keepWeights — сколько последних весов единицы хранить на товар (FIFO);
-// настройка приложения, зеркалит комментарий схемы received_weights.
-const keepWeights = 100
 
 // GetCache собирает кеш приёмки поставщика: правила вычитки (куски и
 // коробки), маппинг внешних кодов, позиции поставщика для ручного выбора.

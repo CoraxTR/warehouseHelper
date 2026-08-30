@@ -38,6 +38,9 @@ type ProductsRepository interface {
 	SearchProducts(ctx context.Context, query string) ([]domain.Product, error)
 	GetProduct(ctx context.Context, id string) (*domain.Product, error)
 	GetProductsByIDs(ctx context.Context, ids []string) ([]domain.Product, error)
+	// UpdateProductAverageWeight — обновление среднего веса (кг) по входу
+	// модуля среднего веса (products.average_weight пишет только каталог).
+	UpdateProductAverageWeight(ctx context.Context, productID string, avgKg float64) error
 }
 
 // ProductPageSynchronizer — контракт автосоздания страницы товара в вики
@@ -152,9 +155,11 @@ type GoodsUseCase struct {
 }
 
 // TurnoverBackfiller — асинхронный первичный бэкфилл оборотов средних продаж
-// (реализует *aucase.UseCase; запросы к МС идут в фоне, не задерживая каталог).
+// (реализует *asucase.UseCase; запросы к МС идут в фоне, не задерживая каталог).
+// Контекст не передаётся намеренно: очередь бэкфилла живёт своей жизнью,
+// а не жизнью запроса, который поставил товар.
 type TurnoverBackfiller interface {
-	BackfillProducts(ctx context.Context, productIDs []string)
+	BackfillProducts(productIDs []string)
 }
 
 // NewGoodsUseCase создаёт юзкейс с источником папок, клиентом товаров
@@ -203,6 +208,18 @@ func (uc *GoodsUseCase) TurnoverProductsByIDs(ctx context.Context, ids []string)
 		})
 	}
 	return out, nil
+}
+
+// UpdateAverageWeight обновляет средний вес товара (кг) — контракт модуля
+// среднего веса (ProductWeightUpdater на его стороне): приёмка передаёт
+// единичные веса туда, модуль считает среднее и через каталог пишет
+// products.average_weight (граница: владелец products — каталог).
+func (uc *GoodsUseCase) UpdateAverageWeight(ctx context.Context, productID string, avgKg float64) error {
+	if avgKg <= 0 {
+		return errors.New("средний вес должен быть больше нуля")
+	}
+
+	return uc.repo.UpdateProductAverageWeight(ctx, productID, avgKg)
 }
 
 // LoadFolderTree тянет папки из МС и строит дерево (без товаров).
@@ -335,7 +352,7 @@ func (uc *GoodsUseCase) ExportProducts(ctx context.Context, items []ExportItem) 
 			}
 
 			// Первичный бэкфилл средних продаж — асинхронно, в фоне.
-			uc.scheduleTurnoverBackfill(ctx, prod.ID)
+			uc.scheduleTurnoverBackfill(prod.ID)
 
 			if err := uc.syncWikiProduct(ctx, prod); err != nil {
 				exportErrs = append(exportErrs, ProductExportError{Name: ms.Name, Err: "не удалось создать страницу вики: " + err.Error()})
@@ -378,7 +395,7 @@ func (uc *GoodsUseCase) SaveProduct(ctx context.Context, p *domain.Product) erro
 	if err := uc.repo.UpsertProduct(ctx, p); err != nil {
 		return err
 	}
-	uc.scheduleTurnoverBackfill(ctx, p.ID)
+	uc.scheduleTurnoverBackfill(p.ID)
 	return nil
 }
 
@@ -405,7 +422,7 @@ func (uc *GoodsUseCase) ResyncProduct(ctx context.Context, id string) (*domain.P
 		return nil, err
 	}
 
-	uc.scheduleTurnoverBackfill(ctx, prod.ID)
+	uc.scheduleTurnoverBackfill(prod.ID)
 
 	if err := uc.syncWikiProduct(ctx, prod); err != nil {
 		// Товар в каталог записан; страница вики — вторичная операция,
@@ -418,11 +435,11 @@ func (uc *GoodsUseCase) ResyncProduct(ctx context.Context, id string) (*domain.P
 
 // scheduleTurnoverBackfill ставит товар в очередь первичного бэкфилла оборотов
 // (асинхронно; бэкфилл идемпотентен — уже заполненные товары пропускает).
-func (uc *GoodsUseCase) scheduleTurnoverBackfill(ctx context.Context, productID string) {
+func (uc *GoodsUseCase) scheduleTurnoverBackfill(productID string) {
 	if uc.turnover == nil {
 		return
 	}
-	uc.turnover.BackfillProducts(ctx, []string{productID})
+	uc.turnover.BackfillProducts([]string{productID})
 }
 
 // syncWikiProduct гарантирует страницу вики товара после записи в каталог

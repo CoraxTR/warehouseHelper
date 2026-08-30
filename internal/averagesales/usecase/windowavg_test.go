@@ -1,6 +1,7 @@
 package usecase
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -38,6 +39,7 @@ func TestWindowAvg(t *testing.T) {
 		current   *averagesales.TurnoverRow
 		n         int
 		wantAvg   *float64 // nil — «продаж не было вообще»
+		wantErr   error
 		wantError bool
 	}{
 		{
@@ -46,6 +48,7 @@ func TestWindowAvg(t *testing.T) {
 			current:  nil,
 			n:        12,
 			wantAvg:  nil,
+			wantErr:  errNoData,
 		},
 		{
 			name:     "только один текущий незакрытый — avg = current/1",
@@ -125,8 +128,8 @@ func TestWindowAvg(t *testing.T) {
 				}
 				return
 			}
-			if err != nil {
-				t.Fatalf("windowAvg() unexpected error: %v", err)
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("windowAvg() error = %v, want %v", err, tt.wantErr)
 			}
 
 			if tt.wantAvg == nil {

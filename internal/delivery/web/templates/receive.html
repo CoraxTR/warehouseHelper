@@ -500,6 +500,10 @@
                 html += '<div class="error" style="margin-top:10px;">Расхождение в ' + mismatch + ' коробке(ах): принято как есть, проверьте комплектацию.</div>';
             }
 
+            if (resp.warnings && resp.warnings.length) {
+                html += '<div class="hint" style="margin-top:10px;color:#856404;background:#fff3cd;border:1px solid #ffeeba;padding:8px 10px;">Приёмка сохранена, но не удалось обновить средний вес:<br>- ' + resp.warnings.join('<br>- ') + '</div>';
+            }
+
             html += '<button onclick="printLater()">Распечатать штрих-коды</button>';
             html += '<p class="hint">Модуль печати появится позже; данные о кусках и коробках уже переданы при сохранении.</p>';
             html += '<p><a href="/ms/receive?id={{.Supplier.ID}}">→ Новая приёмка у этого поставщика</a></p>';

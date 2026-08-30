@@ -1,6 +1,15 @@
 package usecase
 
-import "warehouseHelper/internal/averagesales"
+import (
+	"errors"
+
+	"warehouseHelper/internal/averagesales"
+)
+
+// errNoData — у товара нет ни одного интервала продаж (продаж не было вообще).
+// windowAvg возвращает его, AverageSales конвертирует в (nil, nil) —
+// публичный контракт «нет данных» (потребители обязаны уметь пропускать).
+var errNoData = errors.New("нет данных о продажах")
 
 // windowAvg — среднее по правилу владельца.
 //
@@ -8,7 +17,7 @@ import "warehouseHelper/internal/averagesales"
 // (последний элемент — самая дальняя/самая старая), len <= n;
 // current — текущий незакрытый период (может быть nil). k = len(finished).
 //
-// (nil, nil) — ТОЛЬКО когда k == 0 И current == nil: продаж не было вообще
+// (nil, errNoData) — ТОЛЬКО когда k == 0 И current == nil: продаж не было вообще
 // (новый товар без единых продаж; потребители обязаны пропускать такие товары).
 //
 // Иначе считаем по имеющемуся (даже один текущий незакрытый → avg = current/1):
@@ -25,7 +34,7 @@ import "warehouseHelper/internal/averagesales"
 func windowAvg(finished []averagesales.TurnoverRow, current *averagesales.TurnoverRow, n int) (*float64, error) {
 	k := len(finished)
 	if k == 0 && current == nil {
-		return nil, nil
+		return nil, errNoData
 	}
 
 	includeCurrent := current != nil && (k < n || current.Qty > finished[k-1].Qty)

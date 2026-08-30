@@ -544,3 +544,43 @@ func TestSyncSupplierPage_Validation(t *testing.T) {
 		t.Fatal("пустое имя должно давать ошибку")
 	}
 }
+
+func TestUpdateProductAverageWeight(t *testing.T) {
+	// Страница товара есть — обновляется только средний вес (заголовок
+	// и привязка остаются прежними).
+	repo := &stubWikiRepo{
+		linkedProductPage: &domain.WikiPage{ID: 7, ProductID: "p1", Title: "Говядина охл."},
+	}
+	uc := NewWikiUseCase(repo)
+
+	if err := uc.UpdateProductAverageWeight(context.Background(), "p1", "0.25"); err != nil {
+		t.Fatalf("UpdateProductAverageWeight: %v", err)
+	}
+	if repo.lastUpdatedPageID != 7 || repo.lastUpdatedProductID != "p1" ||
+		repo.lastUpdatedTitle != "Говядина охл." || repo.lastUpdatedAvgWeight != "0.25" {
+		t.Fatalf("обновление: page=%d product=%q title=%q avg=%q",
+			repo.lastUpdatedPageID, repo.lastUpdatedProductID, repo.lastUpdatedTitle, repo.lastUpdatedAvgWeight)
+	}
+}
+
+func TestUpdateProductAverageWeightNoPage(t *testing.T) {
+	// Страницы с привязкой нет — пропуск без ошибки (создастся при выгрузке
+	// из МС или добавлении кода поставщика).
+	repo := &stubWikiRepo{}
+	uc := NewWikiUseCase(repo)
+
+	if err := uc.UpdateProductAverageWeight(context.Background(), "p1", "0.25"); err != nil {
+		t.Fatalf("страницы нет — пропуск: %v", err)
+	}
+	if repo.lastUpdatedPageID != 0 {
+		t.Fatalf("обновления быть не должно: %d", repo.lastUpdatedPageID)
+	}
+}
+
+func TestUpdateProductAverageWeightValidation(t *testing.T) {
+	uc := NewWikiUseCase(&stubWikiRepo{})
+
+	if err := uc.UpdateProductAverageWeight(context.Background(), "  ", "0.25"); err == nil {
+		t.Fatal("пустой id товара должен давать ошибку")
+	}
+}

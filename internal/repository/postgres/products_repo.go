@@ -42,7 +42,7 @@ func (pg *PGClient) GetProductsByIDs(ctx context.Context, ids []string) ([]domai
 	}
 	defer rows.Close()
 
-	var products []domain.Product
+	products := make([]domain.Product, 0)
 	for rows.Next() {
 		p, err := scanProduct(rows)
 		if err != nil {
@@ -140,4 +140,22 @@ func (pg *PGClient) GetProduct(ctx context.Context, id string) (*domain.Product,
 	}
 
 	return p, nil
+}
+
+// UpdateProductAverageWeight обновляет средний вес товара (кг) — вход модуля
+// среднего веса (граница: products.average_weight пишет только каталог).
+// Товара нет → domain.ErrProductNotFound.
+func (pg *PGClient) UpdateProductAverageWeight(ctx context.Context, productID string, avgKg float64) error {
+	tag, err := pg.Pool.Exec(ctx, `
+        UPDATE products SET average_weight = $2 WHERE id = $1
+    `, productID, avgKg)
+	if err != nil {
+		return fmt.Errorf("update average weight %s: %w", productID, err)
+	}
+
+	if tag.RowsAffected() == 0 {
+		return domain.ErrProductNotFound
+	}
+
+	return nil
 }

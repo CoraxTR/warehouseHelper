@@ -163,13 +163,13 @@ func (uc *UseCase) backfillProduct(ctx context.Context, id string) error {
 // Фильтр отчёта — как передан (точечный или пачечный), из строк берутся только
 // товары из want (nil — все строки фильтра).
 func (uc *UseCase) fillMonthlyHistory(ctx context.Context, p averagesales.TurnoverProduct, filter client.ProfitFilter) error {
-	return uc.fillHistory(ctx, monthlyNeed, "month", p, filter, nil)
+	return uc.fillHistory(ctx, monthlyNeed, intervalMonth, p, filter, nil)
 }
 
 // fillWeeklyHistory — понедельная история до первой полной недели текущего года,
 // вглубь до 2014, пока не набрано weeklyNeed not null интервалов.
 func (uc *UseCase) fillWeeklyHistory(ctx context.Context, p averagesales.TurnoverProduct, filter client.ProfitFilter) error {
-	return uc.fillHistory(ctx, weeklyNeed, "week", p, filter, nil)
+	return uc.fillHistory(ctx, weeklyNeed, intervalWeek, p, filter, nil)
 }
 
 // fillHistory — общий цикл бэкфилла: интервалы от границы вглубь, стоп по
@@ -181,7 +181,7 @@ func (uc *UseCase) fillHistory(ctx context.Context, need int, interval string, p
 	needReached := func() bool { return count >= need }
 
 	switch interval {
-	case "week":
+	case intervalWeek:
 		// Недели, начинающиеся строго раньше понедельника первой полной недели
 		// текущего года, вглубь до первой полной недели 2014.
 		firstFull := firstFullWeekStart(now.Year(), now.Location())
@@ -199,7 +199,7 @@ func (uc *UseCase) fillHistory(ctx context.Context, need int, interval string, p
 		}
 		return nil
 
-	default: // "month"
+	default: // intervalMonth
 		for year := now.Year() - 1; year >= minBackfillYear && !needReached(); year-- {
 			var batch []averagesales.TurnoverRow
 			for m := 1; m <= 12; m++ {
@@ -341,7 +341,7 @@ func (uc *UseCase) fillMonthlyMissing(ctx context.Context, active map[string]ave
 			// Группы: один запрос на группу, из строк — только активные товары.
 			for folderID, memberIDs := range groups {
 				want := toSet(memberIDs)
-				rows, err := uc.fetchGroupRows(ctx, from, "month", client.ProfitFilter{ProductFolderID: folderID}, want, active, counts)
+				rows, err := uc.fetchGroupRows(ctx, from, intervalMonth, client.ProfitFilter{ProductFolderID: folderID}, want, active, counts)
 				if err != nil {
 					return err
 				}
@@ -357,7 +357,7 @@ func (uc *UseCase) fillMonthlyMissing(ctx context.Context, active map[string]ave
 			}
 			for i := 0; i < len(chunk); i += noGroupBatch {
 				end := min(i+noGroupBatch, len(chunk))
-				rows, err := uc.fetchGroupRows(ctx, from, "month", client.ProfitFilter{ProductIDs: chunk[i:end]}, nil, active, counts)
+				rows, err := uc.fetchGroupRows(ctx, from, intervalMonth, client.ProfitFilter{ProductIDs: chunk[i:end]}, nil, active, counts)
 				if err != nil {
 					return err
 				}
@@ -395,7 +395,7 @@ func (uc *UseCase) fillWeeklyMissing(ctx context.Context, active map[string]aver
 		var batch []averagesales.TurnoverRow
 		for folderID, memberIDs := range groups {
 			want := toSet(memberIDs)
-			rows, err := uc.fetchGroupRows(ctx, week, "week", client.ProfitFilter{ProductFolderID: folderID}, want, active, counts)
+			rows, err := uc.fetchGroupRows(ctx, week, intervalWeek, client.ProfitFilter{ProductFolderID: folderID}, want, active, counts)
 			if err != nil {
 				return err
 			}
@@ -410,7 +410,7 @@ func (uc *UseCase) fillWeeklyMissing(ctx context.Context, active map[string]aver
 		}
 		for i := 0; i < len(chunk); i += noGroupBatch {
 			end := min(i+noGroupBatch, len(chunk))
-			rows, err := uc.fetchGroupRows(ctx, week, "week", client.ProfitFilter{ProductIDs: chunk[i:end]}, nil, active, counts)
+			rows, err := uc.fetchGroupRows(ctx, week, intervalWeek, client.ProfitFilter{ProductIDs: chunk[i:end]}, nil, active, counts)
 			if err != nil {
 				return err
 			}

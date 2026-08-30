@@ -11,7 +11,7 @@ import (
 
 // rowsEverywhere — продавался всегда (любой период, любой фильтр).
 func rowsEverywhere(_, _ time.Time, _ string, f client.ProfitFilter) []client.ProfitRow {
-	var rows []client.ProfitRow
+	rows := make([]client.ProfitRow, 0, len(f.ProductIDs)+2)
 	if f.ProductFolderID != "" {
 		rows = append(rows, profitRow("p1", 5, 0), profitRow("p2", 5, 0))
 	}

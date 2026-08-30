@@ -108,7 +108,7 @@ func (pg *PGClient) ProductsWithoutMonthlyTurnover(ctx context.Context) ([]strin
 	}
 	defer rows.Close()
 
-	var ids []string
+	ids := make([]string, 0)
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {

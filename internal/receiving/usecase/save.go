@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"warehouseHelper/internal/avgweight"
 	"warehouseHelper/internal/receiving"
 	"warehouseHelper/internal/stock"
 )
@@ -53,30 +54,53 @@ func (uc *ReceivingUseCase) Save(ctx context.Context, req receiving.SaveRequest)
 		return nil, fmt.Errorf("принять в остатки: %w", err)
 	}
 
-	// Веса принятых единиц: только весовые товары; FIFO-лимит поддерживаем сами.
-	var rows []receiving.WeightRow
+	// Веса принятых единиц: только весовые товары. Запись поштучно,
+	// FIFO-лимит, пересчёт среднего и синк каталога/вики — модуль среднего
+	// веса; предупреждения его синков уходят в отчёт приёмки.
+	var rows []avgweight.WeightRow
 	for _, u := range units {
 		if u.WeightG > 0 {
-			rows = append(rows, receiving.WeightRow{ProductID: u.ProductID, WeightG: u.WeightG})
+			rows = append(rows, avgweight.WeightRow{ProductID: u.ProductID, WeightG: u.WeightG})
 		}
 	}
-	if len(rows) > 0 {
-		if err := uc.repo.InsertReceivedWeights(ctx, rows); err != nil {
+	result := &receiving.SaveResult{Rows: buildReport(units), Units: units, Boxes: boxes}
+	if len(rows) > 0 && uc.weights != nil {
+		warnings, err := uc.weights.RecordWeights(ctx, rows)
+		if err != nil {
 			return nil, fmt.Errorf("записать веса: %w", err)
 		}
-		seen := make(map[string]struct{})
-		for _, r := range rows {
-			if _, ok := seen[r.ProductID]; ok {
-				continue
-			}
-			seen[r.ProductID] = struct{}{}
-			if err := uc.repo.TrimReceivedWeights(ctx, r.ProductID, keepWeights); err != nil {
-				return nil, fmt.Errorf("обрезать веса %s: %w", r.ProductID, err)
-			}
+		result.Warnings = translateWeightWarnings(warnings, units)
+	}
+
+	return result, nil
+}
+
+// translateWeightWarnings заменяет в предупреждениях модуля среднего веса
+// id товара на его имя (в отчёте приёмки имя читается, id — нет).
+func translateWeightWarnings(warnings []string, units []receiving.Unit) []string {
+	if len(warnings) == 0 {
+		return nil
+	}
+
+	names := make(map[string]string, len(units))
+	for _, u := range units {
+		if _, ok := names[u.ProductID]; !ok {
+			names[u.ProductID] = u.ProductName
 		}
 	}
 
-	return &receiving.SaveResult{Rows: buildReport(units), Units: units, Boxes: boxes}, nil
+	out := make([]string, 0, len(warnings))
+	for _, w := range warnings {
+		for id, name := range names {
+			if name != "" && strings.Contains(w, id) {
+				w = strings.Replace(w, id, name, 1)
+				break
+			}
+		}
+		out = append(out, w)
+	}
+
+	return out
 }
 
 // resolveBox резолвит коробку и её подсписок: дети должны быть кусками
