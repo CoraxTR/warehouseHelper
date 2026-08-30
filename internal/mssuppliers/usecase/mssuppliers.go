@@ -12,6 +12,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"warehouseHelper/internal/decoderules"
 	"warehouseHelper/internal/domain"
 )
 
@@ -163,7 +164,6 @@ func (uc *MSSuppliersUseCase) fetchName(ctx context.Context, s *domain.Supplier)
 var (
 	counterpartyUUIDRe = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 	uuidInLinkRe       = regexp.MustCompile(`id=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})`)
-	decodeRuleRe       = regexp.MustCompile(`^\d+(-\d+)+$`)
 )
 
 // ExtractCounterpartyID извлекает uuid контрагента из ссылки МойСклад
@@ -199,10 +199,10 @@ func (uc *MSSuppliersUseCase) validate(s *domain.Supplier) error {
 	}
 
 	var err error
-	if s.DecodeRules, err = normalizeRules("правила вычитки штрихкодов", s.DecodeRules); err != nil {
+	if s.DecodeRules, err = normalizeRules("правило вычитки штрихкодов", s.DecodeRules, validateItemRule); err != nil {
 		return err
 	}
-	if s.BoxDecodeRules, err = normalizeRules("правила вычитки коробок", s.BoxDecodeRules); err != nil {
+	if s.BoxDecodeRules, err = normalizeRules("правило вычитки коробок", s.BoxDecodeRules, validateBoxRule); err != nil {
 		return err
 	}
 
@@ -232,16 +232,29 @@ func (uc *MSSuppliersUseCase) validate(s *domain.Supplier) error {
 	return nil
 }
 
-// normalizeRules чистит правила вычитки: обрезка пробелов, удаление пустых строк.
-func normalizeRules(label string, rules []string) ([]string, error) {
+// validateItemRule / validateBoxRule — тонкие обёртки парсера decoderules для
+// валидации правил при сохранении (значение парсера не нужно).
+func validateItemRule(r string) error {
+	_, err := decoderules.ParseItem(r)
+	return err
+}
+
+func validateBoxRule(r string) error {
+	_, err := decoderules.ParseBox(r)
+	return err
+}
+
+// normalizeRules чистит правила вычитки: обрезка пробелов, удаление пустых строк,
+// валидация формата парсером decoderules (один источник истины с приёмкой).
+func normalizeRules(label string, rules []string, parse func(string) error) ([]string, error) {
 	out := make([]string, 0, len(rules))
 	for _, r := range rules {
 		r = strings.TrimSpace(r)
 		if r == "" {
 			continue
 		}
-		if !decodeRuleRe.MatchString(r) {
-			return nil, fmt.Errorf("%s: правило %q должно быть в формате \"28-1-6-7-6-13-8-21-8\"", label, r)
+		if err := parse(r); err != nil {
+			return nil, fmt.Errorf("%s %q: %v", label, r, err)
 		}
 		if utf8.RuneCountInString(r) > 255 {
 			return nil, fmt.Errorf("%s: правило %q слишком длинное (максимум 255 символов)", label, r)
