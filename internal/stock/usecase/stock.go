@@ -204,6 +204,8 @@ func (uc *StockUseCase) UpdatePageContext(ctx context.Context, productID, groupC
 		}
 		pc.GroupCode = groupCode
 		pc.Name = name
+	default:
+		// Полное обновление — без ограничений и ожидаемого кода.
 	}
 	return pc, nil
 }
@@ -227,42 +229,11 @@ func (uc *StockUseCase) ReplaceStock(ctx context.Context, req ReplaceRequest) er
 		return errors.New("нет сканов")
 	}
 
-	// 1. Разбор всех сканов разбирателем + проверка ограничения по группе.
-	type parsedScan struct {
-		code       string
-		qty        int64
-		producedOn time.Time
-		bestBefore time.Time
+	parsed, err := parseScans(req.Scans, req.ExpectedGroupCode)
+	if err != nil {
+		return err
 	}
-	parsed := make([]parsedScan, 0, len(req.Scans))
-	codes := make([]string, 0, len(req.Scans))
-	seen := map[string]struct{}{}
-	for _, raw := range req.Scans {
-		raw = strings.TrimSpace(raw)
-		c, err := innercode.Parse(raw)
-		if err != nil {
-			if errors.Is(err, innercode.ErrNotInternal) {
-				return stock.ErrScanNotInternal
-			}
-			return stock.ErrScanInvalid
-		}
-		if req.ExpectedGroupCode != "" && c.InternalCode[1:4] != req.ExpectedGroupCode {
-			return stock.ErrScanGroupMismatch
-		}
-		parsed = append(parsed, parsedScan{
-			code:       c.InternalCode,
-			qty:        int64(c.Qty),
-			producedOn: c.ProdDate,
-			bestBefore: normalizeDate(c.ExpDate),
-		})
-		if _, ok := seen[c.InternalCode]; !ok {
-			seen[c.InternalCode] = struct{}{}
-			codes = append(codes, c.InternalCode)
-		}
-	}
-
-	// 2. Резолв каталога одним запросом.
-	byCode, err := uc.repo.LoadProductsByCodes(ctx, codes)
+	byCode, err := uc.repo.LoadProductsByCodes(ctx, uniqueCodes(parsed))
 	if err != nil {
 		return fmt.Errorf("load products by codes: %w", err)
 	}
@@ -270,52 +241,123 @@ func (uc *StockUseCase) ReplaceStock(ctx context.Context, req ReplaceRequest) er
 	for _, p := range byCode {
 		byID[p.ID] = p
 	}
-
-	// 3. Группировка сканов по (товар, срок) и проверка ограничения по товару.
-	type agg struct {
-		qty        int64
-		producedOn time.Time
+	batches, order, err := groupScans(parsed, byCode, req.ExpectedProductID)
+	if err != nil {
+		return err
 	}
+	plans, err := uc.buildReplacePlans(batches, order)
+	if err != nil {
+		return err
+	}
+	return uc.applyReplacePlans(ctx, order, plans, byID)
+}
+
+// parsedScan — разобранный штрих-код одного скана.
+type parsedScan struct {
+	code       string
+	qty        int64
+	producedOn time.Time
+	bestBefore time.Time
+}
+
+// parseScans разбирает сырые штрих-коды разбирателем и проверяет
+// ограничение страницы по группе (3 цифры internal_code[1:4]).
+func parseScans(raws []string, expectedGroup string) ([]parsedScan, error) {
+	parsed := make([]parsedScan, 0, len(raws))
+	for _, raw := range raws {
+		raw = strings.TrimSpace(raw)
+		c, err := innercode.Parse(raw)
+		if err != nil {
+			if errors.Is(err, innercode.ErrNotInternal) {
+				return nil, stock.ErrScanNotInternal
+			}
+			return nil, stock.ErrScanInvalid
+		}
+		if expectedGroup != "" && c.InternalCode[1:4] != expectedGroup {
+			return nil, stock.ErrScanGroupMismatch
+		}
+		parsed = append(parsed, parsedScan{
+			code:       c.InternalCode,
+			qty:        int64(c.Qty),
+			producedOn: c.ProdDate,
+			// Нормализация к UTC-полуночи: ключи map time.Time с разными
+			// зонами (кэш из БД vs разбор innercode) не совпадают — лоты
+			// «теряются», скидки сбрасываются, всё уходит в deletes.
+			bestBefore: normalizeDate(c.ExpDate),
+		})
+	}
+	return parsed, nil
+}
+
+// uniqueCodes собирает уникальные internal_code в порядке появления.
+func uniqueCodes(parsed []parsedScan) []string {
+	seen := map[string]struct{}{}
+	codes := make([]string, 0, len(parsed))
+	for _, s := range parsed {
+		if _, ok := seen[s.code]; !ok {
+			seen[s.code] = struct{}{}
+			codes = append(codes, s.code)
+		}
+	}
+	return codes
+}
+
+// agg — сумма сканов одного лота (товар, срок).
+type agg struct {
+	qty        int64
+	producedOn time.Time
+}
+
+// groupScans группирует сканы по (товар, срок) и проверяет ограничение
+// страницы по товару. Возвращает батчи по товарам и порядок их появления.
+func groupScans(parsed []parsedScan, byCode map[string]stock.Product, expectedProductID string) (map[string]map[time.Time]*agg, []string, error) {
 	batches := map[string]map[time.Time]*agg{}
-	var productOrder []string
+	var order []string
 	for _, s := range parsed {
 		p, ok := byCode[s.code]
 		if !ok {
-			return fmt.Errorf("%w: код %s", stock.ErrProductNotFound, s.code)
+			return nil, nil, fmt.Errorf("%w: код %s", stock.ErrProductNotFound, s.code)
 		}
-		if req.ExpectedProductID != "" && p.ID != req.ExpectedProductID {
-			return stock.ErrScanProductMismatch
+		if expectedProductID != "" && p.ID != expectedProductID {
+			return nil, nil, stock.ErrScanProductMismatch
 		}
-		if _, ok := batches[p.ID]; !ok {
-			batches[p.ID] = map[time.Time]*agg{}
-			productOrder = append(productOrder, p.ID)
+		m := batches[p.ID]
+		if m == nil {
+			m = map[time.Time]*agg{}
+			batches[p.ID] = m
+			order = append(order, p.ID)
 		}
-		a := batches[p.ID][s.bestBefore]
+		a := m[s.bestBefore]
 		if a == nil {
 			a = &agg{}
-			batches[p.ID][s.bestBefore] = a
+			m[s.bestBefore] = a
 		}
 		a.qty += s.qty
 		if a.producedOn.IsZero() {
 			a.producedOn = s.producedOn
 		}
 	}
+	return batches, order, nil
+}
 
-	// 4. План замены по товарам: финальные лоты, целевые скидки, удаления.
-	// Даты нормализованы к UTC-полуночи (normalizeDate) — иначе ключи map
-	// time.Time с разными зонами (кэш из БД vs разбор innercode) не совпадают,
-	// и существующие лоты «теряются» (скидки сбросятся, лоты уйдут в deletes).
+// replacePlan — целевое состояние одного товара после замены.
+type replacePlan struct {
+	inCache bool
+	upserts []stock.Lot      // финальные лоты (кэш + события)
+	writes  []stock.LotWrite // целевые значения для репозитория
+	deletes []time.Time      // best_before удаляемых лотов
+}
+
+// buildReplacePlans вычисляет целевое состояние товаров: ручные скидки
+// неистёкших лотов сохраняются, истёкшие сбрасываются; лоты вне сканов
+// уходят в deletes. Читает кэш под RLock.
+func (uc *StockUseCase) buildReplacePlans(batches map[string]map[time.Time]*agg, order []string) ([]replacePlan, error) {
 	today := normalizeDate(time.Now())
-	type plan struct {
-		inCache bool
-		upserts []stock.Lot      // финальные лоты (кэш + события)
-		writes  []stock.LotWrite // целевые значения для репозитория
-		deletes []time.Time      // best_before удаляемых лотов
-	}
-	plans := make([]plan, len(productOrder))
+	plans := make([]replacePlan, len(order))
 
 	uc.mu.RLock()
-	for i, pid := range productOrder {
+	defer uc.mu.RUnlock()
+	for i, pid := range order {
 		pl := &plans[i]
 		cur, ok := uc.cache[pid]
 		pl.inCache = ok
@@ -327,75 +369,113 @@ func (uc *StockUseCase) ReplaceStock(ctx context.Context, req ReplaceRequest) er
 			}
 		}
 		batch := batches[pid]
-
-		bbs := make([]time.Time, 0, len(batch))
-		for bb := range batch {
-			bbs = append(bbs, bb)
-		}
-		sort.Slice(bbs, func(a, b int) bool { return bbs[a].Before(bbs[b]) })
-
-		for _, bb := range bbs {
+		for _, bb := range sortedDates(batch) {
 			a := batch[bb]
 			ex, hasEx := existing[bb]
-			var genMan, tgMan *int16
-			if hasEx && !bb.Before(today) {
-				genMan = cloneInt16(ex.GeneralManual)
-				tgMan = cloneInt16(ex.TelegramManual)
-			}
-			produced := a.producedOn
-			if hasEx && ex.ProducedOn != nil {
-				produced = *ex.ProducedOn
-			}
-			lot := stock.Lot{
-				BestBefore:     bb,
-				Qty:            a.qty,
-				ProducedOn:     &produced,
-				General:        cloneInt16(ex.General),
-				Telegram:       cloneInt16(ex.Telegram),
-				GeneralManual:  genMan,
-				TelegramManual: tgMan,
-			}
+			lot, write := targetLot(ex, hasEx, a, bb, today)
 			pl.upserts = append(pl.upserts, lot)
-			pl.writes = append(pl.writes, stock.LotWrite{
-				BestBefore:     bb,
-				Qty:            a.qty,
-				ProducedOn:     a.producedOn,
-				GeneralManual:  genMan,
-				TelegramManual: tgMan,
-			})
+			pl.writes = append(pl.writes, write)
 		}
-
-		for bb := range existing {
-			if _, in := batch[bb]; !in {
-				pl.deletes = append(pl.deletes, bb)
-			}
-		}
-		sort.Slice(pl.deletes, func(a, b int) bool { return pl.deletes[a].Before(pl.deletes[b]) })
+		pl.deletes = deletedLots(existing, batch)
 	}
-	uc.mu.RUnlock()
+	return plans, nil
+}
 
-	// 5. Запись в БД (одна транзакция).
+// targetLot собирает финальный лот и целевое значение для репозитория:
+// qty из сканов, produced_on — COALESCE(существующего, нового), ручные
+// скидки сохраняются только у лотов со сроком не раньше сегодня.
+func targetLot(ex stock.Lot, hasEx bool, a *agg, bb, today time.Time) (stock.Lot, stock.LotWrite) {
+	var genMan, tgMan *int16
+	if hasEx && !bb.Before(today) {
+		genMan = cloneInt16(ex.GeneralManual)
+		tgMan = cloneInt16(ex.TelegramManual)
+	}
+	produced := a.producedOn
+	if hasEx && ex.ProducedOn != nil {
+		produced = *ex.ProducedOn
+	}
+	lot := stock.Lot{
+		BestBefore:     bb,
+		Qty:            a.qty,
+		ProducedOn:     &produced,
+		General:        cloneInt16(ex.General),
+		Telegram:       cloneInt16(ex.Telegram),
+		GeneralManual:  genMan,
+		TelegramManual: tgMan,
+	}
+	write := stock.LotWrite{
+		BestBefore:     bb,
+		Qty:            a.qty,
+		ProducedOn:     a.producedOn,
+		GeneralManual:  genMan,
+		TelegramManual: tgMan,
+	}
+	return lot, write
+}
+
+// deletedLots — существующие лоты товара, которых нет в батче сканов.
+func deletedLots(existing map[time.Time]stock.Lot, batch map[time.Time]*agg) []time.Time {
+	var deletes []time.Time
+	for bb := range existing {
+		if _, in := batch[bb]; !in {
+			deletes = append(deletes, bb)
+		}
+	}
+	sort.Slice(deletes, func(a, b int) bool { return deletes[a].Before(deletes[b]) })
+	return deletes
+}
+
+// sortedDates — сроки батча, отсортированные по возрастанию.
+func sortedDates(batch map[time.Time]*agg) []time.Time {
+	bbs := make([]time.Time, 0, len(batch))
+	for bb := range batch {
+		bbs = append(bbs, bb)
+	}
+	sort.Slice(bbs, func(a, b int) bool { return bbs[a].Before(bbs[b]) })
+	return bbs
+}
+
+// applyReplacePlans применяет замену: одна транзакция в БД, затем кэш,
+// затем события (сначала удаления, потом upsert'ы — клиент применяет
+// к своему состоянию последовательно).
+func (uc *StockUseCase) applyReplacePlans(ctx context.Context, order []string, plans []replacePlan, byID map[string]stock.Product) error {
+	if err := uc.repo.ReplaceStockLots(ctx, replaceWrites(order, plans)); err != nil {
+		return fmt.Errorf("replace stock lots: %w", err)
+	}
+
+	uc.mu.Lock()
+	err := uc.applyCacheLocked(order, plans, byID)
+	uc.mu.Unlock()
+	if err != nil {
+		return err
+	}
+
+	uc.publishReplaceEvents(order, plans)
+	return nil
+}
+
+// replaceWrites собирает правки для репозитория.
+func replaceWrites(order []string, plans []replacePlan) []stock.ProductWrite {
 	writes := make([]stock.ProductWrite, 0, len(plans))
 	for i := range plans {
 		writes = append(writes, stock.ProductWrite{
-			ProductID: productOrder[i],
+			ProductID: order[i],
 			Upserts:   plans[i].writes,
 			Deletes:   plans[i].deletes,
 		})
 	}
-	if err := uc.repo.ReplaceStockLots(ctx, writes); err != nil {
-		return fmt.Errorf("replace stock lots: %w", err)
-	}
+	return writes
+}
 
-	// 6. Кэш: удаления, upsert'ы, сортировка.
-	uc.mu.Lock()
-	for i, pid := range productOrder {
+// applyCacheLocked применяет замену к кэшу. Вызывается только под mu.Lock.
+func (uc *StockUseCase) applyCacheLocked(order []string, plans []replacePlan, byID map[string]stock.Product) error {
+	for i := range plans {
 		pl := &plans[i]
+		pid := order[i]
 		cur, ok := uc.cache[pid]
 		if !ok {
 			cat, ok := byID[pid]
 			if !ok {
-				uc.mu.Unlock()
 				return fmt.Errorf("%w: %s", stock.ErrProductNotFound, pid)
 			}
 			cp := cat
@@ -405,49 +485,54 @@ func (uc *StockUseCase) ReplaceStock(ctx context.Context, req ReplaceRequest) er
 				uc.byCode[cur.InternalCode] = pid
 			}
 		}
-		lots := cur.Lots[:0]
-		for _, l := range cur.Lots {
-			if containsTime(pl.deletes, l.BestBefore) {
-				continue
-			}
-			lots = append(lots, l)
-		}
-		for _, lot := range pl.upserts {
-			idx := -1
-			for j := range lots {
-				if lots[j].BestBefore.Equal(lot.BestBefore) {
-					idx = j
-					break
-				}
-			}
-			if idx >= 0 {
-				lots[idx] = lot
-			} else {
-				lots = append(lots, lot)
-			}
-		}
-		sort.Slice(lots, func(a, b int) bool { return lots[a].BestBefore.Before(lots[b].BestBefore) })
-		cur.Lots = lots
+		cur.Lots = mergeLots(cur.Lots, pl)
 	}
-	uc.mu.Unlock()
-
-	// 7. События: сначала удаления, потом upsert'ы (клиент применяет к своему состоянию).
-	for i, pid := range productOrder {
-		pl := &plans[i]
-		for _, bb := range pl.deletes {
-			if uc.pub != nil {
-				uc.pub.PublishStockChange(stock.Event{Kind: stock.EventLotDelete, ProductID: pid, BestBefore: bb})
-			}
-		}
-		for j := range pl.upserts {
-			lot := pl.upserts[j]
-			if uc.pub != nil {
-				uc.pub.PublishStockChange(stock.Event{Kind: stock.EventLotUpsert, ProductID: pid, Lot: &lot})
-			}
-		}
-	}
-
 	return nil
+}
+
+// mergeLots убирает удаляемые лоты и применяет целевые (замена или добавление).
+func mergeLots(lots []stock.Lot, pl *replacePlan) []stock.Lot {
+	out := lots[:0]
+	for _, l := range lots {
+		if containsTime(pl.deletes, l.BestBefore) {
+			continue
+		}
+		out = append(out, l)
+	}
+	for _, lot := range pl.upserts {
+		idx := -1
+		for j := range out {
+			if out[j].BestBefore.Equal(lot.BestBefore) {
+				idx = j
+				break
+			}
+		}
+		if idx >= 0 {
+			out[idx] = lot
+		} else {
+			out = append(out, lot)
+		}
+	}
+	sort.Slice(out, func(a, b int) bool { return out[a].BestBefore.Before(out[b].BestBefore) })
+	return out
+}
+
+// publishReplaceEvents рассылает события замены: lot_delete для удалённых
+// лотов, lot_upsert для целевых.
+func (uc *StockUseCase) publishReplaceEvents(order []string, plans []replacePlan) {
+	if uc.pub == nil {
+		return
+	}
+	for i := range plans {
+		pid := order[i]
+		for _, bb := range plans[i].deletes {
+			uc.pub.PublishStockChange(stock.Event{Kind: stock.EventLotDelete, ProductID: pid, BestBefore: bb})
+		}
+		for j := range plans[i].upserts {
+			lot := plans[i].upserts[j]
+			uc.pub.PublishStockChange(stock.Event{Kind: stock.EventLotUpsert, ProductID: pid, Lot: &lot})
+		}
+	}
 }
 
 // normalizeDate приводит дату к UTC-полуночи: единое представление DATE

@@ -392,8 +392,27 @@ func TestReplaceStock(t *testing.T) {
 	if lots[0].GeneralManual == nil || *lots[0].GeneralManual != 3 {
 		t.Errorf("кэш general_manual = %v, want 3", lots[0].GeneralManual)
 	}
+}
 
-	// События: 2 удаления + 1 upsert, порядок «сначала удаления».
+// События замены: сначала удаления (05.09, 10.09), потом upsert с суммой.
+func TestReplaceStockPublishesEvents(t *testing.T) {
+	repo := replaceRepo()
+	pub := &mockPub{}
+	uc := newTestUC(repo, pub)
+	if err := uc.WarmUp(context.Background()); err != nil {
+		t.Fatalf("WarmUp: %v", err)
+	}
+
+	err := uc.ReplaceStock(context.Background(), ReplaceRequest{
+		Scans: []string{
+			codeItem("10100001", 250, day(-10), day(1)),
+			codeBox("10100001", 2500, 10, day(-10), day(1)),
+		},
+	})
+	if err != nil {
+		t.Fatalf("ReplaceStock: %v", err)
+	}
+
 	if len(pub.events) != 3 {
 		t.Fatalf("событий: %d, want 3", len(pub.events))
 	}
