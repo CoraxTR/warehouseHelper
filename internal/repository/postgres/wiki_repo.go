@@ -17,7 +17,7 @@ import (
 // Порядок должен совпадать с порядком Scan в scanWikiPage.
 const wikiPageColumns = `
     id, page_type, title, content, contacts, order_days, delivery_days,
-    average_weight, suppliers, products, supplier_id, (photo IS NOT NULL)`
+    average_weight, suppliers, products, supplier_id, product_id, (photo IS NOT NULL)`
 
 // GetPage возвращает вики-страницу по заголовку (без учёта регистра),
 // включая теги. Если страница не найдена, возвращает (nil, nil).
@@ -81,12 +81,13 @@ func scanWikiPage(row pgx.Row) (*domain.WikiPage, error) {
 		suppliers                []string
 		products                 []string
 		supplierID               *string
+		productID                *string
 		hasPhoto                 bool
 	)
 
 	err := row.Scan(
 		&id, &pageType, &title, &content, &contactsJSON,
-		&orderDays, &deliveryDays, &averageWeight, &suppliers, &products, &supplierID, &hasPhoto,
+		&orderDays, &deliveryDays, &averageWeight, &suppliers, &products, &supplierID, &productID, &hasPhoto,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -110,6 +111,9 @@ func scanWikiPage(row pgx.Row) (*domain.WikiPage, error) {
 	}
 	if supplierID != nil {
 		page.SupplierID = *supplierID
+	}
+	if productID != nil {
+		page.ProductID = *productID
 	}
 
 	if len(contactsJSON) > 0 {
@@ -839,6 +843,115 @@ func (pg *PGClient) UpdateSupplierPage(ctx context.Context, pageID int64, suppli
 	}
 	if tag.RowsAffected() == 0 {
 		return domain.ErrPageNotFound
+	}
+
+	return nil
+}
+
+// === Методы автосоздания страниц товаров и тегов (модуль приёмки) ===
+
+// GetPageByProductID возвращает страницу товара по привязке к каталогу
+// (wiki_pages.product_id). Если страницы нет — (nil, nil).
+func (pg *PGClient) GetPageByProductID(ctx context.Context, productID string) (*domain.WikiPage, error) {
+	row := pg.Pool.QueryRow(ctx, `
+        SELECT `+wikiPageColumns+`
+        FROM wiki_pages
+        WHERE product_id = $1
+    `, productID)
+
+	return scanWikiPage(row)
+}
+
+// GetUnlinkedProductPageByTitle ищет страницу товара без привязки к каталогу
+// (создана вручную, product_id IS NULL). Если нет — (nil, nil).
+func (pg *PGClient) GetUnlinkedProductPageByTitle(ctx context.Context, title string) (*domain.WikiPage, error) {
+	row := pg.Pool.QueryRow(ctx, `
+        SELECT `+wikiPageColumns+`
+        FROM wiki_pages
+        WHERE page_type = 'product' AND product_id IS NULL AND lower(title) = lower($1)
+    `, title)
+
+	return scanWikiPage(row)
+}
+
+// CreateProductPage создаёт страницу товара с привязкой к каталогу.
+// Занятый заголовок (или уже существующая привязка) → domain.ErrTitleTaken.
+func (pg *PGClient) CreateProductPage(ctx context.Context, page *domain.WikiPage) error {
+	tag, err := pg.Pool.Exec(ctx, `
+        INSERT INTO wiki_pages (page_type, title, average_weight, product_id)
+        VALUES ('product', $1, $2, $3)
+        ON CONFLICT DO NOTHING
+    `, page.Title, page.AverageWeight, page.ProductID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return domain.ErrTitleTaken
+	}
+
+	return nil
+}
+
+// UpdateProductPage обновляет данные страницы товара из каталога: заголовок
+// (= name), средний вес и привязку product_id (для непривязанной вручную
+// созданной страницы — claim). Занятый заголовок → domain.ErrTitleTaken;
+// страница удалена конкурентно → domain.ErrPageNotFound.
+func (pg *PGClient) UpdateProductPage(ctx context.Context, pageID int64, productID, title, averageWeight string) error {
+	tag, err := pg.Pool.Exec(ctx, `
+        UPDATE wiki_pages SET
+            title = $1, average_weight = $2, product_id = $3
+        WHERE id = $4
+    `, title, averageWeight, productID, pageID)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return domain.ErrTitleTaken
+		}
+
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return domain.ErrPageNotFound
+	}
+
+	return nil
+}
+
+// AddPageTag добавляет тег странице (идемпотентно): тег создаётся при
+// необходимости, связь — только если её ещё нет.
+func (pg *PGClient) AddPageTag(ctx context.Context, pageID int64, tag string) error {
+	if _, err := pg.Pool.Exec(ctx, `
+        INSERT INTO wiki_tags (name) VALUES ($1)
+        ON CONFLICT DO NOTHING
+    `, tag); err != nil {
+		return err
+	}
+
+	if _, err := pg.Pool.Exec(ctx, `
+        INSERT INTO wiki_page_tags (page_id, tag_id)
+        SELECT $1, t.id FROM wiki_tags t
+        WHERE lower(t.name) = lower($2)
+          AND NOT EXISTS (SELECT 1 FROM wiki_page_tags pt WHERE pt.page_id = $1 AND pt.tag_id = t.id)
+    `, pageID, tag); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// RemovePageTag снимает тег со страницы; осиротевший тег (без связей) удаляется.
+func (pg *PGClient) RemovePageTag(ctx context.Context, pageID int64, tag string) error {
+	if _, err := pg.Pool.Exec(ctx, `
+        DELETE FROM wiki_page_tags
+        WHERE page_id = $1 AND tag_id = (SELECT id FROM wiki_tags WHERE lower(name) = lower($2))
+    `, pageID, tag); err != nil {
+		return err
+	}
+
+	if _, err := pg.Pool.Exec(ctx, `
+        DELETE FROM wiki_tags WHERE id NOT IN (SELECT tag_id FROM wiki_page_tags)
+    `); err != nil {
+		return err
 	}
 
 	return nil
