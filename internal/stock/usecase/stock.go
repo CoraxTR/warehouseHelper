@@ -40,6 +40,9 @@ type Repository interface {
 	// upsert лотов (qty = целевое, produced_on = COALESCE(существующего, нового),
 	// ручные скидки — целевые) и удаление лотов вне сканов.
 	ReplaceStockLots(ctx context.Context, writes []stock.ProductWrite) error
+	// AcceptStockLots добавляет принятые лоты в одной транзакции: upsert
+	// с qty += (существующий срок увеличивается), produced_on — COALESCE.
+	AcceptStockLots(ctx context.Context, lots []stock.LotIn) error
 }
 
 // Publisher — получатель событий об изменениях остатков (вебсокет-хаб).
@@ -589,4 +592,106 @@ func cloneInt16(v *int16) *int16 {
 	}
 	c := *v
 	return &c
+}
+
+// AcceptStock — адаптер модуля приёмки: принятые партии ДОБАВЛЯЮТСЯ к
+// остаткам (qty += по существующему сроку, новый срок — новая строка),
+// produced_on — COALESCE (известная дата не затирается). После записи —
+// кэш и события lot_upsert (клиент «Сроков» обновляется в реальном времени).
+func (uc *StockUseCase) AcceptStock(ctx context.Context, lots []stock.LotIn) error {
+	if len(lots) == 0 {
+		return errors.New("нет принятых позиций")
+	}
+	for _, l := range lots {
+		if strings.TrimSpace(l.ProductID) == "" {
+			return errors.New("не указан товар")
+		}
+		if l.Qty <= 0 {
+			return fmt.Errorf("товар %s: количество должно быть больше нуля", l.ProductID)
+		}
+		if l.BestBefore.IsZero() {
+			return fmt.Errorf("товар %s: не указан срок годности", l.ProductID)
+		}
+	}
+
+	if err := uc.repo.AcceptStockLots(ctx, lots); err != nil {
+		return fmt.Errorf("accept stock lots: %w", err)
+	}
+
+	// Товары вне кэша (не было остатков) — подгружаем из каталога до
+	// блокировки кэша; ошибка не откатывает запись в БД (как в applyReplacePlans).
+	uc.mu.RLock()
+	var missing []string
+	for _, l := range lots {
+		if _, ok := uc.cache[l.ProductID]; !ok {
+			missing = append(missing, l.ProductID)
+		}
+	}
+	uc.mu.RUnlock()
+
+	byID := make(map[string]stock.Product, len(missing))
+	for _, pid := range missing {
+		p, err := uc.repo.LoadProductByID(ctx, pid)
+		if err != nil {
+			return fmt.Errorf("%w: %s", stock.ErrProductNotFound, pid)
+		}
+		byID[pid] = p
+	}
+
+	uc.mu.Lock()
+	events := make([]stock.Event, 0, len(lots))
+	for _, l := range lots {
+		cur, ok := uc.cache[l.ProductID]
+		if !ok {
+			cat, ok := byID[l.ProductID]
+			if !ok {
+				uc.mu.Unlock()
+				return fmt.Errorf("%w: %s", stock.ErrProductNotFound, l.ProductID)
+			}
+			cp := cat
+			cur = &cp
+			uc.cache[l.ProductID] = cur
+			if cur.InternalCode != "" {
+				uc.byCode[cur.InternalCode] = l.ProductID
+			}
+		}
+
+		idx := -1
+		for j := range cur.Lots {
+			if cur.Lots[j].BestBefore.Equal(l.BestBefore) {
+				idx = j
+				break
+			}
+		}
+		if idx >= 0 {
+			cur.Lots[idx].Qty += l.Qty
+			if l.ProducedOn != nil && cur.Lots[idx].ProducedOn == nil {
+				cur.Lots[idx].ProducedOn = l.ProducedOn
+			}
+		} else {
+			cur.Lots = append(cur.Lots, stock.Lot{
+				BestBefore: l.BestBefore,
+				Qty:        l.Qty,
+				ProducedOn: l.ProducedOn,
+			})
+			sort.Slice(cur.Lots, func(i, j int) bool { return cur.Lots[i].BestBefore.Before(cur.Lots[j].BestBefore) })
+			idx = sort.Search(len(cur.Lots), func(j int) bool { return !cur.Lots[j].BestBefore.Before(l.BestBefore) })
+		}
+		lot := cur.Lots[idx]
+		events = append(events, stock.Event{
+			Kind:       stock.EventLotUpsert,
+			ProductID:  l.ProductID,
+			BestBefore: l.BestBefore,
+			Lot:        &lot,
+		})
+	}
+	uc.mu.Unlock()
+
+	if uc.pub != nil {
+		for _, e := range events {
+			uc.pub.PublishStockChange(e)
+		}
+	}
+
+	return nil
 }

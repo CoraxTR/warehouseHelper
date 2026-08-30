@@ -21,6 +21,8 @@ type mockRepo struct {
 	writes      []stock.ProductWrite     // записанные замены
 	productByID map[string]stock.Product // для LoadProductByID
 	groupNames  map[string]string        // для LoadGroupNameByCode
+	accepted    []stock.LotIn            // принятые партии (AcceptStockLots)
+	acceptErr   error                    // ошибка AcceptStockLots
 }
 
 type updateCall struct {
@@ -72,6 +74,14 @@ func (m *mockRepo) ReplaceStockLots(_ context.Context, writes []stock.ProductWri
 		return m.writeErr
 	}
 	m.writes = append(m.writes, writes...)
+	return nil
+}
+
+func (m *mockRepo) AcceptStockLots(_ context.Context, lots []stock.LotIn) error {
+	if m.acceptErr != nil {
+		return m.acceptErr
+	}
+	m.accepted = append(m.accepted, lots...)
 	return nil
 }
 
@@ -641,4 +651,191 @@ func TestValidLengths(t *testing.T) {
 	if len(got) != 2 || got[0] != 29 || got[1] != 33 {
 		t.Errorf("ValidLengths = %v, want [29 33]", got)
 	}
+}
+
+func TestAcceptStock_AddsToExistingLot(t *testing.T) {
+	repo := &mockRepo{products: testStock()}
+	pub := &mockPub{}
+	uc := newTestUC(repo, pub)
+	if err := uc.WarmUp(context.Background()); err != nil {
+		t.Fatalf("WarmUp: %v", err)
+	}
+
+	// Существующий срок 2026-09-01 (qty=2) — приёмка добавляет 3.
+	err := uc.AcceptStock(context.Background(), []stock.LotIn{
+		{ProductID: "p1", BestBefore: d(2026, 9, 1), Qty: 3},
+	})
+	if err != nil {
+		t.Fatalf("AcceptStock: %v", err)
+	}
+	if len(repo.accepted) != 1 || repo.accepted[0].Qty != 3 {
+		t.Fatalf("repo.accepted = %+v, want одна партия qty=3", repo.accepted)
+	}
+
+	snap := uc.Snapshot()
+	var lot *stock.Lot
+	for _, p := range snap {
+		if p.ID == "p1" {
+			for j := range p.Lots {
+				if p.Lots[j].BestBefore.Equal(d(2026, 9, 1)) {
+					lot = &p.Lots[j]
+				}
+			}
+		}
+	}
+	if lot == nil || lot.Qty != 5 {
+		t.Fatalf("лот 2026-09-01: %+v, want qty=5 (2+3)", lot)
+	}
+
+	if len(pub.events) != 1 || pub.events[0].Kind != stock.EventLotUpsert || pub.events[0].ProductID != "p1" {
+		t.Fatalf("events = %+v, want один lot_upsert p1", pub.events)
+	}
+}
+
+func TestAcceptStock_NewLot(t *testing.T) {
+	repo := &mockRepo{products: testStock()}
+	uc := newTestUC(repo, &mockPub{})
+	if err := uc.WarmUp(context.Background()); err != nil {
+		t.Fatalf("WarmUp: %v", err)
+	}
+
+	// Новый срок — новая строка, лоты остаются отсортированными по датам.
+	err := uc.AcceptStock(context.Background(), []stock.LotIn{
+		{ProductID: "p1", BestBefore: d(2026, 9, 7), Qty: 4, ProducedOn: ptrTime(d(2026, 8, 30))},
+	})
+	if err != nil {
+		t.Fatalf("AcceptStock: %v", err)
+	}
+
+	snap := uc.Snapshot()
+	var lots []stock.Lot
+	for _, p := range snap {
+		if p.ID == "p1" {
+			lots = p.Lots
+		}
+	}
+	if len(lots) != 4 {
+		t.Fatalf("p1 лотов = %d, want 4", len(lots))
+	}
+	if !lots[2].BestBefore.Equal(d(2026, 9, 7)) || lots[2].Qty != 4 {
+		t.Fatalf("позиция нового лота: %+v, want 2026-09-07 qty=4 между 09-05 и 09-10", lots[2])
+	}
+}
+
+func TestAcceptStock_ProductNotInCache(t *testing.T) {
+	repo := &mockRepo{
+		products: testStock(),
+		productByID: map[string]stock.Product{
+			"p9": {ID: "p9", InternalCode: "90900009", Name: "Новый товар"},
+		},
+	}
+	pub := &mockPub{}
+	uc := newTestUC(repo, pub)
+	if err := uc.WarmUp(context.Background()); err != nil {
+		t.Fatalf("WarmUp: %v", err)
+	}
+
+	err := uc.AcceptStock(context.Background(), []stock.LotIn{
+		{ProductID: "p9", BestBefore: d(2026, 9, 20), Qty: 1},
+	})
+	if err != nil {
+		t.Fatalf("AcceptStock: %v", err)
+	}
+
+	snap := uc.Snapshot()
+	var found *stock.Product
+	for i := range snap {
+		if snap[i].ID == "p9" {
+			found = &snap[i]
+		}
+	}
+	if found == nil || len(found.Lots) != 1 || found.Lots[0].Qty != 1 {
+		t.Fatalf("товар p9 в кэше: %+v, want лот qty=1", found)
+	}
+	if id, ok := uc.byCode["90900009"]; !ok || id != "p9" {
+		t.Errorf("byCode[90900009] = %q, %v; want p9", id, ok)
+	}
+	if len(pub.events) != 1 {
+		t.Fatalf("events = %d, want 1", len(pub.events))
+	}
+}
+
+func TestAcceptStock_ProducedOnCoalesce(t *testing.T) {
+	repo := &mockRepo{products: testStock()} // p1 2026-09-10 с produced_on 2026-08-28
+	uc := newTestUC(repo, nil)
+	if err := uc.WarmUp(context.Background()); err != nil {
+		t.Fatalf("WarmUp: %v", err)
+	}
+
+	// Приёмка знает другую дату выработки — существующая не затирается.
+	err := uc.AcceptStock(context.Background(), []stock.LotIn{
+		{ProductID: "p1", BestBefore: d(2026, 9, 10), Qty: 1, ProducedOn: ptrTime(d(2026, 8, 1))},
+	})
+	if err != nil {
+		t.Fatalf("AcceptStock: %v", err)
+	}
+
+	snap := uc.Snapshot()
+	for _, p := range snap {
+		if p.ID != "p1" {
+			continue
+		}
+		for _, l := range p.Lots {
+			if l.BestBefore.Equal(d(2026, 9, 10)) {
+				if l.ProducedOn == nil || !l.ProducedOn.Equal(d(2026, 8, 28)) {
+					t.Fatalf("produced_on = %v, want 2026-08-28 (существующая)", l.ProducedOn)
+				}
+				if l.Qty != 11 {
+					t.Fatalf("qty = %d, want 11 (10+1)", l.Qty)
+				}
+			}
+		}
+	}
+}
+
+func TestAcceptStock_Validation(t *testing.T) {
+	repo := &mockRepo{products: testStock()}
+	uc := newTestUC(repo, nil)
+	if err := uc.WarmUp(context.Background()); err != nil {
+		t.Fatalf("WarmUp: %v", err)
+	}
+
+	cases := []struct {
+		name string
+		lots []stock.LotIn
+	}{
+		{"пустой список", nil},
+		{"нет товара", []stock.LotIn{{BestBefore: d(2026, 9, 1), Qty: 1}}},
+		{"qty = 0", []stock.LotIn{{ProductID: "p1", BestBefore: d(2026, 9, 1), Qty: 0}}},
+		{"нет срока", []stock.LotIn{{ProductID: "p1", Qty: 1}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := uc.AcceptStock(context.Background(), tc.lots); err == nil {
+				t.Fatal("ожидалась ошибка валидации")
+			}
+			if len(repo.accepted) != 0 {
+				t.Fatalf("repo.accepted = %+v, репозиторий не должен вызываться", repo.accepted)
+			}
+		})
+	}
+}
+
+func TestAcceptStock_RepoError(t *testing.T) {
+	repo := &mockRepo{products: testStock(), acceptErr: errors.New("pg down")}
+	uc := newTestUC(repo, nil)
+	if err := uc.WarmUp(context.Background()); err != nil {
+		t.Fatalf("WarmUp: %v", err)
+	}
+
+	err := uc.AcceptStock(context.Background(), []stock.LotIn{
+		{ProductID: "p1", BestBefore: d(2026, 9, 1), Qty: 1},
+	})
+	if err == nil {
+		t.Fatal("ожидалась ошибка репозитория")
+	}
+}
+
+func ptrTime(v time.Time) *time.Time {
+	return &v
 }

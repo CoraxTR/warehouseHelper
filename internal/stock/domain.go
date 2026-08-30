@@ -52,6 +52,16 @@ type LotWrite struct {
 	TelegramManual *int16
 }
 
+// LotIn — принятая партия товара (адаптер модуля приёмки): количество
+// ДОБАВЛЯЕТСЯ к существующему лоту (upsert qty +=), существующий срок
+// не заменяется; produced_on — COALESCE (nil не затирает известную дату).
+type LotIn struct {
+	ProductID  string
+	BestBefore time.Time
+	Qty        int64
+	ProducedOn *time.Time
+}
+
 // Event — факт изменения остатков, публикуется владельцем данных (usecase)
 // в вебсокет-хаб. Клиенты пересчитывают таблицу по своему состоянию.
 type Event struct {
