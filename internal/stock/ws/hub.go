@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
 
@@ -19,13 +20,14 @@ import (
 const sendBuffer = 64
 
 // Message — фрейм протокола. При подключении Type = "snapshot" (Rows),
-// далее дельты: "lot_upsert" (ProductID + Lot), в будущем —
-// "lot_delete" / "product_delete".
+// далее дельты: "lot_upsert" (ProductID + Lot), "lot_delete"
+// (ProductID + BestBefore).
 type Message struct {
-	Type      string          `json:"type"`
-	Rows      []stock.Product `json:"rows,omitempty"`       // snapshot
-	ProductID string          `json:"product_id,omitempty"` // дельты
-	Lot       *stock.Lot      `json:"lot,omitempty"`        // lot_upsert
+	Type       string          `json:"type"`
+	Rows       []stock.Product `json:"rows,omitempty"`        // snapshot
+	ProductID  string          `json:"product_id,omitempty"`  // дельты
+	BestBefore string          `json:"best_before,omitempty"` // lot_delete: YYYY-MM-DD
+	Lot        *stock.Lot      `json:"lot,omitempty"`         // lot_upsert
 }
 
 // Hub держит подключённых клиентов и рассылает изменения.
@@ -79,7 +81,11 @@ func (h *Hub) Unregister(c *Client) {
 
 // PublishStockChange — реализация usecase.Publisher: рассылает дельту.
 func (h *Hub) PublishStockChange(e stock.Event) {
-	msg, err := json.Marshal(Message{Type: e.Kind, ProductID: e.ProductID, Lot: e.Lot})
+	m := Message{Type: e.Kind, ProductID: e.ProductID, Lot: e.Lot}
+	if e.Kind == stock.EventLotDelete {
+		m.BestBefore = e.BestBefore.Format(time.DateOnly)
+	}
+	msg, err := json.Marshal(m)
 	if err != nil {
 		log.Printf("ws: marshal event %s: %v", e.Kind, err)
 		return

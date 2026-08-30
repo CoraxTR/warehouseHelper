@@ -34,21 +34,54 @@ type Product struct {
 	Lots         []Lot  `json:"lots"` // по возрастанию BestBefore
 }
 
+// ProductWrite — правки остатков одного товара (замена по сканам
+// «Обновить сроки»): целевые лоты и удаления.
+type ProductWrite struct {
+	ProductID string
+	Upserts   []LotWrite
+	Deletes   []time.Time // best_before удаляемых лотов
+}
+
+// LotWrite — целевое состояние лота при upsert (скидки передаёт usecase —
+// он решил, что сохранить, а что сбросить).
+type LotWrite struct {
+	BestBefore     time.Time
+	Qty            int64
+	ProducedOn     time.Time
+	GeneralManual  *int16
+	TelegramManual *int16
+}
+
 // Event — факт изменения остатков, публикуется владельцем данных (usecase)
 // в вебсокет-хаб. Клиенты пересчитывают таблицу по своему состоянию.
 type Event struct {
-	Kind      string // EventLotUpsert (пока); lot_delete/product_delete появятся с подбором
-	ProductID string
-	Lot       *Lot // заполнен для lot_upsert
+	Kind       string // EventLotUpsert / EventLotDelete
+	ProductID  string
+	BestBefore time.Time // для lot_delete: срок удалённого лота
+	Lot        *Lot      // заполнен для lot_upsert
 }
 
 // Виды событий.
 const (
 	EventLotUpsert = "lot_upsert"
+	EventLotDelete = "lot_delete"
 )
 
-// ErrLotNotFound — нет строки product_stock с таким (product_id, best_before).
-var ErrLotNotFound = errors.New("лот с таким сроком годности не найден")
+// Ошибки домена.
+var (
+	// ErrLotNotFound — нет строки product_stock с таким (product_id, best_before).
+	ErrLotNotFound = errors.New("лот с таким сроком годности не найден")
 
-// ErrProductNotFound — товар не найден в кэше остатков.
-var ErrProductNotFound = errors.New("товар не найден в остатках")
+	// ErrProductNotFound — товар не найден в остатках или каталоге.
+	ErrProductNotFound = errors.New("товар не найден")
+
+	// Ошибки разбора/проверки сканов «Обновить сроки».
+	// ErrScanNotInternal — штрих-код не внутреннего формата (не 29/33 цифры).
+	ErrScanNotInternal = errors.New("не внутренний штрих-код (ожидаются 29 или 33 цифры)")
+	// ErrScanInvalid — внутренний формат, но данные невалидны.
+	ErrScanInvalid = errors.New("неверные данные штрих-кода")
+	// ErrScanGroupMismatch — код не относится к ожидаемой группе.
+	ErrScanGroupMismatch = errors.New("код не относится к ожидаемой группе")
+	// ErrScanProductMismatch — код не совпадает с ожидаемым товаром.
+	ErrScanProductMismatch = errors.New("код не совпадает с ожидаемым товаром")
+)

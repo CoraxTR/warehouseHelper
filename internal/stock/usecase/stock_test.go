@@ -3,18 +3,24 @@ package usecase
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
 	"warehouseHelper/internal/stock"
 )
 
-// mockRepo — хранилище-заглушка: возвращает фикс. лоты, запоминает UPDATE-вызовы.
+// mockRepo — хранилище-заглушка: возвращает фикс. лоты, запоминает вызовы.
 type mockRepo struct {
-	products  []stock.Product
-	updates   []updateCall
-	err       error // ошибка LoadAllStock (WarmUp)
-	updateErr error // ошибка SetManualDiscount
+	products    []stock.Product
+	updates     []updateCall
+	err         error                    // ошибка LoadAllStock (WarmUp)
+	updateErr   error                    // ошибка SetManualDiscount
+	writeErr    error                    // ошибка ReplaceStockLots
+	catalog     map[string]stock.Product // каталог для LoadProductsByCodes
+	writes      []stock.ProductWrite     // записанные замены
+	productByID map[string]stock.Product // для LoadProductByID
+	groupNames  map[string]string        // для LoadGroupNameByCode
 }
 
 type updateCall struct {
@@ -36,6 +42,36 @@ func (m *mockRepo) SetManualDiscount(_ context.Context, productID string, bestBe
 		return m.updateErr
 	}
 	m.updates = append(m.updates, updateCall{productID, bestBefore, generalManual, telegramManual})
+	return nil
+}
+
+func (m *mockRepo) LoadProductsByCodes(_ context.Context, codes []string) (map[string]stock.Product, error) {
+	out := make(map[string]stock.Product, len(codes))
+	for _, c := range codes {
+		if p, ok := m.catalog[c]; ok {
+			out[c] = p
+		}
+	}
+	return out, nil
+}
+
+func (m *mockRepo) LoadProductByID(_ context.Context, productID string) (stock.Product, error) {
+	p, ok := m.productByID[productID]
+	if !ok {
+		return stock.Product{}, stock.ErrProductNotFound
+	}
+	return p, nil
+}
+
+func (m *mockRepo) LoadGroupNameByCode(_ context.Context, groupCode string) (string, error) {
+	return m.groupNames[groupCode], nil
+}
+
+func (m *mockRepo) ReplaceStockLots(_ context.Context, writes []stock.ProductWrite) error {
+	if m.writeErr != nil {
+		return m.writeErr
+	}
+	m.writes = append(m.writes, writes...)
 	return nil
 }
 
@@ -259,5 +295,331 @@ func TestSetManualDiscountRepoError(t *testing.T) {
 	}
 	if len(pub.events) != 0 {
 		t.Errorf("события опубликованы при ошибке репо: %+v", pub.events)
+	}
+}
+
+// --- «Обновить сроки»: замена остатков по сканам ---
+
+// day — дата через n дней от сегодня (UTC-полночь, как normalizeDate).
+func day(n int) time.Time {
+	now := time.Now()
+	return time.Date(now.Year(), now.Month(), now.Day()+n, 0, 0, 0, 0, time.UTC)
+}
+
+// codeItem собирает штрих-код куска (29 цифр) конкатенацией полей.
+func codeItem(internalCode string, weight int, prod, exp time.Time) string {
+	return internalCode + fmt.Sprintf("%05d", weight) + prod.Format("02012006") + exp.Format("02012006")
+}
+
+// codeBox собирает штрих-код коробки (33 цифры) конкатенацией полей.
+func codeBox(internalCode string, weight, qty int, prod, exp time.Time) string {
+	return internalCode + fmt.Sprintf("%06d", weight) + fmt.Sprintf("%03d", qty) + prod.Format("02012006") + exp.Format("02012006")
+}
+
+func replaceRepo() *mockRepo {
+	prod := day(-10)
+	return &mockRepo{
+		products: []stock.Product{
+			{
+				ID: "p1", InternalCode: "10100001", Name: "Хлеб", GroupName: "Хлебобулочные",
+				Lots: []stock.Lot{
+					{BestBefore: day(1), Qty: 2, General: i16(5), GeneralManual: i16(3), TelegramManual: i16(7)},
+					{BestBefore: day(5), Qty: 5, Telegram: i16(20)},
+					{BestBefore: day(10), Qty: 10, ProducedOn: &prod},
+				},
+			},
+		},
+		catalog: map[string]stock.Product{
+			"10100001": {ID: "p1", InternalCode: "10100001", Name: "Хлеб", GroupName: "Хлебобулочные"},
+			"20100002": {ID: "p2", InternalCode: "20100002", Name: "Молоко", GroupName: "Молочные"},
+			"10100003": {ID: "p3", InternalCode: "10100003", Name: "Сыр", GroupName: "Молочные"},
+		},
+	}
+}
+
+func TestReplaceStock(t *testing.T) {
+	repo := replaceRepo()
+	pub := &mockPub{}
+	uc := newTestUC(repo, pub)
+	if err := uc.WarmUp(context.Background()); err != nil {
+		t.Fatalf("WarmUp: %v", err)
+	}
+
+	// Кусок + коробка одного товара на один срок: qty = 1 + 10 = 11.
+	// Лоты 05.09 и 10.09 не отсканированы — будут удалены.
+	err := uc.ReplaceStock(context.Background(), ReplaceRequest{
+		Scans: []string{
+			codeItem("10100001", 250, day(-10), day(1)),
+			codeBox("10100001", 2500, 10, day(-10), day(1)),
+		},
+	})
+	if err != nil {
+		t.Fatalf("ReplaceStock: %v", err)
+	}
+
+	// Репо получил: один товар, upsert лота day(1) с qty 11 и сохранёнными manual,
+	// deletes двух неотсканированных лотов.
+	if len(repo.writes) != 1 {
+		t.Fatalf("writes: len = %d, want 1", len(repo.writes))
+	}
+	w := repo.writes[0]
+	if w.ProductID != "p1" {
+		t.Errorf("productID = %q, want p1", w.ProductID)
+	}
+	if len(w.Upserts) != 1 {
+		t.Fatalf("upserts: len = %d, want 1", len(w.Upserts))
+	}
+	u := w.Upserts[0]
+	if !u.BestBefore.Equal(day(1)) || u.Qty != 11 {
+		t.Errorf("upsert: (%s, qty %d), want (day(1), 11)", u.BestBefore.Format(time.DateOnly), u.Qty)
+	}
+	if u.GeneralManual == nil || *u.GeneralManual != 3 || u.TelegramManual == nil || *u.TelegramManual != 7 {
+		t.Errorf("manual-скидки неистёкшего лота должны сохраниться: %v/%v", u.GeneralManual, u.TelegramManual)
+	}
+	if len(w.Deletes) != 2 {
+		t.Fatalf("deletes: len = %d, want 2", len(w.Deletes))
+	}
+
+	// Кэш: остался один лот с суммой сканов и скидками.
+	snap := uc.Snapshot()
+	if len(snap) != 1 {
+		t.Fatalf("кэш: товаров %d, want 1", len(snap))
+	}
+	lots := snap[0].Lots
+	if len(lots) != 1 || lots[0].Qty != 11 || !lots[0].BestBefore.Equal(day(1)) {
+		t.Errorf("кэш p1: %+v", lots)
+	}
+	if lots[0].GeneralManual == nil || *lots[0].GeneralManual != 3 {
+		t.Errorf("кэш general_manual = %v, want 3", lots[0].GeneralManual)
+	}
+
+	// События: 2 удаления + 1 upsert, порядок «сначала удаления».
+	if len(pub.events) != 3 {
+		t.Fatalf("событий: %d, want 3", len(pub.events))
+	}
+	if pub.events[0].Kind != stock.EventLotDelete || !pub.events[0].BestBefore.Equal(day(5)) {
+		t.Errorf("событие 1: %+v", pub.events[0])
+	}
+	if pub.events[1].Kind != stock.EventLotDelete || !pub.events[1].BestBefore.Equal(day(10)) {
+		t.Errorf("событие 2: %+v", pub.events[1])
+	}
+	if pub.events[2].Kind != stock.EventLotUpsert || pub.events[2].Lot == nil || pub.events[2].Lot.Qty != 11 {
+		t.Errorf("событие 3: %+v", pub.events[2])
+	}
+}
+
+func TestReplaceStockExpiredClearsManual(t *testing.T) {
+	repo := replaceRepo()
+	// Истёкший лот (вчера) с ручной скидкой — в сканах: скидка должна сброситься.
+	repo.products[0].Lots = append(repo.products[0].Lots,
+		stock.Lot{BestBefore: day(-1), Qty: 3, GeneralManual: i16(50), TelegramManual: i16(50)})
+	uc := newTestUC(repo, &mockPub{})
+	if err := uc.WarmUp(context.Background()); err != nil {
+		t.Fatalf("WarmUp: %v", err)
+	}
+
+	err := uc.ReplaceStock(context.Background(), ReplaceRequest{
+		Scans: []string{codeItem("10100001", 250, day(-10), day(-1))},
+	})
+	if err != nil {
+		t.Fatalf("ReplaceStock: %v", err)
+	}
+
+	u := repo.writes[0].Upserts[0]
+	if u.GeneralManual != nil || u.TelegramManual != nil {
+		t.Errorf("manual истёкшего лота должны сброситься: %v/%v", u.GeneralManual, u.TelegramManual)
+	}
+}
+
+func TestReplaceStockNewProduct(t *testing.T) {
+	repo := replaceRepo() // p3 в каталоге, в кэше нет (нет лотов)
+	pub := &mockPub{}
+	uc := newTestUC(repo, pub)
+	if err := uc.WarmUp(context.Background()); err != nil {
+		t.Fatalf("WarmUp: %v", err)
+	}
+
+	err := uc.ReplaceStock(context.Background(), ReplaceRequest{
+		Scans: []string{codeItem("10100003", 200, day(-5), day(7))},
+	})
+	if err != nil {
+		t.Fatalf("ReplaceStock: %v", err)
+	}
+
+	if len(repo.writes) != 1 || repo.writes[0].ProductID != "p3" {
+		t.Fatalf("writes: %+v", repo.writes)
+	}
+	// Товар появился в кэше с лотом, byCode пополнен.
+	snap := uc.Snapshot()
+	if len(snap) != 2 || snap[0].Name != "Сыр" {
+		t.Fatalf("кэш: %+v", snap)
+	}
+	if len(snap[0].Lots) != 1 || snap[0].Lots[0].Qty != 1 || !snap[0].Lots[0].BestBefore.Equal(day(7)) {
+		t.Errorf("лот p3: %+v", snap[0].Lots)
+	}
+	if id, ok := uc.byCode["10100003"]; !ok || id != "p3" {
+		t.Errorf("byCode[10100003] = %q, %v; want p3, true", id, ok)
+	}
+	// Событие лота нового товара опубликовано.
+	if len(pub.events) != 1 || pub.events[0].ProductID != "p3" {
+		t.Errorf("события: %+v", pub.events)
+	}
+}
+
+func TestReplaceStockConstraintProduct(t *testing.T) {
+	repo := replaceRepo()
+	uc := newTestUC(repo, nil)
+	if err := uc.WarmUp(context.Background()); err != nil {
+		t.Fatalf("WarmUp: %v", err)
+	}
+
+	// Страница открыта по p1, а отсканирован код p2.
+	err := uc.ReplaceStock(context.Background(), ReplaceRequest{
+		Scans:             []string{codeItem("20100002", 250, day(-10), day(1))},
+		ExpectedProductID: "p1",
+	})
+	if !errors.Is(err, stock.ErrScanProductMismatch) {
+		t.Fatalf("want ErrScanProductMismatch, got %v", err)
+	}
+	if len(repo.writes) != 0 {
+		t.Fatal("репо не должен был вызываться")
+	}
+}
+
+func TestReplaceStockConstraintGroup(t *testing.T) {
+	repo := replaceRepo()
+	uc := newTestUC(repo, nil)
+	if err := uc.WarmUp(context.Background()); err != nil {
+		t.Fatalf("WarmUp: %v", err)
+	}
+
+	// Группа 021, а код 20100002 (группа 010 по индексам 1..3).
+	err := uc.ReplaceStock(context.Background(), ReplaceRequest{
+		Scans:             []string{codeItem("20100002", 250, day(-10), day(1))},
+		ExpectedGroupCode: "021",
+	})
+	if !errors.Is(err, stock.ErrScanGroupMismatch) {
+		t.Fatalf("want ErrScanGroupMismatch, got %v", err)
+	}
+	if len(repo.writes) != 0 {
+		t.Fatal("репо не должен был вызываться")
+	}
+}
+
+func TestReplaceStockProductNotFound(t *testing.T) {
+	repo := replaceRepo()
+	uc := newTestUC(repo, nil)
+	if err := uc.WarmUp(context.Background()); err != nil {
+		t.Fatalf("WarmUp: %v", err)
+	}
+
+	err := uc.ReplaceStock(context.Background(), ReplaceRequest{
+		Scans: []string{codeItem("10555555", 250, day(-10), day(1))},
+	})
+	if !errors.Is(err, stock.ErrProductNotFound) {
+		t.Fatalf("want ErrProductNotFound, got %v", err)
+	}
+	if len(repo.writes) != 0 {
+		t.Fatal("репо не должен был вызываться")
+	}
+}
+
+func TestReplaceStockNotInternal(t *testing.T) {
+	uc := newTestUC(replaceRepo(), nil)
+	if err := uc.ReplaceStock(context.Background(), ReplaceRequest{
+		Scans: []string{"1234567890"}, // 10 цифр — не внутренний
+	}); !errors.Is(err, stock.ErrScanNotInternal) {
+		t.Fatalf("want ErrScanNotInternal, got %v", err)
+	}
+}
+
+func TestReplaceStockEmpty(t *testing.T) {
+	uc := newTestUC(replaceRepo(), nil)
+	if err := uc.ReplaceStock(context.Background(), ReplaceRequest{}); err == nil {
+		t.Fatal("want error for empty scans, got nil")
+	}
+}
+
+func TestReplaceStockRepoError(t *testing.T) {
+	repo := replaceRepo()
+	repo.writeErr = errors.New("tx failed")
+	pub := &mockPub{}
+	uc := newTestUC(repo, pub)
+	if err := uc.WarmUp(context.Background()); err != nil {
+		t.Fatalf("WarmUp: %v", err)
+	}
+
+	err := uc.ReplaceStock(context.Background(), ReplaceRequest{
+		Scans: []string{codeItem("10100001", 250, day(-10), day(1))},
+	})
+	if err == nil {
+		t.Fatal("want repo error, got nil")
+	}
+	// Кэш не тронут, событий нет.
+	snap := uc.Snapshot()
+	if len(snap[0].Lots) != 3 {
+		t.Errorf("кэш изменён при ошибке репо: %+v", snap[0].Lots)
+	}
+	if len(pub.events) != 0 {
+		t.Errorf("события при ошибке репо: %+v", pub.events)
+	}
+}
+
+// --- контекст страницы «Обновить сроки» ---
+
+func TestUpdatePageContextProduct(t *testing.T) {
+	repo := &mockRepo{productByID: map[string]stock.Product{
+		"p1": {ID: "p1", InternalCode: "10100001", Name: "Хлеб"},
+	}}
+	uc := newTestUC(repo, nil)
+
+	pc, err := uc.UpdatePageContext(context.Background(), "p1", "")
+	if err != nil {
+		t.Fatalf("UpdatePageContext: %v", err)
+	}
+	if pc.ProductID != "p1" || pc.Code != "10100001" || pc.Name != "Хлеб" || pc.GroupCode != "" {
+		t.Errorf("контекст товара: %+v", pc)
+	}
+}
+
+func TestUpdatePageContextProductNoCode(t *testing.T) {
+	repo := &mockRepo{productByID: map[string]stock.Product{
+		"p1": {ID: "p1", Name: "Без кода"},
+	}}
+	uc := newTestUC(repo, nil)
+	if _, err := uc.UpdatePageContext(context.Background(), "p1", ""); err == nil {
+		t.Fatal("want error for product without internal code")
+	}
+}
+
+func TestUpdatePageContextGroup(t *testing.T) {
+	repo := &mockRepo{groupNames: map[string]string{"021": "021 - Zozulinsky&Potseluev"}}
+	uc := newTestUC(repo, nil)
+
+	pc, err := uc.UpdatePageContext(context.Background(), "", "021")
+	if err != nil {
+		t.Fatalf("UpdatePageContext: %v", err)
+	}
+	if pc.GroupCode != "021" || pc.Name != "021 - Zozulinsky&Potseluev" || pc.ProductID != "" {
+		t.Errorf("контекст группы: %+v", pc)
+	}
+}
+
+func TestUpdatePageContextEmpty(t *testing.T) {
+	uc := newTestUC(&mockRepo{}, nil)
+	pc, err := uc.UpdatePageContext(context.Background(), "", "")
+	if err != nil {
+		t.Fatalf("UpdatePageContext: %v", err)
+	}
+	if pc != (PageContext{}) {
+		t.Errorf("полное обновление: контекст должен быть пустым, got %+v", pc)
+	}
+}
+
+func TestValidLengths(t *testing.T) {
+	uc := newTestUC(&mockRepo{}, nil)
+	got := uc.ValidLengths()
+	if len(got) != 2 || got[0] != 29 || got[1] != 33 {
+		t.Errorf("ValidLengths = %v, want [29 33]", got)
 	}
 }
