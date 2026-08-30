@@ -31,6 +31,13 @@ type WikiRepository interface {
 	GetUnlinkedSupplierPageByTitle(ctx context.Context, title string) (*domain.WikiPage, error)
 	CreateSupplierPage(ctx context.Context, page *domain.WikiPage) error
 	UpdateSupplierPage(ctx context.Context, pageID int64, supplierID, title string, orderDays, deliveryDays []int) error
+	// Синк страниц товаров из каталога и теги (модуль приёмки).
+	GetPageByProductID(ctx context.Context, productID string) (*domain.WikiPage, error)
+	GetUnlinkedProductPageByTitle(ctx context.Context, title string) (*domain.WikiPage, error)
+	CreateProductPage(ctx context.Context, page *domain.WikiPage) error
+	UpdateProductPage(ctx context.Context, pageID int64, productID, title, averageWeight string) error
+	AddPageTag(ctx context.Context, pageID int64, tag string) error
+	RemovePageTag(ctx context.Context, pageID int64, tag string) error
 }
 
 // WikiUseCase — сценарии работы с вики-страницами.
@@ -149,6 +156,83 @@ func (uc *WikiUseCase) SyncSupplierPage(ctx context.Context, supplierID, name st
 	}
 
 	return nil
+}
+
+// EnsureProductPage гарантирует страницу вики товара: создаёт (title=name,
+// average_weight из каталога, привязка product_id) или обновляет заголовок
+// и вес (пользовательский контент не трогается). Вызывается при выгрузке
+// товаров из МС и модулем приёмки при добавлении кода поставщика.
+func (uc *WikiUseCase) EnsureProductPage(ctx context.Context, productID, name, averageWeight string) error {
+	productID = strings.TrimSpace(productID)
+	name = strings.TrimSpace(name)
+	if productID == "" {
+		return errors.New("не передан id товара")
+	}
+	if name == "" {
+		return errors.New("не передано имя товара")
+	}
+
+	page, err := uc.repo.GetPageByProductID(ctx, productID)
+	if err != nil {
+		return fmt.Errorf("получить страницу вики товара %s: %w", productID, err)
+	}
+	if page != nil {
+		if err := uc.repo.UpdateProductPage(ctx, page.ID, productID, name, averageWeight); err != nil {
+			return fmt.Errorf("обновить страницу вики товара %s: %w", productID, err)
+		}
+
+		return nil
+	}
+
+	// Страницы с привязкой нет: привязываем вручную созданную с таким же названием.
+	unlinked, err := uc.repo.GetUnlinkedProductPageByTitle(ctx, name)
+	if err != nil {
+		return fmt.Errorf("найти непривязанную страницу %q: %w", name, err)
+	}
+	if unlinked != nil {
+		if err := uc.repo.UpdateProductPage(ctx, unlinked.ID, productID, name, averageWeight); err != nil {
+			return fmt.Errorf("привязать страницу вики %q к товару %s: %w", name, productID, err)
+		}
+
+		return nil
+	}
+
+	if err := uc.repo.CreateProductPage(ctx, &domain.WikiPage{
+		Type:          domain.PageTypeProduct,
+		Title:         name,
+		AverageWeight: averageWeight,
+		ProductID:     productID,
+	}); err != nil {
+		return fmt.Errorf("создать страницу вики товара %s: %w", productID, err)
+	}
+
+	return nil
+}
+
+// AddTagToPage добавляет тег странице по заголовку (идемпотентно).
+func (uc *WikiUseCase) AddTagToPage(ctx context.Context, title, tag string) error {
+	page, err := uc.repo.GetPage(ctx, title)
+	if err != nil {
+		return fmt.Errorf("получить страницу %q: %w", title, err)
+	}
+	if page == nil {
+		return domain.ErrPageNotFound
+	}
+
+	return uc.repo.AddPageTag(ctx, page.ID, tag)
+}
+
+// RemoveTagFromPage снимает тег со страницы по заголовку.
+func (uc *WikiUseCase) RemoveTagFromPage(ctx context.Context, title, tag string) error {
+	page, err := uc.repo.GetPage(ctx, title)
+	if err != nil {
+		return fmt.Errorf("получить страницу %q: %w", title, err)
+	}
+	if page == nil {
+		return domain.ErrPageNotFound
+	}
+
+	return uc.repo.RemovePageTag(ctx, page.ID, tag)
 }
 
 // DeletePage удаляет страницу по заголовку.

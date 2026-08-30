@@ -48,6 +48,20 @@ type stubWikiRepo struct {
 	lastSavedPhoto    *domain.PhotoUpload
 	lastGetPageTitle  string
 	lastResolveTitles []string
+	// синк страниц товаров и теги:
+	linkedProductPage    *domain.WikiPage
+	unlinkedProductPage  *domain.WikiPage
+	lastUpdatedProductID string
+	lastUpdatedAvgWeight string
+	tagErr               error
+	addedTags            []tagRecord
+	removedTags          []tagRecord
+}
+
+// tagRecord — запись вызова Add/RemovePageTag в стабе.
+type tagRecord struct {
+	pageID int64
+	tag    string
 }
 
 // Компиляционная проверка: стаб реализует WikiRepository.
@@ -125,6 +139,43 @@ func (s *stubWikiRepo) UpdateSupplierPage(_ context.Context, pageID int64, suppl
 	s.lastUpdatedDelivDays = deliveryDays
 
 	return s.updatePageErr
+}
+
+// === методы синка страниц товаров и тегов (модуль приёмки) ===
+
+func (s *stubWikiRepo) GetPageByProductID(_ context.Context, _ string) (*domain.WikiPage, error) {
+	return s.linkedProductPage, nil
+}
+
+func (s *stubWikiRepo) GetUnlinkedProductPageByTitle(_ context.Context, _ string) (*domain.WikiPage, error) {
+	return s.unlinkedProductPage, nil
+}
+
+func (s *stubWikiRepo) CreateProductPage(_ context.Context, page *domain.WikiPage) error {
+	s.createdPage = page
+
+	return s.createPageErr
+}
+
+func (s *stubWikiRepo) UpdateProductPage(_ context.Context, pageID int64, productID, title, averageWeight string) error {
+	s.lastUpdatedPageID = pageID
+	s.lastUpdatedProductID = productID
+	s.lastUpdatedTitle = title
+	s.lastUpdatedAvgWeight = averageWeight
+
+	return s.updatePageErr
+}
+
+func (s *stubWikiRepo) AddPageTag(_ context.Context, pageID int64, tag string) error {
+	s.addedTags = append(s.addedTags, tagRecord{pageID: pageID, tag: tag})
+
+	return s.tagErr
+}
+
+func (s *stubWikiRepo) RemovePageTag(_ context.Context, pageID int64, tag string) error {
+	s.removedTags = append(s.removedTags, tagRecord{pageID: pageID, tag: tag})
+
+	return s.tagErr
 }
 
 func TestWikiUseCaseSavePageValidation(t *testing.T) {

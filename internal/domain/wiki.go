@@ -47,6 +47,7 @@ type WikiPage struct {
 	Suppliers     []string  // поставщики (для страницы товара)
 	Products      []string  // продукты (для страницы поставщика)
 	SupplierID    string    // привязка к справочнику поставщиков (mssuppliers); пусто — страница создана вручную
+	ProductID     string    // привязка к каталогу (products); пусто — страница создана вручную
 	HasPhoto      bool      // есть ли фото
 }
 

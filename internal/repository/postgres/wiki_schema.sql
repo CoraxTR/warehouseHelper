@@ -31,6 +31,10 @@ CREATE TABLE wiki_pages (
 -- Один поставщик справочника = одна страница вики (частичный уникальный индекс).
 CREATE UNIQUE INDEX wiki_pages_supplier_id_uniq ON wiki_pages (supplier_id) WHERE supplier_id IS NOT NULL;
 
+-- Один товар каталога = одна страница вики (частичный уникальный индекс);
+-- страницы товаров создаются автоматически при выгрузке из МС (приёмка).
+CREATE UNIQUE INDEX wiki_pages_product_id_uniq ON wiki_pages (product_id) WHERE product_id IS NOT NULL;
+
 -- Уникальность заголовка без учёта регистра: [[склад]] и [[Склад]] — одна страница.
 CREATE UNIQUE INDEX wiki_pages_title_uniq ON wiki_pages (lower(title));
 
