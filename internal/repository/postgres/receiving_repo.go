@@ -146,8 +146,8 @@ func (pg *PGClient) LoadCatalogProductsByCodes(ctx context.Context, codes []stri
 
 	for rows.Next() {
 		var (
-			ref  receiving.ProductRef
-			uom  string
+			ref receiving.ProductRef
+			uom string
 		)
 		if err := rows.Scan(&ref.ProductID, &ref.InternalCode, &ref.Name, &uom); err != nil {
 			return nil, err

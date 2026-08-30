@@ -42,7 +42,7 @@ type Cache struct {
 // DecodeRule — распарсенное правило вычитки поставщика (decoderules.Rule
 // не экспортируем наружу: пакет decoderules — деталь реализации).
 type DecodeRule struct {
-	Length int        `json:"length"`
+	Length int         `json:"length"`
 	Fields []RuleField `json:"fields"`
 }
 
