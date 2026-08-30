@@ -36,6 +36,7 @@ func NewRouter(h *Handler) *http.ServeMux {
 	mux.HandleFunc("POST /goods/resync", h.GoodsResync)           // ресинк позиции из МС
 	mux.HandleFunc("GET /goods/tree", h.GoodsTreePage)            // дерево папок для добавления
 	mux.HandleFunc("POST /goods/tree", h.GoodsExport)             // выгрузка отмеченных товаров в каталог
+	mux.HandleFunc("GET /goods/search/json", h.GoodsSearchJSON)   // поиск товаров для виджета поставщика (JSON)
 	mux.HandleFunc("/qrcodes", h.QRPage)                          // GET — модуль «Честный знак»
 	mux.HandleFunc("/qrcodes/add", h.QRAdd)                       // GET — форма, POST — сохранение фото
 	mux.HandleFunc("/qrcodes/list", h.QRList)                     // GET — таблица заказов с фото
@@ -48,6 +49,13 @@ func NewRouter(h *Handler) *http.ServeMux {
 	mux.HandleFunc("/ms/suppliers/edit", h.SupplierEdit)     // GET — форма редактирования
 	mux.HandleFunc("/ms/suppliers/save", h.SupplierSave)     // POST — создание/обновление
 	mux.HandleFunc("/ms/suppliers/delete", h.SupplierDelete) // POST — удаление
+
+	// Приёмка: виджет «Внешние коды» на карточке поставщика.
+	mux.HandleFunc("POST /ms/receive/barcodes/add", h.ReceiveBarcodesAdd)
+	mux.HandleFunc("POST /ms/receive/barcodes/delete", h.ReceiveBarcodesDelete)
+	mux.HandleFunc("GET /ms/receive", h.ReceivePage)        // страница приёмки (выбор поставщика / сканирование)
+	mux.HandleFunc("GET /ms/receive/cache", h.ReceiveCache) // кеш приёмки (JSON для резолва на клиенте)
+	mux.HandleFunc("POST /ms/receive/save", h.ReceiveSave)  // сохранить приёмку (JSON) → отчёт
 
 	// Модуль «Сроки» (остатки по срокам годности).
 	mux.HandleFunc("GET /ms/dates", h.StockDatesPage)               // страница «Сроки»

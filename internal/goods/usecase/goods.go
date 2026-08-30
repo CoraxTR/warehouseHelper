@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"sort"
 	"strconv"
 	"strings"
@@ -35,6 +36,13 @@ type ProductsRepository interface {
 	UpsertProduct(ctx context.Context, p *domain.Product) error
 	SearchProducts(ctx context.Context, query string) ([]domain.Product, error)
 	GetProduct(ctx context.Context, id string) (*domain.Product, error)
+}
+
+// ProductPageSynchronizer — контракт автосоздания страницы товара в вики
+// при выгрузке из МС, реализуется *wucase.WikiUseCase (вики — отдельный
+// модуль, его таблицы goods не трогает).
+type ProductPageSynchronizer interface {
+	EnsureProductPage(ctx context.Context, productID, name, averageWeight string) error
 }
 
 // FolderNode — узел дерева папок. PathName — полный путь папки
@@ -137,12 +145,13 @@ type GoodsUseCase struct {
 	folders  ProductFolderClient
 	products ProductClient
 	repo     ProductsRepository
+	wiki     ProductPageSynchronizer
 }
 
 // NewGoodsUseCase создаёт юзкейс с источником папок, клиентом товаров
 // и хранилищем каталога.
-func NewGoodsUseCase(f ProductFolderClient, products ProductClient, repo ProductsRepository) *GoodsUseCase {
-	return &GoodsUseCase{folders: f, products: products, repo: repo}
+func NewGoodsUseCase(f ProductFolderClient, products ProductClient, repo ProductsRepository, wiki ProductPageSynchronizer) *GoodsUseCase {
+	return &GoodsUseCase{folders: f, products: products, repo: repo, wiki: wiki}
 }
 
 // LoadFolderTree тянет папки из МС и строит дерево (без товаров).
@@ -260,6 +269,10 @@ func (uc *GoodsUseCase) ExportProducts(ctx context.Context, items []ExportItem) 
 				}
 				continue
 			}
+
+			if err := uc.syncWikiProduct(ctx, prod); err != nil {
+				exportErrs = append(exportErrs, ProductExportError{Name: ms.Name, Err: "не удалось создать страницу вики: " + err.Error()})
+			}
 		}
 	}
 
@@ -320,7 +333,34 @@ func (uc *GoodsUseCase) ResyncProduct(ctx context.Context, id string) (*domain.P
 		return nil, err
 	}
 
+	if err := uc.syncWikiProduct(ctx, prod); err != nil {
+		// Товар в каталог записан; страница вики — вторичная операция,
+		// не валим ресинк из-за неё (пользователь увидит ошибку в логе).
+		log.Printf("resync %s: страница вики: %v", id, err)
+	}
+
 	return prod, nil
+}
+
+// syncWikiProduct гарантирует страницу вики товара после записи в каталог
+// (автосоздание при выгрузке из МС, решение 30.08). Без синка (wiki == nil,
+// тесты) — пропуск.
+func (uc *GoodsUseCase) syncWikiProduct(ctx context.Context, prod *domain.Product) error {
+	if uc.wiki == nil {
+		return nil
+	}
+
+	return uc.wiki.EnsureProductPage(ctx, prod.ID, prod.Name, averageWeightString(prod.AverageWeight))
+}
+
+// averageWeightString форматирует средний вес товара (кг, float из МС) для
+// поля вики average_weight; nil — пустая строка.
+func averageWeightString(w *float64) string {
+	if w == nil {
+		return ""
+	}
+
+	return strconv.FormatFloat(*w, 'f', -1, 64)
 }
 
 // buildProduct собирает domain.Product из данных МС и жёстко проверяет

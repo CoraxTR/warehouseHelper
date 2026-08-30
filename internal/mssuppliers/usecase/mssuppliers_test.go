@@ -98,7 +98,7 @@ func newUC(repo *fakeRepo, ms *fakeMS, wiki *fakeWiki) *MSSuppliersUseCase {
 	if wiki == nil {
 		wiki = &fakeWiki{}
 	}
-	return NewMSSuppliersUseCase(repo, ms, wiki)
+	return NewMSSuppliersUseCase(repo, ms, wiki, nil)
 }
 
 func validSupplier() *domain.Supplier {

@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Приёмка</title>
+<style>
+    body { font-family: Arial, sans-serif; margin: 0; padding: 16px; background: #f7f7f7; color: #222; }
+    h1 { font-size: 22px; margin: 0 0 12px; }
+    a { color: #007bff; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .card { background: #fff; border: 1px solid #ddd; border-radius: 6px; padding: 14px 16px; margin: 12px auto; max-width: 720px; }
+    .card.wide { max-width: 900px; }
+    label { display: block; font-weight: bold; margin: 8px 0 4px; font-size: 14px; }
+    input[type=text], select { width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; font-size: 16px; }
+    input[type=date] { padding: 6px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px; }
+    button { background: #28a745; color: #fff; border: none; padding: 10px 18px; border-radius: 4px; font-size: 15px; margin-top: 10px; cursor: pointer; }
+    button:hover { background: #218838; }
+    button.secondary { background: #6c757d; }
+    button.secondary:hover { background: #565e64; }
+    button.danger { background: #dc3545; }
+    button.danger:hover { background: #c82333; }
+    button.small { padding: 4px 10px; font-size: 13px; margin-top: 0; }
+    .error { color: #dc3545; background: #fdecea; border: 1px solid #f5c6cb; padding: 10px; border-radius: 4px; margin: 10px 0; }
+    .scan-input { font-size: 20px; letter-spacing: 1px; }
+    #scans { margin-top: 14px; }
+    .scan-card { border: 1px solid #ccc; border-left: 5px solid #28a745; background: #fafafa; border-radius: 4px; padding: 10px 12px; margin-bottom: 8px; position: relative; }
+    .scan-card.box { border-left-color: #007bff; }
+    .scan-card.missing { border-left-color: #ffc107; }
+    .scan-card.error-card { border-left-color: #dc3545; }
+    .scan-card .name { font-weight: bold; font-size: 15px; }
+    .scan-card .meta { color: #666; font-size: 13px; margin-top: 2px; }
+    .scan-card .fix { margin-top: 6px; font-size: 13px; }
+    .scan-card .fix select, .scan-card .fix input { width: auto; font-size: 13px; padding: 4px; }
+    .scan-card .remove { position: absolute; top: 8px; right: 10px; }
+    .children { margin: 8px 0 0 18px; border-left: 2px solid #dee2e6; padding-left: 12px; }
+    .child-row { display: flex; justify-content: space-between; align-items: center; padding: 3px 0; font-size: 14px; }
+    .child-row .cname { flex: 1; }
+    .child-row .cmeta { color: #666; margin-right: 10px; }
+    .mismatch { color: #dc3545; font-weight: bold; }
+    #report { margin-top: 14px; }
+    #report table { border-collapse: collapse; width: 100%; background: #fff; }
+    #report th, #report td { border: 1px solid #ccc; padding: 6px 10px; text-align: left; font-size: 14px; }
+    .hint { color: #888; font-size: 13px; margin-top: 4px; }
+    .toplinks { text-align: right; margin-bottom: 10px; font-size: 14px; }
+    .supplier-select { max-width: 720px; margin: 20px auto; }
+</style>
+</head>
+<body>
+{{if not .Supplier}}
+    <div class="card supplier-select">
+        <h1>Приёмка</h1>
+        {{if .Error}}<div class="error">{{.Error}}</div>{{end}}
+        <form method="GET" action="/ms/receive">
+            <label>Поставщик</label>
+            <select name="id" id="supplier-select" required>
+                <option value="" disabled selected>— выберите поставщика —</option>
+                {{range .Suppliers}}
+                <option value="{{.ID}}">{{.Name}}</option>
+                {{end}}
+            </select>
+            <button type="submit">Начать приёмку</button>
+        </form>
+        <p class="hint">Перед приёмкой убедитесь, что у поставщика заведены правила вычитки и внешние коды
+            (карточка поставщика → «Внешние коды»).</p>
+    </div>
+{{else}}
+    <div class="toplinks">
+        <a href="/ms/receive">← Другой поставщик</a> &nbsp;|&nbsp;
+        <a href="/ms/suppliers/edit?id={{.Supplier.ID}}">Правила и коды поставщика</a> &nbsp;|&nbsp;
+        <a href="/ms/receive?id={{.Supplier.ID}}" onclick="event.preventDefault(); location.reload();">Обновить данные поставщика</a>
+    </div>
+
+    <div class="card wide">
+        <h1>Приёмка: {{.Supplier.Name}}</h1>
+        {{if .Error}}<div class="error">{{.Error}}</div>{{end}}
+
+        <div id="scanner" style="{{if .Error}}display:none;{{end}}">
+            <label>Скан (товары и коробки — вперемешку)</label>
+            <input type="text" id="scan-input" class="scan-input" autocomplete="off" autofocus
+                   placeholder="штрих-код товара или коробки...">
+            <div id="box-hint" style="display:none;" class="hint">
+                Идёт сбор коробки: сканируйте товары внутри. Введите <b>666</b>, когда коробка укомплектована.
+            </div>
+            <div id="status-line" class="hint"></div>
+
+            <div id="scans"></div>
+
+            <button id="save-btn" onclick="saveReceive()">Сохранить приёмку</button>
+        </div>
+
+        <div id="report"></div>
+    </div>
+
+    <script>
+        var CACHE = null;         // кеш приёмки: грузится JSON-запросом ниже
+        var SUPPLIER_ID = {{if .Supplier}}'{{.Supplier.ID}}'{{else}}''{{end}};
+        var items = [];           // карточки сканов: {type, scan, manual, children}
+        var boxMode = false;      // идёт сбор содержимого коробки
+
+        var scanInput = document.getElementById('scan-input');
+        var scansBox = document.getElementById('scans');
+        var boxHint = document.getElementById('box-hint');
+        var reportBox = document.getElementById('report');
+        var statusLine = document.getElementById('status-line');
+
+        function parseDate(s) {
+            if (!s || s.length !== 8) { return null; }
+            return s.substr(4, 4) + '-' + s.substr(2, 2) + '-' + s.substr(0, 2);
+        }
+
+        function sliceRule(rule, raw, i) {
+            var f = rule.fields[i];
+            if (!f || f.pos <= 0) { return null; }
+            var start = f.pos - 1;
+            if (start + f.len > raw.length) { return null; }
+            return raw.substr(start, f.len);
+        }
+
+        function resolveByRule(rule, raw, kind) {
+            var scan = {kind: kind, raw: raw, qty: 1};
+            var code = sliceRule(rule, raw, 0);
+            var ext = code ? CACHE.by_external[code] : null;
+            if (ext) {
+                scan.product_id = ext.product_id;
+                scan.internal_code = ext.internal_code;
+                scan.name = ext.name;
+                scan.weighted = ext.weighted;
+            } else {
+                scan.needs_product = true;
+            }
+            var w = sliceRule(rule, raw, 1);
+            if (w) { scan.weight_g = parseInt(w, 10); }
+            var pd = sliceRule(rule, raw, 2);
+            if (pd) { scan.produced_on = parseDate(pd); }
+            var bd = sliceRule(rule, raw, kind === 'box' ? 4 : 3);
+            if (bd) { scan.best_before = parseDate(bd); }
+            if (kind === 'box') {
+                var q = sliceRule(rule, raw, 2);
+                if (q) { scan.qty = parseInt(q, 10); scan.declared_qty = scan.qty; }
+                scan.declared_weight_g = scan.weight_g;
+            }
+            return scan;
+        }
+
+        function resolveScan(raw) {
+            if (raw.length === 29) {
+                var code = raw.substr(0, 8);
+                var prod = CACHE.by_code[code];
+                if (!prod) { return {error: 'Товар с кодом ' + code + ' не найден в каталоге'}; }
+                return {
+                    kind: 'item', raw: raw, product_id: prod.product_id, internal_code: code,
+                    name: prod.name, weighted: prod.weighted,
+                    weight_g: parseInt(raw.substr(8, 5), 10),
+                    produced_on: parseDate(raw.substr(13, 8)),
+                    best_before: parseDate(raw.substr(21, 8))
+                };
+            }
+            if (raw.length === 33) {
+                var code = raw.substr(0, 8);
+                var prod = CACHE.by_code[code];
+                if (!prod) { return {error: 'Товар с кодом ' + code + ' не найден в каталоге'}; }
+                return {
+                    kind: 'box', raw: raw, product_id: prod.product_id, internal_code: code,
+                    name: prod.name, weighted: prod.weighted,
+                    weight_g: parseInt(raw.substr(8, 6), 10),
+                    qty: parseInt(raw.substr(14, 3), 10),
+                    declared_qty: parseInt(raw.substr(14, 3), 10),
+                    declared_weight_g: parseInt(raw.substr(8, 6), 10),
+                    produced_on: parseDate(raw.substr(17, 8)),
+                    best_before: parseDate(raw.substr(25, 8))
+                };
+            }
+            var i, r;
+            for (i = 0; i < CACHE.box_rules.length; i++) {
+                r = CACHE.box_rules[i];
+                if (r.length === raw.length) { return resolveByRule(r, raw, 'box'); }
+            }
+            for (i = 0; i < CACHE.item_rules.length; i++) {
+                r = CACHE.item_rules[i];
+                if (r.length === raw.length) { return resolveByRule(r, raw, 'item'); }
+            }
+            return {error: 'Штрих-код не распознан: нет правила поставщика и это не внутренний формат'};
+        }
+
+        function fmtWeight(g) {
+            if (!g) { return ''; }
+            return (g / 1000).toFixed(3).replace(/\.?0+$/, '') + ' кг';
+        }
+
+        function productSelect(selectedId) {
+            var html = '<select class="fix-product">';
+            html += '<option value="">— выберите позицию —</option>';
+            var i, p;
+            for (i = 0; i < CACHE.products.length; i++) {
+                p = CACHE.products[i];
+                html += '<option value="' + p.product_id + '"' + (p.product_id === selectedId ? ' selected' : '') + '>' +
+                    p.name + ' [' + p.internal_code + ']</option>';
+            }
+            html += '</select>';
+            return html;
+        }
+
+        function scanCard(it) {
+            var s = it.scan;
+            var cls = 'scan-card';
+            var meta = '';
+            var fixes = '';
+
+            if (s.error) {
+                cls += ' error-card';
+                meta = 'НЕ РАСПОЗНАНО';
+                fixes = '<div class="fix">' +
+                    '<label>Позиция (вручную)</label>' + productSelect('') +
+                    ' <input type="date" class="fix-bb" title="Срок годности">' +
+                    ' <button type="button" class="small" onclick="applyManual(this, \'item\')">Применить</button></div>';
+            } else {
+                if (s.kind === 'box') { cls += ' box'; }
+                var declared = '';
+                if (s.kind === 'box' && s.declared_qty) {
+                    declared = 'заявлено: ' + s.declared_qty + ' шт, ' + fmtWeight(s.declared_weight_g) + ' — ';
+                }
+                meta = declared + (s.weight_g ? 'вес ' + fmtWeight(s.weight_g) + ', ' : '') +
+                    (s.produced_on ? 'выработка ' + s.produced_on + ', ' : '') +
+                    (s.best_before ? 'срок ' + s.best_before : '');
+
+                if (s.needs_product || !s.product_id) {
+                    cls += ' missing';
+                    fixes += '<div class="fix">Позиция не определена: ' + productSelect(s.product_id) + '</div>';
+                }
+                if (s.kind === 'item' && s.weighted && !s.weight_g) {
+                    cls += ' missing';
+                    fixes += '<div class="fix">Вес не в коде: <input type="number" class="fix-weight" min="1" placeholder="граммы"> г</div>';
+                }
+                if (!s.best_before) {
+                    cls += ' missing';
+                    fixes += '<div class="fix">Срок не в коде: <input type="date" class="fix-bb"></div>';
+                }
+                if (!s.produced_on && s.kind === 'item') {
+                    fixes += '<div class="fix">Выработка (необязательно): <input type="date" class="fix-pd"></div>';
+                }
+            }
+
+            var html = '<div class="' + cls + '">';
+            html += '<button type="button" class="small danger remove" onclick="removeScan(this)">✕</button>';
+            if (s.error) {
+                html += '<div class="name">' + s.error + '</div><div class="meta">' + s.raw + '</div>';
+            } else {
+                html += '<div class="name">' + (s.name || '???') + (s.kind === 'box' ? ' — коробка' : '') + '</div>';
+                html += '<div class="meta">' + (meta || 'данные не вычитываются') + ' <span class="mismatch" style="display:' + (it.mismatch ? 'inline' : 'none') + '">расхождение!</span></div>';
+            }
+            html += fixes;
+
+            if (s.kind === 'box') {
+                html += '<div class="children">';
+                var i, c;
+                for (i = 0; i < it.children.length; i++) {
+                    c = it.children[i];
+                    html += '<div class="child-row">' +
+                        '<span class="cname">' + (c.scan.name || '???') + '</span>' +
+                        '<span class="cmeta">' + fmtWeight(c.scan.weight_g) + ' · ' + (c.scan.best_before || '—') + '</span>' +
+                        '<button type="button" class="small danger" onclick="removeChild(this, ' + i + ')">✕</button>' +
+                        '</div>';
+                }
+                html += '<div class="hint">в коробке: ' + it.children.length + ' шт, ' + fmtWeight(boxTotalWeight(it)) + '</div>';
+                html += '</div>';
+            }
+            html += '</div>';
+            return html;
+        }
+
+        function render() {
+            var html = '';
+            var i;
+            for (i = 0; i < items.length; i++) {
+                html += scanCard(items[i]);
+            }
+            scansBox.innerHTML = html;
+            boxHint.style.display = boxMode ? 'block' : 'none';
+            scanInput.focus();
+        }
+
+        function removeScan(btn) {
+            var cards = scansBox.children;
+            var idx = Array.prototype.indexOf.call(cards, btn.parentNode);
+            if (idx >= 0) { items.splice(idx, 1); }
+            if (boxMode && items.length === 0) { boxMode = false; }
+            render();
+        }
+
+        function removeChild(btn, childIdx) {
+            var cards = scansBox.children;
+            var idx = Array.prototype.indexOf.call(cards, btn.parentNode.parentNode.parentNode);
+            if (idx >= 0) { items[idx].children.splice(childIdx, 1); }
+            render();
+        }
+
+        function collectItemFixes(card) {
+            var sels = card.querySelectorAll('.fix select.fix-product');
+            var weights = card.querySelectorAll('input.fix-weight');
+            var bbs = card.querySelectorAll('input.fix-bb');
+            var pds = card.querySelectorAll('input.fix-pd');
+            var manual = {};
+            if (sels.length) { manual.product_id = sels[0].value; }
+            if (weights.length && weights[0].value) { manual.weight_g = parseInt(weights[0].value, 10); }
+            if (bbs.length && bbs[0].value) { manual.best_before = bbs[0].value; }
+            if (pds.length && pds[0].value) { manual.produced_on = pds[0].value; }
+            return manual;
+        }
+
+        function applyManual(btn, kind) {
+            var card = btn.parentNode.parentNode;
+            var cards = scansBox.children;
+            var idx = Array.prototype.indexOf.call(cards, card);
+            if (idx < 0) { return; }
+            var it = items[idx];
+            var manual = collectItemFixes(card);
+            var s = it.scan;
+
+            if (manual.product_id) {
+                var i, p;
+                for (i = 0; i < CACHE.products.length; i++) {
+                    p = CACHE.products[i];
+                    if (p.product_id === manual.product_id) {
+                        s.product_id = p.product_id;
+                        s.internal_code = p.internal_code;
+                        s.name = p.name;
+                        s.weighted = p.weighted;
+                        s.needs_product = false;
+                        break;
+                    }
+                }
+            }
+            if (manual.weight_g) { s.weight_g = manual.weight_g; }
+            if (manual.best_before) { s.best_before = manual.best_before; }
+            if (manual.produced_on) { s.produced_on = manual.produced_on; }
+            if (s.error) { delete s.error; s.kind = kind === 'box' ? 'box' : 'item'; }
+            it.manual = manual;
+            render();
+        }
+
+        function boxTotalWeight(it) {
+            var total = 0;
+            var i;
+            for (i = 0; i < it.children.length; i++) {
+                total += (it.children[i].scan.weight_g || 0);
+            }
+            return total;
+        }
+
+        function finishBox(it) {
+            boxMode = false;
+            if (it.scan.declared_qty && it.children.length !== it.scan.declared_qty) { it.mismatch = true; }
+            if (it.scan.declared_weight_g && boxTotalWeight(it) !== it.scan.declared_weight_g) { it.mismatch = true; }
+            render();
+        }
+
+        function handleScan(raw) {
+            if (raw === '666') {
+                if (boxMode && items.length) {
+                    var last = items[items.length - 1];
+                    if (last.scan.kind === 'box' && last.children.length === 0) {
+                        last.error = 'В коробке нет отсканированных товаров';
+                        boxMode = false;
+                    } else if (last.scan.kind === 'box') {
+                        finishBox(last);
+                        return;
+                    }
+                }
+                render();
+                return;
+            }
+
+            var resolved = resolveScan(raw);
+
+            if (boxMode) {
+                var boxItem = items[items.length - 1];
+                if (resolved.error) {
+                    boxItem.children.push({scan: resolved});
+                } else if (resolved.kind === 'item') {
+                    if (boxItem.children.length && boxItem.children[0].scan.internal_code !== resolved.internal_code) {
+                        boxItem.children.push({scan: {error: 'Разные товары в коробке: ' + resolved.name}});
+                    } else {
+                        boxItem.children.push({scan: resolved});
+                    }
+                } else {
+                    boxItem.children.push({scan: {error: 'В коробке не может быть другая коробка'}});
+                }
+                render();
+                return;
+            }
+
+            if (resolved.error) {
+                items.push({scan: resolved, children: []});
+                render();
+                return;
+            }
+
+            if (resolved.kind === 'box') {
+                items.push({scan: resolved, children: [], mismatch: false});
+                boxMode = true;
+                render();
+                return;
+            }
+
+            items.push({scan: resolved, children: []});
+            render();
+        }
+
+        function collectItem(it) {
+            var s = it.scan;
+            var out = {raw: s.raw};
+            if (s.needs_product && it.manual && it.manual.product_id) { out.manual_product_id = it.manual.product_id; }
+            if (s.weighted && !s.weight_g && it.manual && it.manual.weight_g) { out.manual_weight_g = it.manual.weight_g; }
+            if (!s.best_before && it.manual && it.manual.best_before) { out.manual_best_before = it.manual.best_before; }
+            if (!s.produced_on && it.manual && it.manual.produced_on) { out.manual_produced_on = it.manual.produced_on; }
+            return out;
+        }
+
+        function saveReceive() {
+            var supplierId = '{{.Supplier.ID}}';
+            var scans = [];
+            var i, j;
+            var problems = [];
+            for (i = 0; i < items.length; i++) {
+                var it = items[i];
+                if (it.scan.error) { problems.push(it.scan.error); continue; }
+                if (it.scan.kind === 'box') {
+                    if (it.children.length === 0) { problems.push('Коробка без товаров'); continue; }
+                    var kids = [];
+                    var firstCode = null;
+                    var ok = true;
+                    for (j = 0; j < it.children.length; j++) {
+                        var c = it.children[j];
+                        if (c.scan.error) { problems.push(c.scan.error); ok = false; break; }
+                        if (firstCode === null) { firstCode = c.scan.internal_code; }
+                        else if (c.scan.internal_code !== firstCode) { problems.push('Разные товары в коробке'); ok = false; break; }
+                        kids.push(collectItem(c));
+                    }
+                    if (!ok) { continue; }
+                    scans.push({raw: it.scan.raw, children: kids});
+                } else {
+                    if (!it.scan.product_id) { problems.push('Не выбрана позиция для ' + it.scan.raw); continue; }
+                    if (it.scan.weighted && !it.scan.weight_g && (!it.manual || !it.manual.weight_g)) {
+                        problems.push('Не указан вес для ' + it.scan.raw); continue;
+                    }
+                    if (!it.scan.best_before && (!it.manual || !it.manual.best_before)) {
+                        problems.push('Не указан срок для ' + it.scan.raw); continue;
+                    }
+                    scans.push(collectItem(it));
+                }
+            }
+
+            if (problems.length) {
+                alert('Нужно исправить:\n- ' + problems.join('\n- '));
+                return;
+            }
+            if (!scans.length) { alert('Нет принятых единиц'); return; }
+
+            var payload = JSON.stringify({supplier_id: supplierId, scans: scans});
+            var xhr = new XMLHttpRequest();
+            xhr.open('POST', '/ms/receive/save', true);
+            xhr.setRequestHeader('Content-Type', 'application/json');
+            xhr.onreadystatechange = function () {
+                if (xhr.readyState !== 4) { return; }
+                if (xhr.status === 200) {
+                    var resp;
+                    try { resp = JSON.parse(xhr.responseText); } catch (e) { return; }
+                    showReport(resp);
+                } else {
+                    alert('Ошибка сохранения:\n' + xhr.responseText);
+                }
+            };
+            xhr.send(payload);
+        }
+
+        function showReport(resp) {
+            var html = '<h1 style="margin-top:20px;">Принято</h1>';
+            if (!resp.rows || !resp.rows.length) {
+                html += '<div class="error">Ничего не принято</div>';
+            } else {
+                html += '<table><tr><th>Товар</th><th>Срок</th><th>Принято</th></tr>';
+                var i, r;
+                for (i = 0; i < resp.rows.length; i++) {
+                    r = resp.rows[i];
+                    var amount = r.weighted
+                        ? r.qty_kg.toFixed(3).replace(/\.?0+$/, '') + ' кг'
+                        : r.qty + ' шт';
+                    html += '<tr><td>' + r.name + '</td><td>' + r.best_before + '</td><td>' + amount + '</td></tr>';
+                }
+                html += '</table>';
+            }
+
+            var mismatch = 0;
+            var i;
+            for (i = 0; i < resp.boxes.length; i++) {
+                if (resp.boxes[i].mismatch) { mismatch++; }
+            }
+            if (mismatch) {
+                html += '<div class="error" style="margin-top:10px;">Расхождение в ' + mismatch + ' коробке(ах): принято как есть, проверьте комплектацию.</div>';
+            }
+
+            html += '<button onclick="printLater()">Распечатать штрих-коды</button>';
+            html += '<p class="hint">Модуль печати появится позже; данные о кусках и коробках уже переданы при сохранении.</p>';
+            html += '<p><a href="/ms/receive?id={{.Supplier.ID}}">→ Новая приёмка у этого поставщика</a></p>';
+            reportBox.innerHTML = html;
+            document.getElementById('scanner').style.display = 'none';
+        }
+
+        function printLater() {
+            alert('Печать штрих-кодов появится с модулем печати. Данные о принятых кусках и коробках сохранены.');
+        }
+
+        scanInput.addEventListener('keydown', function (e) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                var raw = scanInput.value.trim();
+                scanInput.value = '';
+                if (raw) { handleScan(raw); }
+            }
+        });
+
+        // Кеш приёмки грузится отдельным запросом (страница без него работает:
+        // ввод заблокирован до загрузки).
+        function loadCache() {
+            if (!SUPPLIER_ID) { return; }
+            var xhr = new XMLHttpRequest();
+            xhr.open('GET', '/ms/receive/cache?id=' + encodeURIComponent(SUPPLIER_ID), true);
+            xhr.onreadystatechange = function () {
+                if (xhr.readyState !== 4) { return; }
+                if (xhr.status === 200) {
+                    try {
+                        CACHE = JSON.parse(xhr.responseText);
+                    } catch (e) {
+                        statusLine.textContent = 'Ошибка разбора кеша приёмки';
+                        return;
+                    }
+                    scanInput.disabled = false;
+                    statusLine.textContent = 'Кеш готов: ' + (CACHE.by_external ? Object.keys(CACHE.by_external).length : 0) + ' внешних кодов, ' +
+                        (CACHE.by_code ? Object.keys(CACHE.by_code).length : 0) + ' товаров каталога';
+                    render();
+                } else {
+                    statusLine.textContent = 'Не удалось загрузить кеш приёмки (HTTP ' + xhr.status + ')';
+                }
+            };
+            xhr.send();
+        }
+
+        if (SUPPLIER_ID) {
+            scanInput.disabled = true;
+            statusLine.textContent = 'Загружаю кеш приёмки…';
+            loadCache();
+        }
+
+        render();
+    </script>
+{{end}}
+</body>
+</html>

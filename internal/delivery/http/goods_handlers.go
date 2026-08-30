@@ -4,6 +4,7 @@
 package http
 
 import (
+	"encoding/json"
 	"errors"
 	"html/template"
 	"log"
@@ -326,4 +327,41 @@ func productFromForm(r *http.Request) (*domain.Product, error) {
 	}
 
 	return p, nil
+}
+
+// GoodsSearchJSON — GET /goods/search/json?q=...: поиск товаров каталога
+// для виджета «Внешние коды» на карточке поставщика (JSON, не страница).
+// Ответ: [{id, name, internal_code, uom}].
+func (h *Handler) GoodsSearchJSON(w http.ResponseWriter, r *http.Request) {
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	if q == "" {
+		http.Error(w, "пустой запрос", http.StatusBadRequest)
+
+		return
+	}
+
+	products, err := h.goodsUC.SearchProducts(r.Context(), q)
+	if err != nil {
+		log.Printf("goods search json: %v", err)
+		http.Error(w, "не удалось выполнить поиск", http.StatusInternalServerError)
+
+		return
+	}
+
+	type item struct {
+		ID           string `json:"id"`
+		Name         string `json:"name"`
+		InternalCode string `json:"internal_code"`
+		UOM          string `json:"uom"`
+	}
+
+	out := make([]item, 0, len(products))
+	for _, p := range products {
+		out = append(out, item{ID: p.ID, Name: p.Name, InternalCode: p.InternalCode, UOM: p.UOM})
+	}
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	if err := json.NewEncoder(w).Encode(out); err != nil {
+		log.Printf("goods search json: encode: %v", err)
+	}
 }

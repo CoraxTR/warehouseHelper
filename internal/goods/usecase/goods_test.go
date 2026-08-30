@@ -231,7 +231,7 @@ func TestGoodsUseCaseLoadFolderTree(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			uc := NewGoodsUseCase(tt.stub, nil, nil)
+			uc := NewGoodsUseCase(tt.stub, nil, nil, nil)
 			roots, err := uc.LoadFolderTree(context.Background())
 
 			if tt.wantErr {
@@ -375,7 +375,7 @@ func TestExportProducts_HappyPath(t *testing.T) {
 		uomNames: map[string]string{uomKgHref: "кг", uomPcHref: "шт"},
 	}
 	repo := &stubProductsRepo{}
-	uc := NewGoodsUseCase(&stubProductFolderClient{}, pc, repo)
+	uc := NewGoodsUseCase(&stubProductFolderClient{}, pc, repo, nil)
 
 	errs, err := uc.ExportProducts(context.Background(), []ExportItem{
 		{ProductID: "p1", GroupPath: testGroupA},
@@ -427,7 +427,7 @@ func TestExportProducts_UOMCache(t *testing.T) {
 		},
 		uomNames: map[string]string{uomKgHref: "кг"},
 	}
-	uc := NewGoodsUseCase(&stubProductFolderClient{}, pc, &stubProductsRepo{})
+	uc := NewGoodsUseCase(&stubProductFolderClient{}, pc, &stubProductsRepo{}, nil)
 
 	_, err := uc.ExportProducts(context.Background(), []ExportItem{
 		{ProductID: "p1", GroupPath: testGroupA},
@@ -450,7 +450,7 @@ func TestExportProducts_MissingAttribute_FailsThatProduct(t *testing.T) {
 		uomNames: map[string]string{uomKgHref: "кг"},
 	}
 	repo := &stubProductsRepo{}
-	uc := NewGoodsUseCase(&stubProductFolderClient{}, pc, repo)
+	uc := NewGoodsUseCase(&stubProductFolderClient{}, pc, repo, nil)
 
 	errs, err := uc.ExportProducts(context.Background(), []ExportItem{
 		{ProductID: "p1", GroupPath: testGroupA},
@@ -481,7 +481,7 @@ func TestExportProducts_InternalCodeTaken(t *testing.T) {
 		uomNames: map[string]string{uomKgHref: "кг"},
 	}
 	repo := &stubProductsRepo{upsertErr: domain.ErrInternalCodeTaken}
-	uc := NewGoodsUseCase(&stubProductFolderClient{}, pc, repo)
+	uc := NewGoodsUseCase(&stubProductFolderClient{}, pc, repo, nil)
 
 	errs, err := uc.ExportProducts(context.Background(), []ExportItem{{ProductID: "p1", GroupPath: testGroupA}})
 	if err != nil {
@@ -497,7 +497,7 @@ func TestExportProducts_ProductNotFoundInGroup(t *testing.T) {
 		byPath:   map[string][]client.MSProduct{testGroupA: {}},
 		uomNames: map[string]string{},
 	}
-	uc := NewGoodsUseCase(&stubProductFolderClient{}, pc, &stubProductsRepo{})
+	uc := NewGoodsUseCase(&stubProductFolderClient{}, pc, &stubProductsRepo{}, nil)
 
 	errs, err := uc.ExportProducts(context.Background(), []ExportItem{{ProductID: "ghost", GroupPath: testGroupA}})
 	if err != nil {
@@ -516,7 +516,7 @@ func TestExportProducts_GroupingByPath(t *testing.T) {
 		},
 		uomNames: map[string]string{uomKgHref: "кг"},
 	}
-	uc := NewGoodsUseCase(&stubProductFolderClient{}, pc, &stubProductsRepo{})
+	uc := NewGoodsUseCase(&stubProductFolderClient{}, pc, &stubProductsRepo{}, nil)
 
 	_, err := uc.ExportProducts(context.Background(), []ExportItem{
 		{ProductID: "p1", GroupPath: testGroupA},
@@ -548,7 +548,7 @@ func TestLoadTreeWithProducts(t *testing.T) {
 		},
 		uomNames: map[string]string{uomKgHref: "кг"},
 	}
-	uc := NewGoodsUseCase(folderStub, pc, &stubProductsRepo{})
+	uc := NewGoodsUseCase(folderStub, pc, &stubProductsRepo{}, nil)
 
 	tree, err := uc.LoadTreeWithProducts(context.Background())
 	if err != nil {
@@ -602,7 +602,7 @@ func TestAttrHelpers(t *testing.T) {
 
 func TestSearchProducts(t *testing.T) {
 	repo := &stubProductsRepo{search: []domain.Product{{ID: "p1", Name: "Говядина", InternalCode: "11110001"}}}
-	uc := NewGoodsUseCase(&stubProductFolderClient{}, &stubProductClient{}, repo)
+	uc := NewGoodsUseCase(&stubProductFolderClient{}, &stubProductClient{}, repo, nil)
 
 	got, err := uc.SearchProducts(context.Background(), "говядина")
 	if err != nil {
@@ -619,7 +619,7 @@ func TestSearchProducts(t *testing.T) {
 
 func TestGetProduct(t *testing.T) {
 	repo := &stubProductsRepo{get: &domain.Product{ID: "p1", Name: "Говядина"}}
-	uc := NewGoodsUseCase(&stubProductFolderClient{}, &stubProductClient{}, repo)
+	uc := NewGoodsUseCase(&stubProductFolderClient{}, &stubProductClient{}, repo, nil)
 
 	got, err := uc.GetProduct(context.Background(), "p1")
 	if err != nil || got.ID != "p1" {
@@ -634,7 +634,7 @@ func TestGetProduct(t *testing.T) {
 
 func TestSaveProduct(t *testing.T) {
 	repo := &stubProductsRepo{}
-	uc := NewGoodsUseCase(&stubProductFolderClient{}, &stubProductClient{}, repo)
+	uc := NewGoodsUseCase(&stubProductFolderClient{}, &stubProductClient{}, repo, nil)
 
 	p := &domain.Product{ID: "p1", Name: "Говядина"}
 	if err := uc.SaveProduct(context.Background(), p); err != nil {
@@ -655,7 +655,7 @@ func TestResyncProduct_HappyPath_KeepsGroupName(t *testing.T) {
 		},
 		uomNames: map[string]string{uomKgHref: "кг"},
 	}
-	uc := NewGoodsUseCase(&stubProductFolderClient{}, pc, repo)
+	uc := NewGoodsUseCase(&stubProductFolderClient{}, pc, repo, nil)
 
 	got, err := uc.ResyncProduct(context.Background(), "p1")
 	if err != nil {
@@ -683,7 +683,7 @@ func TestResyncProduct_MissingAttr_NoUpsert(t *testing.T) {
 		},
 		uomNames: map[string]string{uomKgHref: "кг"},
 	}
-	uc := NewGoodsUseCase(&stubProductFolderClient{}, pc, repo)
+	uc := NewGoodsUseCase(&stubProductFolderClient{}, pc, repo, nil)
 
 	_, err := uc.ResyncProduct(context.Background(), "p1")
 	if err == nil || !strings.Contains(err.Error(), "Средний вес") {
@@ -696,9 +696,77 @@ func TestResyncProduct_MissingAttr_NoUpsert(t *testing.T) {
 
 func TestResyncProduct_NotFound(t *testing.T) {
 	repo := &stubProductsRepo{getErr: domain.ErrProductNotFound}
-	uc := NewGoodsUseCase(&stubProductFolderClient{}, &stubProductClient{}, repo)
+	uc := NewGoodsUseCase(&stubProductFolderClient{}, &stubProductClient{}, repo, nil)
 
 	if _, err := uc.ResyncProduct(context.Background(), "nope"); !errors.Is(err, domain.ErrProductNotFound) {
 		t.Errorf("ожидался ErrProductNotFound, получено: %v", err)
+	}
+}
+
+// stubWikiSyncer — стаб ProductPageSynchronizer: запоминает вызовы.
+type stubWikiSyncer struct {
+	calls []wikiSyncCall
+	err   error
+}
+
+type wikiSyncCall struct {
+	productID, name, avgWeight string
+}
+
+func (s *stubWikiSyncer) EnsureProductPage(_ context.Context, productID, name, averageWeight string) error {
+	s.calls = append(s.calls, wikiSyncCall{productID: productID, name: name, avgWeight: averageWeight})
+
+	return s.err
+}
+
+func TestExportProducts_SyncsWikiPage(t *testing.T) {
+	pc := &stubProductClient{
+		byPath: map[string][]client.MSProduct{
+			testGroupA: {
+				msProduct("p1", "11110001", "Говядина охл.", uomKgHref, fullProductAttrs()...),
+				msProduct("p2", "11110002", "Товар 2", uomKgHref, fullProductAttrs()...),
+			},
+		},
+		uomNames: map[string]string{uomKgHref: "кг"},
+	}
+	wiki := &stubWikiSyncer{}
+	uc := NewGoodsUseCase(&stubProductFolderClient{}, pc, &stubProductsRepo{}, wiki)
+
+	_, err := uc.ExportProducts(context.Background(), []ExportItem{
+		{ProductID: "p1", GroupPath: testGroupA},
+		{ProductID: "p2", GroupPath: testGroupA},
+	})
+	if err != nil {
+		t.Fatalf("ExportProducts error: %v", err)
+	}
+	if len(wiki.calls) != 2 {
+		t.Fatalf("EnsureProductPage вызван %d раз, ожидалось 2: %+v", len(wiki.calls), wiki.calls)
+	}
+	if c := wiki.calls[0]; c.productID != "p1" || c.name != "Говядина охл." || c.avgWeight != "12.5" {
+		t.Fatalf("вызов 1 неверен: %+v", c)
+	}
+	if c := wiki.calls[1]; c.productID != "p2" || c.avgWeight != "12.5" {
+		t.Fatalf("вызов 2 неверен: %+v", c)
+	}
+}
+
+func TestExportProducts_WikiErrorIsReportedNotFatal(t *testing.T) {
+	pc := &stubProductClient{
+		byPath: map[string][]client.MSProduct{
+			testGroupA: {msProduct("p1", "11110001", "Говядина охл.", uomKgHref, fullProductAttrs()...)},
+		},
+		uomNames: map[string]string{uomKgHref: "кг"},
+	}
+	wiki := &stubWikiSyncer{err: errors.New("заголовок занят")}
+	uc := NewGoodsUseCase(&stubProductFolderClient{}, pc, &stubProductsRepo{}, wiki)
+
+	errs, err := uc.ExportProducts(context.Background(), []ExportItem{
+		{ProductID: "p1", GroupPath: testGroupA},
+	})
+	if err != nil {
+		t.Fatalf("ExportProducts error: %v", err)
+	}
+	if len(errs) != 1 || !strings.Contains(errs[0].Err, "страницу вики") {
+		t.Fatalf("ожидалась ошибка вики в отчёте, получено: %v", errs)
 	}
 }

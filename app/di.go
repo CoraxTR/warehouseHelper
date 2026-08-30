@@ -13,6 +13,7 @@ import (
 	msu "warehouseHelper/internal/mssuppliers/usecase"
 	"warehouseHelper/internal/qrcodes/photostore"
 	qucase "warehouseHelper/internal/qrcodes/usecase"
+	rucase "warehouseHelper/internal/receiving/usecase"
 	"warehouseHelper/internal/refgo/export/excel"
 	"warehouseHelper/internal/refgo/export/pdf"
 	"warehouseHelper/internal/refgo/registry"
@@ -55,6 +56,8 @@ type DIContainer struct {
 	qrUC            *qucase.QRUseCase
 	msUC            *msu.MSSuppliersUseCase
 	stockUC         *sucase.StockUseCase
+	receiveBarcodes *rucase.BarcodeEditor
+	receivingUC     *rucase.ReceivingUseCase
 	stockHub        *stockws.Hub
 
 	// Хэндлеры
@@ -249,7 +252,7 @@ func (d *DIContainer) WikiUC() *wucase.WikiUseCase {
 // PGClient — gucase.ProductsRepository.
 func (d *DIContainer) GoodsUC() *gucase.GoodsUseCase {
 	if d.goodsUC == nil {
-		d.goodsUC = gucase.NewGoodsUseCase(d.MSClient(), d.MSClient(), d.OrdersRepository())
+		d.goodsUC = gucase.NewGoodsUseCase(d.MSClient(), d.MSClient(), d.OrdersRepository(), d.WikiUC())
 	}
 
 	return d.goodsUC
@@ -270,10 +273,31 @@ func (d *DIContainer) QRUC() *qucase.QRUseCase {
 // msu.WikiSupplierSynchronizer (страница вики поставщика создаётся/обновляется синком).
 func (d *DIContainer) SuppliersUC() *msu.MSSuppliersUseCase {
 	if d.msUC == nil {
-		d.msUC = msu.NewMSSuppliersUseCase(d.OrdersRepository(), d.MSClient(), d.WikiUC())
+		d.msUC = msu.NewMSSuppliersUseCase(d.OrdersRepository(), d.MSClient(), d.WikiUC(), d.ReceiveBarcodes())
 	}
 
 	return d.msUC
+}
+
+// ReceiveBarcodes — сценарии ввода внешних кодов поставщика (приёмка);
+// PGClient реализует rucase.BarcodeRepository / SupplierReader / CatalogReader,
+// WikiUC — rucase.WikiBarcodeRef.
+func (d *DIContainer) ReceiveBarcodes() *rucase.BarcodeEditor {
+	if d.receiveBarcodes == nil {
+		d.receiveBarcodes = rucase.NewBarcodeEditor(d.OrdersRepository(), d.OrdersRepository(), d.OrdersRepository(), d.WikiUC())
+	}
+
+	return d.receiveBarcodes
+}
+
+// ReceivingUC — сценарии приёмки (кеш поставщика, резолв сканов, сохранение);
+// PGClient реализует rucase.ReceiveRepository, StockUC — rucase.StockAccepter.
+func (d *DIContainer) ReceivingUC() *rucase.ReceivingUseCase {
+	if d.receivingUC == nil {
+		d.receivingUC = rucase.NewReceivingUseCase(d.OrdersRepository(), d.StockUC())
+	}
+
+	return d.receivingUC
 }
 
 // StockHub — вебсокет-хаб модуля «Сроки» (клиенты обеих страниц).
@@ -298,7 +322,7 @@ func (d *DIContainer) StockUC() *sucase.StockUseCase {
 
 func (d *DIContainer) Handler() *myhttp.Handler {
 	if d.handlers == nil {
-		d.handlers = myhttp.NewHandler(d.SyncUC(), d.OrdersUC(), d.ExcelExportUC(), d.PdfExportUC(), d.BarcodeExportUC(), d.RefGoCheckAgainstUC(), d.WikiUC(), d.GoodsUC(), d.QRUC(), d.SuppliersUC(), d.StockUC(), d.StockHub())
+		d.handlers = myhttp.NewHandler(d.SyncUC(), d.OrdersUC(), d.ExcelExportUC(), d.PdfExportUC(), d.BarcodeExportUC(), d.RefGoCheckAgainstUC(), d.WikiUC(), d.GoodsUC(), d.QRUC(), d.SuppliersUC(), d.StockUC(), d.StockHub(), d.ReceiveBarcodes(), d.ReceivingUC())
 	}
 
 	return d.handlers

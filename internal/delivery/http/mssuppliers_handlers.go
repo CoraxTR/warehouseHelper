@@ -15,6 +15,7 @@ import (
 
 	"warehouseHelper/internal/domain"
 	msu "warehouseHelper/internal/mssuppliers/usecase"
+	"warehouseHelper/internal/receiving"
 )
 
 // SuppliersListData — данные страницы списка поставщиков.
@@ -47,6 +48,8 @@ type SupplierFormData struct {
 	DelayDaysText        string
 	SpecialDelayDaysText string
 	MinOrderAmountText   string
+
+	Barcodes []receiving.BarcodeRef // виджет «Внешние коды» (приёмка)
 
 	Error string
 }
@@ -104,7 +107,23 @@ func (h *Handler) SupplierEdit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.renderSupplierForm(w, buildSupplierFormData(s, true, "", ""))
+	d := buildSupplierFormData(s, true, "", "")
+	d.Barcodes = h.loadSupplierBarcodes(r, s.ID)
+
+	h.renderSupplierForm(w, d)
+}
+
+// loadSupplierBarcodes читает связки «внешний код → товар» для виджета;
+// ошибка чтения не ломает форму поставщика (вторичные данные), в лог — да.
+func (h *Handler) loadSupplierBarcodes(r *http.Request, supplierID string) []receiving.BarcodeRef {
+	barcodes, err := h.msUC.ListBarcodes(r.Context(), supplierID)
+	if err != nil {
+		log.Printf("list supplier barcodes %s: %v", supplierID, err)
+
+		return nil
+	}
+
+	return barcodes
 }
 
 // SupplierSave — POST /ms/suppliers/save: создание или обновление.
