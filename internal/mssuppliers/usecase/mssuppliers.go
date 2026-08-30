@@ -14,6 +14,7 @@ import (
 
 	"warehouseHelper/internal/decoderules"
 	"warehouseHelper/internal/domain"
+	"warehouseHelper/internal/receiving"
 )
 
 // MSSuppliersRepository — контракт хранилища поставщиков, реализуется postgres-репозиторием.
@@ -37,17 +38,26 @@ type WikiSupplierSynchronizer interface {
 	SyncSupplierPage(ctx context.Context, supplierID, name string, orderDays, deliveryDays []int) error
 }
 
-// MSSuppliersUseCase — сценарии работы с поставщиками.
-type MSSuppliersUseCase struct {
-	repo MSSuppliersRepository
-	ms   CounterpartyClient
-	wiki WikiSupplierSynchronizer
+// BarcodeLister — контракт чтения связок «внешний код → товар» поставщика,
+// реализуется *rucase.BarcodeEditor (приёмка — отдельный модуль, владеет
+// product_supplier_barcodes). Виджет живёт на странице поставщика, данные
+// — приёмки.
+type BarcodeLister interface {
+	List(ctx context.Context, supplierID string) ([]receiving.BarcodeRef, error)
 }
 
-// NewMSSuppliersUseCase создаёт сценарий с переданным хранилищем, MS-клиентом
-// и синком вики.
-func NewMSSuppliersUseCase(repo MSSuppliersRepository, ms CounterpartyClient, wiki WikiSupplierSynchronizer) *MSSuppliersUseCase {
-	return &MSSuppliersUseCase{repo: repo, ms: ms, wiki: wiki}
+// MSSuppliersUseCase — сценарии работы с поставщиками.
+type MSSuppliersUseCase struct {
+	repo     MSSuppliersRepository
+	ms       CounterpartyClient
+	wiki     WikiSupplierSynchronizer
+	barcodes BarcodeLister
+}
+
+// NewMSSuppliersUseCase создаёт сценарий с переданным хранилищем, MS-клиентом,
+// синком вики и листером внешних кодов приёмки.
+func NewMSSuppliersUseCase(repo MSSuppliersRepository, ms CounterpartyClient, wiki WikiSupplierSynchronizer, barcodes BarcodeLister) *MSSuppliersUseCase {
+	return &MSSuppliersUseCase{repo: repo, ms: ms, wiki: wiki, barcodes: barcodes}
 }
 
 // List возвращает всех поставщиков, отсортированных по алфавиту (ORDER BY lower(name)).
@@ -58,6 +68,16 @@ func (uc *MSSuppliersUseCase) List(ctx context.Context) ([]domain.Supplier, erro
 // Get возвращает поставщика по id; если нет — (nil, nil).
 func (uc *MSSuppliersUseCase) Get(ctx context.Context, id string) (*domain.Supplier, error) {
 	return uc.repo.GetSupplier(ctx, id)
+}
+
+// ListBarcodes возвращает связки «внешний код → товар» поставщика для
+// виджета на странице поставщика. Без листера (тесты) — пустой список.
+func (uc *MSSuppliersUseCase) ListBarcodes(ctx context.Context, supplierID string) ([]receiving.BarcodeRef, error) {
+	if uc.barcodes == nil {
+		return nil, nil
+	}
+
+	return uc.barcodes.List(ctx, supplierID)
 }
 
 // Create нормализует и валидирует данные, подтягивает имя из МС и создаёт
