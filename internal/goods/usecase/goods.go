@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 
+	"warehouseHelper/internal/averagesales"
 	"warehouseHelper/internal/domain"
 	"warehouseHelper/internal/msclient/client"
 )
@@ -36,6 +37,7 @@ type ProductsRepository interface {
 	UpsertProduct(ctx context.Context, p *domain.Product) error
 	SearchProducts(ctx context.Context, query string) ([]domain.Product, error)
 	GetProduct(ctx context.Context, id string) (*domain.Product, error)
+	GetProductsByIDs(ctx context.Context, ids []string) ([]domain.Product, error)
 	// UpdateProductAverageWeight — обновление среднего веса (кг) по входу
 	// модуля среднего веса (products.average_weight пишет только каталог).
 	UpdateProductAverageWeight(ctx context.Context, productID string, avgKg float64) error
@@ -149,12 +151,63 @@ type GoodsUseCase struct {
 	products ProductClient
 	repo     ProductsRepository
 	wiki     ProductPageSynchronizer
+	turnover TurnoverBackfiller // опционально (nil в тестах)
+}
+
+// TurnoverBackfiller — асинхронный первичный бэкфилл оборотов средних продаж
+// (реализует *asucase.UseCase; запросы к МС идут в фоне, не задерживая каталог).
+// Контекст не передаётся намеренно: очередь бэкфилла живёт своей жизнью,
+// а не жизнью запроса, который поставил товар.
+type TurnoverBackfiller interface {
+	BackfillProducts(productIDs []string)
 }
 
 // NewGoodsUseCase создаёт юзкейс с источником папок, клиентом товаров
 // и хранилищем каталога.
 func NewGoodsUseCase(f ProductFolderClient, products ProductClient, repo ProductsRepository, wiki ProductPageSynchronizer) *GoodsUseCase {
 	return &GoodsUseCase{folders: f, products: products, repo: repo, wiki: wiki}
+}
+
+// SetTurnoverBackfiller подключает асинхронный бэкфилл оборотов (di.go после
+// создания юзкейса; nil — отключён, тесты).
+func (uc *GoodsUseCase) SetTurnoverBackfiller(t TurnoverBackfiller) {
+	uc.turnover = t
+}
+
+// TurnoverProduct — срез товара для модуля средних продаж
+// (реализация averagesales.ProductReader; products читает только каталог).
+func (uc *GoodsUseCase) TurnoverProduct(ctx context.Context, id string) (*averagesales.TurnoverProduct, error) {
+	p, err := uc.repo.GetProduct(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return &averagesales.TurnoverProduct{
+		ID:            p.ID,
+		UOM:           p.UOM,
+		AverageWeight: p.AverageWeight,
+		TrackWeekly:   p.TrackWeekly,
+		FolderID:      p.FolderID,
+	}, nil
+}
+
+// TurnoverProductsByIDs — срез каталога для списка товаров
+// (реализация averagesales.ProductReader).
+func (uc *GoodsUseCase) TurnoverProductsByIDs(ctx context.Context, ids []string) ([]averagesales.TurnoverProduct, error) {
+	products, err := uc.repo.GetProductsByIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]averagesales.TurnoverProduct, 0, len(products))
+	for _, p := range products {
+		out = append(out, averagesales.TurnoverProduct{
+			ID:            p.ID,
+			UOM:           p.UOM,
+			AverageWeight: p.AverageWeight,
+			TrackWeekly:   p.TrackWeekly,
+			FolderID:      p.FolderID,
+		})
+	}
+	return out, nil
 }
 
 // UpdateAverageWeight обновляет средний вес товара (кг) — контракт модуля
@@ -252,6 +305,19 @@ func (uc *GoodsUseCase) ExportProducts(ctx context.Context, items []ExportItem) 
 	uomCache := make(map[string]string) // href → название
 	var exportErrs []ProductExportError
 
+	// id папки по полному пути (products.folder_id) — из дерева папок.
+	// Ошибка папок не роняет выгрузку: folder_id останется пустым, товары
+	// дозаливки оборотов уйдут в безгрупповые пачки.
+	folderByPath := make(map[string]string)
+	folders, err := uc.folders.FetchProductFolders(ctx)
+	if err != nil {
+		log.Printf("выгрузка: папки не получены, folder_id не заполнится: %v", err)
+	} else {
+		for _, f := range folders {
+			folderByPath[fullFolderPath(f)] = f.ID
+		}
+	}
+
 	for _, path := range paths {
 		products, err := uc.products.FetchProductsByPathName(ctx, path)
 		if err != nil {
@@ -270,7 +336,7 @@ func (uc *GoodsUseCase) ExportProducts(ctx context.Context, items []ExportItem) 
 				continue
 			}
 
-			prod, err := uc.buildProduct(ctx, ms, path, uomCache)
+			prod, err := uc.buildProduct(ctx, ms, path, folderByPath[path], uomCache)
 			if err != nil {
 				exportErrs = append(exportErrs, ProductExportError{Name: ms.Name, Err: err.Error()})
 				continue
@@ -284,6 +350,9 @@ func (uc *GoodsUseCase) ExportProducts(ctx context.Context, items []ExportItem) 
 				}
 				continue
 			}
+
+			// Первичный бэкфилл средних продаж — асинхронно, в фоне.
+			uc.scheduleTurnoverBackfill(prod.ID)
 
 			if err := uc.syncWikiProduct(ctx, prod); err != nil {
 				exportErrs = append(exportErrs, ProductExportError{Name: ms.Name, Err: "не удалось создать страницу вики: " + err.Error()})
@@ -321,8 +390,13 @@ func (uc *GoodsUseCase) GetProduct(ctx context.Context, id string) (*domain.Prod
 }
 
 // SaveProduct сохраняет ручные правки позиции (upsert по id).
+// Новый товар (первичное добавление) уходит в фоновый бэкфилл оборотов.
 func (uc *GoodsUseCase) SaveProduct(ctx context.Context, p *domain.Product) error {
-	return uc.repo.UpsertProduct(ctx, p)
+	if err := uc.repo.UpsertProduct(ctx, p); err != nil {
+		return err
+	}
+	uc.scheduleTurnoverBackfill(p.ID)
+	return nil
 }
 
 // ResyncProduct перезаписывает позицию каталога данными из МС (по id):
@@ -339,7 +413,7 @@ func (uc *GoodsUseCase) ResyncProduct(ctx context.Context, id string) (*domain.P
 		return nil, fmt.Errorf("не удалось получить товар из МойСклад: %w", err)
 	}
 
-	prod, err := uc.buildProduct(ctx, ms, existing.GroupName, make(map[string]string))
+	prod, err := uc.buildProduct(ctx, ms, existing.GroupName, existing.FolderID, make(map[string]string))
 	if err != nil {
 		return nil, err
 	}
@@ -348,6 +422,8 @@ func (uc *GoodsUseCase) ResyncProduct(ctx context.Context, id string) (*domain.P
 		return nil, err
 	}
 
+	uc.scheduleTurnoverBackfill(prod.ID)
+
 	if err := uc.syncWikiProduct(ctx, prod); err != nil {
 		// Товар в каталог записан; страница вики — вторичная операция,
 		// не валим ресинк из-за неё (пользователь увидит ошибку в логе).
@@ -355,6 +431,15 @@ func (uc *GoodsUseCase) ResyncProduct(ctx context.Context, id string) (*domain.P
 	}
 
 	return prod, nil
+}
+
+// scheduleTurnoverBackfill ставит товар в очередь первичного бэкфилла оборотов
+// (асинхронно; бэкфилл идемпотентен — уже заполненные товары пропускает).
+func (uc *GoodsUseCase) scheduleTurnoverBackfill(productID string) {
+	if uc.turnover == nil {
+		return
+	}
+	uc.turnover.BackfillProducts([]string{productID})
 }
 
 // syncWikiProduct гарантирует страницу вики товара после записи в каталог
@@ -380,7 +465,8 @@ func averageWeightString(w *float64) string {
 
 // buildProduct собирает domain.Product из данных МС и жёстко проверяет
 // заполненность всех полей (пропуск любого → ошибка с перечнем).
-func (uc *GoodsUseCase) buildProduct(ctx context.Context, ms client.MSProduct, groupPath string, uomCache map[string]string) (*domain.Product, error) {
+// group_name и folder_id — из пути папки.
+func (uc *GoodsUseCase) buildProduct(ctx context.Context, ms client.MSProduct, groupPath, folderID string, uomCache map[string]string) (*domain.Product, error) {
 	attrs := attributeMap(ms.Attributes)
 
 	shortList, err := attrBool(attrs, "Шорт лист")
@@ -419,6 +505,7 @@ func (uc *GoodsUseCase) buildProduct(ctx context.Context, ms client.MSProduct, g
 		Name:          strings.TrimSpace(ms.Name),
 		UOM:           uomName,
 		GroupName:     groupPath,
+		FolderID:      folderID,
 		AverageWeight: &avgWeight,
 		InventoryType: inventoryType,
 		ShortList:     shortList,

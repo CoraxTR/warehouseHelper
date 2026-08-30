@@ -163,6 +163,42 @@ type MSProductList struct {
 	Rows []MSProduct `json:"rows"`
 }
 
+// ProfitFilter — фильтры отчёта прибыльности (report/profit/byproduct).
+// Фильтр принимает ПОЛНЫЕ href'ы, а не id (id → ошибка 1014, проверено);
+// href'ы клиент собирает сам (refHref), юзкейс передаёт голые id:
+// ProductIDs — пачка товаров (filter=product=<href1>;product=<href2>…);
+// ProductFolderID — группа (filter=productFolder=<href>); задаётся один из них.
+type ProfitFilter struct {
+	ProductIDs      []string // id товаров
+	ProductFolderID string   // id группы (альтернатива ProductIDs)
+}
+
+// ProfitReport — ответ отчёта прибыльности. Строки — по товарам с продажами
+// за запрошенный период [momentFrom, momentTo]; период в строке отсутствует.
+type ProfitReport struct {
+	Meta struct {
+		Size   int `json:"size"`
+		Limit  int `json:"limit"`
+		Offset int `json:"offset"`
+	} `json:"meta"`
+	Rows []ProfitRow `json:"rows"`
+}
+
+// ProfitRow — строка отчёта: товар и продажи за запрошенный период.
+type ProfitRow struct {
+	Assortment struct {
+		Meta struct {
+			Href string `json:"href"`
+		} `json:"meta"`
+		Name string `json:"name"`
+		UOM  struct {
+			Name string `json:"name"`
+		} `json:"uom"`
+	} `json:"assortment"`
+	SellQuantity   float64 `json:"sellQuantity"`
+	ReturnQuantity float64 `json:"returnQuantity"`
+}
+
 // MSUOM — единица измерения МойСклад (entity/uom): нужно только название.
 type MSUOM struct {
 	Name string `json:"name"`

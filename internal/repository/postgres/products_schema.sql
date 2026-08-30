@@ -10,6 +10,7 @@ CREATE TABLE products (
     name           TEXT NOT NULL,       -- название из МС
     uom            TEXT NOT NULL,       -- единица измерения из МС (uom.name): "шт", "кг", ...
     group_name     TEXT,                -- имя группы товаров МС (productFolder.name); NULL — товар без группы; по нему товары разделяются в отображении сроков
+    folder_id      TEXT,                -- id папки МС (productfolder); NULL — товар без группы; заполняет каталог из дерева папок (FetchProductFolders)
     average_weight NUMERIC(12, 4),      -- средний вес штуки, кг; считает модуль приёмки, передаёт каталогу, пишет только каталог (граница: владелец products — каталог)
     shelf_life     SMALLINT CHECK (shelf_life > 0),  -- общий срок годности, дни; NULL — не задан
     pack_size      SMALLINT CHECK (pack_size > 0),   -- размер пачки, штук; NULL — не пачками (заказ/приёмка поштучно)

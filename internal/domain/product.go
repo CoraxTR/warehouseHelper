@@ -16,6 +16,7 @@ type Product struct {
 	Name          string   // название из МС
 	UOM           string   // единица измерения (uom.name): "шт", "кг", ...
 	GroupName     string   // полный путь группы из дерева МС (метаданные дерева)
+	FolderID      string   // id папки МС (productfolder); "" — товар без группы; заполняет каталог из дерева папок
 	AverageWeight *float64 // средний вес штуки, кг; NULL — не задан
 	ShelfLife     *int16   // общий срок годности, дни; NULL — не задан
 	PackSize      *int16   // размер пачки, штук; NULL — не пачками
