@@ -45,7 +45,7 @@ func (uc *ReceivingUseCase) Save(ctx context.Context, req receiving.SaveRequest)
 	}
 
 	if len(units) == 0 {
-		return nil, fmt.Errorf("нет принятых единиц")
+		return nil, errors.New("нет принятых единиц")
 	}
 
 	// Остатки: лоты (товар, срок) с суммой количества — через модуль сроков.
