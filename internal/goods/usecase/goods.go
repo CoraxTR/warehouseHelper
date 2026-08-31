@@ -579,24 +579,39 @@ func (uc *GoodsUseCase) fetchUOMName(ctx context.Context, ms client.MSProduct, c
 	return name, nil
 }
 
-// attributeMap — атрибуты товара по имени.
-func attributeMap(attrs []client.MSAttribute) map[string]json.RawMessage {
-	m := make(map[string]json.RawMessage, len(attrs))
+// attributeMap — атрибуты товара по имени (с типом из метаданных МС).
+func attributeMap(attrs []client.MSAttribute) map[string]client.MSAttribute {
+	m := make(map[string]client.MSAttribute, len(attrs))
 	for _, a := range attrs {
-		m[a.Name] = a.Value
+		m[a.Name] = a
 	}
 	return m
 }
 
-// attrString читает строковый атрибут; отсутствует/пуст — ошибка.
-func attrString(attrs map[string]json.RawMessage, name string) (string, error) {
-	raw, ok := attrs[name]
+// attrString читает строковый атрибут; отсутствует/пуст — ошибка. Тип из
+// метаданных МС (как в заказах): string — плоская строка, customentity/
+// employee — объект {"name": ...}, сохраняем name.
+func attrString(attrs map[string]client.MSAttribute, name string) (string, error) {
+	a, ok := attrs[name]
 	if !ok {
 		return "", fmt.Errorf("не заполнен атрибут %q", name)
 	}
 	var s string
-	if err := json.Unmarshal(raw, &s); err != nil {
-		return "", fmt.Errorf("атрибут %q — не строка", name)
+	switch a.Type {
+	case "", "string":
+		if err := json.Unmarshal(a.Value, &s); err != nil {
+			return "", fmt.Errorf("атрибут %q — не строка", name)
+		}
+	case client.MSCustomEntityType, client.MSEmployeeType:
+		var v struct {
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal(a.Value, &v); err != nil {
+			return "", fmt.Errorf("атрибут %q — не справочник", name)
+		}
+		s = v.Name
+	default:
+		return "", fmt.Errorf("атрибут %q — неподдерживаемый тип %q", name, a.Type)
 	}
 	s = strings.TrimSpace(s)
 	if s == "" {
@@ -606,11 +621,12 @@ func attrString(attrs map[string]json.RawMessage, name string) (string, error) {
 }
 
 // attrBool читает булев атрибут (true/false или строка "true"/"false").
-func attrBool(attrs map[string]json.RawMessage, name string) (bool, error) {
-	raw, ok := attrs[name]
+func attrBool(attrs map[string]client.MSAttribute, name string) (bool, error) {
+	a, ok := attrs[name]
 	if !ok {
 		return false, fmt.Errorf("не заполнен атрибут %q", name)
 	}
+	raw := a.Value
 	var b bool
 	if err := json.Unmarshal(raw, &b); err == nil {
 		return b, nil
@@ -625,11 +641,12 @@ func attrBool(attrs map[string]json.RawMessage, name string) (bool, error) {
 }
 
 // attrFloat читает числовой атрибут (число или строка с числом).
-func attrFloat(attrs map[string]json.RawMessage, name string) (float64, error) {
-	raw, ok := attrs[name]
+func attrFloat(attrs map[string]client.MSAttribute, name string) (float64, error) {
+	a, ok := attrs[name]
 	if !ok {
 		return 0, fmt.Errorf("не заполнен атрибут %q", name)
 	}
+	raw := a.Value
 	var f float64
 	if err := json.Unmarshal(raw, &f); err == nil {
 		return f, nil

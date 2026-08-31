@@ -263,7 +263,7 @@ func msProduct(id, code, name, uomHref string, attrs ...client.MSAttribute) clie
 }
 
 func strAttr(name, val string) client.MSAttribute {
-	return client.MSAttribute{Name: name, Value: json.RawMessage(fmt.Sprintf("%q", val))}
+	return client.MSAttribute{Type: "string", Name: name, Value: json.RawMessage(fmt.Sprintf("%q", val))}
 }
 
 func boolAttr(name string, val bool) client.MSAttribute {
@@ -274,10 +274,47 @@ func numAttr(name string, val float64) client.MSAttribute {
 	return client.MSAttribute{Name: name, Value: json.RawMessage(fmt.Sprintf("%v", val))}
 }
 
+func TestAttrString_CustomEntity(t *testing.T) {
+	// Справочник (customentity): берём name из объекта.
+	attrs := attributeMap([]client.MSAttribute{
+		entityAttr("Вид инвентаризации", "охлаждёнка"),
+	})
+	if v, err := attrString(attrs, "Вид инвентаризации"); err != nil || v != "охлаждёнка" {
+		t.Fatalf("customentity: got %q, err %v", v, err)
+	}
+
+	// customentity со строкой вместо объекта — ошибка.
+	if _, err := attrString(attributeMap([]client.MSAttribute{
+		{Name: "Вид инвентаризации", Type: client.MSCustomEntityType, Value: json.RawMessage(`"строка"`)},
+	}), "Вид инвентаризации"); err == nil {
+		t.Error("customentity со строкой — ожидалась ошибка")
+	}
+
+	// string-тип с объектом — ошибка.
+	if _, err := attrString(attributeMap([]client.MSAttribute{
+		{Name: "Вид инвентаризации", Type: "string", Value: json.RawMessage(`{"name":"x"}`)},
+	}), "Вид инвентаризации"); err == nil {
+		t.Error("string-тип с объектом — ожидалась ошибка")
+	}
+
+	// Неизвестный тип — ошибка.
+	if _, err := attrString(attributeMap([]client.MSAttribute{
+		{Name: "Вид инвентаризации", Type: "file", Value: json.RawMessage(`"x"`)},
+	}), "Вид инвентаризации"); err == nil {
+		t.Error("неизвестный тип — ожидалась ошибка")
+	}
+}
+
+// entityAttr — атрибут-справочник МС (customentity): value — объект с name.
+func entityAttr(name, val string) client.MSAttribute {
+	value := fmt.Sprintf(`{"meta":{"href":"https://online.moysklad.ru/api/remap/1.2/entity/customentity/xxx/yyy","type":"customentity"},"name":%q}`, val)
+	return client.MSAttribute{Type: client.MSCustomEntityType, Name: name, Value: json.RawMessage(value)}
+}
+
 // fullProductAttrs — полный набор атрибутов валидного товара.
 func fullProductAttrs() []client.MSAttribute {
 	return []client.MSAttribute{
-		strAttr("Вид инвентаризации", "охлаждёнка"),
+		entityAttr("Вид инвентаризации", "охлаждёнка"),
 		boolAttr("Шорт лист", true),
 		boolAttr("Недельный", false),
 		numAttr("Средний вес", 12.5),

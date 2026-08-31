@@ -146,9 +146,11 @@ type MSProduct struct {
 	Attributes []MSAttribute `json:"attributes"`
 }
 
-// MSAttribute — кастомный атрибут товара. Value — сырое JSON-значение
-// (строка, число или bool — зависит от типа атрибута в МС).
+// MSAttribute — кастомный атрибут товара. Type — тип атрибута из метаданных
+// МС (string, customentity, employee...); Value — сырое JSON-значение
+// (строка, число, bool или объект {"name": ...} для справочников).
 type MSAttribute struct {
+	Type  string          `json:"type"`
 	Name  string          `json:"name"`
 	Value json.RawMessage `json:"value"`
 }
