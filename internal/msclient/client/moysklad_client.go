@@ -17,6 +17,7 @@ import (
 	"time"
 	"warehouseHelper/internal/config"
 	"warehouseHelper/internal/domain"
+	"warehouseHelper/internal/metrics"
 	"warehouseHelper/internal/msclient/workerpool"
 )
 
@@ -705,10 +706,14 @@ func (msac *MSAPIClient) httpRequest(ctx context.Context, method, url, apikey st
 	req.Header.Set("Accept-Encoding", msEncoding)
 	req.Header.Set("Content-Type", "application/json")
 
+	start := time.Now()
 	resp, err := http.DefaultClient.Do(req)
+	endpoint := metrics.MSEndpoint(url)
 	if err != nil {
+		metrics.ObserveMSRequest(endpoint, "network_error", time.Since(start))
 		return nil, nil, err
 	}
+	metrics.ObserveMSRequest(endpoint, strconv.Itoa(resp.StatusCode), time.Since(start))
 
 	var reader io.Reader = resp.Body
 	if resp.Header.Get("Content-Encoding") == msEncoding {

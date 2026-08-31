@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
@@ -43,6 +44,32 @@ func TestHandlerServesGoMetrics(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("тело /metrics не содержит %q", want)
 		}
+	}
+}
+
+func TestMSEndpoint(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{"https://api.moysklad.ru/api/remap/1.2/entity/customerorder/12345678-1234-1234-1234-123456789012", "entity/customerorder/:id"},
+		{"https://api.moysklad.ru/api/remap/1.2/report/profit/byproduct?interval=month", "report/profit/byproduct"},
+		{"https://api.moysklad.ru/api/remap/1.2/entity/counterparty", "entity/counterparty"},
+		{"не-url", "unknown"},
+	}
+	for _, tc := range cases {
+		if got := MSEndpoint(tc.in); got != tc.want {
+			t.Errorf("MSEndpoint(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestObserveMSRequest(t *testing.T) {
+	ObserveMSRequest("entity/customerorder", "200", 10*time.Millisecond)
+	defer msRequestsTotal.Reset()
+	defer msRequestDuration.Reset()
+
+	if got := testutil.ToFloat64(msRequestsTotal.WithLabelValues("entity/customerorder", "200")); got != 1 {
+		t.Errorf("ms_requests_total = %v, want 1", got)
 	}
 }
 

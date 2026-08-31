@@ -8,6 +8,7 @@ package metrics
 
 import (
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -68,6 +69,50 @@ func SetTableSizes(sizes map[string]int64) {
 		}
 		tableSizesBytes.WithLabelValues(schema, table).Set(float64(v))
 	}
+}
+
+// msRequestsTotal — исходящие запросы к МойСклад (по нормализованному
+// эндпоинту и статусу; статус "network_error" — запрос не ушёл: таймаут,
+// соединение отказано и т.п.).
+var msRequestsTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "ms_requests_total",
+		Help: "Исходящие запросы к API МойСклад (эндпоинт, статус ответа или network_error).",
+	},
+	[]string{"endpoint", "status"},
+)
+
+// msRequestDuration — длительность исходящих запросов к МойСклад.
+var msRequestDuration = promauto.NewHistogramVec(
+	prometheus.HistogramOpts{
+		Name:    "ms_request_duration_seconds",
+		Help:    "Длительность запросов к API МойСклад в секундах.",
+		Buckets: prometheus.DefBuckets,
+	},
+	[]string{"endpoint"},
+)
+
+// msURLPrefix — префикс пути API МойСклад, который отрезается в лейбле
+// endpoint, чтобы не раздувать кардинальность (остаётся "entity/customerorder/:id").
+const msURLPrefix = "/api/remap/1.2/"
+
+// MSEndpoint нормализует URL запроса к МС до вида "entity/customerorder/:id":
+// отрезает префикс хоста/версии и заменяет uuid на ":id". Непарсящийся URL —
+// лейбл "unknown".
+func MSEndpoint(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+		return "unknown"
+	}
+	return NormalizePath(strings.TrimPrefix(u.Path, msURLPrefix))
+}
+
+// ObserveMSRequest учитывает один исходящий запрос к МС: счётчик по
+// эндпоинту и статусу (или "network_error", если запрос не ушёл) и
+// длительность в гистограмму. Вызывается из msclient.
+func ObserveMSRequest(endpoint, status string, d time.Duration) {
+	msRequestsTotal.WithLabelValues(endpoint, status).Inc()
+	msRequestDuration.WithLabelValues(endpoint).Observe(d.Seconds())
 }
 
 // Handler возвращает HTTP-обработчик /metrics (стандартные go_*, process_*
