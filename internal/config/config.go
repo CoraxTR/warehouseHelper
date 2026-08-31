@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -10,7 +11,6 @@ import (
 	"time"
 
 	"github.com/joho/godotenv"
-	"log/slog"
 )
 
 type Config struct {

@@ -21,7 +21,7 @@ func Setup() *slog.Logger {
 
 	var w io.Writer = os.Stdout
 	if path := os.Getenv("APP_LOG_FILE"); path != "" {
-		f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 		if err != nil {
 			log.Printf("logging: не удалось открыть %s, пишу в stdout: %v", path, err)
 		} else {

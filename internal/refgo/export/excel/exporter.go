@@ -5,15 +5,16 @@ import (
 	"errors"
 	"fmt"
 	"image/png"
+	"log/slog"
 	"strconv"
 	"time"
+
 	"warehouseHelper/internal/domain"
 	"warehouseHelper/internal/tempdir"
 
 	"github.com/boombuler/barcode"
 	"github.com/boombuler/barcode/code128"
 	"github.com/xuri/excelize/v2"
-	"log/slog"
 )
 
 const (

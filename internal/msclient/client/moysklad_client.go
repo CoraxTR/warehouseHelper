@@ -208,7 +208,7 @@ func (msac *MSAPIClient) FetchPositionSubInfoByHREF(parentctx context.Context, p
 
 		positionSubInfo, ok := res.Value.(*positionSubInfo)
 		if !ok {
-			slog.Error(fmt.Sprint("FetchPositionSubInfoByHREF failed: unexpected value type"))
+			slog.Error("FetchPositionSubInfoByHREF failed: unexpected value type")
 
 			return "", 0, res.Err
 		}
@@ -305,7 +305,7 @@ func (msac *MSAPIClient) FetchDeliverableOrders(parentctx context.Context) ([]*M
 
 		orders, ok := res.Value.([]*MSOrder)
 		if !ok {
-			slog.Error(fmt.Sprint("FetchDeliverableOrders failed: unexpected value type"))
+			slog.Error("FetchDeliverableOrders failed: unexpected value type")
 
 			return nil, res.Err
 		}

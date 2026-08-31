@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"warehouseHelper/internal/config"
@@ -13,7 +14,6 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"log/slog"
 )
 
 type PGClient struct {
@@ -358,7 +358,7 @@ func (pg *PGClient) GetRefGoCheckOrdersByDateRange(ctx context.Context, dateFrom
 		}
 
 		if refgoNumber == "" {
-			slog.Info(fmt.Sprint("GetRefGoCheckOrdersByDateRange: order with empty refgo_number skipped"))
+			slog.Info("GetRefGoCheckOrdersByDateRange: order with empty refgo_number skipped")
 
 			continue
 		}
