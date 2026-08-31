@@ -56,6 +56,7 @@ func Handler() http.Handler {
 // запрос статусом (для http_requests_total).
 type statusRecorder struct {
 	http.ResponseWriter
+
 	status int
 }
 
