@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"warehouseHelper/internal/config"
+	"warehouseHelper/internal/metrics"
 )
 
 type App struct {
@@ -39,11 +40,36 @@ func (a *App) initDeps() {
 		a.initHTTPServer,
 		a.initStockCache,
 		a.initAverageSales,
+		a.initTableSizes,
 	}
 
 	for _, init := range inits {
 		init()
 	}
+}
+
+// initTableSizes запускает фоновый опрос размеров таблиц БД для метрик
+// (pg_table_sizes_bytes в /metrics). Ошибки не роняют приложение: метрика
+// обновится при следующем тике (раз в минуту).
+func (a *App) initTableSizes() {
+	pg := a.di.OrdersRepository() // пул создаётся один раз, вне ctx-функции
+	go func() {
+		ctx := context.Background()
+		refresh := func() {
+			sizes, err := pg.TableSizes(ctx)
+			if err != nil {
+				log.Printf("опрос размеров таблиц: %v", err)
+				return
+			}
+			metrics.SetTableSizes(sizes)
+		}
+		refresh()
+		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			refresh()
+		}
+	}()
 }
 
 // initAverageSales запускает стартовую дозаливку средних продаж: товары без
@@ -69,7 +95,7 @@ func (a *App) initStockCache() {
 func (a *App) initHTTPServer() {
 	a.httpServer = &http.Server{
 		Addr:              config.NewConfig().HTTPAddress,
-		Handler:           a.di.MUX(),
+		Handler:           metrics.Middleware(a.di.MUX()),
 		ReadHeaderTimeout: 2 * time.Second,
 	}
 }
