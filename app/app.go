@@ -52,10 +52,11 @@ func (a *App) initDeps() {
 // (pg_table_sizes_bytes в /metrics). Ошибки не роняют приложение: метрика
 // обновится при следующем тике (раз в минуту).
 func (a *App) initTableSizes() {
+	pg := a.di.OrdersRepository() // пул создаётся один раз, вне ctx-функции
 	go func() {
 		ctx := context.Background()
 		refresh := func() {
-			sizes, err := a.di.OrdersRepository().TableSizes(ctx)
+			sizes, err := pg.TableSizes(ctx)
 			if err != nil {
 				log.Printf("опрос размеров таблиц: %v", err)
 				return
