@@ -123,6 +123,35 @@
             font-size: 13px;
             margin-top: 0;
         }
+
+        .rules-hint {
+            margin-top: 6px;
+            font-size: 13px;
+            color: #444;
+            background: #f7f7f7;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            padding: 8px;
+        }
+
+        .rules-hint table {
+            border-collapse: collapse;
+            margin-top: 4px;
+        }
+
+        .rules-hint th,
+        .rules-hint td {
+            border: 1px solid #ccc;
+            padding: 2px 10px;
+            text-align: left;
+            font-size: 12px;
+        }
+
+        .rules-hint code {
+            background: #eee;
+            padding: 0 3px;
+            border-radius: 2px;
+        }
     </style>
 </head>
 
@@ -148,9 +177,36 @@
 
         <label>Правила вычитки штрихкодов <span class="readonly-hint">(по одному правилу на строку, формат 28-1-6-7-6-13-8-21-8)</span></label>
         <textarea name="decode_rules" rows="3">{{.DecodeRulesText}}</textarea>
+        <div class="rules-hint">
+            Первое число — длина штрихкода, дальше пары «позиция-длина» по порядку полей
+            (позиция 1 = первый символ штрихкода):
+            <table>
+                <tr><th>Поле</th><th>Что это</th></tr>
+                <tr><td>1-я пара</td><td>код товара у поставщика (внешний код)</td></tr>
+                <tr><td>2-я пара</td><td>вес, граммы</td></tr>
+                <tr><td>3-я пара</td><td>дата выработки, ДДММГГГГ</td></tr>
+                <tr><td>4-я пара</td><td>срок годности, ДДММГГГГ</td></tr>
+            </table>
+            Пример <code>28-1-6-7-6-13-8-21-8</code>: код длиной 28, код товара — символы 1–6,
+            вес — 7–12, выработка — 13–20, срок — 21–28. Поля в штрихкоде нет — оставьте
+            позицию пустой: <code>28- -6-7-6-13-8-21-8</code>.
+        </div>
 
         <label>Правила вычитки коробок <span class="readonly-hint">(формат 28-1-6-7-6-13-8-21-8)</span></label>
         <textarea name="box_decode_rules" rows="3">{{.BoxDecodeRulesText}}</textarea>
+        <div class="rules-hint">
+            Как у штрихкодов товара, но 5 пар — после веса добавляется количество вложений:
+            <table>
+                <tr><th>Поле</th><th>Что это</th></tr>
+                <tr><td>1-я пара</td><td>код товара у поставщика (внешний код)</td></tr>
+                <tr><td>2-я пара</td><td>общий вес коробки, граммы</td></tr>
+                <tr><td>3-я пара</td><td>количество вложений в коробке</td></tr>
+                <tr><td>4-я пара</td><td>дата выработки, ДДММГГГГ</td></tr>
+                <tr><td>5-я пара</td><td>срок годности, ДДММГГГГ</td></tr>
+            </table>
+            Пример <code>28-1-6-7-6-13-2-15-8-23-6</code>: код длиной 28, код товара — 1–6,
+            вес коробки — 7–12, вложений — 13–14, выработка — 15–22, срок — 23–28.
+        </div>
 
         <label>Дни заказа</label>
         <div class="day-row">
