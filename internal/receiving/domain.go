@@ -38,6 +38,10 @@ type Cache struct {
 	ByExternal map[string]BarcodeRef `json:"by_external"`
 	ByCode     map[string]ProductRef `json:"by_code"`
 	Products   []ProductRef          `json:"products"`
+	// BBByBatch — есть правило (товарное или коробочное), не вычитывающее
+	// срок: страница показывает «Срок годности партии», сканы без даты
+	// берут его, сканы с датой сверяются с ним (клиентская логика).
+	BBByBatch bool `json:"bb_batch"`
 }
 
 // DecodeRule — распарсенное правило вычитки поставщика (decoderules.Rule
@@ -46,6 +50,13 @@ type DecodeRule struct {
 	Length int         `json:"length"`
 	Fields []RuleField `json:"fields"`
 }
+
+// Индексы полей в DecodeRule.Fields: у правила товара срок — 3-е поле,
+// у правила коробки — 4-е (порядок полей задаёт decoderules).
+const (
+	ItemBestBeforeField = 3
+	BoxBestBeforeField  = 4
+)
 
 // RuleField — поле правила: позиция (1-based) и длина; Pos == 0 — поле не задано.
 type RuleField struct {
