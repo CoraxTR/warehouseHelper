@@ -8,7 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"path"
@@ -63,7 +63,7 @@ func (msac *MSAPIClient) FetchOrderAgentByHREF(parentCtx context.Context, o *MSO
 		defer func() {
 			err = resp.Body.Close()
 			if err != nil {
-				log.Printf("failed to close response body: %v", err)
+				slog.Error(fmt.Sprintf("failed to close response body: %v", err))
 			}
 		}()
 
@@ -84,7 +84,7 @@ func (msac *MSAPIClient) FetchOrderAgentByHREF(parentCtx context.Context, o *MSO
 	select {
 	case res := <-resultCh:
 		if res.Err != nil {
-			log.Printf("FetchOrderAgentByHREF failed: %v", res.Err)
+			slog.Error(fmt.Sprintf("FetchOrderAgentByHREF failed: %v", res.Err))
 
 			return "", "", res.Err
 		}
@@ -96,7 +96,7 @@ func (msac *MSAPIClient) FetchOrderAgentByHREF(parentCtx context.Context, o *MSO
 
 		return info.Name, info.Phone, nil
 	case <-parentCtx.Done():
-		log.Printf("FetchOrderAgentByHREF timed out: %v", parentCtx.Err())
+		slog.Error(fmt.Sprintf("FetchOrderAgentByHREF timed out: %v", parentCtx.Err()))
 
 		return "", "", nil
 	}
@@ -111,9 +111,9 @@ func (msac *MSAPIClient) FetchOrderPositionsByHREF(parentCtx context.Context, o 
 		if err != nil {
 			select {
 			case <-ctx.Done():
-				log.Printf("FetchOrderPositionsByHREF timed out: %v", ctx.Err())
+				slog.Error(fmt.Sprintf("FetchOrderPositionsByHREF timed out: %v", ctx.Err()))
 			default:
-				log.Printf("FetchOrderPositionsByHREF failed: %v", err)
+				slog.Error(fmt.Sprintf("FetchOrderPositionsByHREF failed: %v", err))
 			}
 
 			return nil, err
@@ -122,7 +122,7 @@ func (msac *MSAPIClient) FetchOrderPositionsByHREF(parentCtx context.Context, o 
 		defer func() {
 			err = resp.Body.Close()
 			if err != nil {
-				log.Printf("failed to close response body: %v", err)
+				slog.Error(fmt.Sprintf("failed to close response body: %v", err))
 			}
 		}()
 
@@ -153,7 +153,7 @@ func (msac *MSAPIClient) FetchOrderPositionsByHREF(parentCtx context.Context, o 
 
 		return positions, nil
 	case <-parentCtx.Done():
-		log.Printf("FetchOrderPositionsByHREF timed out: %v", parentCtx.Err())
+		slog.Error(fmt.Sprintf("FetchOrderPositionsByHREF timed out: %v", parentCtx.Err()))
 
 		return nil, nil
 	}
@@ -173,9 +173,9 @@ func (msac *MSAPIClient) FetchPositionSubInfoByHREF(parentctx context.Context, p
 		if err != nil {
 			select {
 			case <-ctx.Done():
-				log.Printf("FetchPositionSubInfoByHREF timed out: %v", ctx.Err())
+				slog.Error(fmt.Sprintf("FetchPositionSubInfoByHREF timed out: %v", ctx.Err()))
 			default:
-				log.Printf("FetchPositionSubInfoByHREF failed: %v", err)
+				slog.Error(fmt.Sprintf("FetchPositionSubInfoByHREF failed: %v", err))
 			}
 
 			return nil, err
@@ -184,7 +184,7 @@ func (msac *MSAPIClient) FetchPositionSubInfoByHREF(parentctx context.Context, p
 		defer func() {
 			err = resp.Body.Close()
 			if err != nil {
-				log.Printf("failed to close response body: %v", err)
+				slog.Error(fmt.Sprintf("failed to close response body: %v", err))
 			}
 		}()
 
@@ -208,14 +208,14 @@ func (msac *MSAPIClient) FetchPositionSubInfoByHREF(parentctx context.Context, p
 
 		positionSubInfo, ok := res.Value.(*positionSubInfo)
 		if !ok {
-			log.Print("FetchPositionSubInfoByHREF failed: unexpected value type")
+			slog.Error("FetchPositionSubInfoByHREF failed: unexpected value type")
 
 			return "", 0, res.Err
 		}
 
 		return positionSubInfo.Code, positionSubInfo.Weight, nil
 	case <-parentctx.Done():
-		log.Printf("FetchPositionSubInfoByHREF timed out: %v", parentctx.Err())
+		slog.Error(fmt.Sprintf("FetchPositionSubInfoByHREF timed out: %v", parentctx.Err()))
 
 		return "", 0, nil
 	}
@@ -234,7 +234,7 @@ func (msac *MSAPIClient) FetchDeliverableOrders(parentctx context.Context) ([]*M
 
 		baseURL, err := url.Parse(msac.msConfig.URLstart)
 		if err != nil {
-			log.Printf("FetchDeliverableOrders failed to parse baseURL: %v", err)
+			slog.Error(fmt.Sprintf("FetchDeliverableOrders failed to parse baseURL: %v", err))
 
 			return nil, err
 		}
@@ -244,8 +244,8 @@ func (msac *MSAPIClient) FetchDeliverableOrders(parentctx context.Context) ([]*M
 		filterValue := fmt.Sprintf("deliveryPlannedMoment%s;deliveryPlannedMoment%s;state=%s",
 			tomorrowStart, dayAfterTomorrowEnd, msac.refHref("customerorder/metadata/states", msac.msConfig.Refs.ReadystateID))
 
-		log.Println(tomorrowStart)
-		log.Println(dayAfterTomorrowEnd)
+		slog.Info(fmt.Sprintln(tomorrowStart))
+		slog.Info(fmt.Sprintln(dayAfterTomorrowEnd))
 
 		q := baseURL.Query()
 		q.Set("filter", filterValue)
@@ -255,9 +255,9 @@ func (msac *MSAPIClient) FetchDeliverableOrders(parentctx context.Context) ([]*M
 		if err != nil {
 			select {
 			case <-ctx.Done():
-				log.Printf("FetchDeliverableOrders timed out: %v", ctx.Err())
+				slog.Error(fmt.Sprintf("FetchDeliverableOrders timed out: %v", ctx.Err()))
 			default:
-				log.Printf("FetchDeliverableOrders failed: %v", err)
+				slog.Error(fmt.Sprintf("FetchDeliverableOrders failed: %v", err))
 			}
 
 			return nil, err
@@ -266,18 +266,18 @@ func (msac *MSAPIClient) FetchDeliverableOrders(parentctx context.Context) ([]*M
 		defer func() {
 			err = resp.Body.Close()
 			if err != nil {
-				log.Printf("failed to close response body: %v", err)
+				slog.Error(fmt.Sprintf("failed to close response body: %v", err))
 			}
 		}()
 
 		unmFOR, err := unmarshalMSFetchOrdersResponse(body)
 		if err != nil {
-			log.Println(err)
+			slog.Info(fmt.Sprintln(err))
 
 			return nil, err
 		}
 
-		log.Printf("FetchDeliverableOrders fetched %v orders", len(unmFOR.Rows))
+		slog.Info(fmt.Sprintf("FetchDeliverableOrders fetched %v orders", len(unmFOR.Rows)))
 
 		newOrders := make([]*MSOrder, 0, len(unmFOR.Rows)/2)
 		for _, o := range unmFOR.Rows {
@@ -287,7 +287,7 @@ func (msac *MSAPIClient) FetchDeliverableOrders(parentctx context.Context) ([]*M
 		}
 
 		for _, o := range newOrders {
-			log.Printf("Enriching order with ID: %s", o.Name)
+			slog.Info(fmt.Sprintf("Enriching order with ID: %s", o.Name))
 			msac.enrichOrder(ctx, o)
 		}
 
@@ -298,21 +298,21 @@ func (msac *MSAPIClient) FetchDeliverableOrders(parentctx context.Context) ([]*M
 	select {
 	case res := <-resCh:
 		if res.Err != nil {
-			log.Printf("FetchDeliverableOrders failed: %v", res.Err)
+			slog.Error(fmt.Sprintf("FetchDeliverableOrders failed: %v", res.Err))
 
 			return nil, res.Err
 		}
 
 		orders, ok := res.Value.([]*MSOrder)
 		if !ok {
-			log.Print("FetchDeliverableOrders failed: unexpected value type")
+			slog.Error("FetchDeliverableOrders failed: unexpected value type")
 
 			return nil, res.Err
 		}
 
 		return orders, nil
 	case <-parentctx.Done():
-		log.Printf("FetchDeliverableOrders timed out: %v", parentctx.Err())
+		slog.Error(fmt.Sprintf("FetchDeliverableOrders timed out: %v", parentctx.Err()))
 
 		return nil, nil
 	}
@@ -341,7 +341,7 @@ func (msac *MSAPIClient) GetOrderByID(parentctx context.Context, id string) (*MS
 		defer func() {
 			err = resp.Body.Close()
 			if err != nil {
-				log.Printf("failed to close response body: %v", err)
+				slog.Error(fmt.Sprintf("failed to close response body: %v", err))
 			}
 		}()
 
@@ -495,7 +495,7 @@ func (msac *MSAPIClient) SetOrderAsShippedToRefGo(parentctx context.Context, id 
 		defer func() {
 			err = resp.Body.Close()
 			if err != nil {
-				log.Printf("failed to close response body: %v", err)
+				slog.Error(fmt.Sprintf("failed to close response body: %v", err))
 			}
 		}()
 
@@ -561,7 +561,7 @@ func (msac *MSAPIClient) SetRefGoNumberOnly(parentctx context.Context, id, refGo
 		defer func() {
 			err = resp.Body.Close()
 			if err != nil {
-				log.Printf("failed to close response body: %v", err)
+				slog.Error(fmt.Sprintf("failed to close response body: %v", err))
 			}
 		}()
 
@@ -631,7 +631,7 @@ func (msac *MSAPIClient) FetchOrderPDF(parentctx context.Context, id string) ([]
 		defer func() {
 			err = resp.Body.Close()
 			if err != nil {
-				log.Printf("failed to close response body: %v", err)
+				slog.Error(fmt.Sprintf("failed to close response body: %v", err))
 			}
 		}()
 
@@ -656,7 +656,7 @@ func (msac *MSAPIClient) FetchOrderPDF(parentctx context.Context, id string) ([]
 
 		return pdfData, nil
 	case <-parentctx.Done():
-		log.Printf("FetchOrderPDF aborted: %v", parentctx.Err())
+		slog.Info(fmt.Sprintf("FetchOrderPDF aborted: %v", parentctx.Err()))
 
 		return nil, parentctx.Err()
 	}
@@ -714,6 +714,13 @@ func (msac *MSAPIClient) httpRequest(ctx context.Context, method, url, apikey st
 		return nil, nil, err
 	}
 	metrics.ObserveMSRequest(endpoint, strconv.Itoa(resp.StatusCode), time.Since(start))
+	if resp.StatusCode == http.StatusTooManyRequests {
+		metrics.ObserveMSRateLimited(endpoint)
+		slog.Error("МойСклад вернул 429 (превышен лимит запросов) — риск бана API",
+			"endpoint", endpoint,
+			"status", resp.StatusCode,
+		)
+	}
 
 	var reader io.Reader = resp.Body
 	if resp.Header.Get("Content-Encoding") == msEncoding {
@@ -721,7 +728,7 @@ func (msac *MSAPIClient) httpRequest(ctx context.Context, method, url, apikey st
 		if err != nil {
 			err = resp.Body.Close()
 			if err != nil {
-				log.Printf("failed to close response body: %v", err)
+				slog.Error(fmt.Sprintf("failed to close response body: %v", err))
 			}
 
 			return nil, nil, fmt.Errorf("failed to create gzip reader: %w", err)
@@ -730,7 +737,7 @@ func (msac *MSAPIClient) httpRequest(ctx context.Context, method, url, apikey st
 		defer func() {
 			err = gz.Close()
 			if err != nil {
-				log.Printf("failed to close gzip reader: %v", err)
+				slog.Error(fmt.Sprintf("failed to close gzip reader: %v", err))
 			}
 		}()
 
@@ -741,7 +748,7 @@ func (msac *MSAPIClient) httpRequest(ctx context.Context, method, url, apikey st
 	if err != nil {
 		err = resp.Body.Close()
 		if err != nil {
-			log.Printf("failed to close response body: %v", err)
+			slog.Error(fmt.Sprintf("failed to close response body: %v", err))
 		}
 
 		return nil, nil, err
@@ -753,7 +760,7 @@ func (msac *MSAPIClient) httpRequest(ctx context.Context, method, url, apikey st
 func (msac *MSAPIClient) enrichOrder(ctx context.Context, order *MSOrder) {
 	name, phone, err := msac.FetchOrderAgentByHREF(ctx, order)
 	if err != nil {
-		log.Printf("failed to fetch agent for order %s: %v", order.ID, err)
+		slog.Error(fmt.Sprintf("failed to fetch agent for order %s: %v", order.ID, err))
 	} else {
 		order.AgentName = name
 		order.AgentPhone = phone
@@ -761,7 +768,7 @@ func (msac *MSAPIClient) enrichOrder(ctx context.Context, order *MSOrder) {
 
 	positions, err := msac.FetchOrderPositionsByHREF(ctx, order)
 	if err != nil {
-		log.Printf("failed to fetch positions for order %s: %v", order.ID, err)
+		slog.Error(fmt.Sprintf("failed to fetch positions for order %s: %v", order.ID, err))
 
 		return
 	}
@@ -771,7 +778,7 @@ func (msac *MSAPIClient) enrichOrder(ctx context.Context, order *MSOrder) {
 	for i := range order.PositionsWInfo {
 		code, weight, err := msac.FetchPositionSubInfoByHREF(ctx, order.PositionsWInfo[i])
 		if err != nil {
-			log.Printf("failed to fetch subinfo for position %v: %v", order.PositionsWInfo[i].Assortment.Meta.HREF, err)
+			slog.Error(fmt.Sprintf("failed to fetch subinfo for position %v: %v", order.PositionsWInfo[i].Assortment.Meta.HREF, err))
 
 			continue
 		}
@@ -827,7 +834,7 @@ func (msac *MSAPIClient) FetchOrderShipmentState(parentctx context.Context, id s
 		defer func() {
 			err = resp.Body.Close()
 			if err != nil {
-				log.Printf("failed to close response body: %v", err)
+				slog.Error(fmt.Sprintf("failed to close response body: %v", err))
 			}
 		}()
 
@@ -909,7 +916,7 @@ func (msac *MSAPIClient) FetchDemandNewTemplate(parentctx context.Context, id st
 		defer func() {
 			err = resp.Body.Close()
 			if err != nil {
-				log.Printf("failed to close response body: %v", err)
+				slog.Error(fmt.Sprintf("failed to close response body: %v", err))
 			}
 		}()
 
@@ -959,7 +966,7 @@ func (msac *MSAPIClient) CreateDemand(parentctx context.Context, template json.R
 		defer func() {
 			err = resp.Body.Close()
 			if err != nil {
-				log.Printf("failed to close response body: %v", err)
+				slog.Error(fmt.Sprintf("failed to close response body: %v", err))
 			}
 		}()
 
@@ -1050,7 +1057,7 @@ func (msac *MSAPIClient) FetchProfitTurnover(parentctx context.Context, from, to
 
 			err = resp.Body.Close()
 			if err != nil {
-				log.Printf("failed to close response body: %v", err)
+				slog.Error(fmt.Sprintf("failed to close response body: %v", err))
 			}
 
 			if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -1163,7 +1170,7 @@ func (msac *MSAPIClient) FetchProductFolders(parentctx context.Context) ([]MSPro
 
 			err = resp.Body.Close()
 			if err != nil {
-				log.Printf("failed to close response body: %v", err)
+				slog.Error(fmt.Sprintf("failed to close response body: %v", err))
 			}
 
 			if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -1250,7 +1257,7 @@ func (msac *MSAPIClient) FetchCounterpartyName(parentctx context.Context, id str
 
 		err = resp.Body.Close()
 		if err != nil {
-			log.Printf("failed to close response body: %v", err)
+			slog.Error(fmt.Sprintf("failed to close response body: %v", err))
 		}
 
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -1319,7 +1326,7 @@ func (msac *MSAPIClient) FetchProductsByPathName(parentctx context.Context, path
 
 			err = resp.Body.Close()
 			if err != nil {
-				log.Printf("failed to close response body: %v", err)
+				slog.Error(fmt.Sprintf("failed to close response body: %v", err))
 			}
 
 			if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -1417,7 +1424,7 @@ func (msac *MSAPIClient) FetchUOMName(parentctx context.Context, href string) (s
 
 		err = resp.Body.Close()
 		if err != nil {
-			log.Printf("failed to close response body: %v", err)
+			slog.Error(fmt.Sprintf("failed to close response body: %v", err))
 		}
 
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
@@ -1475,7 +1482,7 @@ func (msac *MSAPIClient) FetchProductByID(parentctx context.Context, id string) 
 
 		err = resp.Body.Close()
 		if err != nil {
-			log.Printf("failed to close response body: %v", err)
+			slog.Error(fmt.Sprintf("failed to close response body: %v", err))
 		}
 
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {

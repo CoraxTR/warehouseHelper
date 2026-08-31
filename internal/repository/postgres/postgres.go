@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"time"
 
 	"warehouseHelper/internal/config"
@@ -151,7 +151,7 @@ func (pg *PGClient) GetAllOrders(ctx context.Context) ([]*domain.InternalOrder, 
 	dayAfterTomorrow := now.AddDate(0, 0, 2).Format("02.01.2006")
 
 	// Для отладки можно раскомментировать:
-	// log.Printf("GetAllOrders: tomorrow=%s, dayAfterTomorrow=%s", tomorrow, dayAfterTomorrow)
+	// slog.Info(fmt.Sprintf("GetAllOrders: tomorrow=%s, dayAfterTomorrow=%s", tomorrow, dayAfterTomorrow))
 
 	rows, err := pg.Pool.Query(ctx, `
         SELECT 
@@ -165,7 +165,7 @@ func (pg *PGClient) GetAllOrders(ctx context.Context) ([]*domain.InternalOrder, 
         ORDER BY refgo_number ASC
     `, tomorrow, dayAfterTomorrow)
 	if err != nil {
-		log.Printf("GetAllOrders query error: %v", err)
+		slog.Error(fmt.Sprintf("GetAllOrders query error: %v", err))
 
 		return nil, err
 	}
@@ -191,7 +191,7 @@ func (pg *PGClient) GetAllOrders(ctx context.Context) ([]*domain.InternalOrder, 
 			&errorsJSON,
 		)
 		if err != nil {
-			log.Printf("GetAllOrders scan error: %v", err)
+			slog.Error(fmt.Sprintf("GetAllOrders scan error: %v", err))
 
 			return nil, err
 		}
@@ -221,7 +221,7 @@ func (pg *PGClient) GetAllOrders(ctx context.Context) ([]*domain.InternalOrder, 
 
 			err = json.Unmarshal(errorsJSON, &errs)
 			if err != nil {
-				log.Printf("GetAllOrders unmarshal errors error: %v", err)
+				slog.Error(fmt.Sprintf("GetAllOrders unmarshal errors error: %v", err))
 
 				return nil, err
 			}
@@ -234,7 +234,7 @@ func (pg *PGClient) GetAllOrders(ctx context.Context) ([]*domain.InternalOrder, 
 
 	err = rows.Err()
 	if err != nil {
-		log.Printf("GetAllOrders rows error: %v", err)
+		slog.Error(fmt.Sprintf("GetAllOrders rows error: %v", err))
 
 		return nil, err
 	}
@@ -255,7 +255,7 @@ func (pg *PGClient) UpdateOrders(ctx context.Context, orders []*domain.InternalO
 	defer func() {
 		err := tx.Rollback(ctx)
 		if err != nil && !errors.Is(err, sql.ErrTxDone) {
-			log.Printf("unexpected rollback error: %v", err)
+			slog.Error(fmt.Sprintf("unexpected rollback error: %v", err))
 		}
 	}()
 
@@ -338,7 +338,7 @@ func (pg *PGClient) GetRefGoCheckOrdersByDateRange(ctx context.Context, dateFrom
         WHERE delivery_planned_date = ANY($1)
     `, dates)
 	if err != nil {
-		log.Printf("GetRefGoCheckOrdersByDateRange query error: %v", err)
+		slog.Error(fmt.Sprintf("GetRefGoCheckOrdersByDateRange query error: %v", err))
 
 		return nil, err
 	}
@@ -352,13 +352,13 @@ func (pg *PGClient) GetRefGoCheckOrdersByDateRange(ctx context.Context, dateFrom
 
 		err := rows.Scan(&refgoNumber, &paymentMethod, &sum, &chilledWeight, &frozenWeight, &refgoZone)
 		if err != nil {
-			log.Printf("GetRefGoCheckOrdersByDateRange scan error: %v", err)
+			slog.Error(fmt.Sprintf("GetRefGoCheckOrdersByDateRange scan error: %v", err))
 
 			return nil, err
 		}
 
 		if refgoNumber == "" {
-			log.Print("GetRefGoCheckOrdersByDateRange: order with empty refgo_number skipped")
+			slog.Info("GetRefGoCheckOrdersByDateRange: order with empty refgo_number skipped")
 
 			continue
 		}
@@ -374,7 +374,7 @@ func (pg *PGClient) GetRefGoCheckOrdersByDateRange(ctx context.Context, dateFrom
 
 	err = rows.Err()
 	if err != nil {
-		log.Printf("GetRefGoCheckOrdersByDateRange rows error: %v", err)
+		slog.Error(fmt.Sprintf("GetRefGoCheckOrdersByDateRange rows error: %v", err))
 
 		return nil, err
 	}
@@ -430,7 +430,7 @@ func (pg *PGClient) GetOrdersByIDs(ctx context.Context, ids []string) ([]*domain
 	for rows.Next() {
 		order, err := scanOrderRow(rows)
 		if err != nil {
-			log.Printf("GetOrdersByIDs scan error: %v", err)
+			slog.Error(fmt.Sprintf("GetOrdersByIDs scan error: %v", err))
 
 			return nil, err
 		}
@@ -440,7 +440,7 @@ func (pg *PGClient) GetOrdersByIDs(ctx context.Context, ids []string) ([]*domain
 
 	err = rows.Err()
 	if err != nil {
-		log.Printf("GetOrdersByIDs rows error: %v", err)
+		slog.Error(fmt.Sprintf("GetOrdersByIDs rows error: %v", err))
 
 		return nil, err
 	}

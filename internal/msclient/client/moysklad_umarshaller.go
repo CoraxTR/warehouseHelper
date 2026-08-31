@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 )
 
 func unmarshalMSFetchOrdersResponse(body []byte) (*MSFetchOrdersResponse, error) {
@@ -12,7 +12,7 @@ func unmarshalMSFetchOrdersResponse(body []byte) (*MSFetchOrdersResponse, error)
 
 	err := json.Unmarshal(body, &response)
 	if err != nil {
-		log.Println(err)
+		slog.Info(fmt.Sprintln(err))
 
 		return nil, err
 	}

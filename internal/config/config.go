@@ -3,7 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -362,7 +362,7 @@ func loadRefGoConfig() *RefGoConfig {
 		v, ok := parseEnvFloat(name)
 		if !ok {
 			rgc.CheckAgainstModule = false
-			log.Printf("RefGo check module disabled: %s is empty or invalid", name)
+			slog.Info(fmt.Sprintf("RefGo check module disabled: %s is empty or invalid", name))
 
 			continue
 		}

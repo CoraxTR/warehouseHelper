@@ -7,13 +7,14 @@ package ws
 
 import (
 	"encoding/json"
-	"log"
 	"net/http"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
 
+	"fmt"
+	"log/slog"
 	"warehouseHelper/internal/stock"
 )
 
@@ -87,7 +88,7 @@ func (h *Hub) PublishStockChange(e stock.Event) {
 	}
 	msg, err := json.Marshal(m)
 	if err != nil {
-		log.Printf("ws: marshal event %s: %v", e.Kind, err)
+		slog.Info(fmt.Sprintf("ws: marshal event %s: %v", e.Kind, err))
 		return
 	}
 	h.broadcast(msg)
@@ -98,7 +99,7 @@ func (h *Hub) PublishStockChange(e stock.Event) {
 func (h *Hub) ServeConn(w http.ResponseWriter, r *http.Request, snapshot []byte) {
 	conn, err := h.upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.Printf("ws: upgrade: %v", err)
+		slog.Info(fmt.Sprintf("ws: upgrade: %v", err))
 		return
 	}
 	c := NewClient(h, conn)
@@ -116,7 +117,7 @@ func (h *Hub) broadcast(msg []byte) {
 		select {
 		case c.send <- msg:
 		default:
-			log.Printf("ws: send buffer full, dropping message for %s", c.conn.RemoteAddr())
+			slog.Info(fmt.Sprintf("ws: send buffer full, dropping message for %s", c.conn.RemoteAddr()))
 		}
 	}
 }

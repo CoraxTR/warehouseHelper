@@ -2,7 +2,8 @@ package usecase
 
 import (
 	"context"
-	"log"
+	"fmt"
+	"log/slog"
 	"strconv"
 	"sync"
 	"warehouseHelper/internal/config"
@@ -39,7 +40,7 @@ func (uc *SyncUseCase) SyncDeliverableOrders(ctx context.Context) {
 
 	orders, err := uc.MSAPIClinet.FetchDeliverableOrders(ctx)
 	if err != nil {
-		log.Printf("Failed to fetch deliverable orders: %v", err)
+		slog.Error(fmt.Sprintf("Failed to fetch deliverable orders: %v", err))
 
 		return
 	}
@@ -76,11 +77,11 @@ func (uc *SyncUseCase) SyncDeliverableOrders(ctx context.Context) {
 
 				err := uc.MSAPIClinet.SetRefGoNumberOnly(ctx, internalOrder.GetID(), strconv.Itoa(int(currentRefNumber)))
 				if err != nil {
-					log.Printf("Failed to set RefGoNumber for order %s: %v", internalOrder.GetName(), err)
+					slog.Error(fmt.Sprintf("Failed to set RefGoNumber for order %s: %v", internalOrder.GetName(), err))
 				}
 
 				internalOrder.SetRefGoNumber(strconv.Itoa(int(currentRefNumber)))
-				log.Printf("Assigned RefGoNumber: %v to order: %s", currentRefNumber, internalOrder.GetName())
+				slog.Info(fmt.Sprintf("Assigned RefGoNumber: %v to order: %s", currentRefNumber, internalOrder.GetName()))
 			}
 
 			internalOrder.Validate()
@@ -100,11 +101,11 @@ func (uc *SyncUseCase) SyncDeliverableOrders(ctx context.Context) {
 
 	err = uc.DBClient.InsertOrders(ctx, internalOrders)
 	if err != nil {
-		log.Printf("Failed to insert orders into database: %v", err)
+		slog.Error(fmt.Sprintf("Failed to insert orders into database: %v", err))
 	}
 
 	err = uc.Config.ChangeRefGoLatest(refGoCounter)
 	if err != nil {
-		log.Printf("Failed to update RefGoLatest to %d: %v", refGoCounter, err)
+		slog.Error(fmt.Sprintf("Failed to update RefGoLatest to %d: %v", refGoCounter, err))
 	}
 }

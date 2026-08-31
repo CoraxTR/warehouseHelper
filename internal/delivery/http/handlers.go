@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"html/template"
 	"io"
-	"log"
 	"mime"
 	"net/http"
 	"net/url"
@@ -13,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"fmt"
+	"log/slog"
 	"warehouseHelper/internal/domain"
 	gucase "warehouseHelper/internal/goods/usecase"
 	msucase "warehouseHelper/internal/msclient/usecase"
@@ -154,7 +155,7 @@ func (h *Handler) RefGoCheckAgainst(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.refGoUC.Check(r.Context(), dateFrom, dateTo, data)
 	if err != nil {
-		log.Printf("RefGoCheckAgainst error: %v", err)
+		slog.Error(fmt.Sprintf("RefGoCheckAgainst error: %v", err))
 		http.Error(w, "Failed to run check: "+err.Error(), http.StatusInternalServerError)
 
 		return
@@ -179,16 +180,16 @@ func (h *Handler) Orders(w http.ResponseWriter, r *http.Request) {
 
 	orders, err := h.ordersUC.GetAllOrders(r.Context())
 	if err != nil {
-		log.Printf("GetAllOrders error: %v", err) // добавьте логирование
+		slog.Error(fmt.Sprintf("GetAllOrders error: %v", err)) // добавьте логирование
 		http.Error(w, "Failed to load orders: "+err.Error(), http.StatusInternalServerError)
 
 		return
 	}
 
-	log.Printf("Orders handler loaded %d orders", len(orders))
+	slog.Info(fmt.Sprintf("Orders handler loaded %d orders", len(orders)))
 
 	for _, o := range orders {
-		log.Printf("Order %s errors: %v", o.GetName(), o.GetErrors())
+		slog.Error(fmt.Sprintf("Order %s errors: %v", o.GetName(), o.GetErrors()))
 	}
 
 	tmpl := template.Must(template.ParseFiles("../internal/delivery/web/templates/orders.html"))
@@ -291,7 +292,7 @@ func (h *Handler) searchOrder(ctx context.Context, data *OrderFindPageData) {
 	}
 
 	if err != nil {
-		log.Printf("OrderFind search error: %v", err)
+		slog.Error(fmt.Sprintf("OrderFind search error: %v", err))
 		data.Error = "Ошибка поиска заказа"
 
 		return
@@ -309,7 +310,7 @@ func (h *Handler) searchOrder(ctx context.Context, data *OrderFindPageData) {
 func (h *Handler) renderOrderFindPage(w http.ResponseWriter, data OrderFindPageData) {
 	err := orderFindTmpl.Execute(w, data)
 	if err != nil {
-		log.Printf("OrderFind template error: %v", err)
+		slog.Error(fmt.Sprintf("OrderFind template error: %v", err))
 	}
 }
 
@@ -415,7 +416,7 @@ func (h *Handler) UpdateFromMS(w http.ResponseWriter, r *http.Request) {
 
 	err = h.ordersUC.UpdateOrderFromMS(r.Context(), req.ID)
 	if err != nil {
-		log.Printf("UpdateFromMS error: %v", err)
+		slog.Error(fmt.Sprintf("UpdateFromMS error: %v", err))
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 
 		return
@@ -425,7 +426,7 @@ func (h *Handler) UpdateFromMS(w http.ResponseWriter, r *http.Request) {
 
 	_, err = w.Write([]byte("OK"))
 	if err != nil {
-		log.Printf("Error writing response: %v", err)
+		slog.Error(fmt.Sprintf("Error writing response: %v", err))
 
 		return
 	}
@@ -447,7 +448,7 @@ func (h *Handler) PrintForm(w http.ResponseWriter, r *http.Request) {
 
 	filePath, err := h.pdfUC.GetOrderPDF(r.Context(), id)
 	if err != nil {
-		log.Printf("Error getting PDF: %v", err)
+		slog.Error(fmt.Sprintf("Error getting PDF: %v", err))
 		http.Error(w, "Failed to get PDF: "+err.Error(), http.StatusInternalServerError)
 
 		return
@@ -456,7 +457,7 @@ func (h *Handler) PrintForm(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", "attachment; filename=order_form.pdf")
 	w.Header().Set("Content-Type", "application/pdf")
 
-	log.Println(filePath)
+	slog.Info(fmt.Sprintln(filePath))
 	http.ServeFile(w, r, filePath)
 }
 
@@ -484,7 +485,7 @@ func (h *Handler) PrintMultipleForms(w http.ResponseWriter, r *http.Request) {
 
 	filePath, err := h.pdfUC.GetMultipleOrdersPDF(r.Context(), req.IDs)
 	if err != nil {
-		log.Printf("Error merging PDFs: %v", err)
+		slog.Error(fmt.Sprintf("Error merging PDFs: %v", err))
 		http.Error(w, "Failed to merge PDFs: "+err.Error(), http.StatusInternalServerError)
 
 		return
@@ -511,7 +512,7 @@ func (h *Handler) DeleteOrder(w http.ResponseWriter, r *http.Request) {
 
 	err := h.ordersUC.DeleteOrder(r.Context(), id)
 	if err != nil {
-		log.Printf("DeleteOrder error: %v", err)
+		slog.Error(fmt.Sprintf("DeleteOrder error: %v", err))
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 
 		return
@@ -544,7 +545,7 @@ func (h *Handler) PrintBarcodes(w http.ResponseWriter, r *http.Request) {
 
 	filePath, err := h.barcodeUC.GetMultipleOrdersBarcodes(r.Context(), req.IDs)
 	if err != nil {
-		log.Printf("Error exporting barcodes: %v", err)
+		slog.Error(fmt.Sprintf("Error exporting barcodes: %v", err))
 		http.Error(w, "Failed to export barcodes: "+err.Error(), http.StatusInternalServerError)
 
 		return

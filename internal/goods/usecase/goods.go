@@ -9,11 +9,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"sort"
 	"strconv"
 	"strings"
 
+	"log/slog"
 	"warehouseHelper/internal/averagesales"
 	"warehouseHelper/internal/domain"
 	"warehouseHelper/internal/msclient/client"
@@ -311,7 +311,7 @@ func (uc *GoodsUseCase) ExportProducts(ctx context.Context, items []ExportItem) 
 	folderByPath := make(map[string]string)
 	folders, err := uc.folders.FetchProductFolders(ctx)
 	if err != nil {
-		log.Printf("выгрузка: папки не получены, folder_id не заполнится: %v", err)
+		slog.Info(fmt.Sprintf("выгрузка: папки не получены, folder_id не заполнится: %v", err))
 	} else {
 		for _, f := range folders {
 			folderByPath[fullFolderPath(f)] = f.ID
@@ -427,7 +427,7 @@ func (uc *GoodsUseCase) ResyncProduct(ctx context.Context, id string) (*domain.P
 	if err := uc.syncWikiProduct(ctx, prod); err != nil {
 		// Товар в каталог записан; страница вики — вторичная операция,
 		// не валим ресинк из-за неё (пользователь увидит ошибку в логе).
-		log.Printf("resync %s: страница вики: %v", id, err)
+		slog.Info(fmt.Sprintf("resync %s: страница вики: %v", id, err))
 	}
 
 	return prod, nil

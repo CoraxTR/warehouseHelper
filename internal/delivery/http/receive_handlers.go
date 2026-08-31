@@ -1,7 +1,8 @@
 package http
 
 import (
-	"log"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -22,7 +23,7 @@ func (h *Handler) ReceiveBarcodesAdd(w http.ResponseWriter, r *http.Request) {
 	productID := strings.TrimSpace(r.FormValue("product_id"))
 
 	if err := h.receiveUC.Add(r.Context(), supplierID, externalCode, productID); err != nil {
-		log.Printf("receive: добавить код %q: %v", externalCode, err)
+		slog.Info(fmt.Sprintf("receive: добавить код %q: %v", externalCode, err))
 		http.Redirect(w, r, "/ms/suppliers/edit?id="+url.QueryEscape(supplierID)+"&err="+url.QueryEscape(err.Error()), http.StatusSeeOther)
 
 		return
@@ -44,7 +45,7 @@ func (h *Handler) ReceiveBarcodesDelete(w http.ResponseWriter, r *http.Request) 
 	externalCode := strings.TrimSpace(r.FormValue("external_code"))
 
 	if err := h.receiveUC.Remove(r.Context(), supplierID, externalCode); err != nil {
-		log.Printf("receive: удалить код %q: %v", externalCode, err)
+		slog.Info(fmt.Sprintf("receive: удалить код %q: %v", externalCode, err))
 		http.Redirect(w, r, "/ms/suppliers/edit?id="+url.QueryEscape(supplierID)+"&err="+url.QueryEscape(err.Error()), http.StatusSeeOther)
 
 		return

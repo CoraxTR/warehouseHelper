@@ -8,12 +8,12 @@ import (
 	"fmt"
 	"html/template"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 
+	"log/slog"
 	"warehouseHelper/internal/domain"
 	"warehouseHelper/internal/wiki/render"
 )
@@ -347,7 +347,7 @@ func (h *Handler) wikiSave(w http.ResponseWriter, r *http.Request) {
 	// После успешного SavePage страница уже под page.Title (возможно, переименована).
 	if r.FormValue("remove_photo") != "" && photo == nil && currentTitle != "" {
 		if err = h.wikiUC.RemovePhoto(r.Context(), page.Title); err != nil {
-			log.Printf("WikiSave RemovePhoto error: %v", err)
+			slog.Error(fmt.Sprintf("WikiSave RemovePhoto error: %v", err))
 		}
 	}
 

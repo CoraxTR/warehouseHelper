@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 
+	"log/slog"
 	"warehouseHelper/internal/msclient/client"
 )
 
@@ -92,6 +92,6 @@ func (uc *OrderShipmentEnsurer) notifyCreateFailed(orderName string, cause error
 
 func (uc *OrderShipmentEnsurer) notifyWarehouse(text string) {
 	if err := uc.notifier.NotifyWarehouse(text); err != nil {
-		log.Printf("failed to notify warehouse: %v", err)
+		slog.Error(fmt.Sprintf("failed to notify warehouse: %v", err))
 	}
 }

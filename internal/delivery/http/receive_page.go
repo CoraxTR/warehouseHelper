@@ -3,11 +3,12 @@ package http
 import (
 	"encoding/json"
 	"html/template"
-	"log"
 	"net/http"
 	"strings"
 	"time"
 
+	"fmt"
+	"log/slog"
 	"warehouseHelper/internal/domain"
 	"warehouseHelper/internal/receiving"
 )
@@ -29,7 +30,7 @@ func (h *Handler) ReceivePage(w http.ResponseWriter, r *http.Request) {
 
 	suppliers, err := h.msUC.List(r.Context())
 	if err != nil {
-		log.Printf("receive: список поставщиков: %v", err)
+		slog.Info(fmt.Sprintf("receive: список поставщиков: %v", err))
 		http.Error(w, "не удалось получить список поставщиков", http.StatusInternalServerError)
 		return
 	}
@@ -38,7 +39,7 @@ func (h *Handler) ReceivePage(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimSpace(r.URL.Query().Get("id"))
 	if id == "" {
 		if err := receiveTmpl.Execute(w, data); err != nil {
-			log.Printf("receive template: %v", err)
+			slog.Info(fmt.Sprintf("receive template: %v", err))
 		}
 		return
 	}
@@ -53,14 +54,14 @@ func (h *Handler) ReceivePage(w http.ResponseWriter, r *http.Request) {
 	if supplier == nil {
 		data.Error = "поставщик не найден"
 		if err := receiveTmpl.Execute(w, data); err != nil {
-			log.Printf("receive template: %v", err)
+			slog.Info(fmt.Sprintf("receive template: %v", err))
 		}
 		return
 	}
 	data.Supplier = supplier
 
 	if err := receiveTmpl.Execute(w, data); err != nil {
-		log.Printf("receive template: %v", err)
+		slog.Info(fmt.Sprintf("receive template: %v", err))
 	}
 }
 
@@ -85,7 +86,7 @@ func (h *Handler) ReceiveCache(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	if err := json.NewEncoder(w).Encode(cache); err != nil {
-		log.Printf("receive cache encode: %v", err)
+		slog.Info(fmt.Sprintf("receive cache encode: %v", err))
 	}
 }
 
@@ -128,7 +129,7 @@ func (h *Handler) ReceiveSave(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	if err := json.NewEncoder(w).Encode(result); err != nil {
-		log.Printf("receive save encode: %v", err)
+		slog.Info(fmt.Sprintf("receive save encode: %v", err))
 	}
 }
 

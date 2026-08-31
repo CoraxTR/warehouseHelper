@@ -107,6 +107,20 @@ func MSEndpoint(rawURL string) string {
 	return NormalizePath(strings.TrimPrefix(u.Path, msURLPrefix))
 }
 
+// msRateLimitedTotal — счётчик 429 от МС (рейт-лимит; 100×429/5мин = бан).
+var msRateLimitedTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "ms_rate_limited_total",
+		Help: "Ответы МойСклад 429 (превышен лимит запросов) — риск бана API.",
+	},
+	[]string{"endpoint"},
+)
+
+// ObserveMSRateLimited учитывает один ответ 429 от МС.
+func ObserveMSRateLimited(endpoint string) {
+	msRateLimitedTotal.WithLabelValues(endpoint).Inc()
+}
+
 // ObserveMSRequest учитывает один исходящий запрос к МС: счётчик по
 // эндпоинту и статусу (или "network_error", если запрос не ушёл) и
 // длительность в гистограмму. Вызывается из msclient.

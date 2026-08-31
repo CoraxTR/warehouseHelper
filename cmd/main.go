@@ -1,17 +1,21 @@
 package main
 
 import (
-	"log"
+	"log/slog"
+	"os"
 
 	"warehouseHelper/app"
+	"warehouseHelper/internal/logging"
 )
 
 func main() {
+	logging.Setup()
+
 	a := app.New()
 
-	err := a.Run()
-	if err != nil {
-		log.Fatal("Ошибка запуска сервера:", err)
+	if err := a.Run(); err != nil {
+		slog.Error("ошибка запуска сервера", "error", err)
+		os.Exit(1)
 	}
 
 	//TODO: Добавить graceful shutdown с перехватом сигналов и закрытием ресурсов

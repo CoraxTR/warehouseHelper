@@ -4,7 +4,6 @@ import (
 	"errors"
 	"html/template"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -13,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 
+	"fmt"
+	"log/slog"
 	"warehouseHelper/internal/domain"
 	qucase "warehouseHelper/internal/qrcodes/usecase"
 )
@@ -75,7 +76,7 @@ func (h *Handler) QRAdd(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) renderQRAdd(w http.ResponseWriter, data QRAddPageData) {
 	if err := qrAddTmpl.Execute(w, data); err != nil {
-		log.Printf("qrcodes: render add form: %v", err)
+		slog.Info(fmt.Sprintf("qrcodes: render add form: %v", err))
 	}
 }
 
@@ -84,7 +85,7 @@ func (h *Handler) saveQRPhotos(w http.ResponseWriter, r *http.Request) {
 	// maxMemory — порог спула multipart на диск: файлы сверх 32 МБ пишутся
 	// во временные файлы, а не держатся в памяти.
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
-		log.Printf("qrcodes: parse multipart form: %v", err)
+		slog.Info(fmt.Sprintf("qrcodes: parse multipart form: %v", err))
 		h.renderQRAdd(w, QRAddPageData{Error: "Не удалось прочитать отправленные данные. Попробуйте ещё раз."})
 
 		return
@@ -121,7 +122,7 @@ func (h *Handler) saveQRPhotos(w http.ResponseWriter, r *http.Request) {
 		f, err := fh.Open()
 		if err != nil {
 			closeOpened()
-			log.Printf("qrcodes: open uploaded photo: %v", err)
+			slog.Info(fmt.Sprintf("qrcodes: open uploaded photo: %v", err))
 			h.renderQRAdd(w, QRAddPageData{OrderNumber: orderNumber, Error: "Фото не сохранилось. Переснимите фотографии и попробуйте ещё раз."})
 
 			return
@@ -145,7 +146,7 @@ func (h *Handler) saveQRPhotos(w http.ResponseWriter, r *http.Request) {
 	saved, err := h.qrUC.SavePhotos(r.Context(), orderNumber, uploads)
 	closeOpened()
 	if err != nil {
-		log.Printf("qrcodes: save photos for order %q: %v", orderNumber, err)
+		slog.Info(fmt.Sprintf("qrcodes: save photos for order %q: %v", orderNumber, err))
 		msg := "Фото не сохранилось. Переснимите фотографии и попробуйте ещё раз."
 		if errors.Is(err, qucase.ErrEmptyOrderNumber) {
 			msg = "Введите номер заказа."
@@ -173,14 +174,14 @@ func (h *Handler) QRList(w http.ResponseWriter, r *http.Request) {
 
 	orders, err := h.qrUC.ListOrders(r.Context())
 	if err != nil {
-		log.Printf("qrcodes: list orders: %v", err)
+		slog.Info(fmt.Sprintf("qrcodes: list orders: %v", err))
 		http.Error(w, "Не удалось загрузить список. Попробуйте позже.", http.StatusInternalServerError)
 
 		return
 	}
 
 	if err := qrListTmpl.Execute(w, QRListPageData{Orders: orders}); err != nil {
-		log.Printf("qrcodes: render list: %v", err)
+		slog.Info(fmt.Sprintf("qrcodes: render list: %v", err))
 	}
 }
 

@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"os"
 	"time"
 
@@ -25,7 +25,7 @@ func (e *PDFExporter) ExportOrderPDF(data []byte) (string, error) {
 
 	validated, err := api.ReadAndValidate(bytes.NewReader(data), conf)
 	if err != nil {
-		log.Printf("couldn't validate, %v", err)
+		slog.Info(fmt.Sprintf("couldn't validate, %v", err))
 	}
 
 	outFile, err := os.Create(tempdir.Dir + "/exported.pdf")
@@ -36,7 +36,7 @@ func (e *PDFExporter) ExportOrderPDF(data []byte) (string, error) {
 	defer func() {
 		err := outFile.Close()
 		if err != nil {
-			log.Printf("Failed to close file: %v", err)
+			slog.Error(fmt.Sprintf("Failed to close file: %v", err))
 		}
 	}()
 
@@ -68,7 +68,7 @@ func (e *PDFExporter) ExportMergedPDF(data [][]byte) (string, error) {
 	defer func() {
 		err := file.Close()
 		if err != nil {
-			log.Printf("Failed to close file: %v", err)
+			slog.Error(fmt.Sprintf("Failed to close file: %v", err))
 		}
 	}()
 
