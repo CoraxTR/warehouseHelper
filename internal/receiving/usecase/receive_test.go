@@ -133,6 +133,40 @@ func TestGetCache(t *testing.T) {
 	if !cache.Products[0].Weighted {
 		t.Error("позиция должна быть весовой")
 	}
+	// Все правила вычитывают срок — батч-срок не нужен.
+	if cache.BBByBatch {
+		t.Error("BBByBatch: все правила с датами, ожидалось false")
+	}
+}
+
+func TestGetCache_BBByBatch(t *testing.T) {
+	// Хоть одно правило без дат (товарное или коробочное) → срок партии.
+	cases := []struct {
+		name   string
+		item   []string
+		box    []string
+		wantBB bool
+	}{
+		{name: "товарное правило без дат", item: []string{"12-1-6-7-5- -0- -0"}, box: nil, wantBB: true},
+		{name: "коробочное правило без дат", item: nil, box: []string{"13-2-6-8-5- -0- -0- -0"}, wantBB: true},
+		{name: "без правил", item: nil, box: nil, wantBB: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := testCacheRepo()
+			repo.supplier.DecodeRules = tc.item
+			repo.supplier.BoxDecodeRules = tc.box
+			uc := NewReceivingUseCase(repo, &stubStockAccepter{}, &stubWeightRecorder{})
+
+			cache, err := uc.GetCache(context.Background(), "sup-1")
+			if err != nil {
+				t.Fatalf("GetCache: %v", err)
+			}
+			if cache.BBByBatch != tc.wantBB {
+				t.Fatalf("BBByBatch = %v, want %v", cache.BBByBatch, tc.wantBB)
+			}
+		})
+	}
 }
 
 func TestResolveInternalItem(t *testing.T) {

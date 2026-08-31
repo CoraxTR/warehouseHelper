@@ -92,6 +92,8 @@ func (uc *ReceivingUseCase) GetCache(ctx context.Context, supplierID string) (*r
 		BoxRules:   boxRules,
 		ByExternal: make(map[string]receiving.BarcodeRef, len(barcodes)),
 		ByCode:     make(map[string]receiving.ProductRef),
+		BBByBatch: needBatchBestBefore(itemRules, receiving.ItemBestBeforeField) ||
+			needBatchBestBefore(boxRules, receiving.BoxBestBeforeField),
 	}
 	seen := make(map[string]struct{}, len(barcodes))
 	for _, b := range barcodes {
@@ -130,6 +132,17 @@ func (uc *ReceivingUseCase) AddCatalogCodes(ctx context.Context, cache *receivin
 		cache.ByCode[r.InternalCode] = r
 	}
 	return nil
+}
+
+// needBatchBestBefore — есть ли правило, не вычитывающее срок (поле
+// best-before пустое): такие сканы требуют срока партии при приёмке.
+func needBatchBestBefore(rules []receiving.DecodeRule, bbField int) bool {
+	for _, r := range rules {
+		if len(r.Fields) <= bbField || r.Fields[bbField].Pos == 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // parseRules разбирает правила поставщика в кеш приёмки.
