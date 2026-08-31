@@ -68,7 +68,7 @@
     <div class="toplinks">
         <a href="/ms/receive">← Другой поставщик</a> &nbsp;|&nbsp;
         <a href="/ms/suppliers/edit?id={{.Supplier.ID}}">Правила и коды поставщика</a> &nbsp;|&nbsp;
-        <a href="/ms/receive?id={{.Supplier.ID}}" onclick="event.preventDefault(); location.reload();">Обновить данные поставщика</a>
+        <a href="/ms/receive?id={{.Supplier.ID}}" onclick="event.preventDefault(); refreshCache();">Обновить данные поставщика</a>
     </div>
 
     <div class="card wide">
@@ -77,9 +77,11 @@
 
         <div id="scanner" style="{{if .Error}}display:none;{{end}}">
             <div id="batch-bb-row" style="display:none;">
+                <label>Дата выработки партии</label>
+                <input type="date" id="batch-pd">
                 <label>Срок годности партии</label>
                 <input type="date" id="batch-bb">
-                <div class="hint">Сканы без даты в коде получат этот срок; если в коде есть своя дата — она будет сверена с датой партии (расхождение подсветится).</div>
+                <div class="hint">Сканы без дат в коде получат эти даты; срок из кода сверяется с датой партии (расхождение подсветится).</div>
             </div>
             <label>Скан (товары и коробки — вперемешку)</label>
             <input type="text" id="scan-input" class="scan-input" autocomplete="off" autofocus
@@ -88,6 +90,8 @@
                 Идёт сбор коробки: сканируйте товары внутри. Введите <b>666</b>, когда коробка укомплектована.
             </div>
             <div id="status-line" class="hint"></div>
+            <audio id="beep" preload="auto" src="data:audio/wav;base64,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"></audio>
+
 
             <div id="scans"></div>
 
@@ -110,6 +114,31 @@
         var statusLine = document.getElementById('status-line');
         var batchBBRow = document.getElementById('batch-bb-row');
         var batchBB = document.getElementById('batch-bb');
+        var batchPD = document.getElementById('batch-pd');
+
+        // Громкий бип: Web Audio (если есть), иначе скрытый <audio> с wav.
+        var beepCtx = null;
+        function beep() {
+            try {
+                var AC = window.AudioContext || window.webkitAudioContext;
+                if (AC) {
+                    if (!beepCtx) { beepCtx = new AC(); }
+                    var osc = beepCtx.createOscillator();
+                    var gain = beepCtx.createGain();
+                    osc.connect(gain);
+                    gain.connect(beepCtx.destination);
+                    osc.frequency.value = 880;
+                    gain.gain.value = 0.8;
+                    osc.start(0);
+                    setTimeout(function () { osc.stop(0); }, 250);
+                    return;
+                }
+            } catch (e) { /* fallback ниже */ }
+            try {
+                var a = document.getElementById('beep');
+                if (a) { a.currentTime = 0; a.play(); }
+            } catch (e) { /* звука нет — карточка ошибки всё равно видна */ }
+        }
 
         function parseDate(s) {
             if (!s || s.length !== 8) { return null; }
@@ -140,6 +169,7 @@
             if (w) { scan.weight_g = parseInt(w, 10); }
             var pd = sliceRule(rule, raw, 2);
             if (pd) { scan.produced_on = parseDate(pd); }
+            else if (batchPD.value) { scan.produced_on = batchPD.value; scan._pd_auto = true; }
             var bd = sliceRule(rule, raw, kind === 'box' ? 4 : 3);
             if (bd) {
                 scan.best_before = parseDate(bd);
@@ -395,6 +425,39 @@
             render();
         });
 
+        // Дата выработки партии: та же логика автозаполнения, что у срока.
+        batchPD.addEventListener('change', function () {
+            var pd = batchPD.value;
+            var i, j, it, s, c;
+            for (i = 0; i < items.length; i++) {
+                it = items[i];
+                s = it.scan;
+                if (s.error) { continue; }
+                if (s.kind === 'box') {
+                    for (j = 0; j < it.children.length; j++) {
+                        c = it.children[j];
+                        if (c.scan.error) { continue; }
+                        if (c.scan._pd_auto) {
+                            c.scan.produced_on = pd || null;
+                            if (!pd) { c.scan._pd_auto = false; }
+                        } else if (!c.scan.produced_on && pd) {
+                            c.scan.produced_on = pd;
+                            c.scan._pd_auto = true;
+                        }
+                    }
+                    continue;
+                }
+                if (s._pd_auto) {
+                    s.produced_on = pd || null;
+                    if (!pd) { s._pd_auto = false; }
+                } else if (!s.produced_on && pd) {
+                    s.produced_on = pd;
+                    s._pd_auto = true;
+                }
+            }
+            render();
+        });
+
         function boxTotalWeight(it) {
             var total = 0;
             var i;
@@ -433,7 +496,9 @@
                 var boxItem = items[items.length - 1];
                 if (resolved.error) {
                     boxItem.children.push({scan: resolved});
+                    beep();
                 } else if (resolved.kind === 'item') {
+                    if (resolved.needs_product) { beep(); }
                     if (boxItem.children.length && boxItem.children[0].scan.internal_code !== resolved.internal_code) {
                         boxItem.children.push({scan: {error: 'Разные товары в коробке: ' + resolved.name}});
                     } else {
@@ -441,6 +506,7 @@
                     }
                 } else {
                     boxItem.children.push({scan: {error: 'В коробке не может быть другая коробка'}});
+                    beep();
                 }
                 render();
                 return;
@@ -448,17 +514,20 @@
 
             if (resolved.error) {
                 items.push({scan: resolved, children: []});
+                beep();
                 render();
                 return;
             }
 
             if (resolved.kind === 'box') {
+                if (resolved.needs_product) { beep(); }
                 items.push({scan: resolved, children: [], mismatch: false});
                 boxMode = true;
                 render();
                 return;
             }
 
+            if (resolved.needs_product) { beep(); }
             items.push({scan: resolved, children: []});
             render();
         }
@@ -470,7 +539,8 @@
             if (s.weighted && !s.weight_g && it.manual && it.manual.weight_g) { out.manual_weight_g = it.manual.weight_g; }
             if (s._bb_auto && s.best_before) { out.manual_best_before = s.best_before; }
             else if (!s.best_before && it.manual && it.manual.best_before) { out.manual_best_before = it.manual.best_before; }
-            if (!s.produced_on && it.manual && it.manual.produced_on) { out.manual_produced_on = it.manual.produced_on; }
+            if (s._pd_auto && s.produced_on) { out.manual_produced_on = s.produced_on; }
+            else if (!s.produced_on && it.manual && it.manual.produced_on) { out.manual_produced_on = it.manual.produced_on; }
             return out;
         }
 
@@ -580,6 +650,57 @@
                 if (raw) { handleScan(raw); }
             }
         });
+
+        // «Обновить данные поставщика»: перезапрашиваем кеш и пересчитываем ТОЛЬКО
+        // неидентифицированные сканы (ошибки/без товара) — отсканированное не сбрасывается
+        // (коды могли добавить в соседней вкладке на карточке поставщика).
+        function refreshCache() {
+            if (!SUPPLIER_ID) { return; }
+            statusLine.textContent = 'Обновляю данные поставщика…';
+            var xhr = new XMLHttpRequest();
+            xhr.open('GET', '/ms/receive/cache?id=' + encodeURIComponent(SUPPLIER_ID), true);
+            xhr.onreadystatechange = function () {
+                if (xhr.readyState !== 4) { return; }
+                if (xhr.status !== 200) {
+                    statusLine.textContent = 'Не удалось обновить кеш (HTTP ' + xhr.status + ')';
+                    return;
+                }
+                var fresh;
+                try {
+                    fresh = JSON.parse(xhr.responseText);
+                } catch (e) {
+                    statusLine.textContent = 'Ошибка разбора кеша приёмки';
+                    return;
+                }
+                CACHE = fresh;
+                batchBBRow.style.display = CACHE.bb_batch ? 'block' : 'none';
+                var i, j, it;
+                for (i = 0; i < items.length; i++) {
+                    it = items[i];
+                    if (it.scan.error || it.scan.needs_product) { reResolveItem(it); }
+                    if (it.scan.kind === 'box') {
+                        for (j = 0; j < it.children.length; j++) {
+                            if (it.children[j].scan.error || it.children[j].scan.needs_product) {
+                                reResolveItem(it.children[j]);
+                            }
+                        }
+                    }
+                }
+                statusLine.textContent = 'Кеш обновлён: ' + (CACHE.by_external ? Object.keys(CACHE.by_external).length : 0) + ' внешних кодов';
+                render();
+            };
+            xhr.send();
+        }
+
+        // Пересчитывает скан по свежему CACHE. Не распознался снова — остаётся как был.
+        // Резолвнутые поля заменяются целиком (ручные правки на таких карточках не держим).
+        function reResolveItem(it) {
+            var r = resolveScan(it.scan.raw);
+            if (r.error) { return; }
+            it.scan = r;
+            it.mismatch = false;
+            it.manual = null;
+        }
 
         // Кеш приёмки грузится отдельным запросом (страница без него работает:
         // ввод заблокирован до загрузки).
