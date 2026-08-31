@@ -38,7 +38,11 @@ func envFilePath() string {
 	return ""
 }
 
-func NewConfig() *Config {
+// LoadEnv загружает .env в окружение процесса. Вызывается первой в main:
+// logging.Setup читает APP_LOG_FILE/LOG_LEVEL из окружения, а godotenv
+// кладёт переменные файла в os.Getenv — значит .env должен быть загружен
+// до настройки логгера. Panic — файл не найден или не читается.
+func LoadEnv() {
 	envPath := envFilePath()
 	if envPath == "" {
 		panic("Cannot read config file")
@@ -46,6 +50,10 @@ func NewConfig() *Config {
 	if err := godotenv.Load(envPath); err != nil {
 		panic("Cannot read config file: " + envPath)
 	}
+}
+
+func NewConfig() *Config {
+	LoadEnv()
 
 	apc := loadAppconfig()
 	msc := loadMSConfig()
