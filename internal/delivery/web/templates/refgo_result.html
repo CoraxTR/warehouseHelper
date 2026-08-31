@@ -4,47 +4,19 @@
 <head>
     <meta charset="UTF-8">
     <title>Результаты сверки</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            margin: 40px;
-        }
-
-        ul {
-            list-style: none;
-            padding: 0;
-        }
-
-        li {
-            background: #f8d7da;
-            border: 1px solid #f5c6cb;
-            color: #721c24;
-            border-radius: 4px;
-            padding: 8px 12px;
-            margin-bottom: 6px;
-        }
-
-        .ok {
-            color: #155724;
-            background: #d4edda;
-            border: 1px solid #c3e6cb;
-            border-radius: 4px;
-            padding: 8px 12px;
-            display: inline-block;
-        }
-
-        a {
-            color: #007bff;
-        }
-    </style>
+    <link rel="stylesheet" href="/static/raven-guard.css">
 </head>
 
 <body>
+    <header class="brandbar">
+        <a class="brandbar__brand" href="/"><svg class="brandbar__emblem" viewBox="0 0 64 64" aria-hidden="true"><circle cx="35" cy="25" r="14" fill="#F4F1E9"/><polygon points="6,26 30,17 28,27" fill="#F4F1E9"/><polygon points="13,35 28,27 26,36" fill="#F4F1E9"/><circle cx="34" cy="23" r="3.6" fill="#0A0A0D"/><circle cx="33" cy="22" r="1.1" fill="#C02832"/></svg><span class="brandbar__name">ВОРОН&nbsp;&middot;&nbsp;СКЛАД</span></a>
+        <span class="brandbar__motto">Victorus aut Mortis</span>
+    </header>
     <h1>Результаты сверки</h1>
     <p>За заявленный период было сделано {{.RetrievesCount}} заборов?</p>
     <h2>Проверить на ошибки:</h2>
     {{if .Errors}}
-    <ul>
+    <ul class="error-list">
         {{range .Errors}}
         <li>{{.}}</li>
         {{end}}
