@@ -40,11 +40,35 @@ func (a *App) initDeps() {
 		a.initHTTPServer,
 		a.initStockCache,
 		a.initAverageSales,
+		a.initTableSizes,
 	}
 
 	for _, init := range inits {
 		init()
 	}
+}
+
+// initTableSizes запускает фоновый опрос размеров таблиц БД для метрик
+// (pg_table_sizes_bytes в /metrics). Ошибки не роняют приложение: метрика
+// обновится при следующем тике (раз в минуту).
+func (a *App) initTableSizes() {
+	go func() {
+		ctx := context.Background()
+		refresh := func() {
+			sizes, err := a.di.OrdersRepository().TableSizes(ctx)
+			if err != nil {
+				log.Printf("опрос размеров таблиц: %v", err)
+				return
+			}
+			metrics.SetTableSizes(sizes)
+		}
+		refresh()
+		ticker := time.NewTicker(time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			refresh()
+		}
+	}()
 }
 
 // initAverageSales запускает стартовую дозаливку средних продаж: товары без

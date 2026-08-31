@@ -46,6 +46,22 @@ func TestHandlerServesGoMetrics(t *testing.T) {
 	}
 }
 
+func TestSetTableSizes(t *testing.T) {
+	SetTableSizes(map[string]int64{"public.products": 12345, "public.orders": 67890, "no_schema": 1})
+	defer tableSizesBytes.Reset()
+
+	if got := testutil.ToFloat64(tableSizesBytes.WithLabelValues("public", "products")); got != 12345 {
+		t.Errorf("public.products = %v, want 12345", got)
+	}
+	if got := testutil.ToFloat64(tableSizesBytes.WithLabelValues("public", "orders")); got != 67890 {
+		t.Errorf("public.orders = %v, want 67890", got)
+	}
+	// Ключ без точки пропускается (метрика не создаётся).
+	if got := testutil.ToFloat64(tableSizesBytes.WithLabelValues("", "no_schema")); got != 0 {
+		t.Errorf("no_schema = %v, want 0 (пропущен)", got)
+	}
+}
+
 func TestMiddlewareCountsRequests(t *testing.T) {
 	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNotFound)

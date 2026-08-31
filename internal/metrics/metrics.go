@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -44,6 +45,29 @@ var uuidPattern = regexp.MustCompile(`[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-
 // идентификаторы (uuid) заменяются на ":id".
 func NormalizePath(p string) string {
 	return uuidPattern.ReplaceAllString(p, ":id")
+}
+
+// tableSizesBytes — размер таблиц БД в байтах (заполняет фоновый опрос
+// в app: периодический запрос pg_total_relation_size по pg_tables).
+var tableSizesBytes = promauto.NewGaugeVec(
+	prometheus.GaugeOpts{
+		Name: "pg_table_sizes_bytes",
+		Help: "Общий размер таблиц PostgreSQL в байтах (включая индексы и TOAST), по схеме и таблице.",
+	},
+	[]string{"schema", "table"},
+)
+
+// SetTableSizes обновляет gauge размеров таблиц. Вызывается фоновым
+// опросом БД; ключ — "schema.table".
+func SetTableSizes(sizes map[string]int64) {
+	tableSizesBytes.Reset()
+	for k, v := range sizes {
+		schema, table, ok := strings.Cut(k, ".")
+		if !ok {
+			continue
+		}
+		tableSizesBytes.WithLabelValues(schema, table).Set(float64(v))
+	}
 }
 
 // Handler возвращает HTTP-обработчик /metrics (стандартные go_*, process_*
