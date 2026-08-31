@@ -2,6 +2,8 @@ package http
 
 import (
 	"net/http"
+
+	"warehouseHelper/internal/metrics"
 )
 
 func NewRouter(h *Handler) *http.ServeMux {
@@ -49,6 +51,9 @@ func NewRouter(h *Handler) *http.ServeMux {
 	mux.HandleFunc("/ms/suppliers/edit", h.SupplierEdit)     // GET — форма редактирования
 	mux.HandleFunc("/ms/suppliers/save", h.SupplierSave)     // POST — создание/обновление
 	mux.HandleFunc("/ms/suppliers/delete", h.SupplierDelete) // POST — удаление
+
+	// Метрики приложения для Prometheus (скрейпит внешний сервер).
+	mux.Handle("/metrics", metrics.Handler())
 
 	// Приёмка: виджет «Внешние коды» на карточке поставщика.
 	mux.HandleFunc("POST /ms/receive/barcodes/add", h.ReceiveBarcodesAdd)

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"warehouseHelper/internal/config"
+	"warehouseHelper/internal/metrics"
 )
 
 type App struct {
@@ -69,7 +70,7 @@ func (a *App) initStockCache() {
 func (a *App) initHTTPServer() {
 	a.httpServer = &http.Server{
 		Addr:              config.NewConfig().HTTPAddress,
-		Handler:           a.di.MUX(),
+		Handler:           metrics.Middleware(a.di.MUX()),
 		ReadHeaderTimeout: 2 * time.Second,
 	}
 }
