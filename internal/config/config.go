@@ -3,7 +3,6 @@ package config
 import (
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -11,6 +10,7 @@ import (
 	"time"
 
 	"github.com/joho/godotenv"
+	"log/slog"
 )
 
 type Config struct {
@@ -362,7 +362,7 @@ func loadRefGoConfig() *RefGoConfig {
 		v, ok := parseEnvFloat(name)
 		if !ok {
 			rgc.CheckAgainstModule = false
-			log.Printf("RefGo check module disabled: %s is empty or invalid", name)
+			slog.Info(fmt.Sprintf("RefGo check module disabled: %s is empty or invalid", name))
 
 			continue
 		}

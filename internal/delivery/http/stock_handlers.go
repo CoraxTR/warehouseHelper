@@ -4,12 +4,13 @@ import (
 	"encoding/json"
 	"errors"
 	"html/template"
-	"log"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	"fmt"
+	"log/slog"
 	"warehouseHelper/internal/stock"
 	sucase "warehouseHelper/internal/stock/usecase"
 	stockws "warehouseHelper/internal/stock/ws"
@@ -28,14 +29,14 @@ type stockPageData struct {
 // StockDatesPage — GET /ms/dates: страница «Сроки».
 func (h *Handler) StockDatesPage(w http.ResponseWriter, _ *http.Request) {
 	if err := stockDatesTmpl.Execute(w, stockPageData{}); err != nil {
-		log.Printf("stock_dates template: %v", err)
+		slog.Info(fmt.Sprintf("stock_dates template: %v", err))
 	}
 }
 
 // StockShortPage — GET /ms/dates/short: «Шорт-лист» (только short_list=true).
 func (h *Handler) StockShortPage(w http.ResponseWriter, _ *http.Request) {
 	if err := stockDatesTmpl.Execute(w, stockPageData{ShortList: true}); err != nil {
-		log.Printf("stock_dates template: %v", err)
+		slog.Info(fmt.Sprintf("stock_dates template: %v", err))
 	}
 }
 
@@ -44,7 +45,7 @@ func (h *Handler) StockShortPage(w http.ResponseWriter, _ *http.Request) {
 func (h *Handler) StockDatesWS(w http.ResponseWriter, r *http.Request) {
 	snapshot, err := json.Marshal(stockws.Message{Type: "snapshot", Rows: h.stockUC.Snapshot()})
 	if err != nil {
-		log.Printf("stock ws snapshot: %v", err)
+		slog.Info(fmt.Sprintf("stock ws snapshot: %v", err))
 		http.Error(w, "не удалось собрать снапшот", http.StatusInternalServerError)
 
 		return
@@ -60,7 +61,7 @@ func (h *Handler) StockUpdatePage(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	pc, err := h.stockUC.UpdatePageContext(r.Context(), q.Get("product_id"), q.Get("group"))
 	if err != nil {
-		log.Printf("stock update page: %v", err)
+		slog.Info(fmt.Sprintf("stock update page: %v", err))
 		http.Error(w, err.Error(), http.StatusBadRequest)
 
 		return
@@ -77,7 +78,7 @@ func (h *Handler) StockUpdatePage(w http.ResponseWriter, r *http.Request) {
 		Lengths:   strings.Join(lengths, ","),
 	}
 	if err := stockUpdateTmpl.Execute(w, data); err != nil {
-		log.Printf("stock_update template: %v", err)
+		slog.Info(fmt.Sprintf("stock_update template: %v", err))
 	}
 }
 
@@ -117,7 +118,7 @@ func (h *Handler) StockUpdateSave(w http.ResponseWriter, r *http.Request) {
 			// Товар не заведён в каталог — оператору подсказка, как дозавести.
 			http.Error(w, err.Error()+" — заведите его в МС и выгрузите каталог", http.StatusBadRequest)
 		default:
-			log.Printf("stock update save: %v", err)
+			slog.Info(fmt.Sprintf("stock update save: %v", err))
 			http.Error(w, "не удалось обновить сроки", http.StatusInternalServerError)
 		}
 
@@ -169,7 +170,7 @@ func (h *Handler) StockDiscount(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, stock.ErrProductNotFound), errors.Is(err, stock.ErrLotNotFound):
 			http.Error(w, err.Error(), http.StatusNotFound)
 		default:
-			log.Printf("stock discount: %v", err)
+			slog.Info(fmt.Sprintf("stock discount: %v", err))
 			http.Error(w, "не удалось сохранить скидку", http.StatusInternalServerError)
 		}
 

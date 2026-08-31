@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
-	"log"
 	"math"
 	"net/http"
 	"net/url"
@@ -14,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"log/slog"
 	"warehouseHelper/internal/domain"
 	msu "warehouseHelper/internal/mssuppliers/usecase"
 	"warehouseHelper/internal/receiving"
@@ -66,7 +66,7 @@ var (
 // MsPage — GET /ms: хаб модуля «МойСклад» (кнопки подмодулей).
 func (h *Handler) MsPage(w http.ResponseWriter, _ *http.Request) {
 	if err := msIndexTmpl.Execute(w, nil); err != nil {
-		log.Printf("ms_index template: %v", err)
+		slog.Info(fmt.Sprintf("ms_index template: %v", err))
 	}
 }
 
@@ -79,14 +79,14 @@ func (h *Handler) SuppliersList(w http.ResponseWriter, r *http.Request) {
 
 	suppliers, err := h.msUC.List(r.Context())
 	if err != nil {
-		log.Printf("list suppliers: %v", err)
+		slog.Info(fmt.Sprintf("list suppliers: %v", err))
 		d.Error = "не удалось загрузить список поставщиков"
 	} else {
 		d.Suppliers = suppliers
 	}
 
 	if err := msSuppliersListTmpl.Execute(w, d); err != nil {
-		log.Printf("ms_suppliers_list template: %v", err)
+		slog.Info(fmt.Sprintf("ms_suppliers_list template: %v", err))
 	}
 }
 
@@ -100,7 +100,7 @@ func (h *Handler) SupplierEdit(w http.ResponseWriter, r *http.Request) {
 	id := r.URL.Query().Get("id")
 	s, err := h.msUC.Get(r.Context(), id)
 	if err != nil {
-		log.Printf("get supplier %s: %v", id, err)
+		slog.Info(fmt.Sprintf("get supplier %s: %v", id, err))
 		h.renderSupplierForm(w, buildSupplierFormData(nil, true, "", "не удалось загрузить поставщика"))
 		return
 	}
@@ -120,7 +120,7 @@ func (h *Handler) SupplierEdit(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) loadSupplierBarcodes(r *http.Request, supplierID string) []receiving.BarcodeRef {
 	barcodes, err := h.msUC.ListBarcodes(r.Context(), supplierID)
 	if err != nil {
-		log.Printf("list supplier barcodes %s: %v", supplierID, err)
+		slog.Info(fmt.Sprintf("list supplier barcodes %s: %v", supplierID, err))
 
 		return nil
 	}
@@ -152,7 +152,7 @@ func (h *Handler) SupplierSave(w http.ResponseWriter, r *http.Request) {
 		// Текущее имя — только для показа в форме; при сохранении перезапросится из МС.
 		existing, err := h.msUC.Get(r.Context(), id)
 		if err != nil {
-			log.Printf("get supplier %s: %v", id, err)
+			slog.Info(fmt.Sprintf("get supplier %s: %v", id, err))
 			h.renderSupplierForm(w, buildSupplierFormData(nil, true, "", "не удалось загрузить поставщика"))
 			return
 		}
@@ -231,7 +231,7 @@ func (h *Handler) SupplierDelete(w http.ResponseWriter, r *http.Request) {
 
 	id := r.FormValue("id")
 	if err := h.msUC.Delete(r.Context(), id); err != nil {
-		log.Printf("delete supplier %s: %v", id, err)
+		slog.Info(fmt.Sprintf("delete supplier %s: %v", id, err))
 		http.Redirect(w, r, "/ms/suppliers?err="+url.QueryEscape("не удалось удалить поставщика: "+err.Error()), http.StatusSeeOther)
 		return
 	}
@@ -241,7 +241,7 @@ func (h *Handler) SupplierDelete(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) renderSupplierForm(w http.ResponseWriter, d *SupplierFormData) {
 	if err := msSupplierFormTmpl.Execute(w, d); err != nil {
-		log.Printf("ms_suppliers_form template: %v", err)
+		slog.Info(fmt.Sprintf("ms_suppliers_form template: %v", err))
 	}
 }
 

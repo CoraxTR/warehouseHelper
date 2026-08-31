@@ -9,7 +9,7 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -37,7 +37,7 @@ type Store struct {
 // но не прерывает инициализацию: каждый Save делает свой MkdirAll.
 func NewStore(dir string) *Store {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
-		log.Printf("photostore: создание директории %s: %v", dir, err)
+		slog.Info(fmt.Sprintf("photostore: создание директории %s: %v", dir, err))
 	}
 	return &Store{dir: dir}
 }
@@ -134,7 +134,7 @@ func isImageContent(head []byte) bool {
 // логируются, но не перетирают основную ошибку.
 func (s *Store) removeCreated(id, ext string) {
 	if err := os.Remove(filepath.Join(s.dir, id+"."+ext)); err != nil && !os.IsNotExist(err) {
-		log.Printf("photostore: удаление файла фото %s после ошибки: %v", id, err)
+		slog.Error(fmt.Sprintf("photostore: удаление файла фото %s после ошибки: %v", id, err))
 	}
 }
 

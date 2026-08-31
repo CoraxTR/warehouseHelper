@@ -2,7 +2,7 @@ package client
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"math"
 	"strconv"
 	"strings"
@@ -60,7 +60,7 @@ func processDeliveryDate(date string) string {
 
 	tempdate, err := time.Parse("2006-01-02 15:04:05.000", date)
 	if err != nil {
-		log.Printf("Couldn't parse date: %s", date)
+		slog.Info(fmt.Sprintf("Couldn't parse date: %s", date))
 	}
 
 	deliverydate := tempdate.Format(datelayout)
@@ -112,7 +112,7 @@ func processWeights(msOrder *MSOrder) (chilledWeight, frozenWeight, anyWeight fl
 	for _, position := range msOrder.PositionsWInfo {
 		if position.PositionCode == "" {
 			anyWeight += (position.Quantity * position.PositionWeight * gramsInKG)
-			log.Printf("Позиция %s пропущена из-за отсутствия кода", position.Meta.HREF)
+			slog.Info(fmt.Sprintf("Позиция %s пропущена из-за отсутствия кода", position.Meta.HREF))
 
 			continue
 		}
@@ -141,20 +141,20 @@ func processChilledBoxesCount(msOrder *MSOrder) uint64 {
 
 	chilledBoxesStr, ok := chilledBoxes.(string)
 	if !ok {
-		log.Printf("ошибка преобразования количества коробок охл.: значение не строка: %v", chilledBoxes)
+		slog.Error(fmt.Sprintf("ошибка преобразования количества коробок охл.: значение не строка: %v", chilledBoxes))
 
 		return 0
 	}
 
 	chilledBoxesCount, err := strconv.Atoi(chilledBoxesStr)
 	if err != nil {
-		log.Printf("ошибка преобразования количества коробок охл.: %v", err)
+		slog.Error(fmt.Sprintf("ошибка преобразования количества коробок охл.: %v", err))
 
 		return 0
 	}
 
 	if chilledBoxesCount < 0 {
-		log.Printf("ошибка преобразования количества коробок охл.: отрицательное значение: %d", chilledBoxesCount)
+		slog.Error(fmt.Sprintf("ошибка преобразования количества коробок охл.: отрицательное значение: %d", chilledBoxesCount))
 
 		return 0
 	}
@@ -172,20 +172,20 @@ func processFrozenBoxesCount(msOrder *MSOrder) uint64 {
 
 	frozenBoxesStr, ok := frozenBoxes.(string)
 	if !ok {
-		log.Printf("ошибка преобразования количества коробок зам.: значение не строка: %v", frozenBoxes)
+		slog.Error(fmt.Sprintf("ошибка преобразования количества коробок зам.: значение не строка: %v", frozenBoxes))
 
 		return 0
 	}
 
 	frozenBoxesCount, err := strconv.Atoi(frozenBoxesStr)
 	if err != nil {
-		log.Printf("ошибка преобразования количества коробок зам.: %v", err)
+		slog.Error(fmt.Sprintf("ошибка преобразования количества коробок зам.: %v", err))
 
 		return 0
 	}
 
 	if frozenBoxesCount < 0 {
-		log.Printf("ошибка преобразования количества коробок зам.: отрицательное значение: %d", frozenBoxesCount)
+		slog.Error(fmt.Sprintf("ошибка преобразования количества коробок зам.: отрицательное значение: %d", frozenBoxesCount))
 
 		return 0
 	}
@@ -241,7 +241,7 @@ func (c *MSConverter) ToDomain(msOrder *MSOrder) *domain.InternalOrder {
 		if tempname, sure := name.(string); sure {
 			o.SetRecieverName(tempname)
 		} else {
-			log.Println("TODO")
+			slog.Info(fmt.Sprintln("TODO"))
 		}
 	} else {
 		o.SetRecieverName(msOrder.AgentName)
@@ -251,17 +251,17 @@ func (c *MSConverter) ToDomain(msOrder *MSOrder) *domain.InternalOrder {
 		if assertedphone, sure := phone.(string); sure {
 			tempPhone, err := processPhoneNumber(assertedphone)
 			if err != nil {
-				log.Println(err)
+				slog.Info(fmt.Sprintln(err))
 			}
 
 			o.SetRecieverPhoneNumber(tempPhone)
 		} else {
-			log.Println("TODO")
+			slog.Info(fmt.Sprintln("TODO"))
 		}
 	} else {
 		tempPhone, err := processPhoneNumber(msOrder.AgentPhone)
 		if err != nil {
-			log.Println(err)
+			slog.Info(fmt.Sprintln(err))
 		}
 
 		o.SetRecieverPhoneNumber(tempPhone)

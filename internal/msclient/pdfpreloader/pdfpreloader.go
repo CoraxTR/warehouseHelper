@@ -3,7 +3,8 @@ package pdfpreloader
 import (
 	"context"
 	"errors"
-	"log"
+	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
@@ -23,7 +24,7 @@ type PDFPreloader struct {
 func NewPDFPreloader(c *client.MSAPIClient) *PDFPreloader {
 	err := os.MkdirAll(tempdir.Dir, 0o750)
 	if err != nil {
-		log.Printf("Failed to create temp dir: %v", err)
+		slog.Error(fmt.Sprintf("Failed to create temp dir: %v", err))
 	}
 
 	return &PDFPreloader{
@@ -84,7 +85,7 @@ func (p *PDFPreloader) StartPreloading(orders []*domain.InternalOrder) {
 
 			data, err := p.msclient.FetchOrderPDF(ctx, o.GetID())
 			if err != nil {
-				log.Printf("Failed to fetch PDF for order %s: %v", o.GetID(), err)
+				slog.Error(fmt.Sprintf("Failed to fetch PDF for order %s: %v", o.GetID(), err))
 				// Загрузка прервана (например, отменой контекста) — файл мог
 				// остаться пустым или частичным; удаляем, чтобы он не попал
 				// пустым в merge мульти-PDF.
@@ -94,7 +95,7 @@ func (p *PDFPreloader) StartPreloading(orders []*domain.InternalOrder) {
 			}
 
 			if len(data) == 0 {
-				log.Printf("Fetched empty PDF data for order %s", o.GetID())
+				slog.Info(fmt.Sprintf("Fetched empty PDF data for order %s", o.GetID()))
 				removeFile(filePath)
 
 				return
@@ -102,7 +103,7 @@ func (p *PDFPreloader) StartPreloading(orders []*domain.InternalOrder) {
 
 			err = os.WriteFile(filePath, data, 0o600)
 			if err != nil {
-				log.Printf("Failed to save PDF for order %s: %v", o.GetID(), err)
+				slog.Error(fmt.Sprintf("Failed to save PDF for order %s: %v", o.GetID(), err))
 			}
 		}(ctx, order)
 	}
@@ -123,6 +124,6 @@ func (p *PDFPreloader) StopPreloading() {
 // removeFile удаляет файл по пути, игнорируя его отсутствие.
 func removeFile(path string) {
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		log.Printf("Failed to remove file %s: %v", path, err)
+		slog.Error(fmt.Sprintf("Failed to remove file %s: %v", path, err))
 	}
 }

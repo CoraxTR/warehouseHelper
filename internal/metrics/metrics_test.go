@@ -73,6 +73,15 @@ func TestObserveMSRequest(t *testing.T) {
 	}
 }
 
+func TestObserveMSRateLimited(t *testing.T) {
+	ObserveMSRateLimited("entity/customerorder")
+	defer msRateLimitedTotal.Reset()
+
+	if got := testutil.ToFloat64(msRateLimitedTotal.WithLabelValues("entity/customerorder")); got != 1 {
+		t.Errorf("ms_rate_limited_total = %v, want 1", got)
+	}
+}
+
 func TestSetTableSizes(t *testing.T) {
 	SetTableSizes(map[string]int64{"public.products": 12345, "public.orders": 67890, "no_schema": 1})
 	defer tableSizesBytes.Reset()

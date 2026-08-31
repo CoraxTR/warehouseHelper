@@ -2,10 +2,11 @@ package usecase
 
 import (
 	"context"
-	"log"
 	"sync"
 	"time"
 
+	"fmt"
+	"log/slog"
 	"warehouseHelper/internal/domain"
 )
 
@@ -76,7 +77,7 @@ type ExportSummary struct {
 func (uc *ExportToExcelUseCase) ExportOrders(ctx context.Context) (summary *ExportSummary, err error) {
 	defer func() {
 		if cleanErr := uc.tempCleaner.CleanOlderThan(uc.tempCleanupMaxAge); cleanErr != nil {
-			log.Printf("Failed to clean temp dir: %v", cleanErr)
+			slog.Error(fmt.Sprintf("Failed to clean temp dir: %v", cleanErr))
 		}
 	}()
 
@@ -120,7 +121,7 @@ func (uc *ExportToExcelUseCase) processOrdersShipments(ctx context.Context, orde
 		wg.Go(func() {
 			err := uc.shipper.SetOrderAsShippedToRefGo(ctx, order.GetID())
 			if err != nil {
-				log.Printf("Error setting order as shipped: %s", err)
+				slog.Error(fmt.Sprintf("Error setting order as shipped: %s", err))
 			}
 
 			// Отгрузку обеспечиваем только для оплат «Наличные»/«Терминал»:
@@ -131,7 +132,7 @@ func (uc *ExportToExcelUseCase) processOrdersShipments(ctx context.Context, orde
 
 			err = uc.shipmentEnsurer.EnsureOrderShipment(ctx, order.GetID())
 			if err != nil {
-				log.Printf("Error ensuring order shipment: %s", err)
+				slog.Error(fmt.Sprintf("Error ensuring order shipment: %s", err))
 			}
 		})
 	}
@@ -154,12 +155,12 @@ func NewExportBarcodesToExcelUseCase(exporter ExcelBarcodesExporter, repository 
 func (uc *ExportBarcodesToExcelUseCase) GetMultipleOrdersBarcodes(ctx context.Context, ids []string) (string, error) {
 	orders, err := uc.repository.GetOrdersByIDs(ctx, ids)
 	if err != nil {
-		log.Printf("getMultipleOrdersBarcodes could not get orders from repository: %s", err)
+		slog.Info(fmt.Sprintf("getMultipleOrdersBarcodes could not get orders from repository: %s", err))
 	}
 
 	savepath, err := uc.exporter.ExportOrdersBarcodesToExcel(orders)
 	if err != nil {
-		log.Printf("getMultipleOrdersBarcodes could not create barcodes: %s", err)
+		slog.Info(fmt.Sprintf("getMultipleOrdersBarcodes could not create barcodes: %s", err))
 	}
 
 	return savepath, nil

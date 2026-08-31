@@ -2,7 +2,7 @@ package tempcleaner
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
@@ -18,7 +18,7 @@ type TempCleaner struct {
 // но не прерывает инициализацию.
 func NewTempCleaner(dir string) *TempCleaner {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
-		log.Printf("Failed to create temp dir %s: %v", dir, err)
+		slog.Error(fmt.Sprintf("Failed to create temp dir %s: %v", dir, err))
 	}
 
 	return &TempCleaner{dir: dir}
@@ -45,7 +45,7 @@ func (c *TempCleaner) CleanOlderThan(maxAge time.Duration) error {
 
 		info, err := entry.Info()
 		if err != nil {
-			log.Printf("Failed to get file info for %s: %v", entry.Name(), err)
+			slog.Error(fmt.Sprintf("Failed to get file info for %s: %v", entry.Name(), err))
 
 			continue
 		}
@@ -55,16 +55,16 @@ func (c *TempCleaner) CleanOlderThan(maxAge time.Duration) error {
 		}
 
 		if err := os.Remove(filepath.Join(c.dir, entry.Name())); err != nil && !os.IsNotExist(err) {
-			log.Printf("Failed to remove file %s: %v", entry.Name(), err)
+			slog.Error(fmt.Sprintf("Failed to remove file %s: %v", entry.Name(), err))
 
 			continue
 		}
 
-		log.Printf("Removed old temp file: %s", entry.Name())
+		slog.Info(fmt.Sprintf("Removed old temp file: %s", entry.Name()))
 		removed++
 	}
 
-	log.Printf("Temp cleanup finished: %d file(s) removed", removed)
+	slog.Info(fmt.Sprintf("Temp cleanup finished: %d file(s) removed", removed))
 
 	return nil
 }

@@ -2,7 +2,8 @@ package workerpool
 
 import (
 	"context"
-	"log"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"sync"
 	"warehouseHelper/internal/config"
@@ -50,7 +51,7 @@ func validateKey(ctx context.Context, config *config.MSConfig, apikey string) bo
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, orgURL, http.NoBody)
 	if err != nil {
-		log.Printf("failed to create request: %s", err)
+		slog.Error(fmt.Sprintf("failed to create request: %s", err))
 
 		return false
 	}
@@ -61,7 +62,7 @@ func validateKey(ctx context.Context, config *config.MSConfig, apikey string) bo
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		log.Printf("failed to make request: %s", err)
+		slog.Error(fmt.Sprintf("failed to make request: %s", err))
 
 		return false
 	}
@@ -69,7 +70,7 @@ func validateKey(ctx context.Context, config *config.MSConfig, apikey string) bo
 	defer func() {
 		err := resp.Body.Close()
 		if err != nil {
-			log.Printf("failed to close response body: %s", err)
+			slog.Error(fmt.Sprintf("failed to close response body: %s", err))
 		}
 	}()
 
@@ -94,12 +95,12 @@ func NewMSWorkerPool(config *config.MSConfig) *MSWorkerPool {
 
 		ok := validateKey(ctx, config, v.APIKey)
 		if !ok {
-			log.Printf("%s: Мне дали неправильный API-ключ!", v.Name)
+			slog.Info(fmt.Sprintf("%s: Мне дали неправильный API-ключ!", v.Name))
 
 			continue
 		}
 
-		log.Printf("%s: API-ключ прошёл проверку, мне можно давать задачи", v.Name)
+		slog.Info(fmt.Sprintf("%s: API-ключ прошёл проверку, мне можно давать задачи", v.Name))
 
 		pool.WarehouseWorkers = append(pool.WarehouseWorkers, w)
 		pool.wg.Add(1)
@@ -112,12 +113,12 @@ func NewMSWorkerPool(config *config.MSConfig) *MSWorkerPool {
 
 		ok := validateKey(ctx, config, v.APIKey)
 		if !ok {
-			log.Printf("%s: Мне дали неправильный API-ключ!", v.Name)
+			slog.Info(fmt.Sprintf("%s: Мне дали неправильный API-ключ!", v.Name))
 
 			continue
 		}
 
-		log.Printf("%s: API-ключ прошёл проверку, мне можно давать задачи", v.Name)
+		slog.Info(fmt.Sprintf("%s: API-ключ прошёл проверку, мне можно давать задачи", v.Name))
 
 		pool.OtherWorkers = append(pool.OtherWorkers, w)
 		pool.wg.Add(1)

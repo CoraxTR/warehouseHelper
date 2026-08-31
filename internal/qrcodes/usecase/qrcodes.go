@@ -10,12 +10,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"log/slog"
 	"warehouseHelper/internal/domain"
 )
 
@@ -86,7 +86,7 @@ func (u *QRUseCase) SavePhotos(ctx context.Context, orderNumber string, uploads 
 		rctx := context.WithoutCancel(ctx)
 		for _, name := range savedNames {
 			if err := u.files.RemoveAll(rctx, name); err != nil {
-				log.Printf("qrcodes: откат файла фото %s: %v", name, err)
+				slog.Info(fmt.Sprintf("qrcodes: откат файла фото %s: %v", name, err))
 			}
 		}
 	}
@@ -114,7 +114,7 @@ func (u *QRUseCase) SavePhotos(ctx context.Context, orderNumber string, uploads 
 	// в день — см. Cleanup); ошибка очистки не влияет на уже успешное
 	// сохранение, а лишь логируется.
 	if _, err := u.Cleanup(ctx); err != nil {
-		log.Printf("qrcodes: очистка устаревших фото после сохранения: %v", err)
+		slog.Info(fmt.Sprintf("qrcodes: очистка устаревших фото после сохранения: %v", err))
 	}
 	return len(photos), nil
 }
@@ -183,7 +183,7 @@ func (u *QRUseCase) Cleanup(ctx context.Context) (int, error) {
 	removed := 0
 	for _, name := range names {
 		if err := u.files.RemoveAll(ctx, name); err != nil {
-			log.Printf("qrcodes: удаление фото %s: %v", name, err)
+			slog.Info(fmt.Sprintf("qrcodes: удаление фото %s: %v", name, err))
 			continue
 		}
 		removed++

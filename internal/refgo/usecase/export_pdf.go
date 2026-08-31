@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
 
+	"log/slog"
 	"warehouseHelper/internal/tempdir"
 )
 
@@ -66,7 +66,7 @@ func (uc *ExportOrderPDFUseCase) GetOrderPDF(ctx context.Context, id string) (st
 
 	err = os.WriteFile(filePath, pdfData, 0o600)
 	if err != nil {
-		log.Printf("Failed to save PDF for order %s: %v", id, err)
+		slog.Error(fmt.Sprintf("Failed to save PDF for order %s: %v", id, err))
 	}
 
 	savePath, err := uc.exporter.ExportOrderPDF(pdfData)
@@ -92,7 +92,7 @@ func (uc *ExportOrderPDFUseCase) GetMultipleOrdersPDF(ctx context.Context, ids [
 
 			data, err := os.ReadFile(filePath)
 			if err == nil && len(data) > 0 {
-				log.Printf("Fetched Order PDF %v/%v", doneCounter, len(ids))
+				slog.Info(fmt.Sprintf("Fetched Order PDF %v/%v", doneCounter, len(ids)))
 
 				pdfData[i] = data
 
@@ -106,23 +106,23 @@ func (uc *ExportOrderPDFUseCase) GetMultipleOrdersPDF(ctx context.Context, ids [
 
 			data, err = uc.fetcher.FetchOrderPDF(ctx, id)
 			if err != nil {
-				log.Printf("failed to fetch PDF: %s", err)
+				slog.Error(fmt.Sprintf("failed to fetch PDF: %s", err))
 
 				return
 			}
 
 			if len(data) == 0 {
-				log.Printf("fetched empty PDF data for order %s", id)
+				slog.Info(fmt.Sprintf("fetched empty PDF data for order %s", id))
 
 				return
 			}
 
 			err = os.WriteFile(filePath, data, 0o600)
 			if err != nil {
-				log.Printf("Failed to save PDF for order %s: %v", id, err)
+				slog.Error(fmt.Sprintf("Failed to save PDF for order %s: %v", id, err))
 			}
 
-			log.Printf("Fetched Order PDF %v/%v", doneCounter, len(ids))
+			slog.Info(fmt.Sprintf("Fetched Order PDF %v/%v", doneCounter, len(ids)))
 
 			pdfData[i] = data
 		})
@@ -141,6 +141,6 @@ func (uc *ExportOrderPDFUseCase) GetMultipleOrdersPDF(ctx context.Context, ids [
 // removeCachedPDF удаляет файл из temp-кэша, игнорируя его отсутствие.
 func removeCachedPDF(path, id string) {
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		log.Printf("Failed to remove cached PDF %s: %v", id, err)
+		slog.Error(fmt.Sprintf("Failed to remove cached PDF %s: %v", id, err))
 	}
 }

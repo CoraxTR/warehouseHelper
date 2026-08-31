@@ -3,10 +3,11 @@ package usecase
 import (
 	"context"
 	"errors"
-	"log"
 	"sync"
 	"time"
 
+	"fmt"
+	"log/slog"
 	"warehouseHelper/internal/averagesales"
 	"warehouseHelper/internal/domain"
 	"warehouseHelper/internal/msclient/client"
@@ -80,7 +81,7 @@ func (b *backfillRunner) worker(ctx context.Context) {
 			return
 		}
 		if err := b.uc.backfillProduct(ctx, id); err != nil {
-			log.Printf("averagesales: бэкфилл товара %s: %v", id, err)
+			slog.Info(fmt.Sprintf("averagesales: бэкфилл товара %s: %v", id, err))
 		}
 	}
 }
@@ -107,7 +108,7 @@ func (b *backfillRunner) runMissing() {
 		}()
 
 		if err := b.uc.backfillMissing(ctx); err != nil {
-			log.Printf("averagesales: стартовая дозаливка: %v", err)
+			slog.Info(fmt.Sprintf("averagesales: стартовая дозаливка: %v", err))
 		}
 	}()
 }

@@ -2,10 +2,11 @@ package app
 
 import (
 	"context"
-	"log"
 	"net/http"
 	"time"
 
+	"fmt"
+	"log/slog"
 	"warehouseHelper/internal/config"
 	"warehouseHelper/internal/metrics"
 )
@@ -58,7 +59,7 @@ func (a *App) initTableSizes() {
 		refresh := func() {
 			sizes, err := pg.TableSizes(ctx)
 			if err != nil {
-				log.Printf("опрос размеров таблиц: %v", err)
+				slog.Info(fmt.Sprintf("опрос размеров таблиц: %v", err))
 				return
 			}
 			metrics.SetTableSizes(sizes)
@@ -88,7 +89,7 @@ func (a *App) initStockCache() {
 	defer cancel()
 
 	if err := a.di.StockUC().WarmUp(ctx); err != nil {
-		log.Printf("прогрев кэша остатков: %v (страницы «Сроки» пусты, примените product_stock_schema.sql и перезапустите)", err)
+		slog.Info(fmt.Sprintf("прогрев кэша остатков: %v (страницы «Сроки» пусты, примените product_stock_schema.sql и перезапустите)", err))
 	}
 }
 

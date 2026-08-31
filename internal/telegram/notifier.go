@@ -7,10 +7,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"time"
 
+	"log/slog"
 	"warehouseHelper/internal/config"
 )
 
@@ -88,7 +88,7 @@ func (n *Notifier) sendMessage(chatID int64, text string) error {
 	defer func() {
 		err = resp.Body.Close()
 		if err != nil {
-			log.Printf("failed to close telegram response body: %v", err)
+			slog.Error(fmt.Sprintf("failed to close telegram response body: %v", err))
 		}
 	}()
 
