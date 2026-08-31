@@ -5,10 +5,12 @@ import (
 	"os"
 
 	"warehouseHelper/app"
+	"warehouseHelper/internal/config"
 	"warehouseHelper/internal/logging"
 )
 
 func main() {
+	config.LoadEnv()
 	logging.Setup()
 
 	a := app.New()
