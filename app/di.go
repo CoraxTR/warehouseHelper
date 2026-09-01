@@ -293,12 +293,12 @@ func (d *DIContainer) OrderCoeffUC() *oucase.UseCase {
 // DayStateUC — сценарии состояния товара по дням: утренний снапшот из
 // product_stock, пересчёт строки по событиям стока (шов StockUC), доступность
 // из календаря «Доступность товаров», эмитенты фактов в ordercoeff.
-// PGClient реализует ducecase.Repository; OrderCoeffUC — SoldOutNotifier /
-// UnavailableNotifier / SoldOutRollbackNotifier (методы SoldOut, Unavailable,
-// RollbackSoldOut).
+// PGClient реализует ducecase.Repository; GoodsUC — ducecase.CatalogProvider
+// (каталог для страниц); OrderCoeffUC — SoldOutNotifier / UnavailableNotifier /
+// SoldOutRollbackNotifier (методы SoldOut, Unavailable, RollbackSoldOut).
 func (d *DIContainer) DayStateUC() *ducecase.UseCase {
 	if d.dayStateUC == nil {
-		d.dayStateUC = ducecase.NewUseCase(d.OrdersRepository(), d.OrderCoeffUC(), d.OrderCoeffUC(), d.OrderCoeffUC())
+		d.dayStateUC = ducecase.NewUseCase(d.OrdersRepository(), d.GoodsUC(), d.OrderCoeffUC(), d.OrderCoeffUC(), d.OrderCoeffUC())
 	}
 
 	return d.dayStateUC
@@ -382,7 +382,7 @@ func (d *DIContainer) StockUC() *sucase.StockUseCase {
 
 func (d *DIContainer) Handler() *myhttp.Handler {
 	if d.handlers == nil {
-		d.handlers = myhttp.NewHandler(d.SyncUC(), d.OrdersUC(), d.ExcelExportUC(), d.PdfExportUC(), d.BarcodeExportUC(), d.RefGoCheckAgainstUC(), d.WikiUC(), d.GoodsUC(), d.QRUC(), d.SuppliersUC(), d.StockUC(), d.StockHub(), d.ReceiveBarcodes(), d.ReceivingUC())
+		d.handlers = myhttp.NewHandler(d.SyncUC(), d.OrdersUC(), d.ExcelExportUC(), d.PdfExportUC(), d.BarcodeExportUC(), d.RefGoCheckAgainstUC(), d.WikiUC(), d.GoodsUC(), d.DayStateUC(), d.QRUC(), d.SuppliersUC(), d.StockUC(), d.StockHub(), d.ReceiveBarcodes(), d.ReceivingUC())
 	}
 
 	return d.handlers

@@ -169,3 +169,39 @@ func (pg *PGClient) ClearSoldOut(ctx context.Context, productID string, date tim
 	}
 	return nil
 }
+
+// ListByRange читает строки за период [from, to]: map product_id → map date →
+// строка. Период — календарный месяц (календарь доступности, отчёт по наличию).
+func (pg *PGClient) ListByRange(ctx context.Context, from, to time.Time) (map[string]map[time.Time]daystate.DayState, error) {
+	rows, err := pg.Pool.Query(ctx, `
+        SELECT product_id, date, in_stock, discount_start, discount, discount_increases, orderable, sold_out_today
+        FROM product_day_state
+        WHERE date >= $1 AND date <= $2
+        ORDER BY product_id, date`,
+		from, to,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list days %s..%s: %w", from.Format(time.DateOnly), to.Format(time.DateOnly), err)
+	}
+	defer rows.Close()
+
+	out := map[string]map[time.Time]daystate.DayState{}
+	for rows.Next() {
+		var d daystate.DayState
+		var increases []int16
+		if err := rows.Scan(&d.ProductID, &d.Date, &d.InStock, &d.DiscountStart, &d.Discount, &increases, &d.Orderable, &d.SoldOutToday); err != nil {
+			return nil, fmt.Errorf("list days scan: %w", err)
+		}
+		d.DiscountIncreases = increases
+		byDate := out[d.ProductID]
+		if byDate == nil {
+			byDate = map[time.Time]daystate.DayState{}
+			out[d.ProductID] = byDate
+		}
+		byDate[d.Date] = d
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list days: %w", err)
+	}
+	return out, nil
+}

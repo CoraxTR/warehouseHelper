@@ -612,3 +612,48 @@ details.multi-select .ms-empty { color: #66645C; font-size: 13px; margin-top: 6p
     form.search input[type="text"] { width: 100%; }
     td { font-size: 12.5px; }
 }
+
+/* ===== Доступность товаров / Отчёт по наличию (daystate) ===== */
+.month-nav {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin: 14px 0;
+    flex-wrap: wrap;
+}
+.month-nav__current { font-size: 18px; font-weight: 700; color: #F4F1E9; }
+.month-nav a { color: #C8A65C; text-decoration: none; font-size: 14px; }
+.month-nav a:hover { text-decoration: underline; }
+.export-btn { margin-left: auto; }
+.av-hint { color: #8A887E; font-size: 13px; margin: 8px 0 14px; max-width: 920px; }
+
+.av-table { border-collapse: collapse; font-size: 13px; }
+.av-table th, .av-table td { border: 1px solid #26262E; padding: 2px 6px; text-align: center; white-space: nowrap; }
+.av-name-col { text-align: left; min-width: 240px; }
+.av-day { color: #8A887E; font-weight: 400; }
+.av-day.today { color: #C02832; font-weight: 700; background: #16161C; }
+
+.group-row td { background: #16161C; color: #C8A65C; font-weight: 700; text-align: left; letter-spacing: 0.04em; }
+.av-row .av-name { text-align: left; position: sticky; left: 0; background: #0D0D11; }
+.av-save { margin-left: 10px; }
+.av-save button { display: none; }
+
+.av-cell {
+    width: 26px;
+    height: 22px;
+    cursor: cell;
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    user-select: none;
+}
+.av-cell.on { background: #101014; }
+.av-cell.off { background: #2A2A33; }
+.av-cell.sel { outline: 2px solid #C8A65C; }
+
+/* Отчёт по наличию: заливки совпадают с xlsx-выгрузкой */
+.cell-plain { background: #FFFFFF; color: #000; }
+.cell-yellow { background: #FFEB3B; color: #000; }
+.cell-yellow-red { background: #FFEB3B; color: #C00000; font-weight: 700; }
+.cell-red { background: #F1948A; color: #000; }
+.cell-gray { background: #CCCCCC; color: #000; }
+.cell-empty { background: #101014; color: #66645C; }

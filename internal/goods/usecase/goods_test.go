@@ -408,6 +408,13 @@ func (s *stubProductsRepo) GetProductsByIDs(_ context.Context, _ []string) ([]do
 	return s.search, nil
 }
 
+func (s *stubProductsRepo) LoadAllProducts(_ context.Context) ([]domain.Product, error) {
+	if s.getErr != nil {
+		return nil, s.getErr
+	}
+	return s.search, nil
+}
+
 func (s *stubProductsRepo) UpdateProductAverageWeight(_ context.Context, _ string, avgKg float64) error {
 	if s.updateAvgErr != nil {
 		return s.updateAvgErr

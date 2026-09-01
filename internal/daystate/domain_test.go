@@ -158,3 +158,62 @@ func TestApplyStockChange_Discounts(t *testing.T) {
 		t.Errorf("increases = %v, want пусто", next.DiscountIncreases)
 	}
 }
+
+func reportDate() time.Time {
+	return time.Date(2026, time.September, 15, 0, 0, 0, 0, time.UTC)
+}
+
+// Приоритет правил ячейки отчёта (сверху вниз).
+func TestCellFor(t *testing.T) {
+	today := reportDate()
+
+	tests := []struct {
+		name string
+		d    *DayState
+		date time.Time
+		want CellKind
+		text string
+	}{
+		{"будущая дата — пусто", nil, today.Add(24 * time.Hour), CellEmpty, ""},
+		{"нет строки — пусто", nil, today, CellEmpty, ""},
+		{"in_stock NULL — пусто", &DayState{Date: today, InStock: nil, Orderable: true}, today, CellEmpty, ""},
+		{"недоступна — серая", &DayState{Date: today, InStock: b(true), Orderable: false}, today, CellGray, "0%"},
+		{"закончилась — красная x", &DayState{Date: today, InStock: b(false), Orderable: true}, today, CellRed, "x"},
+		{"в наличии — белая", &DayState{Date: today, InStock: b(true), Orderable: true}, today, CellPlain, "0%"},
+		{"в наличии + скидка — жёлтая", &DayState{Date: today, InStock: b(true), Discount: i16(15), Orderable: true}, today, CellYellow, "15%"},
+		{"sold_out + скидка — жёлтая с красным шрифтом", &DayState{Date: today, InStock: b(true), Discount: i16(15), SoldOutToday: true, Orderable: true}, today, CellYellowRed, "15%"},
+		{"sold_out — красная", &DayState{Date: today, InStock: b(true), SoldOutToday: true, Orderable: true}, today, CellRed, "0%"},
+		{"серая выигрывает у sold_out", &DayState{Date: today, InStock: b(true), SoldOutToday: true, Orderable: false}, today, CellGray, "0%"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := CellFor(tc.d, tc.date, today)
+			if got.Kind != tc.want || got.Text != tc.text {
+				t.Errorf("CellFor = {%s %q}, want {%s %q}", got.Kind, got.Text, tc.want, tc.text)
+			}
+		})
+	}
+}
+
+// Текст ячейки: цепочка скидок и стейт конца дня.
+func TestTextFor(t *testing.T) {
+	tests := []struct {
+		name string
+		d    *DayState
+		want string
+	}{
+		{"скидки нет — 0%", &DayState{InStock: b(true)}, "0%"},
+		{"старт без изменений", &DayState{InStock: b(true), DiscountStart: i16(10), Discount: i16(10)}, "10%"},
+		{"цепочка повышений", &DayState{InStock: b(true), DiscountStart: i16(10), DiscountIncreases: []int16{15, 20}, Discount: i16(20)}, "10% → 15% → 20%"},
+		{"понижение — финал отличается", &DayState{InStock: b(true), DiscountStart: i16(10), Discount: i16(5)}, "10% → 5%"},
+		{"закончилась — финал x", &DayState{InStock: b(false), DiscountStart: i16(10), DiscountIncreases: []int16{15}, Discount: i16(15)}, "10% → 15% → x"},
+		{"сразу закончилась — просто x", &DayState{InStock: b(false)}, "x"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := TextFor(tc.d); got != tc.want {
+				t.Errorf("TextFor = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

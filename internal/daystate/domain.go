@@ -9,6 +9,8 @@ package daystate
 
 import (
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 )
 
@@ -114,4 +116,96 @@ func isDiscountIncrease(cur, next *int16) bool {
 		return *next > 0
 	}
 	return *next > *cur
+}
+
+// CatalogProduct — срез товара каталога для страниц состояния по дням
+// (календарь доступности, отчёт по наличию).
+type CatalogProduct struct {
+	ID        string
+	Name      string
+	GroupName string
+}
+
+// CellKind — оформление ячейки «Отчёта по наличию».
+type CellKind string
+
+// Виды ячеек (правила владельца, 01.09.2026).
+const (
+	CellEmpty     CellKind = "empty"      // нет данных (будущая дата / NULL in_stock)
+	CellPlain     CellKind = "plain"      // в наличии
+	CellYellow    CellKind = "yellow"     // в наличии + скидка
+	CellRed       CellKind = "red"        // закончилась ('x')
+	CellYellowRed CellKind = "yellow-red" // в наличии + скидка + закончилась: жёлтая, шрифт красный
+	CellGray      CellKind = "gray"       // недоступна для заказа
+)
+
+// ReportCell — ячейка отчёта: текст и оформление.
+type ReportCell struct {
+	Text string
+	Kind CellKind
+}
+
+// CellFor вычисляет ячейку отчёта по строке дня (d nil — строки нет).
+// Приоритет правил сверху вниз (владелец, 01.09.2026):
+//  1. дата > сегодня → пустая (таблица дополняется по мере накопления данных);
+//  2. in_stock = NULL → пустая;
+//  3. !orderable (любое состояние) → серая;
+//  4. !in_stock → красная, текст 'x';
+//  5. in_stock + sold_out + discount != NULL → жёлтая, шрифт красный;
+//  6. in_stock + sold_out → красная;
+//  7. in_stock + discount != NULL → жёлтая;
+//  8. in_stock → белая.
+func CellFor(d *DayState, date, today time.Time) ReportCell {
+	if date.After(today) {
+		return ReportCell{Kind: CellEmpty}
+	}
+	if d == nil || d.InStock == nil {
+		return ReportCell{Kind: CellEmpty}
+	}
+	if !d.Orderable {
+		return ReportCell{Kind: CellGray, Text: TextFor(d)}
+	}
+	if !*d.InStock {
+		return ReportCell{Kind: CellRed, Text: TextFor(d)}
+	}
+	if d.SoldOutToday && d.Discount != nil {
+		return ReportCell{Kind: CellYellowRed, Text: TextFor(d)}
+	}
+	if d.SoldOutToday {
+		return ReportCell{Kind: CellRed, Text: TextFor(d)}
+	}
+	if d.Discount != nil {
+		return ReportCell{Kind: CellYellow, Text: TextFor(d)}
+	}
+	return ReportCell{Kind: CellPlain, Text: TextFor(d)}
+}
+
+// TextFor — текст ячейки: discount_start → каждый шаг discount_increases →
+// стейт конца дня ('x' / размер скидки / '0%' если скидки нет). Повтор
+// последнего значения не дублируется: не менялась скидка — остаётся финал.
+// Примеры: 10% → 15% → 20%; закончился → 10% → 15% → x; скидки нет → 0%.
+func TextFor(d *DayState) string {
+	if d == nil {
+		return ""
+	}
+	parts := make([]string, 0, len(d.DiscountIncreases)+2)
+	if d.DiscountStart != nil {
+		parts = append(parts, fmt.Sprintf("%d%%", *d.DiscountStart))
+	}
+	for _, v := range d.DiscountIncreases {
+		parts = append(parts, fmt.Sprintf("%d%%", v))
+	}
+	var final string
+	switch {
+	case d.InStock != nil && !*d.InStock:
+		final = "x"
+	case d.Discount != nil:
+		final = fmt.Sprintf("%d%%", *d.Discount)
+	default:
+		final = "0%"
+	}
+	if len(parts) == 0 || parts[len(parts)-1] != final {
+		parts = append(parts, final)
+	}
+	return strings.Join(parts, " → ")
 }
