@@ -165,8 +165,19 @@ func TestMiddlewareKeepsWebSocketUpgrade(t *testing.T) {
 	}
 
 	// Успешный апгрейд учитывается как 101 Switching Protocols.
-	if got := testutil.ToFloat64(httpRequestsTotal.WithLabelValues(http.MethodGet, "/ws", "101")); got != 1 {
-		t.Errorf("http_requests_total для ws = %v, want 1 (101)", got)
+	// httptest обрабатывает запрос в отдельной горутине: middleware
+	// инкрементит счётчик ПОСЛЕ возврата хендлера, т.е. асинхронно
+	// относительно чтения «pong» клиентом — ждём ограниченным поллингом
+	// (одноразовая проверка давала флейк под нагрузкой).
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if got := testutil.ToFloat64(httpRequestsTotal.WithLabelValues(http.MethodGet, "/ws", "101")); got == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("http_requests_total для ws = %v, want 1 (101): апгрейд не учтён middleware", testutil.ToFloat64(httpRequestsTotal.WithLabelValues(http.MethodGet, "/ws", "101")))
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	httpRequestsTotal.Reset()
 	httpRequestDuration.Reset()
