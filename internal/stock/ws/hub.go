@@ -20,6 +20,15 @@ import (
 
 const sendBuffer = 64
 
+// Периоды keep-alive: сервер пингует клиента каждые 30 секунд; если понг не
+// пришёл за 60 секунд (клиент упал, сеть оборвалась, ПК спал), соединение
+// закрывается — браузер получает onclose и переподключается. Без этого
+// мёртвые соединения висят до первой записи или таймаута TCP.
+const (
+	pingPeriod = 30 * time.Second
+	pongWait   = 60 * time.Second
+)
+
 // Message — фрейм протокола. При подключении Type = "snapshot" (Rows),
 // далее дельты: "lot_upsert" (ProductID + Lot), "lot_delete"
 // (ProductID + BestBefore).
@@ -88,7 +97,7 @@ func (h *Hub) PublishStockChange(e stock.Event) {
 	}
 	msg, err := json.Marshal(m)
 	if err != nil {
-		slog.Info(fmt.Sprintf("ws: marshal event %s: %v", e.Kind, err))
+		slog.Error(fmt.Sprintf("ws: marshal event %s: %v", e.Kind, err))
 		return
 	}
 	h.broadcast(msg)
@@ -99,7 +108,8 @@ func (h *Hub) PublishStockChange(e stock.Event) {
 func (h *Hub) ServeConn(w http.ResponseWriter, r *http.Request, snapshot []byte) {
 	conn, err := h.upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		slog.Info(fmt.Sprintf("ws: upgrade: %v", err))
+		// Клиент получает 500 — это сбой, а не «всё по плану»: уровень ERROR.
+		slog.Error(fmt.Sprintf("ws: upgrade: %v", err))
 		return
 	}
 	c := NewClient(h, conn)
@@ -117,20 +127,26 @@ func (h *Hub) broadcast(msg []byte) {
 		select {
 		case c.send <- msg:
 		default:
-			slog.Info(fmt.Sprintf("ws: send buffer full, dropping message for %s", c.conn.RemoteAddr()))
+			// Медленный клиент теряет дельту (соединение живёт) — но это
+			// потеря данных для клиента: уровень ERROR.
+			slog.Error(fmt.Sprintf("ws: send buffer full, dropping message for %s", c.conn.RemoteAddr()))
 		}
 	}
 }
 
 // readPump читает (и игнорирует) сообщения клиента: держит соединение живым
-// (ping/pong), завершается при разрыве и снимает клиента с хаба.
-// Клиент не шлёт данных по ws — все записи идут POST /ms/dates/discount.
+// (ping/pong с таймаутом понга), завершается при разрыве и снимает клиента
+// с хаба. Клиент не шлёт данных по ws — все записи идут POST /ms/dates/discount.
 func (c *Client) readPump() {
 	defer func() {
 		c.hub.Unregister(c)
 		_ = c.conn.Close()
 	}()
 	c.conn.SetReadLimit(1024)
+	_ = c.conn.SetReadDeadline(time.Now().Add(pongWait))
+	c.conn.SetPongHandler(func(string) error {
+		return c.conn.SetReadDeadline(time.Now().Add(pongWait))
+	})
 	for {
 		if _, _, err := c.conn.ReadMessage(); err != nil {
 			return
@@ -138,12 +154,29 @@ func (c *Client) readPump() {
 	}
 }
 
-// writePump пишет очередь в соединение.
+// writePump пишет очередь в соединение и пингует клиента (keep-alive).
+// Мёртвое соединение закрывается по таймауту понга в readPump — клиент
+// получает onclose и переподключается (см. scheduleReconnect на странице).
 func (c *Client) writePump() {
-	defer func() { _ = c.conn.Close() }()
-	for msg := range c.send {
-		if err := c.conn.WriteMessage(websocket.TextMessage, msg); err != nil {
-			return
+	ticker := time.NewTicker(pingPeriod)
+	defer func() {
+		ticker.Stop()
+		_ = c.conn.Close()
+	}()
+	for {
+		select {
+		case msg, ok := <-c.send:
+			if !ok {
+				_ = c.conn.WriteMessage(websocket.CloseMessage, []byte{})
+				return
+			}
+			if err := c.conn.WriteMessage(websocket.TextMessage, msg); err != nil {
+				return
+			}
+		case <-ticker.C:
+			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				return
+			}
 		}
 	}
 }

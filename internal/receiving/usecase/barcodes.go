@@ -10,8 +10,11 @@ import (
 	"strings"
 
 	"warehouseHelper/internal/domain"
+	"warehouseHelper/internal/metrics"
 	"warehouseHelper/internal/receiving"
 )
+
+const trackPkg = "receiving"
 
 // BarcodeRepository — контракт хранилища связок «внешний код → товар»,
 // реализуется postgres-репозиторием.
@@ -63,6 +66,8 @@ func NewBarcodeEditor(repo BarcodeRepository, suppliers SupplierReader, catalog 
 
 // List возвращает связки поставщика (для виджета на карточке поставщика).
 func (uc *BarcodeEditor) List(ctx context.Context, supplierID string) ([]receiving.BarcodeRef, error) {
+	done := metrics.Track(trackPkg, "List")
+	defer done()
 	supplierID = strings.TrimSpace(supplierID)
 	if supplierID == "" {
 		return nil, errors.New("поставщик не выбран")
@@ -74,6 +79,8 @@ func (uc *BarcodeEditor) List(ctx context.Context, supplierID string) ([]receivi
 // Add добавляет связку «внешний код → товар»: UPSERT + теги вики.
 // Идемпотентно: повторное добавление того же кода обновляет товар.
 func (uc *BarcodeEditor) Add(ctx context.Context, supplierID, externalCode, productID string) error {
+	done := metrics.Track(trackPkg, "Add")
+	defer done()
 	supplierID = strings.TrimSpace(supplierID)
 	externalCode = strings.TrimSpace(externalCode)
 	productID = strings.TrimSpace(productID)
@@ -128,6 +135,8 @@ func (uc *BarcodeEditor) Add(ctx context.Context, supplierID, externalCode, prod
 // Remove удаляет связку; если это последний код этого товара у поставщика —
 // снимает теги с обеих страниц.
 func (uc *BarcodeEditor) Remove(ctx context.Context, supplierID, externalCode string) error {
+	done := metrics.Track(trackPkg, "Remove")
+	defer done()
 	supplierID = strings.TrimSpace(supplierID)
 	externalCode = strings.TrimSpace(externalCode)
 

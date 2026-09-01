@@ -7,7 +7,10 @@ import (
 	"strconv"
 
 	"warehouseHelper/internal/avgweight"
+	"warehouseHelper/internal/metrics"
 )
+
+const trackPkg = "avgweight"
 
 // Repository — хранилище весов принятых единиц (реализует PGClient).
 type Repository interface {
@@ -54,6 +57,8 @@ func NewUseCase(repo Repository, products ProductWeightUpdater, wiki WikiWeightU
 // синка каталога или вики приёмку не роняет: возвращается списком
 // предупреждений (уходят в отчёт).
 func (uc *UseCase) RecordWeights(ctx context.Context, rows []avgweight.WeightRow) (warnings []string, err error) {
+	done := metrics.Track(trackPkg, "RecordWeights")
+	defer done()
 	if len(rows) == 0 {
 		return nil, nil
 	}

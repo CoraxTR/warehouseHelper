@@ -12,7 +12,10 @@ import (
 	"unicode/utf8"
 
 	"warehouseHelper/internal/domain"
+	"warehouseHelper/internal/metrics"
 )
+
+const trackPkg = "wiki"
 
 // WikiRepository — контракт хранилища вики-страниц, реализуется postgres-репозиторием.
 type WikiRepository interface {
@@ -52,11 +55,15 @@ func NewWikiUseCase(repo WikiRepository) *WikiUseCase {
 
 // ListIndex возвращает список вики-страниц по фильтрам.
 func (uc *WikiUseCase) ListIndex(ctx context.Context, query string, tags []string, typ domain.PageType) ([]domain.WikiIndexEntry, error) {
+	done := metrics.Track(trackPkg, "ListIndex")
+	defer done()
 	return uc.repo.ListIndex(ctx, query, tags, typ)
 }
 
 // GetPage возвращает страницу по заголовку; если страницы нет — (nil, nil).
 func (uc *WikiUseCase) GetPage(ctx context.Context, title string) (*domain.WikiPage, error) {
+	done := metrics.Track(trackPkg, "GetPage")
+	defer done()
 	return uc.repo.GetPage(ctx, title)
 }
 
@@ -64,6 +71,8 @@ func (uc *WikiUseCase) GetPage(ctx context.Context, title string) (*domain.WikiP
 // если страницы нет — (nil, nil, nil). Обратные ссылки ищутся
 // по каноническому заголовку страницы.
 func (uc *WikiUseCase) GetPageWithBacklinks(ctx context.Context, title string) (*domain.WikiPage, []string, error) {
+	done := metrics.Track(trackPkg, "GetPageWithBacklinks")
+	defer done()
 	page, err := uc.repo.GetPage(ctx, title)
 	if err != nil {
 		return nil, nil, err
@@ -80,17 +89,23 @@ func (uc *WikiUseCase) GetPageWithBacklinks(ctx context.Context, title string) (
 
 // GetPhoto возвращает данные фото страницы и его MIME-тип.
 func (uc *WikiUseCase) GetPhoto(ctx context.Context, title string) (data []byte, contentType string, err error) {
+	done := metrics.Track(trackPkg, "GetPhoto")
+	defer done()
 	return uc.repo.GetPhoto(ctx, title)
 }
 
 // TagCloud возвращает теги с количеством страниц.
 func (uc *WikiUseCase) TagCloud(ctx context.Context) ([]domain.WikiTagCount, error) {
+	done := metrics.Track(trackPkg, "TagCloud")
+	defer done()
 	return uc.repo.TagCloud(ctx)
 }
 
 // ResolveLinkTargets сопоставляет цели вики-ссылок с реальными заголовками
 // страниц; пустой список не требует обращения к хранилищу.
 func (uc *WikiUseCase) ResolveLinkTargets(ctx context.Context, rawTitles []string) (map[string]string, error) {
+	done := metrics.Track(trackPkg, "ResolveLinkTargets")
+	defer done()
 	if len(rawTitles) == 0 {
 		//nolint:nilnil // контракт: пустой вход — нет ссылок для разрешения
 		return nil, nil
@@ -100,6 +115,8 @@ func (uc *WikiUseCase) ResolveLinkTargets(ctx context.Context, rawTitles []strin
 
 // ListPageTitlesByType возвращает заголовки страниц заданного типа.
 func (uc *WikiUseCase) ListPageTitlesByType(ctx context.Context, typ domain.PageType) ([]string, error) {
+	done := metrics.Track(trackPkg, "ListPageTitlesByType")
+	defer done()
 	return uc.repo.ListPageTitlesByType(ctx, typ)
 }
 
@@ -111,6 +128,8 @@ func (uc *WikiUseCase) ListPageTitlesByType(ctx context.Context, typ domain.Page
 // созданную страницу с тем же названием — привязывает к поставщику.
 // Занятый заголовок (страница другого типа) → domain.ErrTitleTaken.
 func (uc *WikiUseCase) SyncSupplierPage(ctx context.Context, supplierID, name string, orderDays, deliveryDays []int) error {
+	done := metrics.Track(trackPkg, "SyncSupplierPage")
+	defer done()
 	supplierID = strings.TrimSpace(supplierID)
 	name = strings.TrimSpace(name)
 	if supplierID == "" {
@@ -163,6 +182,8 @@ func (uc *WikiUseCase) SyncSupplierPage(ctx context.Context, supplierID, name st
 // и вес (пользовательский контент не трогается). Вызывается при выгрузке
 // товаров из МС и модулем приёмки при добавлении кода поставщика.
 func (uc *WikiUseCase) EnsureProductPage(ctx context.Context, productID, name, averageWeight string) error {
+	done := metrics.Track(trackPkg, "EnsureProductPage")
+	defer done()
 	productID = strings.TrimSpace(productID)
 	name = strings.TrimSpace(name)
 	if productID == "" {
@@ -214,6 +235,8 @@ func (uc *WikiUseCase) EnsureProductPage(ctx context.Context, productID, name, a
 // Страницы с привязкой нет — пропуск без ошибки (создастся при выгрузке
 // из МС или добавлении кода поставщика).
 func (uc *WikiUseCase) UpdateProductAverageWeight(ctx context.Context, productID, averageWeight string) error {
+	done := metrics.Track(trackPkg, "UpdateProductAverageWeight")
+	defer done()
 	productID = strings.TrimSpace(productID)
 	if productID == "" {
 		return errors.New("не передан id товара")
@@ -236,6 +259,8 @@ func (uc *WikiUseCase) UpdateProductAverageWeight(ctx context.Context, productID
 
 // AddTagToPage добавляет тег странице по заголовку (идемпотентно).
 func (uc *WikiUseCase) AddTagToPage(ctx context.Context, title, tag string) error {
+	done := metrics.Track(trackPkg, "AddTagToPage")
+	defer done()
 	page, err := uc.repo.GetPage(ctx, title)
 	if err != nil {
 		return fmt.Errorf("получить страницу %q: %w", title, err)
@@ -249,6 +274,8 @@ func (uc *WikiUseCase) AddTagToPage(ctx context.Context, title, tag string) erro
 
 // RemoveTagFromPage снимает тег со страницы по заголовку.
 func (uc *WikiUseCase) RemoveTagFromPage(ctx context.Context, title, tag string) error {
+	done := metrics.Track(trackPkg, "RemoveTagFromPage")
+	defer done()
 	page, err := uc.repo.GetPage(ctx, title)
 	if err != nil {
 		return fmt.Errorf("получить страницу %q: %w", title, err)
@@ -262,11 +289,15 @@ func (uc *WikiUseCase) RemoveTagFromPage(ctx context.Context, title, tag string)
 
 // DeletePage удаляет страницу по заголовку.
 func (uc *WikiUseCase) DeletePage(ctx context.Context, title string) error {
+	done := metrics.Track(trackPkg, "DeletePage")
+	defer done()
 	return uc.repo.DeletePage(ctx, title)
 }
 
 // RemovePhoto удаляет фото страницы.
 func (uc *WikiUseCase) RemovePhoto(ctx context.Context, title string) error {
+	done := metrics.Track(trackPkg, "RemovePhoto")
+	defer done()
 	return uc.repo.RemovePhoto(ctx, title)
 }
 
@@ -274,6 +305,8 @@ func (uc *WikiUseCase) RemovePhoto(ctx context.Context, title string) error {
 // Ошибки хранилища (в т.ч. domain.ErrTitleTaken) возвращаются как есть.
 // Внимание: метод мутирует переданный page (нормализация полей).
 func (uc *WikiUseCase) SavePage(ctx context.Context, currentTitle string, page *domain.WikiPage, photo *domain.PhotoUpload) error {
+	done := metrics.Track(trackPkg, "SavePage")
+	defer done()
 	if err := validatePageBasics(page); err != nil {
 		return err
 	}

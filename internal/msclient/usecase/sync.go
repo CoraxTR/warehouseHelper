@@ -8,9 +8,12 @@ import (
 	"sync"
 	"warehouseHelper/internal/config"
 	"warehouseHelper/internal/domain"
+	"warehouseHelper/internal/metrics"
 	"warehouseHelper/internal/msclient/client"
 	"warehouseHelper/internal/msclient/pdfpreloader"
 )
+
+// (trackPkg объявлена в первом файле пакета)
 
 type OrdersRepository interface {
 	InsertOrders(ctx context.Context, orders []*domain.InternalOrder) error
@@ -36,6 +39,8 @@ func NewSyncUsecase(client *client.MSAPIClient, repo OrdersRepository, converter
 }
 
 func (uc *SyncUseCase) SyncDeliverableOrders(ctx context.Context) {
+	done := metrics.Track(trackPkg, "SyncDeliverableOrders")
+	defer done()
 	refGoCounter := uc.Config.RGNextOrder
 
 	orders, err := uc.MSAPIClinet.FetchDeliverableOrders(ctx)

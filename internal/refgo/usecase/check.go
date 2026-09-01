@@ -11,8 +11,11 @@ import (
 
 	"warehouseHelper/internal/config"
 	"warehouseHelper/internal/domain"
+	"warehouseHelper/internal/metrics"
 	"warehouseHelper/internal/refgo/registry"
 )
+
+const trackPkg = "refgo"
 
 // RefGoCheckOrdersRepository — источник заказов для сверки.
 type RefGoCheckOrdersRepository interface {
@@ -54,6 +57,8 @@ type RefGoCheckResult struct {
 // Check сверяет реестр перевозчика (file) с заказами из базы за период
 // [dateFrom, dateTo] (включительно).
 func (uc *RefGoCheckAgainstUseCase) Check(ctx context.Context, dateFrom, dateTo string, file []byte) (*RefGoCheckResult, error) {
+	done := metrics.Track(trackPkg, "Check")
+	defer done()
 	retrievesCount, fileOrders, err := uc.parser.ParseRefGoCheckFile(file)
 	if err != nil {
 		return nil, fmt.Errorf("не удалось разобрать файл реестра: %w", err)

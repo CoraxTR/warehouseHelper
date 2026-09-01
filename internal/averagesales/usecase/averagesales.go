@@ -9,8 +9,11 @@ import (
 	"time"
 
 	"warehouseHelper/internal/averagesales"
+	"warehouseHelper/internal/metrics"
 	"warehouseHelper/internal/msclient/client"
 )
+
+const trackPkg = "averagesales"
 
 // Repository — хранилище оборотов (реализует PGClient).
 type Repository interface {
@@ -70,6 +73,8 @@ func NewUseCase(repo Repository, ms SalesClient, products ProductReader) *UseCas
 // (ни одного интервала: новый товар без единых продаж — см. пометку в domain.go).
 // Товара нет в каталоге — ошибка.
 func (uc *UseCase) AverageSales(ctx context.Context, productID string) (*float64, error) {
+	done := metrics.Track(trackPkg, "AverageSales")
+	defer done()
 	prod, err := uc.products.TurnoverProduct(ctx, productID)
 	if err != nil {
 		return nil, fmt.Errorf("товар %s: %w", productID, err)
@@ -164,6 +169,8 @@ const (
 // очередь живёт своей жизнью (собственный context + cancel в раннере),
 // а не жизнью запроса, который её поставил.
 func (uc *UseCase) BackfillProducts(productIDs []string) {
+	done := metrics.Track(trackPkg, "BackfillProducts")
+	defer done()
 	uc.backfill.enqueue(productIDs)
 }
 
@@ -171,11 +178,15 @@ func (uc *UseCase) BackfillProducts(productIDs []string) {
 // (вызывается из app.go после старта, выполняется в фоне). Товары групп —
 // общим запросом productFolder на период, безгрупповые — пачками.
 func (uc *UseCase) BackfillMissing() {
+	done := metrics.Track(trackPkg, "BackfillMissing")
+	defer done()
 	uc.backfill.runMissing()
 }
 
 // Stop останавливает фоновые задачи бэкфилла (при завершении приложения).
 func (uc *UseCase) Stop() {
+	done := metrics.Track(trackPkg, "Stop")
+	defer done()
 	uc.backfill.stop()
 }
 
