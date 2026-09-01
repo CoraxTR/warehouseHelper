@@ -44,7 +44,8 @@ func NewExportOrderPDFUseCase(fetcher PDFFetcher, exporter PDFExporter, preloade
 }
 
 func (uc *ExportOrderPDFUseCase) GetOrderPDF(ctx context.Context, id string) (string, error) {
-	defer metrics.Track(trackPkg, "GetOrderPDF")()
+	done := metrics.Track(trackPkg, "GetOrderPDF")
+	defer done()
 	uc.preloader.StopPreloading()
 
 	filePath := filepath.Join(tempdir.Dir, id+".pdf")
@@ -82,7 +83,8 @@ func (uc *ExportOrderPDFUseCase) GetOrderPDF(ctx context.Context, id string) (st
 }
 
 func (uc *ExportOrderPDFUseCase) GetMultipleOrdersPDF(ctx context.Context, ids []string) (string, error) {
-	defer metrics.Track(trackPkg, "GetMultipleOrdersPDF")()
+	done := metrics.Track(trackPkg, "GetMultipleOrdersPDF")
+	defer done()
 	uc.preloader.StopPreloading()
 
 	pdfData := make([][]byte, len(ids))

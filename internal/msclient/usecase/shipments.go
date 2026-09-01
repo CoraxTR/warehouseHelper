@@ -12,7 +12,6 @@ import (
 	"warehouseHelper/internal/msclient/client"
 )
 
-
 // WarehouseNotifier — отправка уведомлений в чат склада.
 type WarehouseNotifier interface {
 	NotifyWarehouse(text string) error
@@ -44,7 +43,8 @@ func NewOrderShipmentEnsurer(client OrderShipmentClient, notifier WarehouseNotif
 // EnsureOrderShipment проверяет состояние отгрузки заказа по id и, при
 // необходимости, создаёт отгрузку или уведомляет склад о несоответствии.
 func (uc *OrderShipmentEnsurer) EnsureOrderShipment(ctx context.Context, id string) error {
-	defer metrics.Track(trackPkg, "EnsureOrderShipment")()
+	done := metrics.Track(trackPkg, "EnsureOrderShipment")
+	defer done()
 	state, err := uc.client.FetchOrderShipmentState(ctx, id)
 	if err != nil {
 		return fmt.Errorf("failed to fetch shipment state: %w", err)

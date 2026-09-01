@@ -65,20 +65,23 @@ func NewMSSuppliersUseCase(repo MSSuppliersRepository, ms CounterpartyClient, wi
 
 // List возвращает всех поставщиков, отсортированных по алфавиту (ORDER BY lower(name)).
 func (uc *MSSuppliersUseCase) List(ctx context.Context) ([]domain.Supplier, error) {
-	defer metrics.Track(trackPkg, "List")()
+	done := metrics.Track(trackPkg, "List")
+	defer done()
 	return uc.repo.ListSuppliers(ctx)
 }
 
 // Get возвращает поставщика по id; если нет — (nil, nil).
 func (uc *MSSuppliersUseCase) Get(ctx context.Context, id string) (*domain.Supplier, error) {
-	defer metrics.Track(trackPkg, "Get")()
+	done := metrics.Track(trackPkg, "Get")
+	defer done()
 	return uc.repo.GetSupplier(ctx, id)
 }
 
 // ListBarcodes возвращает связки «внешний код → товар» поставщика для
 // виджета на странице поставщика. Без листера (тесты) — пустой список.
 func (uc *MSSuppliersUseCase) ListBarcodes(ctx context.Context, supplierID string) ([]receiving.BarcodeRef, error) {
-	defer metrics.Track(trackPkg, "ListBarcodes")()
+	done := metrics.Track(trackPkg, "ListBarcodes")
+	defer done()
 	if uc.barcodes == nil {
 		return nil, nil
 	}
@@ -89,7 +92,8 @@ func (uc *MSSuppliersUseCase) ListBarcodes(ctx context.Context, supplierID strin
 // Create нормализует и валидирует данные, подтягивает имя из МС и создаёт
 // поставщика. Если поставщик с таким id уже существует — domain.ErrSupplierExists.
 func (uc *MSSuppliersUseCase) Create(ctx context.Context, s *domain.Supplier) error {
-	defer metrics.Track(trackPkg, "Create")()
+	done := metrics.Track(trackPkg, "Create")
+	defer done()
 	if err := uc.validate(s); err != nil {
 		return err
 	}
@@ -116,7 +120,8 @@ func (uc *MSSuppliersUseCase) Create(ctx context.Context, s *domain.Supplier) er
 // Update нормализует и валидирует данные, перезапрашивает имя из МС
 // (имя в БД всегда актуальное) и сохраняет поставщика (upsert).
 func (uc *MSSuppliersUseCase) Update(ctx context.Context, s *domain.Supplier) error {
-	defer metrics.Track(trackPkg, "Update")()
+	done := metrics.Track(trackPkg, "Update")
+	defer done()
 	if err := uc.validate(s); err != nil {
 		return err
 	}
@@ -136,7 +141,8 @@ func (uc *MSSuppliersUseCase) Update(ctx context.Context, s *domain.Supplier) er
 // barcodes/prices — ON DELETE CASCADE, wiki.supplier_id — ON DELETE SET NULL.
 // Если поставщика нет — domain.ErrSupplierNotFound.
 func (uc *MSSuppliersUseCase) Delete(ctx context.Context, id string) error {
-	defer metrics.Track(trackPkg, "Delete")()
+	done := metrics.Track(trackPkg, "Delete")
+	defer done()
 	return uc.repo.DeleteSupplier(ctx, id)
 }
 

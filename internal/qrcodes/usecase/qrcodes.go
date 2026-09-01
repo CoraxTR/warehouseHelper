@@ -72,7 +72,8 @@ func NewQRUseCase(repo QRRepository, files PhotoFileStore, photosDir string, max
 // этого заказ сохраняется в БД; при любой ошибке уже созданные папки фото
 // откатываются, а БД не трогается. Возвращает количество сохранённых фото.
 func (u *QRUseCase) SavePhotos(ctx context.Context, orderNumber string, uploads []PhotoUpload) (int, error) {
-	defer metrics.Track(trackPkg, "SavePhotos")()
+	done := metrics.Track(trackPkg, "SavePhotos")
+	defer done()
 	orderNumber = strings.TrimSpace(orderNumber)
 	if orderNumber == "" {
 		return 0, ErrEmptyOrderNumber
@@ -128,7 +129,8 @@ func (u *QRUseCase) SavePhotos(ctx context.Context, orderNumber string, uploads 
 // выше «3»): более новые заказы имеют больший номер и оказываются выше.
 // Пустые строки сортируются в конец.
 func (u *QRUseCase) ListOrders(ctx context.Context) ([]domain.QROrder, error) {
-	defer metrics.Track(trackPkg, "ListOrders")()
+	done := metrics.Track(trackPkg, "ListOrders")
+	defer done()
 	orders, err := u.repo.GetOrdersWithPhotos(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("qrcodes: список заказов: %w", err)
@@ -155,7 +157,8 @@ func (u *QRUseCase) ListOrders(ctx context.Context) ([]domain.QROrder, error) {
 // логируются, но не прерывают обход; возвращает количество удалённых
 // записей (файлов новой схемы и папок старой схемы).
 func (u *QRUseCase) Cleanup(ctx context.Context) (int, error) {
-	defer metrics.Track(trackPkg, "Cleanup")()
+	done := metrics.Track(trackPkg, "Cleanup")
+	defer done()
 	u.mu.Lock()
 	today := time.Now().Format("02.01.2006")
 	if u.lastCheckDate == today {

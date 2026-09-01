@@ -57,7 +57,8 @@ type RefGoCheckResult struct {
 // Check сверяет реестр перевозчика (file) с заказами из базы за период
 // [dateFrom, dateTo] (включительно).
 func (uc *RefGoCheckAgainstUseCase) Check(ctx context.Context, dateFrom, dateTo string, file []byte) (*RefGoCheckResult, error) {
-	defer metrics.Track(trackPkg, "Check")()
+	done := metrics.Track(trackPkg, "Check")
+	defer done()
 	retrievesCount, fileOrders, err := uc.parser.ParseRefGoCheckFile(file)
 	if err != nil {
 		return nil, fmt.Errorf("не удалось разобрать файл реестра: %w", err)

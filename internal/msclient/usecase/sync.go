@@ -39,7 +39,8 @@ func NewSyncUsecase(client *client.MSAPIClient, repo OrdersRepository, converter
 }
 
 func (uc *SyncUseCase) SyncDeliverableOrders(ctx context.Context) {
-	defer metrics.Track(trackPkg, "SyncDeliverableOrders")()
+	done := metrics.Track(trackPkg, "SyncDeliverableOrders")
+	defer done()
 	refGoCounter := uc.Config.RGNextOrder
 
 	orders, err := uc.MSAPIClinet.FetchDeliverableOrders(ctx)

@@ -168,6 +168,6 @@ func TestMiddlewareKeepsWebSocketUpgrade(t *testing.T) {
 	if got := testutil.ToFloat64(httpRequestsTotal.WithLabelValues(http.MethodGet, "/ws", "101")); got != 1 {
 		t.Errorf("http_requests_total для ws = %v, want 1 (101)", got)
 	}
-	defer httpRequestsTotal.Reset()
-	defer httpRequestDuration.Reset()
+	httpRequestsTotal.Reset()
+	httpRequestDuration.Reset()
 }

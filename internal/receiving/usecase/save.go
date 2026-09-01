@@ -21,7 +21,8 @@ import (
 // отчёт. Коробка принимается «как есть» при расхождении (Mismatch) —
 // подсвечивается, но не блокирует.
 func (uc *ReceivingUseCase) Save(ctx context.Context, req receiving.SaveRequest) (*receiving.SaveResult, error) {
-	defer metrics.Track(trackPkg, "Save")()
+	done := metrics.Track(trackPkg, "Save")
+	defer done()
 	cache, err := uc.GetCache(ctx, req.SupplierID)
 	if err != nil {
 		return nil, err

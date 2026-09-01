@@ -74,7 +74,8 @@ func NewStockUseCase(repo Repository, pub Publisher) *StockUseCase {
 
 // WarmUp прогревает кэш всеми лотами при включении программы.
 func (uc *StockUseCase) WarmUp(ctx context.Context) error {
-	defer metrics.Track(trackPkg, "WarmUp")()
+	done := metrics.Track(trackPkg, "WarmUp")
+	defer done()
 	products, err := uc.repo.LoadAllStock(ctx)
 	if err != nil {
 		return fmt.Errorf("warm up stock cache: %w", err)
@@ -102,7 +103,8 @@ func (uc *StockUseCase) WarmUp(ctx context.Context) error {
 // (group_name, name) — клиент рендерит группы и строки последовательно.
 // Лоты внутри товара — по возрастанию best_before (ближайший срок слева).
 func (uc *StockUseCase) Snapshot() []stock.Product {
-	defer metrics.Track(trackPkg, "Snapshot")()
+	done := metrics.Track(trackPkg, "Snapshot")
+	defer done()
 	uc.mu.RLock()
 	out := make([]stock.Product, 0, len(uc.cache))
 	for _, p := range uc.cache {
@@ -128,7 +130,8 @@ func (uc *StockUseCase) Snapshot() []stock.Product {
 // generalManual/telegramManual: 0..100; nil — сброс (NULL). Значения копируются
 // в кэш, событие публикуется в хаб.
 func (uc *StockUseCase) SetManualDiscount(ctx context.Context, productID string, bestBefore time.Time, generalManual, telegramManual *int16) error {
-	defer metrics.Track(trackPkg, "SetManualDiscount")()
+	done := metrics.Track(trackPkg, "SetManualDiscount")
+	defer done()
 	if err := validateManualDiscount("скидка сайта", generalManual); err != nil {
 		return err
 	}
@@ -195,7 +198,8 @@ type PageContext struct {
 // резолвится из каталога), group — ограничение по коду группы (3 цифры).
 // Без параметров — полное обновление без ограничений.
 func (uc *StockUseCase) UpdatePageContext(ctx context.Context, productID, groupCode string) (PageContext, error) {
-	defer metrics.Track(trackPkg, "UpdatePageContext")()
+	done := metrics.Track(trackPkg, "UpdatePageContext")
+	defer done()
 	pc := PageContext{}
 	switch {
 	case productID != "":
@@ -235,7 +239,8 @@ type ReplaceRequest struct {
 // (best_before >= сегодня), у истёкших — сбрасываются; «просто»-скидки
 // не трогаются. Валидация и запись атомарны: любая ошибка → ничего не меняется.
 func (uc *StockUseCase) ReplaceStock(ctx context.Context, req ReplaceRequest) error {
-	defer metrics.Track(trackPkg, "ReplaceStock")()
+	done := metrics.Track(trackPkg, "ReplaceStock")
+	defer done()
 	if len(req.Scans) == 0 {
 		return errors.New("нет сканов")
 	}
@@ -607,7 +612,8 @@ func cloneInt16(v *int16) *int16 {
 // produced_on — COALESCE (известная дата не затирается). После записи —
 // кэш и события lot_upsert (клиент «Сроков» обновляется в реальном времени).
 func (uc *StockUseCase) AcceptStock(ctx context.Context, lots []stock.LotIn) error {
-	defer metrics.Track(trackPkg, "AcceptStock")()
+	done := metrics.Track(trackPkg, "AcceptStock")
+	defer done()
 	if err := validateAcceptLots(lots); err != nil {
 		return err
 	}
