@@ -94,15 +94,29 @@ func (pg *PGClient) lastTurnover(ctx context.Context, table, periodColumn, produ
 	return out, nil
 }
 
-// ProductsWithoutMonthlyTurnover — id товаров без единой строки месячного
-// оборота (стартовая дозаливка; порядок не важен).
-func (pg *PGClient) ProductsWithoutMonthlyTurnover(ctx context.Context) ([]string, error) {
-	rows, err := pg.Pool.Query(ctx, `
-        SELECT id
+// ProductsMissingMonthlyTurnover — id товаров, у которых в окне последних
+// завершённых месяцев (starts, YYYY-MM-DD) есть дыры: нет строки хотя бы за
+// один период окна (стартовая дозаливка; порядок не важен).
+func (pg *PGClient) ProductsMissingMonthlyTurnover(ctx context.Context, starts []string) ([]string, error) {
+	return pg.productsMissingTurnover(ctx, "product_monthly_turnover", "month_start", starts)
+}
+
+// ProductsMissingWeeklyTurnover — то же для недельного окна.
+func (pg *PGClient) ProductsMissingWeeklyTurnover(ctx context.Context, starts []string) ([]string, error) {
+	return pg.productsMissingTurnover(ctx, "product_weekly_turnover", "week_start", starts)
+}
+
+// productsMissingTurnover — общий запрос: товары каталога без строки хотя бы за
+// один период окна. starts — даты начал периодов; сравниваются как DATE
+// (без часовых поясов: строки 'YYYY-MM-DD' кастуются в date[]).
+func (pg *PGClient) productsMissingTurnover(ctx context.Context, table, periodColumn string, starts []string) ([]string, error) {
+	rows, err := pg.Pool.Query(ctx, fmt.Sprintf(`
+        SELECT DISTINCT p.id
         FROM products p
         WHERE NOT EXISTS (
-            SELECT 1 FROM product_monthly_turnover t WHERE t.product_id = p.id
-        )`)
+            SELECT 1 FROM %s t
+            WHERE t.product_id = p.id AND t.%s = ANY($1::date[])
+        )`, table, periodColumn), starts)
 	if err != nil {
 		return nil, err
 	}

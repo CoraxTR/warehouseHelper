@@ -21,6 +21,10 @@ func rowsEverywhere(_, _ time.Time, _ string, f client.ProfitFilter) []client.Pr
 	return rows
 }
 
+// fixedNow — фиксированные часы тестов: сентябрь 2026, последний завершённый
+// месяц — август 2026 (детерминизм счётчиков запросов).
+var fixedNow = time.Date(2026, time.September, 1, 12, 0, 0, 0, time.UTC)
+
 func TestBackfillProduct_MonthlyStopsAt12(t *testing.T) {
 	sales := &stubSales{rowsFn: rowsEverywhere}
 	repo := &stubRepo{}
@@ -28,17 +32,30 @@ func TestBackfillProduct_MonthlyStopsAt12(t *testing.T) {
 		"p1": {ID: "p1", UOM: "шт"},
 	}}
 	uc := NewUseCase(repo, sales, products)
+	uc.now = func() time.Time { return fixedNow }
 
 	if err := uc.backfillProduct(context.Background(), "p1"); err != nil {
 		t.Fatalf("backfillProduct() error: %v", err)
 	}
 
-	// Товар продавался каждый месяц прошлого года — 12 not null, дальше не идём.
+	// Товар продавался каждый из последних 12 завершённых месяцев —
+	// 12 not null, дальше вглубь не идём.
 	if sales.calls != 12 {
 		t.Errorf("запросов = %d, want 12 (стоп по 12 not null)", sales.calls)
 	}
 	if len(repo.upsM) != 12 {
 		t.Errorf("апсёртнуто строк = %d, want 12", len(repo.upsM))
+	}
+
+	// Первый период — последний ЗАВЕРШЁННЫЙ месяц (август 2026), а не январь
+	// прошлого года: окно средних наполняется свежими периодами.
+	if len(sales.froms) == 0 || !sales.froms[0].Equal(time.Date(2026, time.August, 1, 0, 0, 0, 0, time.UTC)) {
+		t.Errorf("первый период = %v, want 2026-08-01 (последний завершённый)", sales.froms[0])
+	}
+	for _, f := range sales.froms {
+		if f.Equal(time.Date(2026, time.September, 1, 0, 0, 0, 0, time.UTC)) {
+			t.Errorf("текущий незакрытый месяц не должен бэкфиллиться: %v", f)
+		}
 	}
 }
 
@@ -54,15 +71,16 @@ func TestBackfillProduct_Reaches2014(t *testing.T) {
 		"p1": {ID: "p1", UOM: "шт"},
 	}}
 	uc := NewUseCase(repo, sales, products)
+	uc.now = func() time.Time { return fixedNow }
 
 	if err := uc.backfillProduct(context.Background(), "p1"); err != nil {
 		t.Fatalf("backfillProduct() error: %v", err)
 	}
 
-	// 12 лет (2025..2014) × 12 месяцев = 144 запроса; 12 not null не набрались —
-	// упёрлись в 2014.
-	if sales.calls != 144 {
-		t.Errorf("запросов = %d, want 144 (предел 2014)", sales.calls)
+	// От последнего завершённого (авг 2026) вглубь до 2014: 8 месяцев 2026 +
+	// 12 лет × 12 = 152 запроса; 12 not null не набрались — упёрлись в 2014.
+	if sales.calls != 152 {
+		t.Errorf("запросов = %d, want 152 (предел 2014)", sales.calls)
 	}
 	if len(repo.upsM) != 1 {
 		t.Errorf("апсёртнуто строк = %d, want 1 (март 2014)", len(repo.upsM))
@@ -76,6 +94,7 @@ func TestBackfillProduct_WeeklyOnlyForTrackWeekly(t *testing.T) {
 		"p1": {ID: "p1", UOM: "шт", TrackWeekly: true},
 	}}
 	uc := NewUseCase(repo, sales, products)
+	uc.now = func() time.Time { return fixedNow }
 
 	if err := uc.backfillProduct(context.Background(), "p1"); err != nil {
 		t.Fatalf("backfillProduct() error: %v", err)
@@ -99,13 +118,14 @@ func TestBackfillProduct_NoSales(t *testing.T) {
 		"p1": {ID: "p1", UOM: "шт"},
 	}}
 	uc := NewUseCase(repo, sales, products)
+	uc.now = func() time.Time { return fixedNow }
 
 	if err := uc.backfillProduct(context.Background(), "p1"); err != nil {
 		t.Fatalf("backfillProduct() error: %v", err)
 	}
 
-	if sales.calls != 144 {
-		t.Errorf("запросов = %d, want 144 (продаж нет — прошли до 2014)", sales.calls)
+	if sales.calls != 152 {
+		t.Errorf("запросов = %d, want 152 (продаж нет — прошли до 2014)", sales.calls)
 	}
 	if len(repo.upsM) != 0 {
 		t.Errorf("апсёртнуто строк = %d, want 0", len(repo.upsM))
@@ -145,19 +165,21 @@ func TestBackfillProduct_NotInCatalog(t *testing.T) {
 
 func TestBackfillMissing_GroupsAndSingles(t *testing.T) {
 	sales := &stubSales{rowsFn: rowsEverywhere}
-	repo := &stubRepo{without: []string{"p1", "p2", "p3"}}
+	repo := &stubRepo{missingM: []string{"p1", "p2", "p3"}}
 	products := &stubProducts{byID: map[string]averagesales.TurnoverProduct{
 		"p1": {ID: "p1", UOM: "шт", FolderID: "f1"},
 		"p2": {ID: "p2", UOM: "шт", FolderID: "f1"},
 		"p3": {ID: "p3", UOM: "шт"},
 	}}
 	uc := NewUseCase(repo, sales, products)
+	uc.now = func() time.Time { return fixedNow }
 
 	if err := uc.backfillMissing(context.Background()); err != nil {
 		t.Fatalf("backfillMissing() error: %v", err)
 	}
 
-	// Месяцы прошлого года: 12 запросов по группе f1 (productFolder) + 12 по пачке [p3].
+	// Последние 12 завершённых месяцев: 12 запросов по группе f1 (productFolder)
+	// + 12 по пачке [p3]; все товары продавались каждый месяц — стоп по 12.
 	groupCalls, singleCalls := 0, 0
 	for _, f := range sales.filters {
 		if f.ProductFolderID == "f1" {
@@ -174,9 +196,88 @@ func TestBackfillMissing_GroupsAndSingles(t *testing.T) {
 		t.Errorf("запросов пачки = %d, want 12", singleCalls)
 	}
 
-	// 3 товара × 12 месяцев прошлого года.
+	// 3 товара × 12 завершённых месяцев окна.
 	if len(repo.upsM) != 36 {
 		t.Errorf("апсёртнуто строк = %d, want 36 (3 товара × 12 месяцев)", len(repo.upsM))
+	}
+}
+
+// TestBackfillMissing_WeeklyIndependent — недельная дозаливка не зависит от
+// месячной: месячных дыр нет, недельная селекция вернула товар — недели
+// дозаливаются (раньше недельный набор был подмножеством месячного и такой
+// товар не дозаливался никогда).
+func TestBackfillMissing_WeeklyIndependent(t *testing.T) {
+	sales := &stubSales{rowsFn: rowsEverywhere}
+	repo := &stubRepo{missingW: []string{"p1"}}
+	products := &stubProducts{byID: map[string]averagesales.TurnoverProduct{
+		"p1": {ID: "p1", UOM: "шт", TrackWeekly: true},
+	}}
+	uc := NewUseCase(repo, sales, products)
+	uc.now = func() time.Time { return fixedNow }
+
+	if err := uc.backfillMissing(context.Background()); err != nil {
+		t.Fatalf("backfillMissing() error: %v", err)
+	}
+
+	if sales.calls != 5 {
+		t.Errorf("запросов = %d, want 5 (недельное окно, стоп по 5)", sales.calls)
+	}
+	if len(repo.upsW) != 5 {
+		t.Errorf("недельных строк = %d, want 5", len(repo.upsW))
+	}
+}
+
+// TestBackfillMissing_WeeklyFiltersTrackWeekly — недельная селекция может
+// вернуть товар без track_weekly (у него просто нет недельных строк) —
+// он не должен попасть в недельную дозаливку.
+func TestBackfillMissing_WeeklyFiltersTrackWeekly(t *testing.T) {
+	sales := &stubSales{rowsFn: rowsEverywhere}
+	repo := &stubRepo{missingW: []string{"p1"}}
+	products := &stubProducts{byID: map[string]averagesales.TurnoverProduct{
+		"p1": {ID: "p1", UOM: "шт"}, // TrackWeekly = false
+	}}
+	uc := NewUseCase(repo, sales, products)
+	uc.now = func() time.Time { return fixedNow }
+
+	if err := uc.backfillMissing(context.Background()); err != nil {
+		t.Fatalf("backfillMissing() error: %v", err)
+	}
+
+	if sales.calls != 0 {
+		t.Errorf("запросов = %d, want 0 (не track_weekly — не дозаливаем)", sales.calls)
+	}
+}
+
+func TestCompletedPeriodStarts(t *testing.T) {
+	now := time.Date(2026, time.September, 1, 12, 0, 0, 0, time.UTC)
+
+	monthly := completedPeriodStarts(intervalMonth, 3, now)
+	wantMonthly := []time.Time{
+		time.Date(2026, time.August, 1, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, time.July, 1, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, time.June, 1, 0, 0, 0, 0, time.UTC),
+	}
+	if len(monthly) != 3 {
+		t.Fatalf("месячных периодов = %d, want 3", len(monthly))
+	}
+	for i, want := range wantMonthly {
+		if !monthly[i].Equal(want) {
+			t.Errorf("месяц[%d] = %v, want %v", i, monthly[i], want)
+		}
+	}
+
+	weekly := completedPeriodStarts(intervalWeek, 2, now)
+	wantWeekly := []time.Time{
+		time.Date(2026, time.August, 24, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, time.August, 17, 0, 0, 0, 0, time.UTC),
+	}
+	if len(weekly) != 2 {
+		t.Fatalf("недельных периодов = %d, want 2", len(weekly))
+	}
+	for i, want := range wantWeekly {
+		if !weekly[i].Equal(want) {
+			t.Errorf("неделя[%d] = %v, want %v", i, weekly[i], want)
+		}
 	}
 }
 

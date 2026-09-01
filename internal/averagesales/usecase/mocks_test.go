@@ -33,14 +33,15 @@ func (s *stubSales) FetchProfitTurnover(_ context.Context, from, to time.Time, i
 
 // stubRepo — заглушка хранилища оборотов.
 type stubRepo struct {
-	monthly []averagesales.TurnoverRow // возвращается из LastMonthlyTurnover
-	weekly  []averagesales.TurnoverRow
-	upsM    []averagesales.TurnoverRow
-	upsW    []averagesales.TurnoverRow
-	hasM    bool
-	hasW    bool
-	without []string
-	err     error
+	monthly  []averagesales.TurnoverRow // возвращается из LastMonthlyTurnover
+	weekly   []averagesales.TurnoverRow
+	upsM     []averagesales.TurnoverRow
+	upsW     []averagesales.TurnoverRow
+	hasM     bool
+	hasW     bool
+	missingM []string // дыры в месячном окне (селекция дозаливки)
+	missingW []string // дыры в недельном окне
+	err      error
 }
 
 func (r *stubRepo) UpsertMonthlyTurnover(_ context.Context, rows []averagesales.TurnoverRow) error {
@@ -75,8 +76,12 @@ func (r *stubRepo) HasWeeklyTurnover(_ context.Context, _ string) (bool, error) 
 	return r.hasW, nil
 }
 
-func (r *stubRepo) ProductsWithoutMonthlyTurnover(_ context.Context) ([]string, error) {
-	return r.without, nil
+func (r *stubRepo) ProductsMissingMonthlyTurnover(_ context.Context, _ []string) ([]string, error) {
+	return r.missingM, nil
+}
+
+func (r *stubRepo) ProductsMissingWeeklyTurnover(_ context.Context, _ []string) ([]string, error) {
+	return r.missingW, nil
 }
 
 // stubProducts — заглушка каталога.

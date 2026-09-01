@@ -26,9 +26,12 @@ type Repository interface {
 	LastMonthlyTurnover(ctx context.Context, productID string, n int) ([]averagesales.TurnoverRow, error)
 	// LastWeeklyTurnover — последние n строк недельного оборота товара.
 	LastWeeklyTurnover(ctx context.Context, productID string, n int) ([]averagesales.TurnoverRow, error)
-	// ProductsWithoutMonthlyTurnover — id товаров без единой строки месячного оборота
-	// (стартовая дозаливка).
-	ProductsWithoutMonthlyTurnover(ctx context.Context) ([]string, error)
+	// ProductsMissingMonthlyTurnover — id товаров, у которых в окне последних
+	// завершённых месяцев (starts, YYYY-MM-DD) есть дыры: нет строки хотя бы
+	// за один период окна (стартовая дозаливка; порядок не важен).
+	ProductsMissingMonthlyTurnover(ctx context.Context, starts []string) ([]string, error)
+	// ProductsMissingWeeklyTurnover — то же для недельного окна.
+	ProductsMissingWeeklyTurnover(ctx context.Context, starts []string) ([]string, error)
 	// HasMonthlyTurnover — есть ли у товара хоть одна строка месячного оборота.
 	HasMonthlyTurnover(ctx context.Context, productID string) (bool, error)
 	// HasWeeklyTurnover — есть ли у товара хоть одна строка недельного оборота.
@@ -55,11 +58,12 @@ type UseCase struct {
 	ms       SalesClient
 	products ProductReader
 	backfill *backfillRunner
+	now      func() time.Time // часы модуля (тесты подменяют фиксированным временем)
 }
 
 // NewUseCase создаёт юзкейс: хранилище, клиент отчёта МС, читатель каталога.
 func NewUseCase(repo Repository, ms SalesClient, products ProductReader) *UseCase {
-	uc := &UseCase{repo: repo, ms: ms, products: products}
+	uc := &UseCase{repo: repo, ms: ms, products: products, now: time.Now}
 	uc.backfill = newBackfillRunner(uc)
 	return uc
 }
@@ -92,7 +96,7 @@ func (uc *UseCase) AverageSales(ctx context.Context, productID string) (*float64
 	}
 
 	// Набор интервалов рефреша: даты вытащенных строк + текущий незакрытый период.
-	periodStart := currentPeriodStart(interval, time.Now())
+	periodStart := currentPeriodStart(interval, uc.now())
 	dates := map[time.Time]struct{}{periodStart: {}}
 	for _, r := range rows {
 		dates[r.PeriodStart] = struct{}{}
