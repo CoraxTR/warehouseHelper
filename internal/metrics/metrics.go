@@ -7,6 +7,9 @@
 package metrics
 
 import (
+	"bufio"
+	"errors"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -129,6 +132,42 @@ func ObserveMSRequest(endpoint, status string, d time.Duration) {
 	msRequestDuration.WithLabelValues(endpoint).Observe(d.Seconds())
 }
 
+// funcCallsTotal — количество вызовов функций приложения (по пакету и имени).
+// Инструментируются входные точки usecase-слоя модулей: это «функции в
+// пакетах», по которым видно, что вызывается чаще всего (см. Track).
+var funcCallsTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "func_calls_total",
+		Help: "Количество вызовов функций приложения (пакет, функция).",
+	},
+	[]string{"package", "function"},
+)
+
+// funcCallDuration — длительность вызовов функций приложения.
+var funcCallDuration = promauto.NewHistogramVec(
+	prometheus.HistogramOpts{
+		Name:    "func_call_duration_seconds",
+		Help:    "Длительность вызовов функций приложения в секундах.",
+		Buckets: prometheus.DefBuckets,
+	},
+	[]string{"package", "function"},
+)
+
+// Track возвращает замыкание для замера одного вызова функции:
+//
+//	defer metrics.Track("stock", "SetManualDiscount")()
+//
+// Учитывает вызов в func_calls_total и длительность в func_call_duration_seconds.
+// Считает только те функции, где вызывается, — полный охват не обязателен,
+// на дашборде видно по лейблу package, какой модуль покрыт.
+func Track(pkg, fn string) func() {
+	start := time.Now()
+	return func() {
+		funcCallsTotal.WithLabelValues(pkg, fn).Inc()
+		funcCallDuration.WithLabelValues(pkg, fn).Observe(time.Since(start).Seconds())
+	}
+}
+
 // Handler возвращает HTTP-обработчик /metrics (стандартные go_*, process_*
 // метрики плюс зарегистрированные выше счётчики).
 func Handler() http.Handler {
@@ -136,18 +175,40 @@ func Handler() http.Handler {
 }
 
 // statusRecorder запоминает код ответа, чтобы middleware мог пометить
-// запрос статусом (для http_requests_total).
+// запрос статусом (для http_requests_total), и пробрасывает hijack
+// нижележащему writer (без этого вебсокеты падают с 500).
 type statusRecorder struct {
 	http.ResponseWriter
 
-	status int
+	status   int
+	hijacked bool
 }
 
 // WriteHeader фиксирует код ответа до передачи нижележащему writer.
+// После hijack (вебсокет) ответ уже пишется напрямую в соединение — не трогаем.
 func (r *statusRecorder) WriteHeader(code int) {
+	if r.hijacked {
+		return
+	}
 	r.status = code
 	r.ResponseWriter.WriteHeader(code)
 }
+
+// Hijack отдаёт соединение нижележащему writer (http.Hijacker). Без этого
+// обёрнутый middleware ResponseWriter не реализует http.Hijacker, и
+// gorilla/websocket отвечает 500 «response does not implement http.Hijacker».
+func (r *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	h, ok := r.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, errors.New("response does not implement http.Hijacker")
+	}
+	r.hijacked = true
+	return h.Hijack()
+}
+
+// Компиляционная проверка: обёртка обязана сохранять hijack-возможность
+// нижележащего ResponseWriter (иначе регрессия ломает вебсокеты молча).
+var _ http.Hijacker = (*statusRecorder)(nil)
 
 // Middleware оборачивает весь роутер: считает запросы и длительность
 // обработки по методу и нормализованному пути.
@@ -157,6 +218,9 @@ func Middleware(next http.Handler) http.Handler {
 
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(rec, req)
+		if rec.hijacked {
+			rec.status = http.StatusSwitchingProtocols
+		}
 
 		path := NormalizePath(req.URL.Path)
 		httpRequestsTotal.WithLabelValues(req.Method, path, strconv.Itoa(rec.status)).Inc()

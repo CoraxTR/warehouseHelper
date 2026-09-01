@@ -29,14 +29,14 @@ type stockPageData struct {
 // StockDatesPage — GET /ms/dates: страница «Сроки».
 func (h *Handler) StockDatesPage(w http.ResponseWriter, _ *http.Request) {
 	if err := stockDatesTmpl.Execute(w, stockPageData{}); err != nil {
-		slog.Info(fmt.Sprintf("stock_dates template: %v", err))
+		slog.Error(fmt.Sprintf("stock_dates template: %v", err))
 	}
 }
 
 // StockShortPage — GET /ms/dates/short: «Шорт-лист» (только short_list=true).
 func (h *Handler) StockShortPage(w http.ResponseWriter, _ *http.Request) {
 	if err := stockDatesTmpl.Execute(w, stockPageData{ShortList: true}); err != nil {
-		slog.Info(fmt.Sprintf("stock_dates template: %v", err))
+		slog.Error(fmt.Sprintf("stock_dates template: %v", err))
 	}
 }
 
@@ -45,7 +45,7 @@ func (h *Handler) StockShortPage(w http.ResponseWriter, _ *http.Request) {
 func (h *Handler) StockDatesWS(w http.ResponseWriter, r *http.Request) {
 	snapshot, err := json.Marshal(stockws.Message{Type: "snapshot", Rows: h.stockUC.Snapshot()})
 	if err != nil {
-		slog.Info(fmt.Sprintf("stock ws snapshot: %v", err))
+		slog.Error(fmt.Sprintf("stock ws snapshot: %v", err))
 		http.Error(w, "не удалось собрать снапшот", http.StatusInternalServerError)
 
 		return
