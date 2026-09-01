@@ -46,6 +46,7 @@ type DIContainer struct {
 	tempcleaner  *tempcleaner.TempCleaner
 	xlsximporter rgucase.RefGoXlsxParser
 	tg           *telegram.Notifier
+	stockStatus  *stockStatusNotifier
 
 	// Юзкейсы
 	syncUC          *msucase.SyncUseCase
@@ -197,6 +198,16 @@ func (d *DIContainer) TelegramNotifier() *telegram.Notifier {
 	return d.tg
 }
 
+// StockStatusNotifier — уведомления о смене наличия в общий канал telegram
+// (имя товара — из каталога; без TG_COMMON_CHAT_ID — молчаливый no-op).
+func (d *DIContainer) StockStatusNotifier() *stockStatusNotifier {
+	if d.stockStatus == nil {
+		d.stockStatus = NewStockStatusNotifier(d.TelegramNotifier(), d.GoodsUC())
+	}
+
+	return d.stockStatus
+}
+
 func (d *DIContainer) ShipmentEnsurer() *msucase.OrderShipmentEnsurer {
 	if d.shipmentEnsurer == nil {
 		d.shipmentEnsurer = msucase.NewOrderShipmentEnsurer(d.MSClient(), d.TelegramNotifier())
@@ -298,7 +309,7 @@ func (d *DIContainer) OrderCoeffUC() *oucase.UseCase {
 // SoldOutRollbackNotifier (методы SoldOut, Unavailable, RollbackSoldOut).
 func (d *DIContainer) DayStateUC() *ducecase.UseCase {
 	if d.dayStateUC == nil {
-		d.dayStateUC = ducecase.NewUseCase(d.OrdersRepository(), d.GoodsUC(), d.OrderCoeffUC(), d.OrderCoeffUC(), d.OrderCoeffUC())
+		d.dayStateUC = ducecase.NewUseCase(d.OrdersRepository(), d.GoodsUC(), d.OrderCoeffUC(), d.OrderCoeffUC(), d.OrderCoeffUC(), d.StockStatusNotifier())
 	}
 
 	return d.dayStateUC

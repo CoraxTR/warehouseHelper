@@ -75,9 +75,11 @@ func DiscountFromLots(lots []LotState) *int16 {
 }
 
 // ApplyStockChange пересчитывает строку дня после изменения остатков.
-// Возвращает обновлённую строку и soldOutNow — наблюдаемый переход
-// «было в наличии → стало нет»: ставит sold_out_today и требует эмита
-// SoldOut в ordercoeff.
+// Возвращает обновлённую строку и два наблюдаемых перехода:
+//   - soldOutNow — «было в наличии → стало нет»: ставит sold_out_today
+//     и требует эмита SoldOut в ordercoeff;
+//   - backInStock — «не было в наличии → появилось» (только уведомление,
+//     маркер sold_out_today НЕ сбрасывается: «закончилась сегодня» — факт дня).
 //
 // Правила:
 //   - in_stock — пересчёт из лотов (всегда известен после события);
@@ -86,7 +88,7 @@ func DiscountFromLots(lots []LotState) *int16 {
 //   - sold_out_today — сохраняется; устанавливается при переходе в 0,
 //     НЕ сбрасывается приходом (сброс — только RollbackSoldOut);
 //   - orderable и discount_start событие не трогает.
-func ApplyStockChange(cur DayState, lots []LotState) (next DayState, soldOutNow bool) {
+func ApplyStockChange(cur DayState, lots []LotState) (next DayState, soldOutNow, backInStock bool) {
 	next = cur
 
 	inStock := InStockFromLots(lots)
@@ -95,6 +97,9 @@ func ApplyStockChange(cur DayState, lots []LotState) (next DayState, soldOutNow 
 		next.SoldOutToday = true
 		soldOutNow = true
 	}
+	if cur.InStock != nil && !*cur.InStock && inStock {
+		backInStock = true
+	}
 
 	newDiscount := DiscountFromLots(lots)
 	if isDiscountIncrease(cur.Discount, newDiscount) {
@@ -102,7 +107,7 @@ func ApplyStockChange(cur DayState, lots []LotState) (next DayState, soldOutNow 
 	}
 	next.Discount = newDiscount
 
-	return next, soldOutNow
+	return next, soldOutNow, backInStock
 }
 
 // isDiscountIncrease — повышение скидки: новое значение строго больше

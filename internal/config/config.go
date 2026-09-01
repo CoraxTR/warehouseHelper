@@ -456,6 +456,7 @@ type TelegramConfig struct {
 	BotToken        string
 	WarehouseChatID int64
 	EveryoneChatID  int64
+	CommonChatID    int64
 }
 
 func loadTelegramConfig() *TelegramConfig {
@@ -463,6 +464,7 @@ func loadTelegramConfig() *TelegramConfig {
 		BotToken:        os.Getenv("TG_BOT_TOKEN"),
 		WarehouseChatID: parseEnvInt64("TG_WAREHOUSE_CHAT_ID"),
 		EveryoneChatID:  parseEnvInt64("TG_EVERYONE_CHAT_ID"),
+		CommonChatID:    parseEnvInt64("TG_COMMON_CHAT_ID"),
 	}
 }
 

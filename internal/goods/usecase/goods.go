@@ -442,6 +442,19 @@ func (uc *GoodsUseCase) GetProduct(ctx context.Context, id string) (*domain.Prod
 	return p, nil
 }
 
+// ProductName — название товара каталога по id (для уведомлений модулей,
+// например смены наличия в daystate; продукты читает только каталог).
+func (uc *GoodsUseCase) ProductName(ctx context.Context, productID string) (string, error) {
+	done := metrics.Track(trackPkg, "ProductName")
+	defer done()
+	p, err := uc.repo.GetProduct(ctx, productID)
+	if err != nil {
+		return "", err
+	}
+
+	return p.Name, nil
+}
+
 // SaveProduct сохраняет ручные правки позиции (upsert по id).
 // Новый товар (первичное добавление) уходит в фоновый бэкфилл оборотов.
 func (uc *GoodsUseCase) SaveProduct(ctx context.Context, p *domain.Product) error {

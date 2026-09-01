@@ -29,6 +29,7 @@ type Notifier struct {
 	botToken        string
 	warehouseChatID int64
 	everyoneChatID  int64
+	commonChatID    int64
 }
 
 // NewNotifier собирает Notifier из конфигурации Telegram.
@@ -39,6 +40,7 @@ func NewNotifier(cfg *config.TelegramConfig) *Notifier {
 		botToken:        cfg.BotToken,
 		warehouseChatID: cfg.WarehouseChatID,
 		everyoneChatID:  cfg.EveryoneChatID,
+		commonChatID:    cfg.CommonChatID,
 	}
 }
 
@@ -49,7 +51,7 @@ func (n *Notifier) NotifyWarehouse(text string) error {
 		return nil
 	}
 
-	return n.sendMessage(n.warehouseChatID, text)
+	return n.sendMessage(context.Background(), n.warehouseChatID, text)
 }
 
 // NotifyEveryone отправляет сообщение в общий чат сотрудников.
@@ -59,10 +61,21 @@ func (n *Notifier) NotifyEveryone(text string) error {
 		return nil
 	}
 
-	return n.sendMessage(n.everyoneChatID, text)
+	return n.sendMessage(context.Background(), n.everyoneChatID, text)
 }
 
-func (n *Notifier) sendMessage(chatID int64, text string) error {
+// NotifyCommon отправляет сообщение в общий канал (уведомления модулей,
+// например смена наличия товара). Без настроенного токена или chat_id
+// общего канала — no-op.
+func (n *Notifier) NotifyCommon(ctx context.Context, text string) error {
+	if n.botToken == "" || n.commonChatID == 0 {
+		return nil
+	}
+
+	return n.sendMessage(ctx, n.commonChatID, text)
+}
+
+func (n *Notifier) sendMessage(ctx context.Context, chatID int64, text string) error {
 	payload, err := json.Marshal(map[string]any{
 		"chat_id": chatID,
 		"text":    text,
@@ -73,7 +86,7 @@ func (n *Notifier) sendMessage(chatID int64, text string) error {
 
 	url := fmt.Sprintf("%s/bot%s/sendMessage", n.apiBaseURL, n.botToken)
 
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, url, bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
 	if err != nil {
 		return fmt.Errorf("failed to create telegram request: %w", err)
 	}

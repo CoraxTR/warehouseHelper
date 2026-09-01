@@ -68,34 +68,34 @@ func TestApplyStockChange_StockTransitions(t *testing.T) {
 	// Переход «было в наличии → стало нет»: маркер + эмит.
 	cur := baseDay()
 	cur.InStock = b(true)
-	next, soldOutNow := ApplyStockChange(cur, nil)
-	if !next.SoldOutToday || !soldOutNow || next.InStock == nil || *next.InStock {
-		t.Errorf("переход в ноль: soldOutToday=%v soldOutNow=%v inStock=%v", next.SoldOutToday, soldOutNow, next.InStock)
+	next, soldOutNow, backInStock := ApplyStockChange(cur, nil)
+	if !next.SoldOutToday || !soldOutNow || backInStock || next.InStock == nil || *next.InStock {
+		t.Errorf("переход в ноль: soldOutToday=%v soldOutNow=%v backInStock=%v inStock=%v", next.SoldOutToday, soldOutNow, backInStock, next.InStock)
 	}
 
 	// Уже закончился — перехода нет, эмита нет.
 	cur = baseDay()
 	cur.InStock = b(false)
 	cur.SoldOutToday = true
-	next, soldOutNow = ApplyStockChange(cur, nil)
-	if soldOutNow || !next.SoldOutToday {
-		t.Errorf("было нет в наличии: soldOutNow=%v soldOutToday=%v", soldOutNow, next.SoldOutToday)
+	next, soldOutNow, backInStock = ApplyStockChange(cur, nil)
+	if soldOutNow || backInStock || !next.SoldOutToday {
+		t.Errorf("было нет в наличии: soldOutNow=%v backInStock=%v soldOutToday=%v", soldOutNow, backInStock, next.SoldOutToday)
 	}
 
-	// Приход не сбрасывает маркер и не эмитит.
+	// Приход после sold_out: маркер НЕ сбрасывается, но «появился» — да.
 	cur = baseDay()
 	cur.InStock = b(false)
 	cur.SoldOutToday = true
-	next, soldOutNow = ApplyStockChange(cur, []LotState{{Qty: 5}})
-	if soldOutNow || !next.SoldOutToday || next.InStock == nil || !*next.InStock {
-		t.Errorf("приход после sold_out: soldOutNow=%v soldOutToday=%v inStock=%v", soldOutNow, next.SoldOutToday, next.InStock)
+	next, soldOutNow, backInStock = ApplyStockChange(cur, []LotState{{Qty: 5}})
+	if soldOutNow || !backInStock || !next.SoldOutToday || next.InStock == nil || !*next.InStock {
+		t.Errorf("приход после sold_out: soldOutNow=%v backInStock=%v soldOutToday=%v inStock=%v", soldOutNow, backInStock, next.SoldOutToday, next.InStock)
 	}
 
 	// Неизвестное состояние (будущая строка) → становится известно, эмита нет.
 	cur = baseDay() // InStock nil
-	next, soldOutNow = ApplyStockChange(cur, []LotState{{Qty: 2}})
-	if soldOutNow || next.InStock == nil || !*next.InStock {
-		t.Errorf("nil → в наличии: soldOutNow=%v inStock=%v", soldOutNow, next.InStock)
+	next, soldOutNow, backInStock = ApplyStockChange(cur, []LotState{{Qty: 2}})
+	if soldOutNow || backInStock || next.InStock == nil || !*next.InStock {
+		t.Errorf("nil → в наличии: soldOutNow=%v backInStock=%v inStock=%v", soldOutNow, backInStock, next.InStock)
 	}
 }
 
@@ -106,7 +106,7 @@ func TestApplyStockChange_Discounts(t *testing.T) {
 	cur.InStock = b(true)
 	cur.Discount = i16(5)
 	cur.DiscountIncreases = []int16{7}
-	next, _ := ApplyStockChange(cur, []LotState{{Qty: 1, EffectiveGeneral: i16(10)}})
+	next, _, _ := ApplyStockChange(cur, []LotState{{Qty: 1, EffectiveGeneral: i16(10)}})
 	if next.Discount == nil || *next.Discount != 10 {
 		t.Errorf("discount = %v, want 10", next.Discount)
 	}
@@ -117,7 +117,7 @@ func TestApplyStockChange_Discounts(t *testing.T) {
 	// Скидка появилась (NULL → 7): повышение.
 	cur = baseDay()
 	cur.InStock = b(true)
-	next, _ = ApplyStockChange(cur, []LotState{{Qty: 1, EffectiveGeneral: i16(7)}})
+	next, _, _ = ApplyStockChange(cur, []LotState{{Qty: 1, EffectiveGeneral: i16(7)}})
 	if !reflect.DeepEqual(next.DiscountIncreases, []int16{7}) {
 		t.Errorf("increases = %v, want [7]", next.DiscountIncreases)
 	}
@@ -125,7 +125,7 @@ func TestApplyStockChange_Discounts(t *testing.T) {
 	// Скидка ноль (NULL → 0): значение, но НЕ повышение.
 	cur = baseDay()
 	cur.InStock = b(true)
-	next, _ = ApplyStockChange(cur, []LotState{{Qty: 1, EffectiveGeneral: i16(0)}})
+	next, _, _ = ApplyStockChange(cur, []LotState{{Qty: 1, EffectiveGeneral: i16(0)}})
 	if next.Discount == nil || *next.Discount != 0 {
 		t.Errorf("discount = %v, want 0", next.Discount)
 	}
@@ -138,7 +138,7 @@ func TestApplyStockChange_Discounts(t *testing.T) {
 	cur.InStock = b(true)
 	cur.Discount = i16(10)
 	cur.DiscountIncreases = []int16{10}
-	next, _ = ApplyStockChange(cur, []LotState{{Qty: 1, EffectiveGeneral: i16(5)}})
+	next, _, _ = ApplyStockChange(cur, []LotState{{Qty: 1, EffectiveGeneral: i16(5)}})
 	if next.Discount == nil || *next.Discount != 5 {
 		t.Errorf("discount = %v, want 5", next.Discount)
 	}
@@ -150,7 +150,7 @@ func TestApplyStockChange_Discounts(t *testing.T) {
 	cur = baseDay()
 	cur.InStock = b(true)
 	cur.Discount = i16(10)
-	next, _ = ApplyStockChange(cur, []LotState{{Qty: 1}})
+	next, _, _ = ApplyStockChange(cur, []LotState{{Qty: 1}})
 	if next.Discount != nil {
 		t.Errorf("discount = %v, want nil", next.Discount)
 	}
