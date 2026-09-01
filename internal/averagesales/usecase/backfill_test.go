@@ -234,7 +234,7 @@ func TestBackfillMissing_WeeklyFiltersTrackWeekly(t *testing.T) {
 	sales := &stubSales{rowsFn: rowsEverywhere}
 	repo := &stubRepo{missingW: []string{"p1"}}
 	products := &stubProducts{byID: map[string]averagesales.TurnoverProduct{
-		"p1": {ID: "p1", UOM: "шт"}, // TrackWeekly = false
+		"p1": {ID: "p1", UOM: "шт"}, // без track_weekly — в недельную дозаливку не берём
 	}}
 	uc := NewUseCase(repo, sales, products)
 	uc.now = func() time.Time { return fixedNow }

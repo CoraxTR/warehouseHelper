@@ -289,9 +289,8 @@ func (uc *UseCase) backfillMissing(ctx context.Context) error {
 }
 
 // splitByFolder — товары дозаливки на группы (по folder_id) и безгрупповые.
-func splitByFolder(active map[string]averagesales.TurnoverProduct) (map[string][]string, []string) {
-	groups := make(map[string][]string)
-	var singles []string
+func splitByFolder(active map[string]averagesales.TurnoverProduct) (groups map[string][]string, singles []string) {
+	groups = make(map[string][]string, len(active))
 	for id, p := range active {
 		if p.FolderID != "" {
 			groups[p.FolderID] = append(groups[p.FolderID], id)
