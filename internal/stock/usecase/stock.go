@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"sync"
@@ -53,23 +54,54 @@ type Publisher interface {
 	PublishStockChange(e stock.Event)
 }
 
+// DayStateRecorder — наблюдатель состояния товара по дням (модуль daystate):
+// вызывается после каждой записи остатков, чтобы пересчитать строку дня
+// (наличие, скидки, sold_out). Ошибка наблюдателя операцию стока не роняет.
+type DayStateRecorder interface {
+	OnStockChanged(ctx context.Context, productID string) error
+}
+
 // maxDiscount — верхняя граница скидки в процентах (CHECK в БД дублирует).
 const maxDiscount = 100
 
 // StockUseCase — кэш остатков + сценарии записи. Кэш — read-модель:
 // единственный писатель — сам usecase (репо → кэш → publish).
 type StockUseCase struct {
-	repo Repository
-	pub  Publisher
+	repo     Repository
+	pub      Publisher
+	dayState DayStateRecorder
 
 	mu     sync.RWMutex
 	cache  map[string]*stock.Product // product_id → товар (Lots по возрастанию best_before)
 	byCode map[string]string         // internal_code → product_id (шов для будущей приёмки)
 }
 
-// NewStockUseCase создаёт сценарий с хранилищем и публикатором (хаб может быть nil).
-func NewStockUseCase(repo Repository, pub Publisher) *StockUseCase {
-	return &StockUseCase{repo: repo, pub: pub}
+// NewStockUseCase создаёт сценарий с хранилищем и публикатором (хаб может
+// быть nil); dayState — наблюдатель состояния по дням (может быть nil).
+func NewStockUseCase(repo Repository, pub Publisher, dayState DayStateRecorder) *StockUseCase {
+	return &StockUseCase{repo: repo, pub: pub, dayState: dayState}
+}
+
+// notifyDayState уведомляет daystate об изменении остатков товаров (без
+// дубликатов). Наблюдатель: ошибка только логируется, операция стока не
+// роняется — строка дня пересчитается при следующем касании товара.
+func (uc *StockUseCase) notifyDayState(ctx context.Context, productIDs ...string) {
+	if uc.dayState == nil {
+		return
+	}
+	seen := make(map[string]struct{}, len(productIDs))
+	for _, pid := range productIDs {
+		if pid == "" {
+			continue
+		}
+		if _, ok := seen[pid]; ok {
+			continue
+		}
+		seen[pid] = struct{}{}
+		if err := uc.dayState.OnStockChanged(ctx, pid); err != nil {
+			slog.Info(fmt.Sprintf("stock: daystate %s: %v", pid, err))
+		}
+	}
 }
 
 // WarmUp прогревает кэш всеми лотами при включении программы.
@@ -173,6 +205,7 @@ func (uc *StockUseCase) SetManualDiscount(ctx context.Context, productID string,
 	if uc.pub != nil {
 		uc.pub.PublishStockChange(stock.Event{Kind: stock.EventLotUpsert, ProductID: productID, Lot: lot})
 	}
+	uc.notifyDayState(ctx, productID)
 
 	return nil
 }
@@ -467,13 +500,14 @@ func (uc *StockUseCase) applyReplacePlans(ctx context.Context, order []string, p
 	}
 
 	uc.mu.Lock()
-	err := uc.applyCacheLocked(order, plans, byID)
-	uc.mu.Unlock()
-	if err != nil {
+	if err := uc.applyCacheLocked(order, plans, byID); err != nil {
+		uc.mu.Unlock()
 		return err
 	}
-
+	uc.mu.Unlock()
 	uc.publishReplaceEvents(order, plans)
+	uc.notifyDayState(ctx, order...)
+
 	return nil
 }
 
@@ -641,6 +675,11 @@ func (uc *StockUseCase) AcceptStock(ctx context.Context, lots []stock.LotIn) err
 			uc.pub.PublishStockChange(e)
 		}
 	}
+	ids := make([]string, 0, len(lots))
+	for _, l := range lots {
+		ids = append(ids, l.ProductID)
+	}
+	uc.notifyDayState(ctx, ids...)
 
 	return nil
 }

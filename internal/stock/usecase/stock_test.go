@@ -122,7 +122,7 @@ func testStock() []stock.Product {
 }
 
 func newTestUC(repo Repository, pub Publisher) *StockUseCase {
-	return NewStockUseCase(repo, pub)
+	return NewStockUseCase(repo, pub, nil)
 }
 
 func TestWarmUp(t *testing.T) {
@@ -838,4 +838,84 @@ func TestAcceptStock_RepoError(t *testing.T) {
 
 func ptrTime(v time.Time) *time.Time {
 	return &v
+}
+
+// mockDayState — наблюдатель-заглушка состояния по дням: запоминает товары,
+// может отдавать ошибку.
+type mockDayState struct {
+	calls []string
+	err   error
+}
+
+func (m *mockDayState) OnStockChanged(_ context.Context, productID string) error {
+	m.calls = append(m.calls, productID)
+	if m.err != nil {
+		return m.err
+	}
+	return nil
+}
+
+// Шов daystate: после каждой записи остатков наблюдатель вызывается по
+// каждому уникальному товару; ошибка наблюдателя операцию не роняет.
+func TestDayStateRecorder(t *testing.T) {
+	repo := &mockRepo{products: testStock()}
+	ds := &mockDayState{}
+	uc := newTestUC(repo, nil)
+	uc.dayState = ds
+	if err := uc.WarmUp(context.Background()); err != nil {
+		t.Fatalf("WarmUp: %v", err)
+	}
+
+	// Приёмка: два лота одного товара + один другого → по одному вызову на товар.
+	if err := uc.AcceptStock(context.Background(), []stock.LotIn{
+		{ProductID: "p1", BestBefore: d(2026, 9, 1), Qty: 3},
+		{ProductID: "p1", BestBefore: d(2026, 9, 2), Qty: 1},
+		{ProductID: "p2", BestBefore: d(2026, 9, 1), Qty: 2},
+	}); err != nil {
+		t.Fatalf("AcceptStock: %v", err)
+	}
+	if len(ds.calls) != 2 || ds.calls[0] != "p1" || ds.calls[1] != "p2" {
+		t.Errorf("AcceptStock: вызовы = %v, want [p1 p2]", ds.calls)
+	}
+
+	// Ручная скидка.
+	ds.calls = nil
+	if err := uc.SetManualDiscount(context.Background(), "p1", d(2026, 9, 1), i16(10), nil); err != nil {
+		t.Fatalf("SetManualDiscount: %v", err)
+	}
+	if len(ds.calls) != 1 || ds.calls[0] != "p1" {
+		t.Errorf("SetManualDiscount: вызовы = %v, want [p1]", ds.calls)
+	}
+
+	// Ошибка наблюдателя не роняет операцию стока (вызов был, ошибка логируется).
+	ds.err = errors.New("boom")
+	ds.calls = nil
+	if err := uc.AcceptStock(context.Background(), []stock.LotIn{
+		{ProductID: "p1", BestBefore: d(2026, 9, 3), Qty: 1},
+	}); err != nil {
+		t.Fatalf("AcceptStock с ошибкой наблюдателя: %v", err)
+	}
+	if len(ds.calls) != 1 {
+		t.Errorf("вызовов = %d, want 1", len(ds.calls))
+	}
+}
+
+// Замена остатков («Обновить сроки») уведомляет daystate по каждому товару.
+func TestDayStateRecorderReplace(t *testing.T) {
+	repo := replaceRepo()
+	ds := &mockDayState{}
+	uc := newTestUC(repo, nil)
+	uc.dayState = ds
+	if err := uc.WarmUp(context.Background()); err != nil {
+		t.Fatalf("WarmUp: %v", err)
+	}
+
+	if err := uc.ReplaceStock(context.Background(), ReplaceRequest{
+		Scans: []string{codeItem("10100001", 250, day(-10), day(1))},
+	}); err != nil {
+		t.Fatalf("ReplaceStock: %v", err)
+	}
+	if len(ds.calls) != 1 || ds.calls[0] != "p1" {
+		t.Errorf("замена: вызовы = %v, want [p1]", ds.calls)
+	}
 }

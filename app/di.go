@@ -5,6 +5,7 @@ import (
 	asucase "warehouseHelper/internal/averagesales/usecase"
 	aucase "warehouseHelper/internal/avgweight/usecase"
 	"warehouseHelper/internal/config"
+	ducecase "warehouseHelper/internal/daystate/usecase"
 	myhttp "warehouseHelper/internal/delivery/http"
 	gucase "warehouseHelper/internal/goods/usecase"
 	"warehouseHelper/internal/msclient/client"
@@ -58,13 +59,14 @@ type DIContainer struct {
 	goodsUC         *gucase.GoodsUseCase
 	averageSalesUC  *asucase.UseCase
 	orderCoeffUC    *oucase.UseCase
+	dayStateUC      *ducecase.UseCase
 	qrUC            *qucase.QRUseCase
 	msUC            *msu.MSSuppliersUseCase
 	stockUC         *sucase.StockUseCase
+	stockHub        *stockws.Hub
 	receiveBarcodes *rucase.BarcodeEditor
 	receivingUC     *rucase.ReceivingUseCase
 	avgWeightUC     *aucase.UseCase
-	stockHub        *stockws.Hub
 
 	// Хэндлеры
 	mux      *http.ServeMux
@@ -288,6 +290,20 @@ func (d *DIContainer) OrderCoeffUC() *oucase.UseCase {
 	return d.orderCoeffUC
 }
 
+// DayStateUC — сценарии состояния товара по дням: утренний снапшот из
+// product_stock, пересчёт строки по событиям стока (шов StockUC), доступность
+// из календаря «Доступность товаров», эмитенты фактов в ordercoeff.
+// PGClient реализует ducecase.Repository; OrderCoeffUC — SoldOutNotifier /
+// UnavailableNotifier / SoldOutRollbackNotifier (методы SoldOut, Unavailable,
+// RollbackSoldOut).
+func (d *DIContainer) DayStateUC() *ducecase.UseCase {
+	if d.dayStateUC == nil {
+		d.dayStateUC = ducecase.NewUseCase(d.OrdersRepository(), d.OrderCoeffUC(), d.OrderCoeffUC(), d.OrderCoeffUC())
+	}
+
+	return d.dayStateUC
+}
+
 // QRUC — сценарии модуля «Честный знак»; PGClient реализует qucase.QRRepository.
 func (d *DIContainer) QRUC() *qucase.QRUseCase {
 	if d.qrUC == nil {
@@ -353,11 +369,12 @@ func (d *DIContainer) StockHub() *stockws.Hub {
 }
 
 // StockUC — сценарии модуля «Сроки»: кэш остатков и ручные скидки.
-// PGClient реализует sucase.Repository, StockHub — sucase.Publisher.
+// PGClient реализует sucase.Repository, StockHub — sucase.Publisher,
+// DayStateUC — sucase.DayStateRecorder (шов состояния по дням).
 // Кэш прогревается при старте (app.initStockCache).
 func (d *DIContainer) StockUC() *sucase.StockUseCase {
 	if d.stockUC == nil {
-		d.stockUC = sucase.NewStockUseCase(d.OrdersRepository(), d.StockHub())
+		d.stockUC = sucase.NewStockUseCase(d.OrdersRepository(), d.StockHub(), d.DayStateUC())
 	}
 
 	return d.stockUC
