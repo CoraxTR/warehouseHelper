@@ -20,7 +20,7 @@
     {{end}}
 
     <div class="actions">
-        <form method="post" action="/goods/search" style="display:flex;gap:8px;margin:0;">
+        <form method="post" action="/goods/search" class="search-row">
             <input type="text" name="q" value="{{.Query}}" placeholder="Код или название товара" autofocus>
             <button type="submit">Поиск</button>
         </form>

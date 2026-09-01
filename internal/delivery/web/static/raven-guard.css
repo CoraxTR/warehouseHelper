@@ -300,9 +300,12 @@ form.search button { margin-left: 8px; }
 .topbar .cancel { margin-right: 10px; }
 .top-actions { display: flex; align-items: center; flex-wrap: wrap; }
 .top-actions .btn { margin-left: 8px; }
-#ws-status { position: absolute; right: 4px; top: 4px; font-size: 12px; color: #66645C; }
+#ws-status { margin-left: 12px; font-size: 12px; color: #66645C; }
 #ws-status.online { color: #A3B894; }
 #ws-status.offline { color: #E0877E; }
+/* строка поиска «Продукции»: flex без gap (старые браузеры), отступы марджинами */
+.search-row { display: flex; align-items: center; }
+.search-row input { margin-right: 8px; }
 
 .actions { display: flex; align-items: center; flex-wrap: wrap; margin: 20px 0 16px; }
 .actions > * { margin: 0 8px 8px 0; }
