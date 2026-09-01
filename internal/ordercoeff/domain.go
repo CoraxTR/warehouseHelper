@@ -41,38 +41,6 @@ const (
 	EventRollbackDiscount EventType = 6 // отмена скидки: +1 к coeff, требует живой −1
 )
 
-// eventValue — вклад события в коэффициент периода.
-func eventValue(ev EventType) int16 {
-	switch ev {
-	case EventSoldOut:
-		return 1
-	case EventDiscount:
-		return -1
-	case EventFrozen:
-		return -2
-	case EventUnavailable, EventRollbackSoldOut, EventRollbackDiscount:
-		return 0
-	}
-	return 0
-}
-
-// bumpCounter увеличивает живой счётчик события в периоде.
-// Откаты и неизвестные события счётчик не трогают (их логика в ApplyEvent).
-func bumpCounter(cur *PeriodCoeff, ev EventType) {
-	switch ev {
-	case EventSoldOut:
-		cur.SoldOut++
-	case EventDiscount:
-		cur.Discount++
-	case EventFrozen:
-		cur.Frozen++
-	case EventUnavailable:
-		cur.Unavailable++
-	case EventRollbackSoldOut, EventRollbackDiscount:
-		// откат — не новое событие, счётчик не наращиваем
-	}
-}
-
 // PeriodCoeff — состояние коэффициента периода (одна строка «календаря»).
 // Строка существует только для событийного периода; чистые периоды строк
 // не имеют. Coeff — накопленное значение цепочки, «сидящее» на этом периоде;
@@ -89,6 +57,21 @@ type PeriodCoeff struct {
 	Unavailable int16
 }
 
+// transfer возвращает строку текущего периода (создаёт при первом событии)
+// и предыдущий период с обнулённым Coeff, если произошёл перенос.
+func transfer(cur, prev *PeriodCoeff) (newCur, newPrev *PeriodCoeff) {
+	if cur != nil {
+		return cur, nil
+	}
+	cur = &PeriodCoeff{}
+	if prev == nil {
+		return cur, nil
+	}
+	cur.Coeff = prev.Coeff
+	prev.Coeff = 0
+	return cur, prev
+}
+
 // ApplyEvent — чистое правило цепочки: применяет событие к текущему периоду.
 //
 // cur — состояние текущего периода (nil = период чистый, строки нет);
@@ -102,41 +85,46 @@ type PeriodCoeff struct {
 //     события нужного типа в текущем периоде нет): ничего писать не нужно.
 func ApplyEvent(cur, prev *PeriodCoeff, ev EventType) (newCur, newPrev *PeriodCoeff, applied bool) {
 	switch ev {
-	case EventRollbackSoldOut, EventRollbackDiscount:
-		if cur == nil {
-			return nil, nil, false
+	case EventSoldOut:
+		newCur, newPrev = transfer(cur, prev)
+		newCur.SoldOut++
+		newCur.Coeff++
+		return newCur, newPrev, true
+
+	case EventDiscount:
+		newCur, newPrev = transfer(cur, prev)
+		newCur.Discount++
+		newCur.Coeff--
+		return newCur, newPrev, true
+
+	case EventFrozen:
+		newCur, newPrev = transfer(cur, prev)
+		newCur.Frozen++
+		newCur.Coeff -= 2
+		return newCur, newPrev, true
+
+	case EventUnavailable:
+		newCur, newPrev = transfer(cur, prev)
+		newCur.Unavailable++
+		return newCur, newPrev, true
+
+	case EventRollbackSoldOut:
+		if cur == nil || cur.SoldOut == 0 {
+			return cur, nil, false
 		}
-		if ev == EventRollbackSoldOut {
-			if cur.SoldOut == 0 {
-				return cur, nil, false
-			}
-			cur.SoldOut--
-			cur.Coeff--
-		} else {
-			if cur.Discount == 0 {
-				return cur, nil, false
-			}
-			cur.Discount--
-			cur.Coeff++
-		}
+		cur.SoldOut--
+		cur.Coeff--
 		return cur, nil, true
 
-	case EventSoldOut, EventDiscount, EventFrozen, EventUnavailable:
-		if cur == nil {
-			// Первый случай в периоде: перенос накопленного из предыдущего
-			// событийного периода (если он был) и его обнуление.
-			cur = &PeriodCoeff{}
-			if prev != nil {
-				cur.Coeff = prev.Coeff
-				prev.Coeff = 0
-				newPrev = prev
-			}
+	case EventRollbackDiscount:
+		if cur == nil || cur.Discount == 0 {
+			return cur, nil, false
 		}
-		bumpCounter(cur, ev)
-		cur.Coeff += eventValue(ev)
-		return cur, newPrev, true
+		cur.Discount--
+		cur.Coeff++
+		return cur, nil, true
 
 	default:
-		return nil, nil, false
+		return cur, nil, false
 	}
 }
