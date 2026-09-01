@@ -4,116 +4,14 @@
 <head>
     <meta charset="UTF-8">
     <title>{{.Page.Title}}</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            margin: 20px;
-        }
-
-        h1 {
-            font-size: 24px;
-            margin: 0;
-        }
-
-        .header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-
-        .btn {
-            padding: 8px 16px;
-            background-color: #007bff;
-            color: white;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 14px;
-            text-decoration: none;
-            display: inline-block;
-        }
-
-        .btn:hover {
-            background-color: #0056b3;
-        }
-
-        .btn-danger {
-            background-color: #dc3545;
-        }
-
-        .btn-danger:hover {
-            background-color: #c82333;
-        }
-
-        .error {
-            color: #ff3333;
-        }
-
-        .section {
-            margin-top: 20px;
-        }
-
-        .section h2 {
-            font-size: 18px;
-            border-bottom: 1px solid #ddd;
-            padding-bottom: 4px;
-        }
-
-        .mini-calendar {
-            border-collapse: collapse;
-        }
-
-        .mini-calendar td {
-            border: 1px solid #ddd;
-            padding: 8px 12px;
-            text-align: center;
-            font-size: 14px;
-        }
-
-        .mini-calendar td.day-on {
-            background-color: #4CAF50;
-            color: white;
-            font-weight: bold;
-        }
-
-        .muted {
-            color: #777;
-        }
-
-        .chip {
-            display: inline-block;
-            background-color: #e0e0e0;
-            border-radius: 12px;
-            padding: 2px 10px;
-            margin: 2px;
-            font-size: 13px;
-            text-decoration: none;
-            color: #333;
-        }
-
-        .chip:hover {
-            background-color: #cccccc;
-        }
-
-        .content {
-            line-height: 1.6;
-        }
-
-        .bottom-actions {
-            margin-top: 20px;
-            display: flex;
-            gap: 10px;
-            justify-content: center;
-            align-items: center;
-        }
-
-        .hidden {
-            display: none !important;
-        }
-    </style>
+    <link rel="stylesheet" href="/static/raven-guard.css">
 </head>
 
 <body>
+    <header class="brandbar">
+        <a class="brandbar__brand" href="/"><svg class="brandbar__emblem" viewBox="0 0 64 64" aria-hidden="true"><circle cx="35" cy="25" r="14" fill="#F4F1E9"/><polygon points="6,26 30,17 28,27" fill="#F4F1E9"/><polygon points="13,35 28,27 26,36" fill="#F4F1E9"/><circle cx="34" cy="23" r="3.6" fill="#0A0A0D"/><circle cx="33" cy="22" r="1.1" fill="#C02832"/></svg><span class="brandbar__name">ВОРОН&nbsp;&middot;&nbsp;СКЛАД</span></a>
+        <span class="brandbar__motto">Приёмка или смерть</span>
+    </header>
     <div class="header">
         <h1>{{.Page.Title}}</h1>
         {{if .Page.SupplierID}}

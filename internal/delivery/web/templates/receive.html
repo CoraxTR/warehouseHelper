@@ -4,49 +4,13 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Приёмка</title>
-<style>
-    body { font-family: Arial, sans-serif; margin: 0; padding: 16px; background: #f7f7f7; color: #222; }
-    h1 { font-size: 22px; margin: 0 0 12px; }
-    a { color: #007bff; text-decoration: none; }
-    a:hover { text-decoration: underline; }
-    .card { background: #fff; border: 1px solid #ddd; border-radius: 6px; padding: 14px 16px; margin: 12px auto; max-width: 720px; }
-    .card.wide { max-width: 900px; }
-    label { display: block; font-weight: bold; margin: 8px 0 4px; font-size: 14px; }
-    input[type=text], select { width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; font-size: 16px; }
-    input[type=date] { padding: 6px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px; }
-    button { background: #28a745; color: #fff; border: none; padding: 10px 18px; border-radius: 4px; font-size: 15px; margin-top: 10px; cursor: pointer; }
-    button:hover { background: #218838; }
-    button.secondary { background: #6c757d; }
-    button.secondary:hover { background: #565e64; }
-    button.danger { background: #dc3545; }
-    button.danger:hover { background: #c82333; }
-    button.small { padding: 4px 10px; font-size: 13px; margin-top: 0; }
-    .error { color: #dc3545; background: #fdecea; border: 1px solid #f5c6cb; padding: 10px; border-radius: 4px; margin: 10px 0; }
-    .scan-input { font-size: 20px; letter-spacing: 1px; }
-    #scans { margin-top: 14px; }
-    .scan-card { border: 1px solid #ccc; border-left: 5px solid #28a745; background: #fafafa; border-radius: 4px; padding: 10px 12px; margin-bottom: 8px; position: relative; }
-    .scan-card.box { border-left-color: #007bff; }
-    .scan-card.missing { border-left-color: #ffc107; }
-    .scan-card.error-card { border-left-color: #dc3545; }
-    .scan-card .name { font-weight: bold; font-size: 15px; }
-    .scan-card .meta { color: #666; font-size: 13px; margin-top: 2px; }
-    .scan-card .fix { margin-top: 6px; font-size: 13px; }
-    .scan-card .fix select, .scan-card .fix input { width: auto; font-size: 13px; padding: 4px; }
-    .scan-card .remove { position: absolute; top: 8px; right: 10px; }
-    .children { margin: 8px 0 0 18px; border-left: 2px solid #dee2e6; padding-left: 12px; }
-    .child-row { display: flex; justify-content: space-between; align-items: center; padding: 3px 0; font-size: 14px; }
-    .child-row .cname { flex: 1; }
-    .child-row .cmeta { color: #666; margin-right: 10px; }
-    .mismatch { color: #dc3545; font-weight: bold; }
-    #report { margin-top: 14px; }
-    #report table { border-collapse: collapse; width: 100%; background: #fff; }
-    #report th, #report td { border: 1px solid #ccc; padding: 6px 10px; text-align: left; font-size: 14px; }
-    .hint { color: #888; font-size: 13px; margin-top: 4px; }
-    .toplinks { text-align: right; margin-bottom: 10px; font-size: 14px; }
-    .supplier-select { max-width: 720px; margin: 20px auto; }
-</style>
+<link rel="stylesheet" href="/static/raven-guard.css">
 </head>
 <body>
+    <header class="brandbar">
+        <a class="brandbar__brand" href="/"><svg class="brandbar__emblem" viewBox="0 0 64 64" aria-hidden="true"><circle cx="35" cy="25" r="14" fill="#F4F1E9"/><polygon points="6,26 30,17 28,27" fill="#F4F1E9"/><polygon points="13,35 28,27 26,36" fill="#F4F1E9"/><circle cx="34" cy="23" r="3.6" fill="#0A0A0D"/><circle cx="33" cy="22" r="1.1" fill="#C02832"/></svg><span class="brandbar__name">ВОРОН&nbsp;&middot;&nbsp;СКЛАД</span></a>
+        <span class="brandbar__motto">Приёмка или смерть</span>
+    </header>
 {{if not .Supplier}}
     <div class="card supplier-select">
         <h1>Приёмка</h1>
