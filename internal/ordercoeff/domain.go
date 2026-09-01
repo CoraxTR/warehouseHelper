@@ -50,10 +50,28 @@ func eventValue(ev EventType) int16 {
 		return -1
 	case EventFrozen:
 		return -2
+	case EventUnavailable, EventRollbackSoldOut, EventRollbackDiscount:
+		return 0
+	}
+	return 0
+}
+
+// bumpCounter увеличивает живой счётчик события в периоде.
+// Откаты и неизвестные события счётчик не трогают (их логика в ApplyEvent).
+func bumpCounter(cur *PeriodCoeff, ev EventType) {
+	switch ev {
+	case EventSoldOut:
+		cur.SoldOut++
+	case EventDiscount:
+		cur.Discount++
+	case EventFrozen:
+		cur.Frozen++
 	case EventUnavailable:
-		return 0
-	default: // откаты и неизвестные события — вклада не имеют
-		return 0
+		cur.Unavailable++
+	case EventRollbackSoldOut, EventRollbackDiscount:
+		// откат — не новое событие, счётчик не наращиваем
+	default:
+		// неизвестное событие — счётчик не трогаем
 	}
 }
 
@@ -116,21 +134,11 @@ func ApplyEvent(cur, prev *PeriodCoeff, ev EventType) (newCur, newPrev *PeriodCo
 				newPrev = prev
 			}
 		}
-		switch ev {
-		case EventSoldOut:
-			cur.SoldOut++
-		case EventDiscount:
-			cur.Discount++
-		case EventFrozen:
-			cur.Frozen++
-		case EventUnavailable:
-			cur.Unavailable++
-		default:
-			return cur, nil, false // неизвестное событие — не накладываем
-		}
+		bumpCounter(cur, ev)
 		cur.Coeff += eventValue(ev)
 		return cur, newPrev, true
-	}
 
-	return cur, nil, false
+	default:
+		return nil, nil, false
+	}
 }
