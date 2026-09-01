@@ -70,8 +70,6 @@ func bumpCounter(cur *PeriodCoeff, ev EventType) {
 		cur.Unavailable++
 	case EventRollbackSoldOut, EventRollbackDiscount:
 		// откат — не новое событие, счётчик не наращиваем
-	default:
-		// неизвестное событие — счётчик не трогаем
 	}
 }
 
