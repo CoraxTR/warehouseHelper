@@ -186,35 +186,53 @@ func (uc *UseCase) OnStockChanged(ctx context.Context, productID string) error {
 	return nil
 }
 
-// SetOrderable — календарь «Доступность товаров»: даты любые (включая
-// будущие). Строки создаются при необходимости, orderable перезаписывается.
-// При orderable=false на каждую дату эмитится Unavailable (вклад 0, держит
-// цепочку коэффициента); при true — без эмита (отката «недоступен» в
-// ordercoeff нет).
-func (uc *UseCase) SetOrderable(ctx context.Context, productID string, dates []time.Time, orderable bool) error {
+// SetOrderable — календарь «Доступность товаров»: даты доступны для заказа
+// (любые, включая будущие). Строки создаются при необходимости, orderable
+// перезаписывается. Без эмита — отката «недоступен» в ordercoeff нет.
+func (uc *UseCase) SetOrderable(ctx context.Context, productID string, dates []time.Time) error {
 	done := metrics.Track(trackPkg, "SetOrderable")
 	defer done()
 
-	if productID == "" {
-		return errors.New("не указан товар")
-	}
-	dates = uniqueDates(dates)
-	if len(dates) == 0 {
-		return errors.New("не выбраны даты")
-	}
-
-	if err := uc.repo.SetOrderable(ctx, productID, dates, orderable); err != nil {
+	dates, err := uc.normalizeDates(productID, dates)
+	if err != nil {
 		return err
 	}
-	if !orderable {
-		for _, d := range dates {
-			at := normalizeDate(d)
-			if err := uc.unavailable.Unavailable(ctx, productID, at); err != nil {
-				slog.Info(fmt.Sprintf("daystate: Unavailable %s %s: %v", productID, at.Format(time.DateOnly), err))
-			}
+	return uc.repo.SetOrderable(ctx, productID, dates, true)
+}
+
+// SetUnavailable — календарь «Доступность товаров»: даты недоступны для
+// заказа. На каждую дату эмитится Unavailable (вклад 0, держит цепочку
+// коэффициента); ошибка эмита логируется, запись не откатывается.
+func (uc *UseCase) SetUnavailable(ctx context.Context, productID string, dates []time.Time) error {
+	done := metrics.Track(trackPkg, "SetUnavailable")
+	defer done()
+
+	dates, err := uc.normalizeDates(productID, dates)
+	if err != nil {
+		return err
+	}
+	if err := uc.repo.SetOrderable(ctx, productID, dates, false); err != nil {
+		return err
+	}
+	for _, d := range dates {
+		if err := uc.unavailable.Unavailable(ctx, productID, d); err != nil {
+			slog.Info(fmt.Sprintf("daystate: Unavailable %s %s: %v", productID, d.Format(time.DateOnly), err))
 		}
 	}
 	return nil
+}
+
+// normalizeDates проверяет товар и даты календаря, убирает дубликаты и
+// приводит даты к единому представлению DATE.
+func (uc *UseCase) normalizeDates(productID string, dates []time.Time) ([]time.Time, error) {
+	if productID == "" {
+		return nil, errors.New("не указан товар")
+	}
+	dates = uniqueDates(dates)
+	if len(dates) == 0 {
+		return nil, errors.New("не выбраны даты")
+	}
+	return dates, nil
 }
 
 // RollbackSoldOut — возврат товара в остаток через расформирование заказа

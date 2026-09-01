@@ -14,8 +14,8 @@ func i16(v int16) *int16 { return &v }
 
 func b(v bool) *bool { return &v }
 
-func day(y int, m time.Month, d int) time.Time {
-	return time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
+func day(d int) time.Time {
+	return time.Date(2026, time.September, d, 0, 0, 0, 0, time.UTC)
 }
 
 func key(productID string, date time.Time) string {
@@ -60,7 +60,7 @@ func (f *fakeRepo) GetDay(_ context.Context, productID string, date time.Time) (
 	}
 	d, ok := f.days[key(productID, date)]
 	if !ok {
-		return nil, nil
+		return nil, daystate.ErrDayNotFound
 	}
 	cp := *d
 	return &cp, nil
@@ -167,7 +167,7 @@ func newTestUC(repo Repository, soldOut SoldOutNotifier, unavailable Unavailable
 }
 
 func TestOnStockChanged_CreatesRowAndUpdates(t *testing.T) {
-	today := day(2026, 9, 1)
+	today := day(1)
 	repo := &fakeRepo{days: map[string]*daystate.DayState{}, lots: map[string][]daystate.LotState{
 		"p1": {{Qty: 5, EffectiveGeneral: i16(7)}},
 	}}
@@ -190,7 +190,7 @@ func TestOnStockChanged_CreatesRowAndUpdates(t *testing.T) {
 		t.Errorf("ensured скидки = %v/%v, want 7/7", e.DiscountStart, e.Discount)
 	}
 	if !e.Orderable {
-		t.Errorf("ensured.Orderable = false, want true (default)")
+		t.Error("ensured.Orderable = false, want true (default)")
 	}
 
 	// Пересчёт записан.
@@ -209,7 +209,7 @@ func TestOnStockChanged_CreatesRowAndUpdates(t *testing.T) {
 }
 
 func TestOnStockChanged_SoldOutTransition(t *testing.T) {
-	today := day(2026, 9, 1)
+	today := day(1)
 	repo := &fakeRepo{
 		days: map[string]*daystate.DayState{
 			key("p1", today): {ProductID: "p1", Date: today, InStock: b(true), Discount: i16(5), Orderable: true},
@@ -225,7 +225,7 @@ func TestOnStockChanged_SoldOutTransition(t *testing.T) {
 
 	u := repo.updated[0]
 	if !u.SoldOutToday {
-		t.Errorf("SoldOutToday = false, want true")
+		t.Error("SoldOutToday = false, want true")
 	}
 	if u.InStock == nil || *u.InStock {
 		t.Errorf("InStock = %v, want false", u.InStock)
@@ -236,7 +236,7 @@ func TestOnStockChanged_SoldOutTransition(t *testing.T) {
 }
 
 func TestOnStockChanged_NoEmitWhenAlreadyOut(t *testing.T) {
-	today := day(2026, 9, 1)
+	today := day(1)
 	repo := &fakeRepo{
 		days: map[string]*daystate.DayState{
 			key("p1", today): {ProductID: "p1", Date: today, InStock: b(false), SoldOutToday: true, Orderable: true},
@@ -253,12 +253,12 @@ func TestOnStockChanged_NoEmitWhenAlreadyOut(t *testing.T) {
 		t.Errorf("SoldOut: %v, want нет", soldOut.calls)
 	}
 	if !repo.updated[0].SoldOutToday {
-		t.Errorf("маркер дня должен сохраниться")
+		t.Error("маркер дня должен сохраниться")
 	}
 }
 
 func TestOnStockChanged_DiscountIncreaseAppends(t *testing.T) {
-	today := day(2026, 9, 1)
+	today := day(1)
 	repo := &fakeRepo{
 		days: map[string]*daystate.DayState{
 			key("p1", today): {ProductID: "p1", Date: today, InStock: b(true), Discount: i16(5), DiscountIncreases: []int16{5}, Orderable: true},
@@ -282,14 +282,14 @@ func TestOnStockChanged_DiscountIncreaseAppends(t *testing.T) {
 func TestSetOrderable(t *testing.T) {
 	repo := &fakeRepo{days: map[string]*daystate.DayState{}}
 	unavailable := &fakeUnavailable{}
-	uc := newTestUC(repo, &fakeSoldOut{}, unavailable, &fakeRollback{}, day(2026, 9, 1))
+	uc := newTestUC(repo, &fakeSoldOut{}, unavailable, &fakeRollback{}, day(1))
 
-	d1 := day(2026, 9, 10)
-	d2 := day(2026, 9, 11)
+	d1 := day(10)
+	d2 := day(11)
 
-	// false → батч без дубликатов + эмит на каждую дату.
-	if err := uc.SetOrderable(context.Background(), "p1", []time.Time{d1, d2, d1}, false); err != nil {
-		t.Fatalf("SetOrderable(false): %v", err)
+	// Недоступность → батч без дубликатов + эмит на каждую дату.
+	if err := uc.SetUnavailable(context.Background(), "p1", []time.Time{d1, d2, d1}); err != nil {
+		t.Fatalf("SetUnavailable: %v", err)
 	}
 	if len(repo.orderableCalls) != 1 {
 		t.Fatalf("orderableCalls: len = %d, want 1", len(repo.orderableCalls))
@@ -305,10 +305,10 @@ func TestSetOrderable(t *testing.T) {
 		t.Errorf("Unavailable: %v, want 2 вызова", unavailable.calls)
 	}
 
-	// true → без эмитов.
+	// Доступность → без эмитов.
 	unavailable.calls = nil
-	if err := uc.SetOrderable(context.Background(), "p1", []time.Time{d1}, true); err != nil {
-		t.Fatalf("SetOrderable(true): %v", err)
+	if err := uc.SetOrderable(context.Background(), "p1", []time.Time{d1}); err != nil {
+		t.Fatalf("SetOrderable: %v", err)
 	}
 	if len(unavailable.calls) != 0 {
 		t.Errorf("Unavailable при true: %v, want нет", unavailable.calls)
@@ -317,12 +317,12 @@ func TestSetOrderable(t *testing.T) {
 
 func TestSetOrderable_Validation(t *testing.T) {
 	repo := &fakeRepo{days: map[string]*daystate.DayState{}}
-	uc := newTestUC(repo, &fakeSoldOut{}, &fakeUnavailable{}, &fakeRollback{}, day(2026, 9, 1))
+	uc := newTestUC(repo, &fakeSoldOut{}, &fakeUnavailable{}, &fakeRollback{}, day(1))
 
-	if err := uc.SetOrderable(context.Background(), "", []time.Time{day(2026, 9, 10)}, false); err == nil {
+	if err := uc.SetUnavailable(context.Background(), "", []time.Time{day(10)}); err == nil {
 		t.Error("пустой товар: ожидалась ошибка")
 	}
-	if err := uc.SetOrderable(context.Background(), "p1", nil, false); err == nil {
+	if err := uc.SetUnavailable(context.Background(), "p1", nil); err == nil {
 		t.Error("пустые даты: ожидалась ошибка")
 	}
 }
@@ -330,9 +330,9 @@ func TestSetOrderable_Validation(t *testing.T) {
 func TestRollbackSoldOut(t *testing.T) {
 	repo := &fakeRepo{days: map[string]*daystate.DayState{}}
 	rollback := &fakeRollback{}
-	uc := newTestUC(repo, &fakeSoldOut{}, &fakeUnavailable{}, rollback, day(2026, 9, 1))
+	uc := newTestUC(repo, &fakeSoldOut{}, &fakeUnavailable{}, rollback, day(1))
 
-	at := day(2026, 9, 1)
+	at := day(1)
 	if err := uc.RollbackSoldOut(context.Background(), "p1", at); err != nil {
 		t.Fatalf("RollbackSoldOut: %v", err)
 	}
@@ -347,18 +347,18 @@ func TestRollbackSoldOut(t *testing.T) {
 func TestRollbackSoldOut_NotifierError(t *testing.T) {
 	repo := &fakeRepo{days: map[string]*daystate.DayState{}}
 	rollback := &fakeRollback{err: errors.New("coeff down")}
-	uc := newTestUC(repo, &fakeSoldOut{}, &fakeUnavailable{}, rollback, day(2026, 9, 1))
+	uc := newTestUC(repo, &fakeSoldOut{}, &fakeUnavailable{}, rollback, day(1))
 
-	if err := uc.RollbackSoldOut(context.Background(), "p1", day(2026, 9, 1)); err == nil {
+	if err := uc.RollbackSoldOut(context.Background(), "p1", day(1)); err == nil {
 		t.Error("ошибка эмита должна вернуться вызывающему")
 	}
 }
 
 func TestEnsureSnapshot(t *testing.T) {
 	repo := &fakeRepo{days: map[string]*daystate.DayState{}, snapDone: false}
-	uc := newTestUC(repo, &fakeSoldOut{}, &fakeUnavailable{}, &fakeRollback{}, day(2026, 9, 1))
+	uc := newTestUC(repo, &fakeSoldOut{}, &fakeUnavailable{}, &fakeRollback{}, day(1))
 
-	if err := uc.EnsureSnapshot(context.Background(), day(2026, 9, 1)); err != nil {
+	if err := uc.EnsureSnapshot(context.Background(), day(1)); err != nil {
 		t.Fatalf("EnsureSnapshot: %v", err)
 	}
 	if repo.snapInsertCalls != 1 {
@@ -367,7 +367,7 @@ func TestEnsureSnapshot(t *testing.T) {
 
 	// Уже сделан — повторный вызов ничего не пишет.
 	repo.snapDone = true
-	if err := uc.EnsureSnapshot(context.Background(), day(2026, 9, 1)); err != nil {
+	if err := uc.EnsureSnapshot(context.Background(), day(1)); err != nil {
 		t.Fatalf("EnsureSnapshot: %v", err)
 	}
 	if repo.snapInsertCalls != 1 {
@@ -378,7 +378,7 @@ func TestEnsureSnapshot(t *testing.T) {
 // Тик снапшота: до времени снапшота — не проверяем, после — делаем.
 func TestTrySnapshotTiming(t *testing.T) {
 	repo := &fakeRepo{days: map[string]*daystate.DayState{}, snapDone: false}
-	uc := newTestUC(repo, &fakeSoldOut{}, &fakeUnavailable{}, &fakeRollback{}, day(2026, 9, 1).Add(8*time.Hour))
+	uc := newTestUC(repo, &fakeSoldOut{}, &fakeUnavailable{}, &fakeRollback{}, day(1).Add(8*time.Hour))
 
 	// 08:00, снапшот в 09:00 — рано.
 	uc.trySnapshot(context.Background(), 9*time.Hour)
@@ -387,7 +387,7 @@ func TestTrySnapshotTiming(t *testing.T) {
 	}
 
 	// 09:05 — делаем.
-	uc.now = func() time.Time { return day(2026, 9, 1).Add(9*time.Hour + 5*time.Minute) }
+	uc.now = func() time.Time { return day(1).Add(9*time.Hour + 5*time.Minute) }
 	uc.trySnapshot(context.Background(), 9*time.Hour)
 	if repo.snapDoneCalls != 1 || repo.snapInsertCalls != 1 {
 		t.Errorf("в 09:05: done=%d insert=%d, want 1/1", repo.snapDoneCalls, repo.snapInsertCalls)

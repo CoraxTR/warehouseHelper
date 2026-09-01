@@ -59,17 +59,17 @@ func InStockFromLots(lots []LotState) bool {
 // DiscountFromLots — максимальная effective-скидка канала general по лотам;
 // nil, если ни у одного лота скидка не задана.
 func DiscountFromLots(lots []LotState) *int16 {
-	var max *int16
+	var top *int16
 	for _, l := range lots {
 		if l.EffectiveGeneral == nil {
 			continue
 		}
-		if max == nil || *l.EffectiveGeneral > *max {
+		if top == nil || *l.EffectiveGeneral > *top {
 			v := *l.EffectiveGeneral
-			max = &v
+			top = &v
 		}
 	}
-	return max
+	return top
 }
 
 // ApplyStockChange пересчитывает строку дня после изменения остатков.

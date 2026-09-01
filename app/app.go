@@ -99,7 +99,7 @@ func (a *App) initStockCache() {
 // 09:00). Ошибки не роняют приложение — ретрай на следующем тике (спящий ПК,
 // недоступная БД).
 func (a *App) initDayState() {
-	a.di.DayStateUC().Start(context.Background(), a.di.Config().AppConfig.DayStateSnapshotTime)
+	a.di.DayStateUC().Start(context.Background(), a.di.Config().DayStateSnapshotTime)
 }
 
 func (a *App) initHTTPServer() {

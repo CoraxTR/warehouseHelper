@@ -26,9 +26,7 @@ func (pg *PGClient) EnsureDay(ctx context.Context, d daystate.DayState) error {
 	return nil
 }
 
-// GetDay читает строку дня; (nil, nil) — строки нет.
-//
-//nolint:nilnil // контракт: (nil, nil) = строки нет
+// GetDay читает строку дня; строки нет — daystate.ErrDayNotFound.
 func (pg *PGClient) GetDay(ctx context.Context, productID string, date time.Time) (*daystate.DayState, error) {
 	var d daystate.DayState
 	var increases []int16
@@ -39,7 +37,7 @@ func (pg *PGClient) GetDay(ctx context.Context, productID string, date time.Time
 		productID, date,
 	).Scan(&d.ProductID, &d.Date, &d.InStock, &d.DiscountStart, &d.Discount, &increases, &d.Orderable, &d.SoldOutToday)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, nil
+		return nil, daystate.ErrDayNotFound
 	}
 	if err != nil {
 		return nil, fmt.Errorf("select day %s %s: %w", productID, date.Format(time.DateOnly), err)
