@@ -13,6 +13,7 @@ import (
 	msucase "warehouseHelper/internal/msclient/usecase"
 	"warehouseHelper/internal/msclient/workerpool"
 	msu "warehouseHelper/internal/mssuppliers/usecase"
+	oucase "warehouseHelper/internal/ordercoeff/usecase"
 	"warehouseHelper/internal/qrcodes/photostore"
 	qucase "warehouseHelper/internal/qrcodes/usecase"
 	rucase "warehouseHelper/internal/receiving/usecase"
@@ -56,6 +57,7 @@ type DIContainer struct {
 	wikiUC          *wucase.WikiUseCase
 	goodsUC         *gucase.GoodsUseCase
 	averageSalesUC  *asucase.UseCase
+	orderCoeffUC    *oucase.UseCase
 	qrUC            *qucase.QRUseCase
 	msUC            *msu.MSSuppliersUseCase
 	stockUC         *sucase.StockUseCase
@@ -273,6 +275,17 @@ func (d *DIContainer) AverageSalesUC() *asucase.UseCase {
 	}
 
 	return d.averageSalesUC
+}
+
+// OrderCoeffUC — сценарии «Коэффициент изменения заказа»: приём событий
+// от модулей-владельцев фактов и чтение коэффициентов по интервалам.
+// PGClient реализует oucase.Repository, GoodsUC — oucase.ProductReader.
+func (d *DIContainer) OrderCoeffUC() *oucase.UseCase {
+	if d.orderCoeffUC == nil {
+		d.orderCoeffUC = oucase.NewUseCase(d.OrdersRepository(), d.GoodsUC())
+	}
+
+	return d.orderCoeffUC
 }
 
 // QRUC — сценарии модуля «Честный знак»; PGClient реализует qucase.QRRepository.

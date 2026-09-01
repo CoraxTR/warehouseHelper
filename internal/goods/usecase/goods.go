@@ -217,6 +217,18 @@ func (uc *GoodsUseCase) TurnoverProductsByIDs(ctx context.Context, ids []string)
 	return out, nil
 }
 
+// TrackWeekly — отслеживается ли товар по неделям (реализация
+// ordercoeff.ProductReader; продукты читает только каталог).
+func (uc *GoodsUseCase) TrackWeekly(ctx context.Context, id string) (bool, error) {
+	done := metrics.Track(trackPkg, "TrackWeekly")
+	defer done()
+	p, err := uc.repo.GetProduct(ctx, id)
+	if err != nil {
+		return false, err
+	}
+	return p.TrackWeekly, nil
+}
+
 // UpdateAverageWeight обновляет средний вес товара (кг) — контракт модуля
 // среднего веса (ProductWeightUpdater на его стороне): приёмка передаёт
 // единичные веса туда, модуль считает среднее и через каталог пишет
