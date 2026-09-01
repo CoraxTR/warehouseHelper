@@ -82,6 +82,9 @@ type AppConfig struct {
 	// WeightsHistoryLimit — сколько последних весов единицы хранить на товар
 	// (FIFO, модуль среднего веса); настройка приложения, не в схеме.
 	WeightsHistoryLimit int
+	// DayStateSnapshotTime — время утреннего снапшота состояний по дням
+	// (модуль daystate), от полуночи, локальное время процесса.
+	DayStateSnapshotTime time.Duration
 }
 
 // QRConfig — модуль «Честный знак»: фото кодов маркировки по заказам.
@@ -136,10 +139,21 @@ func loadAppconfig() *AppConfig {
 		}
 	}
 
+	// Время утреннего снапшота daystate: APP_DAYSTATE_SNAPSHOT_TIME в формате
+	// "HH:MM" (локальное время процесса); по умолчанию 09:00; невалидное
+	// значение — дефолт.
+	dayStateSnapshotTime := 9 * time.Hour
+	if tStr := os.Getenv("APP_DAYSTATE_SNAPSHOT_TIME"); tStr != "" {
+		if t, err := time.Parse("15:04", tStr); err == nil {
+			dayStateSnapshotTime = time.Duration(t.Hour())*time.Hour + time.Duration(t.Minute())*time.Minute
+		}
+	}
+
 	return &AppConfig{
-		HTTPAddress:         httpAddress,
-		TempCleanupMaxAge:   tempCleanupMaxAge,
-		WeightsHistoryLimit: weightsHistoryLimit,
+		HTTPAddress:          httpAddress,
+		TempCleanupMaxAge:    tempCleanupMaxAge,
+		WeightsHistoryLimit:  weightsHistoryLimit,
+		DayStateSnapshotTime: dayStateSnapshotTime,
 	}
 }
 

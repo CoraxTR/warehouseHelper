@@ -40,6 +40,7 @@ func (a *App) initDeps() {
 	inits := []func(){
 		a.initHTTPServer,
 		a.initStockCache,
+		a.initDayState,
 		a.initAverageSales,
 		a.initTableSizes,
 	}
@@ -91,6 +92,14 @@ func (a *App) initStockCache() {
 	if err := a.di.StockUC().WarmUp(ctx); err != nil {
 		slog.Info(fmt.Sprintf("прогрев кэша остатков: %v (страницы «Сроки» пусты, примените product_stock_schema.sql и перезапустите)", err))
 	}
+}
+
+// initDayState запускает фоновую задачу утреннего снапшота состояний по дням
+// (модуль daystate): время — APP_DAYSTATE_SNAPSHOT_TIME (локальное, default
+// 09:00). Ошибки не роняют приложение — ретрай на следующем тике (спящий ПК,
+// недоступная БД).
+func (a *App) initDayState() {
+	a.di.DayStateUC().Start(context.Background(), a.di.Config().AppConfig.DayStateSnapshotTime)
 }
 
 func (a *App) initHTTPServer() {
