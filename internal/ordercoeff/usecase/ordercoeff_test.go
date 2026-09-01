@@ -34,7 +34,7 @@ func (r *stubRepo) ApplyCoeffEvent(_ context.Context, productID string, periodTy
 	return r.applied, nil
 }
 
-func (r *stubRepo) Coefficients(_ context.Context, productID string, periodType ordercoeff.PeriodType, intervals []time.Time) (map[time.Time]int16, error) {
+func (r *stubRepo) Coefficients(_ context.Context, _ string, periodType ordercoeff.PeriodType, intervals []time.Time) (map[time.Time]int16, error) {
 	r.coeffCalls++
 	if r.err != nil {
 		return nil, r.err

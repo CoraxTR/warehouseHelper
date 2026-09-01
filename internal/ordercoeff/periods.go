@@ -8,8 +8,10 @@ func PeriodStart(pt PeriodType, at time.Time) time.Time {
 	switch pt {
 	case PeriodWeek:
 		return weekStart(at)
-	default: // PeriodMonth
+	case PeriodMonth:
 		return time.Date(at.Year(), at.Month(), 1, 0, 0, 0, 0, at.Location())
+	default:
+		return time.Time{}
 	}
 }
 
@@ -18,8 +20,10 @@ func PrevPeriodStart(pt PeriodType, start time.Time) time.Time {
 	switch pt {
 	case PeriodWeek:
 		return start.AddDate(0, 0, -7)
-	default: // PeriodMonth
+	case PeriodMonth:
 		return start.AddDate(0, -1, 0)
+	default:
+		return time.Time{}
 	}
 }
 

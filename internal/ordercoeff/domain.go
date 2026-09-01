@@ -52,8 +52,9 @@ func eventValue(ev EventType) int16 {
 		return -2
 	case EventUnavailable:
 		return 0
+	default: // откаты и неизвестные события — вклада не имеют
+		return 0
 	}
-	return 0
 }
 
 // PeriodCoeff — состояние коэффициента периода (одна строка «календаря»).
@@ -124,6 +125,8 @@ func ApplyEvent(cur, prev *PeriodCoeff, ev EventType) (newCur, newPrev *PeriodCo
 			cur.Frozen++
 		case EventUnavailable:
 			cur.Unavailable++
+		default:
+			return cur, nil, false // неизвестное событие — не накладываем
 		}
 		cur.Coeff += eventValue(ev)
 		return cur, newPrev, true

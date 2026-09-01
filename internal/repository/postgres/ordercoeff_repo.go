@@ -83,6 +83,8 @@ func (pg *PGClient) ApplyCoeffEvent(ctx context.Context, productID string, perio
 }
 
 // coeffPeriodForUpdate читает строку периода под блокировкой; nil, если строки нет.
+//
+//nolint:nilnil // контракт: (nil, nil) = периода нет, переносить нечего
 func (pg *PGClient) coeffPeriodForUpdate(ctx context.Context, tx pgx.Tx, productID string, periodType ordercoeff.PeriodType, periodStart time.Time) (*ordercoeff.PeriodCoeff, error) {
 	var p ordercoeff.PeriodCoeff
 	err := tx.QueryRow(ctx, `
