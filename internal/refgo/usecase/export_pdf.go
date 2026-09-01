@@ -10,8 +10,11 @@ import (
 	"sync/atomic"
 
 	"log/slog"
+	"warehouseHelper/internal/metrics"
 	"warehouseHelper/internal/tempdir"
 )
+
+// (trackPkg объявлена в первом файле пакета)
 
 type PDFFetcher interface {
 	FetchOrderPDF(ctx context.Context, id string) ([]byte, error)
@@ -41,6 +44,7 @@ func NewExportOrderPDFUseCase(fetcher PDFFetcher, exporter PDFExporter, preloade
 }
 
 func (uc *ExportOrderPDFUseCase) GetOrderPDF(ctx context.Context, id string) (string, error) {
+	defer metrics.Track(trackPkg, "GetOrderPDF")()
 	uc.preloader.StopPreloading()
 
 	filePath := filepath.Join(tempdir.Dir, id+".pdf")
@@ -78,6 +82,7 @@ func (uc *ExportOrderPDFUseCase) GetOrderPDF(ctx context.Context, id string) (st
 }
 
 func (uc *ExportOrderPDFUseCase) GetMultipleOrdersPDF(ctx context.Context, ids []string) (string, error) {
+	defer metrics.Track(trackPkg, "GetMultipleOrdersPDF")()
 	uc.preloader.StopPreloading()
 
 	pdfData := make([][]byte, len(ids))

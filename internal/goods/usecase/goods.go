@@ -16,8 +16,11 @@ import (
 	"log/slog"
 	"warehouseHelper/internal/averagesales"
 	"warehouseHelper/internal/domain"
+	"warehouseHelper/internal/metrics"
 	"warehouseHelper/internal/msclient/client"
 )
+
+const trackPkg = "goods"
 
 // ProductFolderClient — источник папок товаров из МС (реализует *client.MSAPIClient).
 type ProductFolderClient interface {
@@ -177,6 +180,7 @@ func (uc *GoodsUseCase) SetTurnoverBackfiller(t TurnoverBackfiller) {
 // TurnoverProduct — срез товара для модуля средних продаж
 // (реализация averagesales.ProductReader; products читает только каталог).
 func (uc *GoodsUseCase) TurnoverProduct(ctx context.Context, id string) (*averagesales.TurnoverProduct, error) {
+	defer metrics.Track(trackPkg, "TurnoverProduct")()
 	p, err := uc.repo.GetProduct(ctx, id)
 	if err != nil {
 		return nil, err
@@ -193,6 +197,7 @@ func (uc *GoodsUseCase) TurnoverProduct(ctx context.Context, id string) (*averag
 // TurnoverProductsByIDs — срез каталога для списка товаров
 // (реализация averagesales.ProductReader).
 func (uc *GoodsUseCase) TurnoverProductsByIDs(ctx context.Context, ids []string) ([]averagesales.TurnoverProduct, error) {
+	defer metrics.Track(trackPkg, "TurnoverProductsByIDs")()
 	products, err := uc.repo.GetProductsByIDs(ctx, ids)
 	if err != nil {
 		return nil, err
@@ -215,6 +220,7 @@ func (uc *GoodsUseCase) TurnoverProductsByIDs(ctx context.Context, ids []string)
 // единичные веса туда, модуль считает среднее и через каталог пишет
 // products.average_weight (граница: владелец products — каталог).
 func (uc *GoodsUseCase) UpdateAverageWeight(ctx context.Context, productID string, avgKg float64) error {
+	defer metrics.Track(trackPkg, "UpdateAverageWeight")()
 	if avgKg <= 0 {
 		return errors.New("средний вес должен быть больше нуля")
 	}
@@ -224,6 +230,7 @@ func (uc *GoodsUseCase) UpdateAverageWeight(ctx context.Context, productID strin
 
 // LoadFolderTree тянет папки из МС и строит дерево (без товаров).
 func (uc *GoodsUseCase) LoadFolderTree(ctx context.Context) ([]*FolderNode, error) {
+	defer metrics.Track(trackPkg, "LoadFolderTree")()
 	folders, err := uc.folders.FetchProductFolders(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("не удалось получить папки товаров из МойСклад: %w", err)
@@ -236,6 +243,7 @@ func (uc *GoodsUseCase) LoadFolderTree(ctx context.Context) ([]*FolderNode, erro
 // с filter=pathName, через msclient) и строит дерево с товарами-листьями.
 // Ошибка любой папки прерывает загрузку целиком.
 func (uc *GoodsUseCase) LoadTreeWithProducts(ctx context.Context) ([]*FolderNode, error) {
+	defer metrics.Track(trackPkg, "LoadTreeWithProducts")()
 	folders, err := uc.folders.FetchProductFolders(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("не удалось получить папки товаров из МойСклад: %w", err)
@@ -291,6 +299,7 @@ type ProductExportError struct {
 // единицы измерения кэшируются по href. Ошибка любого товара не прерывает
 // остальных: по каждому неуспешному возвращается ProductExportError.
 func (uc *GoodsUseCase) ExportProducts(ctx context.Context, items []ExportItem) ([]ProductExportError, error) {
+	defer metrics.Track(trackPkg, "ExportProducts")()
 	byPath := make(map[string][]ExportItem)
 	for _, it := range items {
 		byPath[it.GroupPath] = append(byPath[it.GroupPath], it)
@@ -366,6 +375,7 @@ func (uc *GoodsUseCase) ExportProducts(ctx context.Context, items []ExportItem) 
 // SearchProducts ищет товары каталога: точное совпадение internal_code
 // или подстрока name. Пустой запрос — ошибка.
 func (uc *GoodsUseCase) SearchProducts(ctx context.Context, query string) ([]domain.Product, error) {
+	defer metrics.Track(trackPkg, "SearchProducts")()
 	q := strings.TrimSpace(query)
 	if q == "" {
 		return nil, errors.New("пустой запрос поиска")
@@ -381,6 +391,7 @@ func (uc *GoodsUseCase) SearchProducts(ctx context.Context, query string) ([]dom
 
 // GetProduct — товар каталога по id.
 func (uc *GoodsUseCase) GetProduct(ctx context.Context, id string) (*domain.Product, error) {
+	defer metrics.Track(trackPkg, "GetProduct")()
 	p, err := uc.repo.GetProduct(ctx, id)
 	if err != nil {
 		return nil, err
@@ -392,6 +403,7 @@ func (uc *GoodsUseCase) GetProduct(ctx context.Context, id string) (*domain.Prod
 // SaveProduct сохраняет ручные правки позиции (upsert по id).
 // Новый товар (первичное добавление) уходит в фоновый бэкфилл оборотов.
 func (uc *GoodsUseCase) SaveProduct(ctx context.Context, p *domain.Product) error {
+	defer metrics.Track(trackPkg, "SaveProduct")()
 	if err := uc.repo.UpsertProduct(ctx, p); err != nil {
 		return err
 	}
@@ -403,6 +415,7 @@ func (uc *GoodsUseCase) SaveProduct(ctx context.Context, p *domain.Product) erro
 // все поля из МС заново, group_name остаётся текущий (из каталога).
 // Жёсткая валидация — как при выгрузке; при ошибке запись в БД не меняется.
 func (uc *GoodsUseCase) ResyncProduct(ctx context.Context, id string) (*domain.Product, error) {
+	defer metrics.Track(trackPkg, "ResyncProduct")()
 	existing, err := uc.repo.GetProduct(ctx, id)
 	if err != nil {
 		return nil, err

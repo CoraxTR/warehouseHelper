@@ -16,9 +16,11 @@ import (
 	"warehouseHelper/internal/decoderules"
 	"warehouseHelper/internal/domain"
 	"warehouseHelper/internal/innercode"
+	"warehouseHelper/internal/metrics"
 	"warehouseHelper/internal/receiving"
 	"warehouseHelper/internal/stock"
 )
+
 
 // ReceiveRepository — контракт чтения данных приёмки.
 type ReceiveRepository interface {
@@ -63,6 +65,7 @@ func NewReceivingUseCase(repo ReceiveRepository, stock StockAccepter, weights We
 // GetCache собирает кеш приёмки поставщика: правила вычитки (куски и
 // коробки), маппинг внешних кодов, позиции поставщика для ручного выбора.
 func (uc *ReceivingUseCase) GetCache(ctx context.Context, supplierID string) (*receiving.Cache, error) {
+	defer metrics.Track(trackPkg, "GetCache")()
 	supplierID = strings.TrimSpace(supplierID)
 	if supplierID == "" {
 		return nil, errors.New("не выбран поставщик")
@@ -121,6 +124,7 @@ func (uc *ReceivingUseCase) GetCache(ctx context.Context, supplierID string) (*r
 // даже для товаров, не заведённых у поставщика. Вызывается только при
 // отдаче кеша странице; Save резолвит внутренние коды лениво.
 func (uc *ReceivingUseCase) AddCatalogCodes(ctx context.Context, cache *receiving.Cache) error {
+	defer metrics.Track(trackPkg, "AddCatalogCodes")()
 	refs, err := uc.repo.LoadCatalogAllRefs(ctx)
 	if err != nil {
 		return fmt.Errorf("каталог для кеша: %w", err)
@@ -165,6 +169,7 @@ func parseRules(rules []string, parse func(string) (decoderules.Rule, error)) ([
 // Resolve распознаёт скан: внутренний формат (29/33) или правило поставщика.
 // Ручные поля (товар, вес, даты) применяются, если поле не вычитывается.
 func (uc *ReceivingUseCase) Resolve(ctx context.Context, cache *receiving.Cache, e receiving.ScanEntry) (*receiving.DecodedScan, error) {
+	defer metrics.Track(trackPkg, "Resolve")()
 	raw := strings.TrimSpace(e.Raw)
 	if raw == "" {
 		return nil, errors.New("пустой штрих-код")

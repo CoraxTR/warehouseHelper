@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"log/slog"
 	"warehouseHelper/internal/domain"
+	"warehouseHelper/internal/metrics"
 )
+
 
 type ExcelExporter interface {
 	ExportOrdersToExcel(orders []*domain.InternalOrder) (savepath string, err error)
@@ -75,6 +77,7 @@ type ExportSummary struct {
 }
 
 func (uc *ExportToExcelUseCase) ExportOrders(ctx context.Context) (summary *ExportSummary, err error) {
+	defer metrics.Track(trackPkg, "ExportOrders")()
 	defer func() {
 		if cleanErr := uc.tempCleaner.CleanOlderThan(uc.tempCleanupMaxAge); cleanErr != nil {
 			slog.Error(fmt.Sprintf("Failed to clean temp dir: %v", cleanErr))
@@ -153,6 +156,7 @@ func NewExportBarcodesToExcelUseCase(exporter ExcelBarcodesExporter, repository 
 }
 
 func (uc *ExportBarcodesToExcelUseCase) GetMultipleOrdersBarcodes(ctx context.Context, ids []string) (string, error) {
+	defer metrics.Track(trackPkg, "GetMultipleOrdersBarcodes")()
 	orders, err := uc.repository.GetOrdersByIDs(ctx, ids)
 	if err != nil {
 		slog.Info(fmt.Sprintf("getMultipleOrdersBarcodes could not get orders from repository: %s", err))

@@ -7,10 +7,13 @@ import (
 	"os"
 	"path/filepath"
 	"warehouseHelper/internal/domain"
+	"warehouseHelper/internal/metrics"
 	"warehouseHelper/internal/msclient/client"
 	"warehouseHelper/internal/msclient/pdfpreloader"
 	"warehouseHelper/internal/tempdir"
 )
+
+const trackPkg = "msclient"
 
 type OrderRepository interface {
 	GetAllOrders(ctx context.Context) ([]*domain.InternalOrder, error)
@@ -44,10 +47,12 @@ func NewOrdersUseCase(repo OrderRepository, msClient MoySkladClient, converter *
 }
 
 func (uc *OrdersUseCase) GetAllOrders(ctx context.Context) ([]*domain.InternalOrder, error) {
+	defer metrics.Track(trackPkg, "GetAllOrders")()
 	return uc.repo.GetAllOrders(ctx)
 }
 
 func (uc *OrdersUseCase) UpdateOrders(ctx context.Context, orders []*domain.InternalOrder) error {
+	defer metrics.Track(trackPkg, "UpdateOrders")()
 	err := uc.repo.UpdateOrders(ctx, orders)
 	if err != nil {
 		return err
@@ -57,6 +62,7 @@ func (uc *OrdersUseCase) UpdateOrders(ctx context.Context, orders []*domain.Inte
 }
 
 func (uc *OrdersUseCase) UpdateOrderFromMS(ctx context.Context, id string) error {
+	defer metrics.Track(trackPkg, "UpdateOrderFromMS")()
 	err := uc.DeletePreloadedPDF(id)
 	if err != nil {
 		return err
@@ -85,6 +91,7 @@ func (uc *OrdersUseCase) UpdateOrderFromMS(ctx context.Context, id string) error
 }
 
 func (uc *OrdersUseCase) DeleteOrder(ctx context.Context, id string) error {
+	defer metrics.Track(trackPkg, "DeleteOrder")()
 	if err := uc.repo.DeleteOrder(ctx, id); err != nil {
 		return err
 	}
@@ -99,16 +106,19 @@ func (uc *OrdersUseCase) DeleteOrder(ctx context.Context, id string) error {
 // GetOrderByName возвращает заказ по номеру в МойСклад (name).
 // Если заказ не найден, возвращает (nil, nil).
 func (uc *OrdersUseCase) GetOrderByName(ctx context.Context, name string) (*domain.InternalOrder, error) {
+	defer metrics.Track(trackPkg, "GetOrderByName")()
 	return uc.repo.GetOrderByName(ctx, name)
 }
 
 // GetOrderByRefGoNumber возвращает заказ по номеру в РефГо (refgo_number).
 // Если заказ не найден, возвращает (nil, nil).
 func (uc *OrdersUseCase) GetOrderByRefGoNumber(ctx context.Context, refgoNumber string) (*domain.InternalOrder, error) {
+	defer metrics.Track(trackPkg, "GetOrderByRefGoNumber")()
 	return uc.repo.GetOrderByRefGoNumber(ctx, refgoNumber)
 }
 
 func (uc *OrdersUseCase) DeletePreloadedPDF(id string) error {
+	defer metrics.Track(trackPkg, "DeletePreloadedPDF")()
 	filePath := filepath.Join(tempdir.Dir, id+".pdf")
 
 	err := os.Remove(filePath)
