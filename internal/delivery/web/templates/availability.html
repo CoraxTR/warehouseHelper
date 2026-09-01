@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Доступность товаров — {{monthName .Month}}</title>
+    <link rel="stylesheet" href="/static/raven-guard.css">
+</head>
+
+<body>
+    <header class="brandbar">
+        <a class="brandbar__brand" href="/"><svg class="brandbar__emblem" viewBox="0 0 64 64" aria-hidden="true"><circle cx="35" cy="25" r="14" fill="#F4F1E9"/><polygon points="6,26 30,17 28,27" fill="#F4F1E9"/><polygon points="13,35 28,27 26,36" fill="#F4F1E9"/><circle cx="34" cy="23" r="3.6" fill="#0A0A0D"/><circle cx="33" cy="22" r="1.1" fill="#C02832"/></svg><span class="brandbar__name">ВОРОН&nbsp;&middot;&nbsp;СКЛАД</span></a>
+        <span class="brandbar__motto">Приёмка или смерть</span>
+    </header>
+    <h1>Доступность товаров</h1>
+    <p><a href="/goods">← Назад в Продукцию</a></p>
+
+    <div class="month-nav">
+        <a href="/goods/availability?month={{prevMonth .Month}}">← {{monthName (prevMonth .Month)}}</a>
+        <span class="month-nav__current">{{monthName .Month}}</span>
+        <a href="/goods/availability?month={{nextMonth .Month}}">{{monthName (nextMonth .Month)}} →</a>
+    </div>
+    <div class="av-hint">Выделите ячейки в строке товара (нажали и тяните), затем «Сохранить изменения» справа от названия. Недоступные дни — тёмные.</div>
+
+    <table class="av-table">
+        <thead>
+            <tr>
+                <th class="av-name-col">Товар</th>
+                {{range $i := seq .Days}}
+                <th class="av-day {{if eq $i (todayDay $.Month)}}today{{end}}">{{$i}}</th>
+                {{end}}
+            </tr>
+        </thead>
+        <tbody>
+            {{$prev := ""}}
+            {{range $p := .Products}}
+            {{if ne $p.GroupName $prev}}
+            <tr class="group-row">
+                <td colspan="{{plus $.Days 1}}">{{$p.GroupName}}</td>
+            </tr>
+            {{$prev = $p.GroupName}}
+            {{end}}
+            <tr class="av-row" data-pid="{{$p.ProductID}}">
+                <td class="av-name">{{$p.Name}}<span class="av-save"><button type="button" onclick="saveAvailability(this)">Сохранить изменения</button></span></td>
+                {{range $i := seq $.Days}}
+                <td class="av-cell {{if index $p.Orderable (minus $i 1)}}on{{else}}off{{end}}" data-day="{{$i}}"></td>
+                {{end}}
+            </tr>
+            {{end}}
+        </tbody>
+    </table>
+
+    <script>
+        var AV_MONTH = '{{.Month.Format "2006-01"}}'; // месяц страницы для дат сохранения
+
+        // Выделение ячеек: mousedown фиксирует строку, drag идёт только по ней
+        // (уход курсора выше/ниже строку НЕ меняет), значение — по первой ячейке.
+        var AV = {
+            active: false,
+            pid: null,
+            startDay: 0,
+            lastDay: 0,
+            target: 1,
+            pending: {} // pid -> {dates: [...], orderable: bool}
+        };
+
+        function avCellClass(cell) {
+            return (cell.className.indexOf('on') >= 0) ? 'on' : 'off';
+        }
+
+        function avCellValue(cell) {
+            return avCellClass(cell) === 'on' ? 1 : 0;
+        }
+
+        function avCells(pid) {
+            var rows = document.getElementsByTagName('tr');
+            var out = [];
+            for (var i = 0; i < rows.length; i++) {
+                if (rows[i].getAttribute('data-pid') === pid) {
+                    var tds = rows[i].getElementsByTagName('td');
+                    for (var j = 0; j < tds.length; j++) {
+                        if (tds[j].className.indexOf('av-cell') >= 0) {
+                            out.push(tds[j]);
+                        }
+                    }
+                }
+            }
+            return out;
+        }
+
+        function avClearSelection(pid) {
+            var cells = avCells(pid);
+            for (var i = 0; i < cells.length; i++) {
+                cells[i].className = cells[i].className.replace(/\bsel\b/g, '').trim();
+            }
+        }
+
+        function avApplySelection(pid, from, to) {
+            var lo = Math.min(from, to);
+            var hi = Math.max(from, to);
+            var cells = avCells(pid);
+            for (var i = 0; i < cells.length; i++) {
+                var d = parseInt(cells[i].getAttribute('data-day'), 10);
+                var add = (d >= lo && d <= hi) ? ' sel' : '';
+                cells[i].className = cells[i].className.replace(/\bsel\b/g, '').trim() + add;
+            }
+        }
+
+        function avFirstValue(pid, from) {
+            var cells = avCells(pid);
+            for (var i = 0; i < cells.length; i++) {
+                if (parseInt(cells[i].getAttribute('data-day'), 10) === from) {
+                    return avCellValue(cells[i]);
+                }
+            }
+            return 1;
+        }
+
+        function avSaveButton(pid) {
+            var rows = document.getElementsByTagName('tr');
+            for (var i = 0; i < rows.length; i++) {
+                if (rows[i].getAttribute('data-pid') === pid) {
+                    var name = rows[i].getElementsByClassName('av-name')[0];
+                    if (name) {
+                        return name.getElementsByTagName('button')[0];
+                    }
+                }
+            }
+            return null;
+        }
+
+        function avStart(e) {
+            var cell = e.target;
+            if (cell.className.indexOf('av-cell') < 0) {
+                return;
+            }
+            var row = cell.parentNode;
+            var pid = row.getAttribute('data-pid');
+            if (!pid) {
+                return;
+            }
+            e.preventDefault();
+            AV.active = true;
+            AV.pid = pid;
+            AV.startDay = parseInt(cell.getAttribute('data-day'), 10);
+            AV.lastDay = AV.startDay;
+            AV.target = avFirstValue(pid, AV.startDay) ? 0 : 1; // первая ячейка задаёт значение
+            avApplySelection(pid, AV.startDay, AV.lastDay);
+        }
+
+        function avMove(e) {
+            if (!AV.active || !AV.pid) {
+                return;
+            }
+            var cell = e.target;
+            if (cell.className.indexOf('av-cell') < 0) {
+                return;
+            }
+            // Только ячейки той же строки: уход выше/ниже строку не меняет.
+            if (cell.parentNode.getAttribute('data-pid') !== AV.pid) {
+                return;
+            }
+            var d = parseInt(cell.getAttribute('data-day'), 10);
+            if (d === AV.lastDay) {
+                return;
+            }
+            AV.lastDay = d;
+            avApplySelection(AV.pid, AV.startDay, AV.lastDay);
+        }
+
+        function avEnd() {
+            if (!AV.active || !AV.pid) {
+                return;
+            }
+            var pid = AV.pid;
+            var lo = Math.min(AV.startDay, AV.lastDay);
+            var hi = Math.max(AV.startDay, AV.lastDay);
+            var dates = [];
+            var cells = avCells(pid);
+            var btn = avSaveButton(pid);
+            for (var i = 0; i < cells.length; i++) {
+                var d = parseInt(cells[i].getAttribute('data-day'), 10);
+                if (d < lo || d > hi) {
+                    continue;
+                }
+                // Применить значение ко всем выделенным.
+                var newClass = AV.target === 1 ? 'on' : 'off';
+                cells[i].className = cells[i].className.replace(/\bon|\boff/g, '').trim() + ' ' + newClass + ' sel';
+                dates.push(String(d).length === 1 ? '0' + d : '' + d);
+            }
+            AV.pending[pid] = { dates: dates, orderable: AV.target === 1 };
+            AV.active = false;
+            AV.pid = null;
+            if (btn) {
+                btn.style.display = 'inline-block';
+            }
+        }
+
+        // Сохранение: POST /goods/availability/save {product_id, dates[], orderable}.
+        function saveAvailability(btn) {
+            var row = btn.parentNode.parentNode.parentNode; // button → span → td → tr
+            var pid = row.getAttribute('data-pid');
+            var p = AV.pending[pid];
+            if (!p || p.dates.length === 0) {
+                alert('Сначала выделите дни в строке товара');
+                return;
+            }
+            var dates = [];
+            for (var i = 0; i < p.dates.length; i++) {
+                dates.push(AV_MONTH + '-' + p.dates[i]);
+            }
+            var xhr = new XMLHttpRequest();
+            xhr.open('POST', '/goods/availability/save', true);
+            xhr.setRequestHeader('Content-Type', 'application/json');
+            xhr.onreadystatechange = function () {
+                if (xhr.readyState !== 4) {
+                    return;
+                }
+                if (xhr.status === 204) {
+                    delete AV.pending[pid];
+                    location.reload();
+                } else {
+                    alert('Не удалось сохранить (HTTP ' + xhr.status + ')');
+                }
+            };
+            xhr.send(JSON.stringify({ product_id: pid, dates: dates, orderable: p.orderable }));
+        }
+
+        document.addEventListener('mousedown', avStart, false);
+        document.addEventListener('mouseover', avMove, false);
+        document.addEventListener('mouseup', avEnd, false);
+    </script>
+</body>
+
+</html>

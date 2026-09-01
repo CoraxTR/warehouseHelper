@@ -118,6 +118,38 @@ func (f *fakeRepo) ClearSoldOut(_ context.Context, productID string, date time.T
 	return nil
 }
 
+func (f *fakeRepo) ListByRange(_ context.Context, from, to time.Time) (map[string]map[time.Time]daystate.DayState, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	out := map[string]map[time.Time]daystate.DayState{}
+	for _, d := range f.days {
+		if d.Date.Before(from) || d.Date.After(to) {
+			continue
+		}
+		byDate := out[d.ProductID]
+		if byDate == nil {
+			byDate = map[time.Time]daystate.DayState{}
+			out[d.ProductID] = byDate
+		}
+		byDate[d.Date] = *d
+	}
+	return out, nil
+}
+
+// fakeCatalog — каталог-заглушка для страниц daystate.
+type fakeCatalog struct {
+	products []daystate.CatalogProduct
+	err      error
+}
+
+func (f *fakeCatalog) CatalogProducts(_ context.Context) ([]daystate.CatalogProduct, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.products, nil
+}
+
 // fakeSoldOut — получатель SoldOut.
 type fakeSoldOut struct {
 	calls []string
@@ -160,8 +192,8 @@ func (f *fakeRollback) RollbackSoldOut(_ context.Context, productID string, _ ti
 	return true, nil
 }
 
-func newTestUC(repo Repository, soldOut SoldOutNotifier, unavailable UnavailableNotifier, rollback SoldOutRollbackNotifier, now time.Time) *UseCase {
-	uc := NewUseCase(repo, soldOut, unavailable, rollback)
+func newTestUC(repo Repository, catalog CatalogProvider, soldOut SoldOutNotifier, unavailable UnavailableNotifier, rollback SoldOutRollbackNotifier, now time.Time) *UseCase {
+	uc := NewUseCase(repo, catalog, soldOut, unavailable, rollback)
 	uc.now = func() time.Time { return now }
 	return uc
 }
@@ -172,7 +204,7 @@ func TestOnStockChanged_CreatesRowAndUpdates(t *testing.T) {
 		"p1": {{Qty: 5, EffectiveGeneral: i16(7)}},
 	}}
 	soldOut := &fakeSoldOut{}
-	uc := newTestUC(repo, soldOut, &fakeUnavailable{}, &fakeRollback{}, today)
+	uc := newTestUC(repo, &fakeCatalog{}, soldOut, &fakeUnavailable{}, &fakeRollback{}, today)
 
 	if err := uc.OnStockChanged(context.Background(), "p1"); err != nil {
 		t.Fatalf("OnStockChanged: %v", err)
@@ -217,7 +249,7 @@ func TestOnStockChanged_SoldOutTransition(t *testing.T) {
 		lots: map[string][]daystate.LotState{"p1": {{Qty: 0}}},
 	}
 	soldOut := &fakeSoldOut{}
-	uc := newTestUC(repo, soldOut, &fakeUnavailable{}, &fakeRollback{}, today)
+	uc := newTestUC(repo, &fakeCatalog{}, soldOut, &fakeUnavailable{}, &fakeRollback{}, today)
 
 	if err := uc.OnStockChanged(context.Background(), "p1"); err != nil {
 		t.Fatalf("OnStockChanged: %v", err)
@@ -244,7 +276,7 @@ func TestOnStockChanged_NoEmitWhenAlreadyOut(t *testing.T) {
 		lots: map[string][]daystate.LotState{"p1": nil},
 	}
 	soldOut := &fakeSoldOut{}
-	uc := newTestUC(repo, soldOut, &fakeUnavailable{}, &fakeRollback{}, today)
+	uc := newTestUC(repo, &fakeCatalog{}, soldOut, &fakeUnavailable{}, &fakeRollback{}, today)
 
 	if err := uc.OnStockChanged(context.Background(), "p1"); err != nil {
 		t.Fatalf("OnStockChanged: %v", err)
@@ -265,7 +297,7 @@ func TestOnStockChanged_DiscountIncreaseAppends(t *testing.T) {
 		},
 		lots: map[string][]daystate.LotState{"p1": {{Qty: 1, EffectiveGeneral: i16(15)}}},
 	}
-	uc := newTestUC(repo, &fakeSoldOut{}, &fakeUnavailable{}, &fakeRollback{}, today)
+	uc := newTestUC(repo, &fakeCatalog{}, &fakeSoldOut{}, &fakeUnavailable{}, &fakeRollback{}, today)
 
 	if err := uc.OnStockChanged(context.Background(), "p1"); err != nil {
 		t.Fatalf("OnStockChanged: %v", err)
@@ -282,7 +314,7 @@ func TestOnStockChanged_DiscountIncreaseAppends(t *testing.T) {
 func TestSetOrderable(t *testing.T) {
 	repo := &fakeRepo{days: map[string]*daystate.DayState{}}
 	unavailable := &fakeUnavailable{}
-	uc := newTestUC(repo, &fakeSoldOut{}, unavailable, &fakeRollback{}, day(1))
+	uc := newTestUC(repo, &fakeCatalog{}, &fakeSoldOut{}, unavailable, &fakeRollback{}, day(1))
 
 	d1 := day(10)
 	d2 := day(11)
@@ -317,7 +349,7 @@ func TestSetOrderable(t *testing.T) {
 
 func TestSetOrderable_Validation(t *testing.T) {
 	repo := &fakeRepo{days: map[string]*daystate.DayState{}}
-	uc := newTestUC(repo, &fakeSoldOut{}, &fakeUnavailable{}, &fakeRollback{}, day(1))
+	uc := newTestUC(repo, &fakeCatalog{}, &fakeSoldOut{}, &fakeUnavailable{}, &fakeRollback{}, day(1))
 
 	if err := uc.SetUnavailable(context.Background(), "", []time.Time{day(10)}); err == nil {
 		t.Error("пустой товар: ожидалась ошибка")
@@ -330,7 +362,7 @@ func TestSetOrderable_Validation(t *testing.T) {
 func TestRollbackSoldOut(t *testing.T) {
 	repo := &fakeRepo{days: map[string]*daystate.DayState{}}
 	rollback := &fakeRollback{}
-	uc := newTestUC(repo, &fakeSoldOut{}, &fakeUnavailable{}, rollback, day(1))
+	uc := newTestUC(repo, &fakeCatalog{}, &fakeSoldOut{}, &fakeUnavailable{}, rollback, day(1))
 
 	at := day(1)
 	if err := uc.RollbackSoldOut(context.Background(), "p1", at); err != nil {
@@ -347,7 +379,7 @@ func TestRollbackSoldOut(t *testing.T) {
 func TestRollbackSoldOut_NotifierError(t *testing.T) {
 	repo := &fakeRepo{days: map[string]*daystate.DayState{}}
 	rollback := &fakeRollback{err: errors.New("coeff down")}
-	uc := newTestUC(repo, &fakeSoldOut{}, &fakeUnavailable{}, rollback, day(1))
+	uc := newTestUC(repo, &fakeCatalog{}, &fakeSoldOut{}, &fakeUnavailable{}, rollback, day(1))
 
 	if err := uc.RollbackSoldOut(context.Background(), "p1", day(1)); err == nil {
 		t.Error("ошибка эмита должна вернуться вызывающему")
@@ -356,7 +388,7 @@ func TestRollbackSoldOut_NotifierError(t *testing.T) {
 
 func TestEnsureSnapshot(t *testing.T) {
 	repo := &fakeRepo{days: map[string]*daystate.DayState{}, snapDone: false}
-	uc := newTestUC(repo, &fakeSoldOut{}, &fakeUnavailable{}, &fakeRollback{}, day(1))
+	uc := newTestUC(repo, &fakeCatalog{}, &fakeSoldOut{}, &fakeUnavailable{}, &fakeRollback{}, day(1))
 
 	if err := uc.EnsureSnapshot(context.Background(), day(1)); err != nil {
 		t.Fatalf("EnsureSnapshot: %v", err)
@@ -378,7 +410,7 @@ func TestEnsureSnapshot(t *testing.T) {
 // Тик снапшота: до времени снапшота — не проверяем, после — делаем.
 func TestTrySnapshotTiming(t *testing.T) {
 	repo := &fakeRepo{days: map[string]*daystate.DayState{}, snapDone: false}
-	uc := newTestUC(repo, &fakeSoldOut{}, &fakeUnavailable{}, &fakeRollback{}, day(1).Add(8*time.Hour))
+	uc := newTestUC(repo, &fakeCatalog{}, &fakeSoldOut{}, &fakeUnavailable{}, &fakeRollback{}, day(1).Add(8*time.Hour))
 
 	// 08:00, снапшот в 09:00 — рано.
 	uc.trySnapshot(context.Background(), 9*time.Hour)
@@ -391,5 +423,74 @@ func TestTrySnapshotTiming(t *testing.T) {
 	uc.trySnapshot(context.Background(), 9*time.Hour)
 	if repo.snapDoneCalls != 1 || repo.snapInsertCalls != 1 {
 		t.Errorf("в 09:05: done=%d insert=%d, want 1/1", repo.snapDoneCalls, repo.snapInsertCalls)
+	}
+}
+
+// Календарь доступности: строки дня переопределяют дефолт «доступна».
+func TestAvailability(t *testing.T) {
+	now := day(1)
+	repo := &fakeRepo{days: map[string]*daystate.DayState{
+		key("p1", day(10)): {ProductID: "p1", Date: day(10), Orderable: false},
+		key("p2", day(10)): {ProductID: "p2", Date: day(10), Orderable: true},
+	}}
+	catalog := &fakeCatalog{products: []daystate.CatalogProduct{
+		{ID: "p1", Name: "Хлеб", GroupName: "Хлебобулочные"},
+		{ID: "p2", Name: "Молоко", GroupName: "Молочные"},
+	}}
+	uc := newTestUC(repo, catalog, &fakeSoldOut{}, &fakeUnavailable{}, &fakeRollback{}, now)
+
+	page, err := uc.Availability(context.Background(), day(1))
+	if err != nil {
+		t.Fatalf("Availability: %v", err)
+	}
+	if page.Days != 30 {
+		t.Errorf("Days = %d, want 30 (сентябрь)", page.Days)
+	}
+	if len(page.Products) != 2 {
+		t.Fatalf("товаров = %d, want 2", len(page.Products))
+	}
+	p1 := page.Products[0]
+	if p1.ProductID != "p1" || p1.GroupName != "Хлебобулочные" {
+		t.Errorf("p1 = %+v", p1)
+	}
+	if !p1.Orderable[0] {
+		t.Error("день без строки должен быть доступен по умолчанию")
+	}
+	if p1.Orderable[9] {
+		t.Error("день 10 у p1 должен быть недоступен (строка orderable=false)")
+	}
+	if !page.Products[1].Orderable[9] {
+		t.Error("день 10 у p2 должен остаться доступным")
+	}
+}
+
+// Отчёт по наличию: ячейки по правилам, отсутствующие строки — пустые.
+func TestStockReport(t *testing.T) {
+	now := day(15) // середина месяца: дни 1..2 уже прошли
+	repo := &fakeRepo{days: map[string]*daystate.DayState{
+		key("p1", day(1)): {ProductID: "p1", Date: day(1), InStock: b(true), Discount: i16(15), Orderable: true},
+		key("p1", day(2)): {ProductID: "p1", Date: day(2), InStock: b(false), Orderable: true},
+	}}
+	catalog := &fakeCatalog{products: []daystate.CatalogProduct{
+		{ID: "p1", Name: "Хлеб", GroupName: "Хлебобулочные"},
+	}}
+	uc := newTestUC(repo, catalog, &fakeSoldOut{}, &fakeUnavailable{}, &fakeRollback{}, now)
+
+	page, err := uc.StockReport(context.Background(), day(1))
+	if err != nil {
+		t.Fatalf("StockReport: %v", err)
+	}
+	if len(page.Products) != 1 {
+		t.Fatalf("товаров = %d, want 1", len(page.Products))
+	}
+	cells := page.Products[0].Cells
+	if cells[0].Kind != daystate.CellYellow {
+		t.Errorf("день 1: kind = %s, want yellow", cells[0].Kind)
+	}
+	if cells[1].Kind != daystate.CellRed {
+		t.Errorf("день 2: kind = %s, want red", cells[1].Kind)
+	}
+	if cells[2].Kind != daystate.CellEmpty {
+		t.Errorf("день 3 (нет строки): kind = %s, want empty", cells[2].Kind)
 	}
 }

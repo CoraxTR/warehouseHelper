@@ -15,6 +15,7 @@ import (
 
 	"log/slog"
 	"warehouseHelper/internal/averagesales"
+	"warehouseHelper/internal/daystate"
 	"warehouseHelper/internal/domain"
 	"warehouseHelper/internal/metrics"
 	"warehouseHelper/internal/msclient/client"
@@ -41,6 +42,9 @@ type ProductsRepository interface {
 	SearchProducts(ctx context.Context, query string) ([]domain.Product, error)
 	GetProduct(ctx context.Context, id string) (*domain.Product, error)
 	GetProductsByIDs(ctx context.Context, ids []string) ([]domain.Product, error)
+	// LoadAllProducts возвращает все товары каталога, отсортированные по
+	// (group_name, name) — для страниц состояния по дням.
+	LoadAllProducts(ctx context.Context) ([]domain.Product, error)
 	// UpdateProductAverageWeight — обновление среднего веса (кг) по входу
 	// модуля среднего веса (products.average_weight пишет только каталог).
 	UpdateProductAverageWeight(ctx context.Context, productID string, avgKg float64) error
@@ -406,6 +410,24 @@ func (uc *GoodsUseCase) SearchProducts(ctx context.Context, query string) ([]dom
 	}
 
 	return products, nil
+}
+
+// CatalogProducts — все товары каталога, отсортированные по группам
+// (реализация daystate.CatalogProvider для календаря доступности и отчёта
+// по наличию; продукты читает только каталог).
+func (uc *GoodsUseCase) CatalogProducts(ctx context.Context) ([]daystate.CatalogProduct, error) {
+	done := metrics.Track(trackPkg, "CatalogProducts")
+	defer done()
+
+	products, err := uc.repo.LoadAllProducts(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("каталог: %w", err)
+	}
+	out := make([]daystate.CatalogProduct, 0, len(products))
+	for _, p := range products {
+		out = append(out, daystate.CatalogProduct{ID: p.ID, Name: p.Name, GroupName: p.GroupName})
+	}
+	return out, nil
 }
 
 // GetProduct — товар каталога по id.

@@ -58,6 +58,34 @@ func (pg *PGClient) GetProductsByIDs(ctx context.Context, ids []string) ([]domai
 	return products, nil
 }
 
+// LoadAllProducts возвращает все товары каталога, отсортированные по
+// (group_name, name) — страницы состояния по дням (календарь, отчёт).
+func (pg *PGClient) LoadAllProducts(ctx context.Context) ([]domain.Product, error) {
+	rows, err := pg.Pool.Query(ctx, `
+        SELECT `+productColumns+`
+        FROM products
+        ORDER BY group_name, name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	products := make([]domain.Product, 0)
+	for rows.Next() {
+		p, err := scanProduct(rows)
+		if err != nil {
+			return nil, err
+		}
+		products = append(products, *p)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return products, nil
+}
+
 // UpsertProduct создаёт или обновляет товар каталога (upsert по id).
 // Дубль internal_code (уникальный индекс, занят другим товаром) →
 // domain.ErrInternalCodeTaken.

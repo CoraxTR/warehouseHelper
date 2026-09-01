@@ -22,7 +22,7 @@ type Repository interface {
 	// EnsureDay создаёт строку дня, если её нет (ON CONFLICT DO NOTHING);
 	// snapshot-значения используются только при вставке.
 	EnsureDay(ctx context.Context, d daystate.DayState) error
-	// GetDay читает строку дня; (nil, nil) — строки нет.
+	// GetDay читает строку дня; строки нет — daystate.ErrDayNotFound.
 	GetDay(ctx context.Context, productID string, date time.Time) (*daystate.DayState, error)
 	// UpdateDay обновляет пересчитываемые поля (in_stock, discount,
 	// discount_increases, sold_out_today); строки нет — daystate.ErrDayNotFound.
@@ -41,6 +41,15 @@ type Repository interface {
 	// ClearSoldOut сбрасывает маркер «закончилась» строки дня; строки нет —
 	// не ошибка (нечего сбрасывать).
 	ClearSoldOut(ctx context.Context, productID string, date time.Time) error
+	// ListByRange читает строки за период [from, to]:
+	// map product_id → map date → строка (для страниц календаря и отчёта).
+	ListByRange(ctx context.Context, from, to time.Time) (map[string]map[time.Time]daystate.DayState, error)
+}
+
+// CatalogProvider — каталог товаров для страниц daystate; реализует
+// goods (метод CatalogProducts), связка в di.go.
+type CatalogProvider interface {
+	CatalogProducts(ctx context.Context) ([]daystate.CatalogProduct, error)
 }
 
 // SoldOutNotifier — получатель события «позиция закончилась»; реализует
@@ -65,6 +74,7 @@ type SoldOutRollbackNotifier interface {
 // наблюдатели фактов для ordercoeff.
 type UseCase struct {
 	repo            Repository
+	catalog         CatalogProvider
 	soldOut         SoldOutNotifier
 	unavailable     UnavailableNotifier
 	soldOutRollback SoldOutRollbackNotifier
@@ -72,10 +82,12 @@ type UseCase struct {
 	now func() time.Time // переопределяется в тестах
 }
 
-// NewUseCase собирает сценарий; notifier'ы обязательны (реализует ordercoeff).
-func NewUseCase(repo Repository, soldOut SoldOutNotifier, unavailable UnavailableNotifier, soldOutRollback SoldOutRollbackNotifier) *UseCase {
+// NewUseCase собирает сценарий; catalog и notifier'ы обязательны
+// (goods и ordercoeff реализуют, связка di.go).
+func NewUseCase(repo Repository, catalog CatalogProvider, soldOut SoldOutNotifier, unavailable UnavailableNotifier, soldOutRollback SoldOutRollbackNotifier) *UseCase {
 	return &UseCase{
 		repo:            repo,
+		catalog:         catalog,
 		soldOut:         soldOut,
 		unavailable:     unavailable,
 		soldOutRollback: soldOutRollback,
