@@ -105,7 +105,10 @@
             {{end}}
         </select>
 
-        <label>Дедлайн <span class="readonly-hint">(календарь с временем; должен быть позже текущего момента)</span></label>
+        <label>Дедлайн <span class="readonly-hint">
+            {{if .IsEdit}}если не менять: при смене статуса станет ровно +24 часа от сохранения, без смены статуса останется прежним{{else}}оставьте как есть: станет ровно +24 часа от момента сохранения{{end}}
+        </span></label>
+        <input type="hidden" name="deadline_initial" id="deadline-initial" value="{{.DeadlineInitial}}">
         <input type="datetime-local" name="deadline" id="deadline" value="{{.Deadline}}" required>
 
         <button type="submit" class="btn">{{if .IsEdit}}Сохранить{{else}}Создать обращение{{end}}</button>
@@ -236,7 +239,7 @@
             (function (row) { bindRow(row); })(firstRows[i]);
         }
 
-        // ---- Дедлайн: не раньше текущего момента ----
+        // ---- Дедлайн: авто (+24 часа от сохранения), если поле не меняли ----
         function pad(n) { return (n < 10 ? '0' : '') + n; }
 
         function nowLocal() {
@@ -250,6 +253,12 @@
             if (!dl || !dl.value) {
                 alert('Укажите дедлайн — дату и время, к которым обращение должно быть отработано.');
                 return false;
+            }
+            // Поле не меняли — сервер сам поставит дедлайн: +24 часа от
+            // сохранения при создании/смене статуса, прежний — иначе.
+            var init = document.getElementById('deadline-initial');
+            if (init && init.value && dl.value === init.value) {
+                return true;
             }
             if (dl.value <= nowLocal()) {
                 alert('Дедлайн должен быть позже текущего момента.');
