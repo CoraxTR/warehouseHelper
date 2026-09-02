@@ -420,14 +420,10 @@ func (uc *UseCase) DeletePhoto(ctx context.Context, complaintID int64, name stri
 // статус обращения требует его: «На рассмотрении» и «Завершено» (с тегом
 // валидатора). Ошибка отправки логируется и не роняет операцию.
 func (uc *UseCase) notifyIfInstant(ctx context.Context, c *domain.Complaint) {
-	switch c.Status {
-	case domain.ComplaintStatusReviewing, domain.ComplaintStatusCompleted:
-		// мгновенные уведомления — только эти два статуса (все остальные
-		// перечислены ниже: уходят по дедлайну через тикер)
-	case domain.ComplaintStatusCreated,
-		domain.ComplaintStatusWarehouse,
-		domain.ComplaintStatusSupplier,
-		domain.ComplaintStatusClient:
+	// Мгновенные уведомления — только «На рассмотрении» и «Завершено»
+	// (с тегом валидатора). Остальные статусы уходят по дедлайну через
+	// тикер Start, поэтому здесь — тихий выход.
+	if c.Status != domain.ComplaintStatusReviewing && c.Status != domain.ComplaintStatusCompleted {
 		return
 	}
 

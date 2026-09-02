@@ -233,7 +233,7 @@ func newTestUC(repo *stubRepo, tags []domain.ComplaintRoleTag) (*UseCase, *stubN
 		"p1": {ID: "p1", Name: "Пылесос"},
 		"p2": {ID: "p2", Name: "Наушники"},
 	}}, photos, notify, "http://warehouse.local:8080")
-	fixed := time.Date(2026, 9, 2, 12, 0, 0, 0, time.Now().Location())
+	fixed := time.Date(2026, time.September, 2, 12, 0, 0, 0, time.Now().Location())
 	uc.now = func() time.Time { return fixed }
 	return uc, notify, photos
 }
@@ -245,7 +245,7 @@ func validInput() ComplaintInput {
 		Description:   "Сломался",
 		Actions:       "Позвонили клиенту",
 		Status:        domain.ComplaintStatusCreated,
-		Deadline:      time.Date(2026, 9, 3, 12, 0, 0, 0, time.Now().Location()),
+		Deadline:      time.Date(2026, time.September, 3, 12, 0, 0, 0, time.Now().Location()),
 		Items:         []domain.ComplaintItem{{ProductID: "p1", ProductName: ""}},
 	}
 }
@@ -300,7 +300,7 @@ func TestCreateValidations(t *testing.T) {
 		repo := newStubRepo()
 		uc, _, _ := newTestUC(repo, nil)
 		in := validInput()
-		in.Deadline = time.Date(2026, 9, 1, 12, 0, 0, 0, time.Now().Location())
+		in.Deadline = time.Date(2026, time.September, 1, 12, 0, 0, 0, time.Now().Location())
 		if _, err := uc.Create(context.Background(), in, nil); !errors.Is(err, ErrComplaintDeadlinePast) {
 			t.Errorf("Create error = %v, want ErrComplaintDeadlinePast", err)
 		}
@@ -415,7 +415,7 @@ func TestUpdateRejectsPastDeadline(t *testing.T) {
 		t.Fatalf("Create error: %v", err)
 	}
 
-	in.Deadline = time.Date(2026, 9, 1, 12, 0, 0, 0, time.Now().Location())
+	in.Deadline = time.Date(2026, time.September, 1, 12, 0, 0, 0, time.Now().Location())
 	if err := uc.Update(context.Background(), id, in); !errors.Is(err, ErrComplaintDeadlinePast) {
 		t.Errorf("Update error = %v, want ErrComplaintDeadlinePast", err)
 	}
