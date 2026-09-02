@@ -16,9 +16,9 @@
     <p><a href="/goods">← Назад в Продукцию</a></p>
 
     <div class="month-nav">
-        <a href="/goods/stock-report?month={{prevMonth .Month}}">← {{monthName (prevMonth .Month)}}</a>
+        <a href="/goods/stock-report?month={{monthSlug (prevMonth .Month)}}">← {{monthName (prevMonth .Month)}}</a>
         <span class="month-nav__current">{{monthName .Month}}</span>
-        <a href="/goods/stock-report?month={{nextMonth .Month}}">{{monthName (nextMonth .Month)}} →</a>
+        <a href="/goods/stock-report?month={{monthSlug (nextMonth .Month)}}">{{monthName (nextMonth .Month)}} →</a>
         <button type="button" onclick="exportReport()" class="export-btn">Выгрузить xlsx</button>
     </div>
     <div class="av-hint">

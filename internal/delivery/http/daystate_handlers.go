@@ -20,6 +20,7 @@ var (
 				"monthName": monthName,
 				"prevMonth": prevMonth,
 				"nextMonth": nextMonth,
+				"monthSlug": monthSlug,
 				"todayDay":  todayDay,
 			}).
 			ParseFiles("../internal/delivery/web/templates/availability.html"))
@@ -32,6 +33,7 @@ var (
 				"monthName": monthName,
 				"prevMonth": prevMonth,
 				"nextMonth": nextMonth,
+				"monthSlug": monthSlug,
 				"todayDay":  todayDay,
 			}).
 			ParseFiles("../internal/delivery/web/templates/stock_report.html"))
@@ -60,10 +62,13 @@ func monthName(t time.Time) string {
 	return fmt.Sprintf("%s %d", monthNames[t.Month()-1], t.Year())
 }
 
-// prevMonth/nextMonth — «YYYY-MM» соседних месяцев для навигации.
-func prevMonth(t time.Time) string { return t.AddDate(0, -1, 0).Format("2006-01") }
+// prevMonth/nextMonth — соседние месяцы для навигации.
+func prevMonth(t time.Time) time.Time { return t.AddDate(0, -1, 0) }
 
-func nextMonth(t time.Time) string { return t.AddDate(0, 1, 0).Format("2006-01") }
+func nextMonth(t time.Time) time.Time { return t.AddDate(0, 1, 0) }
+
+// monthSlug — «YYYY-MM» для ссылки ?month=...
+func monthSlug(t time.Time) string { return t.Format("2006-01") }
 
 // todayDay — номер сегодняшнего дня, если месяц — текущий; иначе 0
 // (подсветка колонки «сегодня»).

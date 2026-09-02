@@ -16,9 +16,9 @@
     <p><a href="/goods">← Назад в Продукцию</a></p>
 
     <div class="month-nav">
-        <a href="/goods/availability?month={{prevMonth .Month}}">← {{monthName (prevMonth .Month)}}</a>
+        <a href="/goods/availability?month={{monthSlug (prevMonth .Month)}}">← {{monthName (prevMonth .Month)}}</a>
         <span class="month-nav__current">{{monthName .Month}}</span>
-        <a href="/goods/availability?month={{nextMonth .Month}}">{{monthName (nextMonth .Month)}} →</a>
+        <a href="/goods/availability?month={{monthSlug (nextMonth .Month)}}">{{monthName (nextMonth .Month)}} →</a>
     </div>
     <div class="av-hint">Выделите ячейки в строке товара (нажали и тяните), затем «Сохранить изменения» справа от названия. Недоступные дни — тёмные.</div>
 
