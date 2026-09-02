@@ -236,8 +236,8 @@ func (uc *UseCase) Update(ctx context.Context, id int64, in ComplaintInput) erro
 	}
 
 	if in.DeadlineAuto {
-		switch {
-		case in.Status == old.Status || in.Status == domain.ComplaintStatusCompleted:
+		switch in.Status {
+		case old.Status, domain.ComplaintStatusCompleted:
 			in.Deadline = old.Deadline
 		default:
 			in.Deadline = uc.now().Add(24 * time.Hour)
