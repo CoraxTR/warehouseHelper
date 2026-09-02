@@ -70,6 +70,17 @@ type SoldOutRollbackNotifier interface {
 	RollbackSoldOut(ctx context.Context, productID string, at time.Time) (bool, error)
 }
 
+// StockStatusNotifier — получатель уведомлений о смене наличия в течение дня
+// («закончился»/«появился»); реализует app-адаптер поверх telegram
+// (общий канал, TG_COMMON_CHAT_ID), связка в di.go. Наблюдатель: ошибка
+// уведомления логируется, операцию стока не роняет.
+type StockStatusNotifier interface {
+	// SoldOut — товар закончился (переход в ноль).
+	SoldOut(ctx context.Context, productID string) error
+	// BackInStock — товар появился (обратный переход).
+	BackInStock(ctx context.Context, productID string) error
+}
+
 // UseCase — сценарии daystate. Сток — клиент (OnStockChanged); эмитенты —
 // наблюдатели фактов для ordercoeff.
 type UseCase struct {
@@ -78,19 +89,21 @@ type UseCase struct {
 	soldOut         SoldOutNotifier
 	unavailable     UnavailableNotifier
 	soldOutRollback SoldOutRollbackNotifier
+	stockStatus     StockStatusNotifier
 
 	now func() time.Time // переопределяется в тестах
 }
 
 // NewUseCase собирает сценарий; catalog и notifier'ы обязательны
 // (goods и ordercoeff реализуют, связка di.go).
-func NewUseCase(repo Repository, catalog CatalogProvider, soldOut SoldOutNotifier, unavailable UnavailableNotifier, soldOutRollback SoldOutRollbackNotifier) *UseCase {
+func NewUseCase(repo Repository, catalog CatalogProvider, soldOut SoldOutNotifier, unavailable UnavailableNotifier, soldOutRollback SoldOutRollbackNotifier, stockStatus StockStatusNotifier) *UseCase {
 	return &UseCase{
 		repo:            repo,
 		catalog:         catalog,
 		soldOut:         soldOut,
 		unavailable:     unavailable,
 		soldOutRollback: soldOutRollback,
+		stockStatus:     stockStatus,
 		now:             time.Now,
 	}
 }
@@ -183,7 +196,7 @@ func (uc *UseCase) OnStockChanged(ctx context.Context, productID string) error {
 	if err != nil {
 		return err
 	}
-	next, soldOutNow := daystate.ApplyStockChange(*cur, lots)
+	next, soldOutNow, backInStock := daystate.ApplyStockChange(*cur, lots)
 	if err := uc.repo.UpdateDay(ctx, next); err != nil {
 		return err
 	}
@@ -193,6 +206,14 @@ func (uc *UseCase) OnStockChanged(ctx context.Context, productID string) error {
 			// Строка дня уже записана; эмит — наблюдаемый факт, его потеря
 			// не откатывает изменение остатков. Логируем для разбора.
 			slog.Info(fmt.Sprintf("daystate: SoldOut %s: %v", productID, err))
+		}
+		if err := uc.stockStatus.SoldOut(ctx, productID); err != nil {
+			slog.Info(fmt.Sprintf("daystate: уведомление SoldOut %s: %v", productID, err))
+		}
+	}
+	if backInStock {
+		if err := uc.stockStatus.BackInStock(ctx, productID); err != nil {
+			slog.Info(fmt.Sprintf("daystate: уведомление BackInStock %s: %v", productID, err))
 		}
 	}
 	return nil
