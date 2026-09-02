@@ -23,14 +23,14 @@
         <div class="product-row">
             <input type="hidden" name="product_id" value="{{.ProductID}}">
             <input type="hidden" name="product_name" value="{{.ProductName}}">
-            <input type="text" class="product-search" placeholder="Товар (по базе)" value="{{.ProductName}}" autocomplete="off">
+            <input type="text" class="product-search" placeholder="Товар: выберите из списка или введите часть названия" value="{{.ProductName}}" autocomplete="off">
             <div class="product-results"></div>
         </div>
         <input type="date" name="date_from" value="{{.DateFrom}}">
         <input type="date" name="date_to" value="{{.DateTo}}">
         <button type="submit" class="btn">Найти</button>
     </form>
-    <span class="readonly-hint">Условия поиска объединяются: можно искать по номеру, телефону, товару и диапазону дат одновременно.</span>
+    <span class="readonly-hint">Условия поиска объединяются: можно искать по номеру, телефону, товару и диапазону дат одновременно. Товар: выбранный из списка — точное совпадение; введённый текст ищется по названиям товаров в обращениях.</span>
 
     {{if .Rows}}
     <table>

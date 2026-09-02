@@ -351,7 +351,11 @@ func (uc *UseCase) ListAll(ctx context.Context) ([]domain.ComplaintSummary, erro
 }
 
 // Search ищет обращения по фильтру (AND по заполненным полям). Телефон
-// нормализуется: поиск по любому варианту записи номера.
+// нормализуется: поиск по любому варианту записи номера. ProductName —
+// подстрока названия товара по снимкам в обращениях; она нужна только
+// когда товар не выбран из каталога: при заданном ProductID точное
+// вхождение главнее (снимок имени мог отличаться от текущего названия —
+// товар переименовывали).
 func (uc *UseCase) Search(ctx context.Context, f domain.ComplaintFilter) ([]domain.ComplaintSummary, error) {
 	done := metrics.Track(trackPkg, "Search")
 	defer done()
@@ -362,6 +366,9 @@ func (uc *UseCase) Search(ctx context.Context, f domain.ComplaintFilter) ([]doma
 			return nil, ErrComplaintBadPhone
 		}
 		f.Phone = norm
+	}
+	if f.ProductID != "" {
+		f.ProductName = ""
 	}
 	if !f.From.IsZero() && !f.To.IsZero() && f.From.After(f.To) {
 		return nil, errors.New("начало диапазона дат позже конца")
