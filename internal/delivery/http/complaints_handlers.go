@@ -112,7 +112,7 @@ func complaintRowFromSummary(s domain.ComplaintSummary) complaintListRow {
 		OrderNumber:  s.MSOrderNumber,
 		Phone:        s.Phone,
 		PhoneDisplay: domain.FormatPhone(s.Phone),
-		CreatedAt:    s.CreatedAt.Local().Format("02.01.2006 15:04"),
+		CreatedAt:    s.CreatedAt.In(procLoc).Format("02.01.2006 15:04"),
 		Status:       s.Status.StatusLabel(),
 	}
 	for _, it := range s.Items {
@@ -139,7 +139,7 @@ func complaintFormDataFromComplaint(c *domain.Complaint, msg, searchReturn strin
 		Actions:      c.Actions,
 		Status:       string(c.Status),
 		Statuses:     domain.ComplaintStatuses,
-		Deadline:     c.Deadline.Local().Format("2006-01-02T15:04"),
+		Deadline:     c.Deadline.In(procLoc).Format("2006-01-02T15:04"),
 		Msg:          msg,
 		SearchReturn: searchReturn,
 	}
@@ -150,6 +150,20 @@ func complaintFormDataFromComplaint(c *domain.Complaint, msg, searchReturn strin
 }
 
 // ---- Общие помощники ----
+
+// procLoc — часовая зона процесса: прод-машина работает в МСК, значение
+// datetime-local и даты поиска вводятся в локальном времени сервера.
+var procLoc = time.Now().Location()
+
+// errBadDeadlineFormat — значение datetime-local не разобралось.
+var errBadDeadlineFormat = errors.New("дедлайн указан в неверном формате")
+
+// closeComplaintFiles закрывает открытые загруженные файлы.
+func closeComplaintFiles(files []io.Closer) {
+	for _, f := range files {
+		_ = f.Close()
+	}
+}
 
 // parseComplaintID читает id обращения из query/формы.
 func parseComplaintID(r *http.Request) (int64, bool) {
@@ -164,37 +178,41 @@ func parseDeadlineLocal(s string) (time.Time, error) {
 	if s == "" {
 		return time.Time{}, nil
 	}
-	return time.ParseInLocation("2006-01-02T15:04", s, time.Local)
+	return time.ParseInLocation("2006-01-02T15:04", s, procLoc)
 }
 
-// complaintFormFromRequest собирает ввод формы обращения. Возвращает
-// ComplaintInput, список загруженных фото и ошибку валидации полей (без
-// телефона/дедлайна — их проверяет usecase).
-func complaintFormFromRequest(r *http.Request) (usecase.ComplaintInput, []photostore.Upload, []io.Closer, error) {
-	in := usecase.ComplaintInput{
+// complaintFormResult — разобранный ввод формы обращения.
+type complaintFormResult struct {
+	in      usecase.ComplaintInput
+	uploads []photostore.Upload
+	opened  []io.Closer
+}
+
+// complaintFormFromRequest собирает ввод формы обращения (поля + товары +
+// приложенные фото). Ошибка валидации полей возвращается второй величиной
+// (телефон и дедлайн дополнительно проверяет usecase).
+func complaintFormFromRequest(r *http.Request) (complaintFormResult, error) {
+	var res complaintFormResult
+	res.in = usecase.ComplaintInput{
 		MSOrderNumber: strings.TrimSpace(r.FormValue("ms_order")),
 		Phone:         strings.TrimSpace(r.FormValue("phone")),
 		Description:   r.FormValue("description"),
 		Actions:       r.FormValue("actions"),
 		Status:        domain.ComplaintStatus(r.FormValue("status")),
 	}
-	if !in.Status.Valid() {
-		in.Status = domain.ComplaintStatusCreated
+	if !res.in.Status.Valid() {
+		res.in.Status = domain.ComplaintStatusCreated
 	}
 	dl, err := parseDeadlineLocal(r.FormValue("deadline"))
 	if err != nil {
-		return in, nil, nil, errors.New("Дедлайн указан в неверном формате.")
+		return res, errBadDeadlineFormat
 	}
-	in.Deadline = dl
+	res.in.Deadline = dl
 
 	// Товары: параллельные поля product_id[] / product_name[].
 	ids := r.Form["product_id"]
 	names := r.Form["product_name"]
-	n := len(ids)
-	if len(names) > n {
-		n = len(names)
-	}
-	for i := 0; i < n; i++ {
+	for i := 0; i < max(len(ids), len(names)); i++ {
 		var id, name string
 		if i < len(ids) {
 			id = strings.TrimSpace(ids[i])
@@ -205,17 +223,14 @@ func complaintFormFromRequest(r *http.Request) (usecase.ComplaintInput, []photos
 		if id == "" && name == "" {
 			continue
 		}
-		in.Items = append(in.Items, domain.ComplaintItem{ProductID: id, ProductName: name})
+		res.in.Items = append(res.in.Items, domain.ComplaintItem{ProductID: id, ProductName: name})
 	}
 
-	// Фото из multipart (только при создании; на карточке фото добавляются
+	// Фото из multipart (при создании; на карточке фото добавляются
 	// отдельным запросом). Ошибки чтения файлов накапливаем — вернём первую.
-	var (
-		uploads []photostore.Upload
-		opened  []io.Closer
-		first   error
-	)
 	files := r.MultipartForm.File["photos"]
+	res.opened = make([]io.Closer, 0, len(files))
+	var first error
 	for _, fh := range files {
 		f, err := fh.Open()
 		if err != nil {
@@ -224,7 +239,7 @@ func complaintFormFromRequest(r *http.Request) (usecase.ComplaintInput, []photos
 			}
 			continue
 		}
-		opened = append(opened, f)
+		res.opened = append(res.opened, f)
 		id, err := newComplaintPhotoID()
 		if err != nil {
 			if first == nil {
@@ -235,13 +250,13 @@ func complaintFormFromRequest(r *http.Request) (usecase.ComplaintInput, []photos
 		ext := extFromContentType(fh.Header.Get("Content-Type"))
 		if ext == "" {
 			if first == nil {
-				first = errors.New("Файл «" + fh.Filename + "» не похож на изображение.")
+				first = errors.New("файл «" + fh.Filename + "» не похож на изображение")
 			}
 			continue
 		}
-		uploads = append(uploads, photostore.Upload{ID: id, Ext: ext, Data: f})
+		res.uploads = append(res.uploads, photostore.Upload{ID: id, Ext: ext, Data: f})
 	}
-	return in, uploads, opened, first
+	return res, first
 }
 
 // newComplaintPhotoID — id фото: 16 hex-символов (8 случайных байт).
@@ -383,20 +398,17 @@ func (h *Handler) ComplaintCreate(w http.ResponseWriter, r *http.Request) {
 		_ = complaintFormTmpl.Execute(w, data)
 	}
 
-	in, uploads, opened, firstErr := complaintFormFromRequest(r)
+	res, firstErr := complaintFormFromRequest(r)
 	if firstErr != nil {
-		renderErr(firstErr.Error())
+		closeComplaintFiles(res.opened)
+		renderErr(complaintSaveError(firstErr))
 		return
 	}
-	if uploads != nil {
-		defer func() {
-			for _, c := range opened {
-				_ = c.Close()
-			}
-		}()
+	if len(res.uploads) > 0 {
+		defer closeComplaintFiles(res.opened)
 	}
 
-	id, err := h.complaintsUC.Create(r.Context(), in, uploads)
+	id, err := h.complaintsUC.Create(r.Context(), res.in, res.uploads)
 	if err != nil {
 		renderErr(complaintSaveError(err))
 		return
@@ -427,18 +439,13 @@ func (h *Handler) ComplaintSave(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Не удалось прочитать отправленные данные.", http.StatusBadRequest)
 		return
 	}
-	in, uploads, opened, firstErr := complaintFormFromRequest(r)
-	_ = uploads // фото на карточке добавляются отдельным POST /complaint/photo/add
-	if opened != nil {
-		for _, c := range opened {
-			_ = c.Close()
-		}
-	}
+	res, firstErr := complaintFormFromRequest(r)
+	closeComplaintFiles(res.opened) // фото на карточке добавляются отдельным POST /complaint/photo/add
 	if firstErr != nil {
-		h.complaintFormErr(w, r, id, firstErr.Error())
+		h.complaintFormErr(w, r, id, complaintSaveError(firstErr))
 		return
 	}
-	if err := h.complaintsUC.Update(r.Context(), id, in); err != nil {
+	if err := h.complaintsUC.Update(r.Context(), id, res.in); err != nil {
 		h.complaintFormErr(w, r, id, complaintSaveError(err))
 		return
 	}
@@ -498,6 +505,8 @@ func complaintSaveError(err error) string {
 		return "Не удалось распознать номер телефона. Примеры: +79361234567, 8-936-123-45-67, 9361234567."
 	case errors.Is(err, usecase.ErrComplaintDeadlinePast):
 		return "Дедлайн должен быть позже текущего момента."
+	case errors.Is(err, errBadDeadlineFormat):
+		return "Дедлайн указан в неверном формате."
 	default:
 		return "Не удалось сохранить обращение. Попробуйте ещё раз."
 	}
@@ -522,38 +531,47 @@ func (h *Handler) ComplaintsSearch(w http.ResponseWriter, r *http.Request) {
 		DateFrom:    q.Get("date_from"),
 		DateTo:      q.Get("date_to"),
 	}
-	hasFilter := data.OrderNumber != "" || data.Phone != "" || data.ProductID != "" ||
-		data.DateFrom != "" || data.DateTo != ""
-	if hasFilter {
-		data.Searched = true
-		f := domain.ComplaintFilter{
-			MSOrderNumber: data.OrderNumber,
-			Phone:         data.Phone,
-			ProductID:     data.ProductID,
+	if !complaintHasSearchFilter(data) {
+		_ = complaintsSearchTmpl.Execute(w, data)
+		return
+	}
+	data.Searched = true
+	f := domain.ComplaintFilter{
+		MSOrderNumber: data.OrderNumber,
+		Phone:         data.Phone,
+		ProductID:     data.ProductID,
+	}
+	if data.DateFrom != "" {
+		from, err := time.ParseInLocation("2006-01-02", data.DateFrom, procLoc)
+		if err != nil {
+			data.Error = "Дата «с» указана неверно."
+			_ = complaintsSearchTmpl.Execute(w, data)
+			return
 		}
-		var err error
-		if data.DateFrom != "" {
-			f.From, err = time.ParseInLocation("2006-01-02", data.DateFrom, time.Local)
-			if err != nil {
-				data.Error = "Дата «с» указана неверно."
-			}
+		f.From = from
+	}
+	if data.DateTo != "" {
+		to, err := time.ParseInLocation("2006-01-02", data.DateTo, procLoc)
+		if err != nil {
+			data.Error = "Дата «по» указана неверно."
+			_ = complaintsSearchTmpl.Execute(w, data)
+			return
 		}
-		if err == nil && data.DateTo != "" {
-			f.To, err = time.ParseInLocation("2006-01-02", data.DateTo, time.Local)
-			if err != nil {
-				data.Error = "Дата «по» указана неверно."
-			}
-		}
-		if err == nil {
-			list, serr := h.complaintsUC.Search(r.Context(), f)
-			if serr != nil {
-				data.Error = complaintSearchError(serr)
-			} else {
-				data.Rows = complaintRowsFromSummaries(list)
-			}
-		}
+		f.To = to
+	}
+	list, err := h.complaintsUC.Search(r.Context(), f)
+	if err != nil {
+		data.Error = complaintSearchError(err)
+	} else {
+		data.Rows = complaintRowsFromSummaries(list)
 	}
 	_ = complaintsSearchTmpl.Execute(w, data)
+}
+
+// complaintHasSearchFilter — задан хотя бы один фильтр поиска.
+func complaintHasSearchFilter(d complaintsSearchData) bool {
+	return d.OrderNumber != "" || d.Phone != "" || d.ProductID != "" ||
+		d.DateFrom != "" || d.DateTo != ""
 }
 
 type complaintsSearchData struct {
@@ -604,6 +622,8 @@ func (h *Handler) ComplaintsTags(w http.ResponseWriter, r *http.Request) {
 			err = h.complaintsUC.SetRoleTag(r.Context(), role, strings.TrimSpace(r.FormValue("tag")))
 		case "delete":
 			err = h.complaintsUC.DeleteRoleTag(r.Context(), role)
+		default:
+			err = errors.New("неизвестное действие")
 		}
 		if err != nil {
 			roles, rerr := h.complaintsRoleTagsData(r.Context())
@@ -658,22 +678,19 @@ func (h *Handler) ComplaintPhotoAdd(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Не удалось прочитать файлы.", http.StatusBadRequest)
 		return
 	}
-	in, uploads, opened, firstErr := complaintFormFromRequest(r)
-	_ = in
-	if uploads == nil || len(uploads) == 0 {
+	res, firstErr := complaintFormFromRequest(r)
+	if firstErr != nil {
+		closeComplaintFiles(res.opened)
+		http.Redirect(w, r, fmt.Sprintf("/complaint?id=%d&msg=%s", id, url.QueryEscape(complaintSaveError(firstErr))), http.StatusSeeOther)
+		return
+	}
+	if len(res.uploads) == 0 {
+		closeComplaintFiles(res.opened)
 		http.Redirect(w, r, fmt.Sprintf("/complaint?id=%d&msg=%s", id, url.QueryEscape("Выберите фотографии")), http.StatusSeeOther)
 		return
 	}
-	if firstErr != nil {
-		http.Redirect(w, r, fmt.Sprintf("/complaint?id=%d&msg=%s", id, url.QueryEscape(firstErr.Error())), http.StatusSeeOther)
-		return
-	}
-	defer func() {
-		for _, c := range opened {
-			_ = c.Close()
-		}
-	}()
-	if err := h.complaintsUC.AddPhotos(r.Context(), id, uploads); err != nil {
+	defer closeComplaintFiles(res.opened)
+	if err := h.complaintsUC.AddPhotos(r.Context(), id, res.uploads); err != nil {
 		slog.Info(fmt.Sprintf("complaints: add photos to %d: %v", id, err))
 		http.Redirect(w, r, fmt.Sprintf("/complaint?id=%d&msg=%s", id, url.QueryEscape("Фото не сохранились")), http.StatusSeeOther)
 		return

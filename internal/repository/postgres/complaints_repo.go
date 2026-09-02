@@ -242,17 +242,24 @@ func collectComplaintSummaries(rows pgx.Rows) ([]domain.ComplaintSummary, error)
 	return summaries, nil
 }
 
-// ListComplaintSummaries возвращает список обращений (с товарами) по убыванию
-// даты создания: activeOnly=true — только статус != completed («Жалобы»),
-// false — полный список.
-func (pg *PGClient) ListComplaintSummaries(ctx context.Context, activeOnly bool) ([]domain.ComplaintSummary, error) {
+// ListActiveComplaintSummaries — обращения со статусом != «Завершено»
+// (главная «Жалобы») по убыванию даты создания.
+func (pg *PGClient) ListActiveComplaintSummaries(ctx context.Context) ([]domain.ComplaintSummary, error) {
+	return pg.complaintSummaries(ctx, ` WHERE c.status <> 'completed'`)
+}
+
+// ListAllComplaintSummaries — полный список обращений (все статусы).
+func (pg *PGClient) ListAllComplaintSummaries(ctx context.Context) ([]domain.ComplaintSummary, error) {
+	return pg.complaintSummaries(ctx, "")
+}
+
+// complaintSummaries — общий запрос списка обращений с товарами (LEFT JOIN)
+// по убыванию даты создания; where — готовое WHERE-условие или пустая строка.
+func (pg *PGClient) complaintSummaries(ctx context.Context, where string) ([]domain.ComplaintSummary, error) {
 	query := `SELECT ` + complaintSummaryColumns + `
 		FROM complaints c
-		LEFT JOIN complaint_items ci ON ci.complaint_id = c.id`
-	if activeOnly {
-		query += ` WHERE c.status <> 'completed'`
-	}
-	query += ` ORDER BY c.created_at DESC, c.id DESC, ci.id`
+		LEFT JOIN complaint_items ci ON ci.complaint_id = c.id` + where + `
+		ORDER BY c.created_at DESC, c.id DESC, ci.id`
 
 	rows, err := pg.Pool.Query(ctx, query)
 	if err != nil {

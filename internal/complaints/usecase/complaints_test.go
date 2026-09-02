@@ -36,7 +36,7 @@ func (s *stubRepo) fail() error {
 	return nil
 }
 
-func (s *stubRepo) CreateComplaint(ctx context.Context, c *domain.Complaint) (int64, error) {
+func (s *stubRepo) CreateComplaint(_ context.Context, c *domain.Complaint) (int64, error) {
 	if err := s.fail(); err != nil {
 		return 0, err
 	}
@@ -50,7 +50,7 @@ func (s *stubRepo) CreateComplaint(ctx context.Context, c *domain.Complaint) (in
 	return id, nil
 }
 
-func (s *stubRepo) UpdateComplaint(ctx context.Context, c *domain.Complaint) error {
+func (s *stubRepo) UpdateComplaint(_ context.Context, c *domain.Complaint) error {
 	if err := s.fail(); err != nil {
 		return err
 	}
@@ -68,12 +68,12 @@ func (s *stubRepo) UpdateComplaint(ctx context.Context, c *domain.Complaint) err
 	return nil
 }
 
-func (s *stubRepo) DeleteComplaint(ctx context.Context, id int64) error {
+func (s *stubRepo) DeleteComplaint(_ context.Context, id int64) error {
 	delete(s.complaints, id)
 	return nil
 }
 
-func (s *stubRepo) GetComplaint(ctx context.Context, id int64) (*domain.Complaint, error) {
+func (s *stubRepo) GetComplaint(_ context.Context, id int64) (*domain.Complaint, error) {
 	if err := s.fail(); err != nil {
 		return nil, err
 	}
@@ -86,28 +86,32 @@ func (s *stubRepo) GetComplaint(ctx context.Context, id int64) (*domain.Complain
 	return &cp, nil
 }
 
-func (s *stubRepo) ListComplaintSummaries(ctx context.Context, activeOnly bool) ([]domain.ComplaintSummary, error) {
+func (s *stubRepo) ListActiveComplaintSummaries(_ context.Context) ([]domain.ComplaintSummary, error) {
 	return nil, nil
 }
 
-func (s *stubRepo) SearchComplaints(ctx context.Context, f domain.ComplaintFilter) ([]domain.ComplaintSummary, error) {
+func (s *stubRepo) ListAllComplaintSummaries(_ context.Context) ([]domain.ComplaintSummary, error) {
 	return nil, nil
 }
 
-func (s *stubRepo) DueComplaints(ctx context.Context, now time.Time) ([]domain.ComplaintDue, error) {
+func (s *stubRepo) SearchComplaints(_ context.Context, f domain.ComplaintFilter) ([]domain.ComplaintSummary, error) {
+	return nil, nil
+}
+
+func (s *stubRepo) DueComplaints(_ context.Context, now time.Time) ([]domain.ComplaintDue, error) {
 	return append([]domain.ComplaintDue(nil), s.due...), nil
 }
 
-func (s *stubRepo) ShiftComplaintDeadline(ctx context.Context, id int64) error {
+func (s *stubRepo) ShiftComplaintDeadline(_ context.Context, id int64) error {
 	s.shifted = append(s.shifted, id)
 	return nil
 }
 
-func (s *stubRepo) ListComplaintRoleTags(ctx context.Context) ([]domain.ComplaintRoleTag, error) {
+func (s *stubRepo) ListComplaintRoleTags(_ context.Context) ([]domain.ComplaintRoleTag, error) {
 	return append([]domain.ComplaintRoleTag(nil), s.tags...), nil
 }
 
-func (s *stubRepo) SetComplaintRoleTag(ctx context.Context, role domain.ComplaintRole, tag string) error {
+func (s *stubRepo) SetComplaintRoleTag(_ context.Context, role domain.ComplaintRole, tag string) error {
 	for i, t := range s.tags {
 		if t.Role == role {
 			s.tags[i].Tag = tag
@@ -118,7 +122,7 @@ func (s *stubRepo) SetComplaintRoleTag(ctx context.Context, role domain.Complain
 	return nil
 }
 
-func (s *stubRepo) DeleteComplaintRoleTag(ctx context.Context, role domain.ComplaintRole) error {
+func (s *stubRepo) DeleteComplaintRoleTag(_ context.Context, role domain.ComplaintRole) error {
 	out := s.tags[:0]
 	for _, t := range s.tags {
 		if t.Role != role {
@@ -132,7 +136,7 @@ func (s *stubRepo) DeleteComplaintRoleTag(ctx context.Context, role domain.Compl
 // stubCatalog — каталог товаров.
 type stubCatalog struct{ products map[string]domain.Product }
 
-func (c stubCatalog) GetProductsByIDs(ctx context.Context, ids []string) ([]domain.Product, error) {
+func (c stubCatalog) GetProductsByIDs(_ context.Context, ids []string) ([]domain.Product, error) {
 	out := make([]domain.Product, 0, len(ids))
 	for _, id := range ids {
 		if p, ok := c.products[id]; ok {
@@ -148,11 +152,11 @@ type stubPhotos struct {
 	open map[string][]byte // key: complaintID/name
 }
 
-func (p *stubPhotos) List(ctx context.Context, complaintID int64) ([]photostore.Photo, error) {
+func (p *stubPhotos) List(_ context.Context, complaintID int64) ([]photostore.Photo, error) {
 	return append([]photostore.Photo(nil), p.list[complaintID]...), nil
 }
 
-func (p *stubPhotos) Add(ctx context.Context, complaintID int64, ups []photostore.Upload) error {
+func (p *stubPhotos) Add(_ context.Context, complaintID int64, ups []photostore.Upload) error {
 	if p.list == nil {
 		p.list = map[int64][]photostore.Photo{}
 	}
@@ -162,7 +166,7 @@ func (p *stubPhotos) Add(ctx context.Context, complaintID int64, ups []photostor
 	return nil
 }
 
-func (p *stubPhotos) Remove(ctx context.Context, complaintID int64, name string) error {
+func (p *stubPhotos) Remove(_ context.Context, complaintID int64, name string) error {
 	out := p.list[complaintID][:0]
 	for _, ph := range p.list[complaintID] {
 		if ph.Name != name {
@@ -173,7 +177,7 @@ func (p *stubPhotos) Remove(ctx context.Context, complaintID int64, name string)
 	return nil
 }
 
-func (p *stubPhotos) Open(ctx context.Context, complaintID int64, name string) (io.ReadCloser, error) {
+func (p *stubPhotos) Open(_ context.Context, complaintID int64, name string) (io.ReadCloser, error) {
 	if p.open == nil {
 		return nil, errors.New("нет файла")
 	}
@@ -198,24 +202,24 @@ type stubNotifier struct {
 	photoCalls   int
 }
 
-func (n *stubNotifier) NotifyCommonStatus(ctx context.Context, textHTML string, callbackData string) error {
+func (n *stubNotifier) NotifyCommonStatus(_ context.Context, textHTML string, callbackData string) error {
 	n.statusTexts = append(n.statusTexts, textHTML)
 	n.statusData = append(n.statusData, callbackData)
 	return nil
 }
 
-func (n *stubNotifier) SendDetails(ctx context.Context, chatID int64, text string) error {
+func (n *stubNotifier) SendDetails(_ context.Context, chatID int64, text string) error {
 	n.details = append(n.details, text)
 	return nil
 }
 
-func (n *stubNotifier) SendPhotos(ctx context.Context, chatID int64, photos []domain.ComplaintTGPhoto) error {
+func (n *stubNotifier) SendPhotos(_ context.Context, chatID int64, photos []domain.ComplaintTGPhoto) error {
 	n.photoCalls++
 	n.photoBatches += len(photos)
 	return nil
 }
 
-func (n *stubNotifier) AnswerCallback(ctx context.Context, callbackQueryID string) error {
+func (n *stubNotifier) AnswerCallback(_ context.Context, callbackQueryID string) error {
 	n.answered = append(n.answered, callbackQueryID)
 	return nil
 }

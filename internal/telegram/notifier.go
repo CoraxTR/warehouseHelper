@@ -88,7 +88,7 @@ func (n *Notifier) NotifyCommon(ctx context.Context, text string) error {
 // (жалобы: уведомление о статусе + кнопка «Получить подробности»).
 // callbackData — данные кнопки; текст кнопки фиксированный. Без настроенного
 // токена или chat_id общего канала — no-op.
-func (n *Notifier) NotifyCommonStatus(ctx context.Context, textHTML string, callbackData string) error {
+func (n *Notifier) NotifyCommonStatus(ctx context.Context, textHTML, callbackData string) error {
 	if n.botToken == "" || n.commonChatID == 0 {
 		return nil
 	}
@@ -138,10 +138,7 @@ func (n *Notifier) SendPhotos(ctx context.Context, chatID int64, photos []domain
 	}
 
 	for start := 0; start < len(photos); start += mediaGroupMaxPhotos {
-		end := start + mediaGroupMaxPhotos
-		if end > len(photos) {
-			end = len(photos)
-		}
+		end := min(start+mediaGroupMaxPhotos, len(photos))
 		if err := n.sendMediaGroup(ctx, chatID, photos[start:end]); err != nil {
 			return fmt.Errorf("send media group %d..%d: %w", start, end, err)
 		}

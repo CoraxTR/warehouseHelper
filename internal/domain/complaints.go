@@ -116,6 +116,8 @@ func TagRoleForStatus(s ComplaintStatus) (ComplaintRole, bool) {
 		return ComplaintRoleValidator, true
 	case ComplaintStatusWarehouse, ComplaintStatusSupplier:
 		return ComplaintRoleWarehouse, true
+	case ComplaintStatusCreated, ComplaintStatusClient:
+		return "", false
 	default:
 		return "", false
 	}
@@ -186,7 +188,7 @@ func NormalizePhone(raw string) (string, error) {
 		}
 	}
 	if len(digits) == 0 {
-		return "", fmt.Errorf("телефон не указан")
+		return "", errors.New("телефон не указан")
 	}
 	switch len(digits) {
 	case 11:

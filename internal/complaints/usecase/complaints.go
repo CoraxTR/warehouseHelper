@@ -47,7 +47,8 @@ type ComplaintRepository interface {
 	UpdateComplaint(ctx context.Context, c *domain.Complaint) error
 	DeleteComplaint(ctx context.Context, id int64) error
 	GetComplaint(ctx context.Context, id int64) (*domain.Complaint, error)
-	ListComplaintSummaries(ctx context.Context, activeOnly bool) ([]domain.ComplaintSummary, error)
+	ListActiveComplaintSummaries(ctx context.Context) ([]domain.ComplaintSummary, error)
+	ListAllComplaintSummaries(ctx context.Context) ([]domain.ComplaintSummary, error)
 	SearchComplaints(ctx context.Context, f domain.ComplaintFilter) ([]domain.ComplaintSummary, error)
 	DueComplaints(ctx context.Context, now time.Time) ([]domain.ComplaintDue, error)
 	ShiftComplaintDeadline(ctx context.Context, id int64) error
@@ -338,7 +339,7 @@ func (uc *UseCase) ListActive(ctx context.Context) ([]domain.ComplaintSummary, e
 	done := metrics.Track(trackPkg, "ListActive")
 	defer done()
 
-	return uc.repo.ListComplaintSummaries(ctx, true)
+	return uc.repo.ListActiveComplaintSummaries(ctx)
 }
 
 // ListAll возвращает полный список обращений (все статусы) по убыванию
@@ -347,7 +348,7 @@ func (uc *UseCase) ListAll(ctx context.Context) ([]domain.ComplaintSummary, erro
 	done := metrics.Track(trackPkg, "ListAll")
 	defer done()
 
-	return uc.repo.ListComplaintSummaries(ctx, false)
+	return uc.repo.ListAllComplaintSummaries(ctx)
 }
 
 // Search ищет обращения по фильтру (AND по заполненным полям). Телефон
@@ -422,6 +423,12 @@ func (uc *UseCase) DeletePhoto(ctx context.Context, complaintID int64, name stri
 func (uc *UseCase) notifyIfInstant(ctx context.Context, c *domain.Complaint) {
 	switch c.Status {
 	case domain.ComplaintStatusReviewing, domain.ComplaintStatusCompleted:
+		// мгновенные уведомления — только эти два статуса
+	case domain.ComplaintStatusCreated,
+		domain.ComplaintStatusWarehouse,
+		domain.ComplaintStatusSupplier,
+		domain.ComplaintStatusClient:
+		return
 	default:
 		return
 	}
@@ -443,7 +450,7 @@ func (uc *UseCase) notificationText(id int64, status domain.ComplaintStatus, tag
 		sb.WriteString(" ")
 	}
 	link := fmt.Sprintf("%s/complaint?id=%d", uc.baseURL, id)
-	sb.WriteString(fmt.Sprintf(`<a href="%s">Обращение %d</a>: %s`, link, id, statusMessage(status)))
+	sb.WriteString(fmt.Sprintf("<a href=%q>Обращение %d</a>: %s", link, id, statusMessage(status)))
 	sb.WriteString("\nСсылка открывается только в локальной сети")
 	return sb.String()
 }
@@ -489,7 +496,7 @@ func ParseCallbackData(data string) (complaintID int64, ok bool) {
 
 // HandleDetailsButton отвечает на нажатие «Получить подробности»: закрывает
 // callback, шлёт в чат карточку обращения и фотографии (если есть).
-func (uc *UseCase) HandleDetailsButton(ctx context.Context, callbackQueryID string, chatID int64, complaintID int64) error {
+func (uc *UseCase) HandleDetailsButton(ctx context.Context, callbackQueryID string, chatID, complaintID int64) error {
 	done := metrics.Track(trackPkg, "HandleDetailsButton")
 	defer done()
 

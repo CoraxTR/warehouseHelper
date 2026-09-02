@@ -115,9 +115,10 @@ func (a *App) initDayState() {
 // Оба переживают сбои: тикер ретраит на следующем тике, поллер логирует
 // ошибки и продолжает. Без токена бота поллер не запускается.
 func (a *App) initComplaints() {
-	a.di.ComplaintsUC().Start(context.Background())
+	uc := a.di.ComplaintsUC()
+	uc.Start(context.Background())
 
-	token := a.di.Config().TelegramConfig.BotToken
+	token := a.di.Config().BotToken
 	if token == "" {
 		slog.Info("complaints: поллер не запущен: токен бота не настроен")
 		return
@@ -127,7 +128,7 @@ func (a *App) initComplaints() {
 		if !ok {
 			return nil // кнопка не нашего модуля — не наше нажатие
 		}
-		return a.di.ComplaintsUC().HandleDetailsButton(ctx, cb.ID, cb.ChatID, id)
+		return uc.HandleDetailsButton(ctx, cb.ID, cb.ChatID, id)
 	})
 	go func() {
 		if err := poller.Run(context.Background()); err != nil {

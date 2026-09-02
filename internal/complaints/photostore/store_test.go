@@ -49,7 +49,9 @@ func complaintArchivePath(root string, complaintID int64) string {
 // readAll читает весь ReadCloser и закрывает его.
 func readAll(t *testing.T, rc io.ReadCloser) []byte {
 	t.Helper()
-	defer rc.Close()
+	defer func() {
+		_ = rc.Close()
+	}()
 	b, err := io.ReadAll(rc)
 	if err != nil {
 		t.Fatalf("ReadAll: %v", err)
@@ -64,7 +66,9 @@ func archiveEntryModified(t *testing.T, path, name string) time.Time {
 	if err != nil {
 		t.Fatalf("zip.OpenReader(%s): %v", path, err)
 	}
-	defer zr.Close()
+	defer func() {
+		_ = zr.Close()
+	}()
 	for _, f := range zr.File {
 		if f.Name == name {
 			return f.Modified

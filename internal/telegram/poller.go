@@ -3,6 +3,7 @@ package telegram
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -96,12 +97,12 @@ func (p *Poller) Run(ctx context.Context) error {
 		updates, err := p.getUpdates(ctx)
 		if err != nil {
 			if ctx.Err() != nil {
-				return nil
+				return ctx.Err()
 			}
 			slog.Info(fmt.Sprintf("telegram: getUpdates: %v", err))
 			select {
 			case <-ctx.Done():
-				return nil
+				return ctx.Err()
 			case <-time.After(3 * time.Second): // пауза перед ретраем, чтобы не долбить API
 			}
 			continue
@@ -142,7 +143,7 @@ func (p *Poller) getUpdates(ctx context.Context) ([]tgUpdate, error) {
 	url := fmt.Sprintf("%s/bot%s/getUpdates?timeout=25&offset=%d",
 		p.apiBaseURL, p.botToken, p.offset)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
@@ -167,7 +168,7 @@ func (p *Poller) getUpdates(ctx context.Context) ([]tgUpdate, error) {
 		return nil, fmt.Errorf("decode getUpdates response: %w", err)
 	}
 	if !parsed.OK {
-		return nil, fmt.Errorf("getUpdates ok=false")
+		return nil, errors.New("getUpdates ok=false")
 	}
 	return parsed.Result, nil
 }

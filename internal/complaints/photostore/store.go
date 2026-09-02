@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -85,7 +86,9 @@ func (s *Store) List(ctx context.Context, complaintID int64) ([]Photo, error) {
 		}
 		return nil, fmt.Errorf("photostore: список фото жалобы %d: открытие архива %s: %w", complaintID, path, err)
 	}
-	defer zr.f.Close()
+	defer func() {
+		_ = zr.f.Close()
+	}()
 
 	photos := make([]Photo, 0)
 	for _, f := range zr.zr.File {
@@ -93,11 +96,15 @@ func (s *Store) List(ctx context.Context, complaintID int64) ([]Photo, error) {
 			continue
 		}
 		id, ext, _ := strings.Cut(f.Name, ".")
+		size := f.UncompressedSize64
+		if size > math.MaxInt64 {
+			continue // теоретический zip64-перекос — не наш архив
+		}
 		photos = append(photos, Photo{
 			Name: f.Name,
 			ID:   id,
 			Ext:  ext,
-			Size: int64(f.UncompressedSize64),
+			Size: int64(size),
 		})
 	}
 	return photos, nil
@@ -319,6 +326,42 @@ func (e *entryReadCloser) Close() error {
 	return err
 }
 
+// copyArchiveEntries переписывает валидные записи старого архива в новый
+// (порядок и FileHeader.Modified сохраняются; записи из skip и посторонние
+// имена отбрасываются).
+func copyArchiveEntries(zw *zip.Writer, old *zip.Reader, skip map[string]struct{}) error {
+	for _, f := range old.File {
+		if _, drop := skip[f.Name]; drop {
+			continue
+		}
+		if !fileRe.MatchString(f.Name) {
+			continue // посторонние записи при пересборке отбрасываются
+		}
+		// Свежий заголовок: метод Store, время из старой записи
+		// (Modified не теряется при чтении/записи — см. archive/zip).
+		hdr := &zip.FileHeader{Name: f.Name, Method: zip.Store, Modified: f.Modified}
+		w, err := zw.CreateHeader(hdr)
+		if err != nil {
+			return fmt.Errorf("заголовок записи %s: %w", f.Name, err)
+		}
+		rc, err := f.Open()
+		if err != nil {
+			return fmt.Errorf("чтение записи %s: %w", f.Name, err)
+		}
+		//nolint:gosec // архив пишет только приложение: zip.Store без сжатия,
+		// размер записей ограничен телом HTTP-запроса — «бомбы» нет.
+		_, copyErr := io.Copy(w, rc)
+		closeErr := rc.Close()
+		if copyErr != nil {
+			return fmt.Errorf("копирование записи %s: %w", f.Name, copyErr)
+		}
+		if closeErr != nil {
+			return fmt.Errorf("закрытие записи %s: %w", f.Name, closeErr)
+		}
+	}
+	return nil
+}
+
 // rebuild пересобирает архив жалобы: сначала записи старого архива old
 // (только валидные имена <id>.<ext>, в исходном порядке, с сохранением
 // FileHeader.Modified; записи из skip пропускаются), затем новые файлы через
@@ -350,32 +393,8 @@ func (s *Store) rebuild(complaintID int64, old *zip.Reader, skip map[string]stru
 
 	zw := zip.NewWriter(tmp)
 	if old != nil {
-		for _, f := range old.File {
-			if _, drop := skip[f.Name]; drop {
-				continue
-			}
-			if !fileRe.MatchString(f.Name) {
-				continue // посторонние записи при пересборке отбрасываются
-			}
-			// Свежий заголовок: метод Store, время из старой записи
-			// (Modified не теряется при чтении/записи — см. archive/zip).
-			hdr := &zip.FileHeader{Name: f.Name, Method: zip.Store, Modified: f.Modified}
-			w, err := zw.CreateHeader(hdr)
-			if err != nil {
-				return fail(fmt.Errorf("photostore: пересборка архива %s: заголовок записи %s: %w", path, f.Name, err))
-			}
-			rc, err := f.Open()
-			if err != nil {
-				return fail(fmt.Errorf("photostore: пересборка архива %s: чтение записи %s: %w", path, f.Name, err))
-			}
-			_, copyErr := io.Copy(w, rc)
-			closeErr := rc.Close()
-			if copyErr != nil {
-				return fail(fmt.Errorf("photostore: пересборка архива %s: копирование записи %s: %w", path, f.Name, copyErr))
-			}
-			if closeErr != nil {
-				return fail(fmt.Errorf("photostore: пересборка архива %s: закрытие записи %s: %w", path, f.Name, closeErr))
-			}
+		if err := copyArchiveEntries(zw, old, skip); err != nil {
+			return fail(fmt.Errorf("photostore: пересборка архива %s: %w", path, err))
 		}
 	}
 	if addNew != nil {

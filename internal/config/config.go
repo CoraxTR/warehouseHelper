@@ -137,6 +137,8 @@ func loadComplaintsConfig() *ComplaintsConfig {
 
 	publicURL := os.Getenv("COMPLAINTS_PUBLIC_URL")
 	if publicURL == "" {
+		//nolint:revive // http по умолчанию: ссылки открываются только в локальной
+		// сети (mDNS warehouse.local), TLS-сертификата у приложения нет.
 		publicURL = "http://warehouse.local:8080"
 	}
 
