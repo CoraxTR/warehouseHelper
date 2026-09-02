@@ -537,6 +537,11 @@ func (h *Handler) ComplaintsSearch(w http.ResponseWriter, r *http.Request) {
 		DateFrom:    q.Get("date_from"),
 		DateTo:      q.Get("date_to"),
 	}
+	// Пустая форма — просто показываем страницу поиска, не ищем всё подряд.
+	if !complaintHasSearchFilter(data) {
+		_ = complaintsSearchTmpl.Execute(w, data)
+		return
+	}
 	data.Searched = true
 	f := domain.ComplaintFilter{
 		MSOrderNumber: data.OrderNumber,
