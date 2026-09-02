@@ -71,7 +71,8 @@ jobs:
             product_weekly_turnover_schema.sql \
             product_monthly_turnover_schema.sql \
             qrcodes_schema.sql \
-            wiki_schema.sql; do
+            wiki_schema.sql \
+            complaints_schema.sql; do
             psql -h localhost -U wh -d wh -v ON_ERROR_STOP=1 -f "internal/repository/postgres/$f" > /dev/null || exit 1
           done
-          echo "Схемы применены: 13/13"
+          echo "Схемы применены: 14/14"
