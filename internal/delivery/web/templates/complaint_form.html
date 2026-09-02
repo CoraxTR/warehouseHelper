@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <title>{{if .IsEdit}}Обращение #{{.ID}}{{else}}Новое обращение{{end}}</title>
+    <link rel="stylesheet" href="/static/raven-guard.css">
+</head>
+
+<body>
+    <header class="brandbar">
+        <a class="brandbar__brand" href="/"><svg class="brandbar__emblem" viewBox="0 0 64 64" aria-hidden="true"><circle cx="35" cy="25" r="14" fill="#F4F1E9"/><polygon points="6,26 30,17 28,27" fill="#F4F1E9"/><polygon points="13,35 28,27 26,36" fill="#F4F1E9"/><circle cx="34" cy="23" r="3.6" fill="#0A0A0D"/><circle cx="33" cy="22" r="1.1" fill="#C02832"/></svg><span class="brandbar__name">ВОРОН&nbsp;&middot;&nbsp;СКЛАД</span></a>
+        <span class="brandbar__motto">Приёмка или смерть</span>
+    </header>
+
+    <h1>{{if .IsEdit}}Обращение #{{.ID}}{{else}}Новое обращение{{end}}</h1>
+
+    {{if .Msg}}<div class="msg">{{.Msg}}</div>{{end}}
+    {{if .Error}}<p class="error">{{.Error}}</p>{{end}}
+
+    {{if .IsEdit}}
+    <!-- Фотографии — вне формы сохранения: у карточки свои POST-формы
+         (добавление и удаление), чтобы не вкладывать form в form. -->
+    <label>Фотографии <span class="readonly-hint">(хранятся архивом на сервере; добавление/удаление — ниже)</span></label>
+    {{if .PhotoCount}}
+    <div class="thumbs">
+        {{range .Photos}}
+        <div class="complaint-photo">
+            <img src="/complaint/photo?id={{$.ID}}&amp;name={{.Name}}" alt="Фото обращения">
+            <form method="POST" action="/complaint/photo/delete?id={{$.ID}}&amp;name={{.Name}}"
+                onsubmit="return confirm('Удалить фото?');">
+                <button type="submit" class="btn-remove">Удалить</button>
+            </form>
+        </div>
+        {{end}}
+    </div>
+    {{else}}
+    <p class="empty">Фотографий пока нет.</p>
+    {{end}}
+
+    <form method="POST" action="/complaint/photo/add?id={{.ID}}" enctype="multipart/form-data" class="photo-add">
+        <div id="drop-zone">
+            Перетащите фотографии сюда или выберите файлы — можно пачкой
+            <input type="file" id="photos" name="photos" accept="image/*" multiple>
+            <div id="preview"></div>
+            <div id="photo-count" class="photo-count"></div>
+            <button type="submit" class="btn">Добавить фотографии</button>
+        </div>
+    </form>
+    {{end}}
+
+    <form method="POST" action="{{if .IsEdit}}/complaint/save?id={{.ID}}{{else}}/complaints/new{{end}}"
+        {{if not .IsEdit}}enctype="multipart/form-data"{{end}} onsubmit="return checkDeadline();">
+
+        <label>Номер заказа в МС</label>
+        <input type="text" name="ms_order" value="{{.OrderNumber}}" required autofocus>
+
+        <label>Телефон клиента</label>
+        <input type="text" name="phone" value="{{.Phone}}" placeholder="+7 (936) 123-45-67">
+
+        <label>Товар <span class="readonly-hint">(поиск по базе; начните вводить название)</span></label>
+        <div id="product-rows">
+            {{if .Products}}
+            {{range .Products}}
+            <div class="product-row">
+                <input type="hidden" name="product_id" value="{{.ProductID}}">
+                <input type="hidden" name="product_name" value="{{.Name}}">
+                <input type="text" class="product-search" placeholder="Например, Гречка 900 г" value="{{.Name}}" autocomplete="off">
+                <button type="button" class="btn-remove product-remove">−</button>
+                <div class="product-results"></div>
+            </div>
+            {{end}}
+            {{else}}
+            <div class="product-row">
+                <input type="hidden" name="product_id" value="">
+                <input type="hidden" name="product_name" value="">
+                <input type="text" class="product-search" placeholder="Например, Гречка 900 г" autocomplete="off">
+                <button type="button" class="btn-remove product-remove">−</button>
+                <div class="product-results"></div>
+            </div>
+            {{end}}
+        </div>
+        <span class="readonly-hint">При заполнении товара добавится следующая строка — так можно указать несколько товаров в одном обращении.</span>
+
+        <label>Описание</label>
+        <textarea name="description" rows="4">{{.Description}}</textarea>
+
+        {{if not .IsEdit}}
+        <label>Фотографии <span class="readonly-hint">(можно пачкой; прикрепятся при создании обращения)</span></label>
+        <div id="drop-zone">
+            Перетащите фотографии сюда или выберите файлы — можно пачкой
+            <input type="file" id="photos" name="photos" accept="image/*" multiple>
+            <div id="preview"></div>
+            <div id="photo-count" class="photo-count"></div>
+        </div>
+        {{end}}
+
+        <label>Предпринятые действия</label>
+        <textarea name="actions" rows="3">{{.Actions}}</textarea>
+
+        <label>Статус</label>
+        <select name="status">
+            {{range $s := .Statuses}}
+            <option value="{{$s}}" {{if eq (printf "%s" $s) $.Status}}selected{{end}}>{{$s.StatusLabel}}</option>
+            {{end}}
+        </select>
+
+        <label>Дедлайн <span class="readonly-hint">(календарь с временем; должен быть позже текущего момента)</span></label>
+        <input type="datetime-local" name="deadline" id="deadline" value="{{.Deadline}}" required>
+
+        <button type="submit" class="btn">{{if .IsEdit}}Сохранить{{else}}Создать обращение{{end}}</button>
+    </form>
+
+    {{if .SearchReturn}}
+    <a class="back" href="{{.SearchReturn}}">← К результатам поиска</a>
+    {{else}}
+    <a class="back" href="/complaints">← К списку обращений</a>
+    {{end}}
+
+    <script>
+        // ---- Поиск товара: строки + подсказки (XHR /goods/search/json) ----
+        // В строке: скрытые product_id/product_name + текстовое поле поиска.
+        // Выбор из подсказок фиксирует id и имя; новая пустая строка
+        // добавляется, когда заполнена последняя.
+        var rowsBox = document.getElementById('product-rows');
+        var xhr = null;
+
+        function productRowHtml() {
+            var div = document.createElement('div');
+            div.className = 'product-row';
+            div.innerHTML = '' +
+                '<input type="hidden" name="product_id" value="">' +
+                '<input type="hidden" name="product_name" value="">' +
+                '<input type="text" class="product-search" placeholder="Например, Гречка 900 г" autocomplete="off">' +
+                '<button type="button" class="btn-remove product-remove">−</button>' +
+                '<div class="product-results"></div>';
+            return div;
+        }
+
+        function isLastRow(row) {
+            var rows = rowsBox.getElementsByClassName('product-row');
+            return rows.length === 0 || rows[rows.length - 1] === row;
+        }
+
+        function bindRow(row) {
+            var search = row.getElementsByClassName('product-search')[0];
+            var inputs = row.getElementsByTagName('input');
+            var idInput = inputs[0];
+            var nameInput = inputs[1];
+            var results = row.getElementsByClassName('product-results')[0];
+            var removeBtn = row.getElementsByClassName('product-remove')[0];
+
+            removeBtn.onclick = function () {
+                var rows = rowsBox.getElementsByClassName('product-row');
+                if (rows.length > 1) {
+                    rowsBox.removeChild(row);
+                } else {
+                    search.value = '';
+                    idInput.value = '';
+                    nameInput.value = '';
+                    results.innerHTML = '';
+                }
+            };
+
+            var timer = null;
+            search.addEventListener('input', function () {
+                // Ручная правка текста сбрасывает выбранный товар.
+                idInput.value = '';
+                nameInput.value = search.value;
+                if (timer) { clearTimeout(timer); }
+                timer = setTimeout(function () { doSearch(search, results); }, 250);
+            });
+
+            results.addEventListener('click', function (e) {
+                var hit = e.target;
+                if (!hit || hit.className !== 'product-hit') { return; }
+                search.value = hit.getAttribute('data-name');
+                idInput.value = hit.getAttribute('data-id');
+                nameInput.value = hit.getAttribute('data-name');
+                results.innerHTML = '';
+                if (isLastRow(row)) {
+                    var next = productRowHtml();
+                    rowsBox.appendChild(next);
+                    bindRow(next);
+                }
+            });
+        }
+
+        function doSearch(search, results) {
+            var q = search.value.trim();
+            if (q.length < 3) {
+                results.innerHTML = '';
+                return;
+            }
+            if (xhr) { xhr.abort(); }
+            xhr = new XMLHttpRequest();
+            xhr.open('GET', '/goods/search/json?q=' + encodeURIComponent(q), true);
+            xhr.onreadystatechange = function () {
+                if (xhr.readyState !== 4 || xhr.status !== 200) { return; }
+                var items;
+                try { items = JSON.parse(xhr.responseText); } catch (e) { return; }
+                var html = '';
+                for (var i = 0; i < items.length; i++) {
+                    html += '<div class="product-hit" data-id="' + items[i].id + '" data-name="' +
+                        items[i].name.replace(/"/g, '&quot;') + '">' + items[i].name +
+                        ' <span class="readonly-hint">[' + items[i].internal_code + ']</span></div>';
+                }
+                results.innerHTML = html || '<div class="readonly-hint">Ничего не найдено</div>';
+            };
+            xhr.send();
+        }
+
+        var firstRows = rowsBox.getElementsByClassName('product-row');
+        for (var i = 0; i < firstRows.length; i++) {
+            (function (row) { bindRow(row); })(firstRows[i]);
+        }
+
+        // ---- Дедлайн: не раньше текущего момента ----
+        function pad(n) { return (n < 10 ? '0' : '') + n; }
+
+        function nowLocal() {
+            var d = new Date();
+            return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) +
+                'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+        }
+
+        function checkDeadline() {
+            var dl = document.getElementById('deadline');
+            if (!dl || !dl.value) {
+                alert('Укажите дедлайн — дату и время, к которым обращение должно быть отработано.');
+                return false;
+            }
+            if (dl.value <= nowLocal()) {
+                alert('Дедлайн должен быть позже текущего момента.');
+                return false;
+            }
+            return true;
+        }
+
+        // ---- Фотографии: накопление пачкой (drag&drop + выбор файлов) ----
+        var dt = new DataTransfer();
+        var objectUrls = [];
+        var photosInput = document.getElementById('photos');
+        var preview = document.getElementById('preview');
+        var count = document.getElementById('photo-count');
+
+        function renderPreview() {
+            for (var i = 0; i < objectUrls.length; i++) { URL.revokeObjectURL(objectUrls[i]); }
+            objectUrls = [];
+            preview.innerHTML = '';
+            for (var i = 0; i < dt.files.length; i++) {
+                var img = document.createElement('img');
+                img.src = URL.createObjectURL(dt.files[i]);
+                objectUrls.push(img.src);
+                preview.appendChild(img);
+            }
+            count.textContent = dt.files.length > 0 ? 'Добавлено фото: ' + dt.files.length : '';
+        }
+
+        function addFiles(fileList) {
+            for (var i = 0; i < fileList.length; i++) {
+                dt.items.add(fileList[i]);
+            }
+            if (photosInput) { photosInput.files = dt.files; }
+            renderPreview();
+        }
+
+        if (photosInput) {
+            photosInput.addEventListener('change', function () {
+                addFiles(photosInput.files);
+                photosInput.value = '';
+            });
+        }
+
+        var zone = document.getElementById('drop-zone');
+        if (zone) {
+            zone.addEventListener('dragover', function (e) { e.preventDefault(); });
+            zone.addEventListener('drop', function (e) {
+                e.preventDefault();
+                addFiles(e.dataTransfer.files);
+            });
+            zone.addEventListener('click', function (e) {
+                var tag = e.target && e.target.tagName;
+                if (tag === 'INPUT' || tag === 'BUTTON' || tag === 'A') { return; }
+                if (photosInput) { photosInput.click(); }
+            });
+        }
+    </script>
+</body>
+
+</html>

@@ -657,3 +657,26 @@ details.multi-select .ms-empty { color: #66645C; font-size: 13px; margin-top: 6p
 .cell-red { background: #F1948A; color: #000; }
 .cell-gray { background: #CCCCCC; color: #000; }
 .cell-empty { background: #101014; color: #66645C; }
+
+/* ===== Жалобы (complaints) ===== */
+/* Строка товара на карточке/в поиске: текстовое поле + подсказки */
+.product-row { margin-bottom: 6px; }
+.product-row .product-search { width: 100%; max-width: 420px; box-sizing: border-box; }
+.product-row .btn-remove { margin-left: 8px; vertical-align: middle; }
+.product-results { background: #0D0D11; border: 1px solid #26262E; max-width: 420px; margin-top: 2px; }
+.search-row .product-row { margin-right: 8px; }
+.search-row .product-row .product-search { min-width: 240px; max-width: 420px; }
+
+/* Фото на карточке обращения: миниатюра + кнопка удаления под ней */
+.complaint-photo { width: 24%; margin: 2px; box-sizing: border-box; }
+.complaint-photo img { width: 100%; display: block; border: 1px solid #26262E; border-radius: 2px; cursor: zoom-in; }
+.complaint-photo form { margin-top: 4px; }
+.complaint-photo .btn-remove { font-size: 12px; padding: 2px 8px; }
+.photo-add { margin: 8px 0; max-width: 600px; }
+
+/* Кнопка «Зарегистрировать tg - теги»: справа внизу списка */
+.tags-corner { position: fixed; right: 12px; bottom: 12px; z-index: 50; }
+
+@media (max-width: 900px) {
+    .complaint-photo { width: 48%; }
+}

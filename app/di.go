@@ -4,6 +4,8 @@ import (
 	"net/http"
 	asucase "warehouseHelper/internal/averagesales/usecase"
 	aucase "warehouseHelper/internal/avgweight/usecase"
+	cphotos "warehouseHelper/internal/complaints/photostore"
+	cucase "warehouseHelper/internal/complaints/usecase"
 	"warehouseHelper/internal/config"
 	ducecase "warehouseHelper/internal/daystate/usecase"
 	myhttp "warehouseHelper/internal/delivery/http"
@@ -47,6 +49,7 @@ type DIContainer struct {
 	xlsximporter rgucase.RefGoXlsxParser
 	tg           *telegram.Notifier
 	stockStatus  *stockStatusNotifier
+	complaintsUC *cucase.UseCase
 
 	// Юзкейсы
 	syncUC          *msucase.SyncUseCase
@@ -391,9 +394,28 @@ func (d *DIContainer) StockUC() *sucase.StockUseCase {
 	return d.stockUC
 }
 
+// ComplaintsUC — сценарии модуля «Жалобы»: обращения клиентов с фото
+// (zip-архивы), статусы, уведомления в common_chat. PGClient реализует
+// ComplaintRepository и CatalogReader (GetProductsByIDs), photostore.Store —
+// PhotoStore, telegram.Notifier — ComplaintNotifier.
+func (d *DIContainer) ComplaintsUC() *cucase.UseCase {
+	if d.complaintsUC == nil {
+		cc := d.Config().ComplaintsConfig
+		d.complaintsUC = cucase.NewUseCase(
+			d.OrdersRepository(),
+			d.OrdersRepository(),
+			cphotos.NewStore(cc.PhotosDir),
+			d.TelegramNotifier(),
+			cc.PublicURL,
+		)
+	}
+
+	return d.complaintsUC
+}
+
 func (d *DIContainer) Handler() *myhttp.Handler {
 	if d.handlers == nil {
-		d.handlers = myhttp.NewHandler(d.SyncUC(), d.OrdersUC(), d.ExcelExportUC(), d.PdfExportUC(), d.BarcodeExportUC(), d.RefGoCheckAgainstUC(), d.WikiUC(), d.GoodsUC(), d.DayStateUC(), d.QRUC(), d.SuppliersUC(), d.StockUC(), d.StockHub(), d.ReceiveBarcodes(), d.ReceivingUC())
+		d.handlers = myhttp.NewHandler(d.SyncUC(), d.OrdersUC(), d.ExcelExportUC(), d.PdfExportUC(), d.BarcodeExportUC(), d.RefGoCheckAgainstUC(), d.WikiUC(), d.GoodsUC(), d.DayStateUC(), d.QRUC(), d.SuppliersUC(), d.StockUC(), d.StockHub(), d.ReceiveBarcodes(), d.ReceivingUC(), d.ComplaintsUC())
 	}
 
 	return d.handlers
