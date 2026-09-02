@@ -128,9 +128,8 @@ func TagRoleForStatus(s ComplaintStatus) (ComplaintRole, bool) {
 		return ComplaintRoleWarehouse, true
 	case ComplaintStatusCreated, ComplaintStatusClient:
 		return "", false
-	default:
-		return "", false
 	}
+	return "", false
 }
 
 // Complaint — обращение целиком (поля + товары).

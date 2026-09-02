@@ -139,10 +139,7 @@ func (uc *UseCase) SetRoleTag(ctx context.Context, role domain.ComplaintRole, ta
 	if tag == "" {
 		return ErrComplaintBadTag
 	}
-	if err := uc.repo.SetComplaintRoleTag(ctx, role, tag); err != nil {
-		return err
-	}
-	return nil
+	return uc.repo.SetComplaintRoleTag(ctx, role, tag)
 }
 
 // DeleteRoleTag удаляет тег роли (идемпотентно).
@@ -425,13 +422,12 @@ func (uc *UseCase) DeletePhoto(ctx context.Context, complaintID int64, name stri
 func (uc *UseCase) notifyIfInstant(ctx context.Context, c *domain.Complaint) {
 	switch c.Status {
 	case domain.ComplaintStatusReviewing, domain.ComplaintStatusCompleted:
-		// мгновенные уведомления — только эти два статуса
+		// мгновенные уведомления — только эти два статуса (все остальные
+		// перечислены ниже: уходят по дедлайну через тикер)
 	case domain.ComplaintStatusCreated,
 		domain.ComplaintStatusWarehouse,
 		domain.ComplaintStatusSupplier,
 		domain.ComplaintStatusClient:
-		return
-	default:
 		return
 	}
 
@@ -535,7 +531,7 @@ func (uc *UseCase) HandleDetailsButton(ctx context.Context, callbackQueryID stri
 }
 
 // sendPhotos читает фото обращения из архива и отправляет в чат.
-func (uc *UseCase) sendPhotos(ctx context.Context, chatID int64, complaintID int64) error {
+func (uc *UseCase) sendPhotos(ctx context.Context, chatID, complaintID int64) error {
 	photos, err := uc.files.List(ctx, complaintID)
 	if err != nil {
 		return err

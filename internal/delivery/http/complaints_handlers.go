@@ -559,7 +559,7 @@ func (h *Handler) ComplaintsSearch(w http.ResponseWriter, r *http.Request) {
 		ProductID:     data.ProductID,
 	}
 	if data.DateFrom != "" {
-		from, err := time.ParseInLocation("2006-01-02", data.DateFrom, procLoc)
+		from, err := time.ParseInLocation(time.DateOnly, data.DateFrom, procLoc)
 		if err != nil {
 			data.Error = "Дата «с» указана неверно."
 			_ = complaintsSearchTmpl.Execute(w, data)
@@ -568,7 +568,7 @@ func (h *Handler) ComplaintsSearch(w http.ResponseWriter, r *http.Request) {
 		f.From = from
 	}
 	if data.DateTo != "" {
-		to, err := time.ParseInLocation("2006-01-02", data.DateTo, procLoc)
+		to, err := time.ParseInLocation(time.DateOnly, data.DateTo, procLoc)
 		if err != nil {
 			data.Error = "Дата «по» указана неверно."
 			_ = complaintsSearchTmpl.Execute(w, data)

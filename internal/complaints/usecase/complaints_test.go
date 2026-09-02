@@ -94,11 +94,11 @@ func (s *stubRepo) ListAllComplaintSummaries(_ context.Context) ([]domain.Compla
 	return nil, nil
 }
 
-func (s *stubRepo) SearchComplaints(_ context.Context, f domain.ComplaintFilter) ([]domain.ComplaintSummary, error) {
+func (s *stubRepo) SearchComplaints(_ context.Context, _ domain.ComplaintFilter) ([]domain.ComplaintSummary, error) {
 	return nil, nil
 }
 
-func (s *stubRepo) DueComplaints(_ context.Context, now time.Time) ([]domain.ComplaintDue, error) {
+func (s *stubRepo) DueComplaints(_ context.Context, _ time.Time) ([]domain.ComplaintDue, error) {
 	return append([]domain.ComplaintDue(nil), s.due...), nil
 }
 
@@ -202,18 +202,18 @@ type stubNotifier struct {
 	photoCalls   int
 }
 
-func (n *stubNotifier) NotifyCommonStatus(_ context.Context, textHTML string, callbackData string) error {
+func (n *stubNotifier) NotifyCommonStatus(_ context.Context, textHTML, callbackData string) error {
 	n.statusTexts = append(n.statusTexts, textHTML)
 	n.statusData = append(n.statusData, callbackData)
 	return nil
 }
 
-func (n *stubNotifier) SendDetails(_ context.Context, chatID int64, text string) error {
+func (n *stubNotifier) SendDetails(_ context.Context, _ int64, text string) error {
 	n.details = append(n.details, text)
 	return nil
 }
 
-func (n *stubNotifier) SendPhotos(_ context.Context, chatID int64, photos []domain.ComplaintTGPhoto) error {
+func (n *stubNotifier) SendPhotos(_ context.Context, _ int64, photos []domain.ComplaintTGPhoto) error {
 	n.photoCalls++
 	n.photoBatches += len(photos)
 	return nil
@@ -233,7 +233,7 @@ func newTestUC(repo *stubRepo, tags []domain.ComplaintRoleTag) (*UseCase, *stubN
 		"p1": {ID: "p1", Name: "Пылесос"},
 		"p2": {ID: "p2", Name: "Наушники"},
 	}}, photos, notify, "http://warehouse.local:8080")
-	fixed := time.Date(2026, 9, 2, 12, 0, 0, 0, time.Local)
+	fixed := time.Date(2026, 9, 2, 12, 0, 0, 0, time.Now().Location())
 	uc.now = func() time.Time { return fixed }
 	return uc, notify, photos
 }
@@ -245,7 +245,7 @@ func validInput() ComplaintInput {
 		Description:   "Сломался",
 		Actions:       "Позвонили клиенту",
 		Status:        domain.ComplaintStatusCreated,
-		Deadline:      time.Date(2026, 9, 3, 12, 0, 0, 0, time.Local),
+		Deadline:      time.Date(2026, 9, 3, 12, 0, 0, 0, time.Now().Location()),
 		Items:         []domain.ComplaintItem{{ProductID: "p1", ProductName: ""}},
 	}
 }
@@ -300,7 +300,7 @@ func TestCreateValidations(t *testing.T) {
 		repo := newStubRepo()
 		uc, _, _ := newTestUC(repo, nil)
 		in := validInput()
-		in.Deadline = time.Date(2026, 9, 1, 12, 0, 0, 0, time.Local)
+		in.Deadline = time.Date(2026, 9, 1, 12, 0, 0, 0, time.Now().Location())
 		if _, err := uc.Create(context.Background(), in, nil); !errors.Is(err, ErrComplaintDeadlinePast) {
 			t.Errorf("Create error = %v, want ErrComplaintDeadlinePast", err)
 		}
@@ -415,7 +415,7 @@ func TestUpdateRejectsPastDeadline(t *testing.T) {
 		t.Fatalf("Create error: %v", err)
 	}
 
-	in.Deadline = time.Date(2026, 9, 1, 12, 0, 0, 0, time.Local)
+	in.Deadline = time.Date(2026, 9, 1, 12, 0, 0, 0, time.Now().Location())
 	if err := uc.Update(context.Background(), id, in); !errors.Is(err, ErrComplaintDeadlinePast) {
 		t.Errorf("Update error = %v, want ErrComplaintDeadlinePast", err)
 	}

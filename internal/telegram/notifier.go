@@ -233,8 +233,10 @@ func photoKind(p domain.ComplaintTGPhoto) (kind string, ok bool) {
 		if len(p.Data) <= telegramPhotoMaxBytes {
 			return "photo", true
 		}
+		return "document", true
+	default:
+		return "document", true
 	}
-	return "document", true
 }
 
 func (n *Notifier) sendMessage(ctx context.Context, chatID int64, text string) error {

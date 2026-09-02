@@ -61,7 +61,7 @@ func NewRouter(h *Handler) *http.ServeMux {
 	mux.HandleFunc("GET /complaints/all", h.ComplaintsAllPage)             // полный список
 	mux.HandleFunc("GET /complaints/new", h.ComplaintNewForm)              // форма создания
 	mux.HandleFunc("POST /complaints/new", h.ComplaintCreate)              // создание (multipart: поля + фото)
-	mux.HandleFunc("GET /complaints/search", h.ComplaintsSearch)           // поиск (номер/телефон/товар/даты)
+	mux.HandleFunc("GET /complaints/search", h.ComplaintsSearch)           // поиск обращений
 	mux.HandleFunc("GET /complaints/tags", h.ComplaintsTags)               // страница tg-тегов
 	mux.HandleFunc("POST /complaints/tags", h.ComplaintsTags)              // сохранить/удалить тег роли
 	mux.HandleFunc("GET /complaint", h.ComplaintForm)                      // карточка обращения (просмотр/редактирование)

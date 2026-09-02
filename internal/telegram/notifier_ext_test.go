@@ -58,7 +58,10 @@ func TestNotifyCommonStatusSendsHTMLWithButton(t *testing.T) {
 	if !ok || len(buttons) != 1 {
 		t.Fatalf("inline_keyboard row = %#v, want one button", rows[0])
 	}
-	btn := buttons[0].(map[string]any)
+	btn, ok := buttons[0].(map[string]any)
+	if !ok {
+		t.Fatalf("button = %#v, want map", buttons[0])
+	}
 	if btn["text"] != "Получить подробности" {
 		t.Errorf("button text = %v, want «Получить подробности»", btn["text"])
 	}
