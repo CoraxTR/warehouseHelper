@@ -318,7 +318,6 @@ func renderComplaintsList(w http.ResponseWriter, data complaintsListData) {
 }
 
 // ComplaintForm — карточка обращения (просмотр/редактирование), GET.
-// Также раздаёт форму создания при id=0? Нет: создание — отдельный роут.
 func (h *Handler) ComplaintForm(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", http.MethodGet)
@@ -345,12 +344,23 @@ func (h *Handler) ComplaintForm(w http.ResponseWriter, r *http.Request) {
 		slog.Info(fmt.Sprintf("complaints: photos %d: %v", id, err))
 		photos = nil
 	}
-	data := complaintFormDataFromComplaint(c, r.URL.Query().Get("msg"), r.URL.Query().Get("from"))
+	data := complaintFormDataFromComplaint(c, r.URL.Query().Get("msg"), complaintSearchReturn(r))
 	data.Photos = photos
 	data.PhotoCount = len(photos)
 	if err := complaintFormTmpl.Execute(w, data); err != nil {
 		slog.Info(fmt.Sprintf("complaints: render form: %v", err))
 	}
+}
+
+// complaintSearchReturn — адрес возврата из карточки в результаты поиска.
+// Принимаются только внутренние пути (с ведущим «/» и не «//host»):
+// javascript:-схемы и внешние URL из query-параметра отбрасываются.
+func complaintSearchReturn(r *http.Request) string {
+	from := r.URL.Query().Get("from")
+	if from == "" || from[0] != '/' || (len(from) > 1 && from[1] == '/') {
+		return ""
+	}
+	return from
 }
 
 // ComplaintNewForm — форма создания обращения, GET.
@@ -532,6 +542,13 @@ func (h *Handler) ComplaintsSearch(w http.ResponseWriter, r *http.Request) {
 		DateTo:      q.Get("date_to"),
 	}
 	if !complaintHasSearchFilter(data) {
+		_ = complaintsSearchTmpl.Execute(w, data)
+		return
+	}
+	if data.ProductName != "" && data.ProductID == "" {
+		// Текст в поле товара без выбора из подсказок каталога: поиск идёт
+		// только по товарам базы, фильтра по «сырому» названию нет.
+		data.Error = "Выберите товар из выпадающего списка, затем нажмите «Найти»."
 		_ = complaintsSearchTmpl.Execute(w, data)
 		return
 	}

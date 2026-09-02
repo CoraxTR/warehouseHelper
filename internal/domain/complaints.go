@@ -96,6 +96,16 @@ const (
 // ComplaintRoles — все роли тегов (порядок = порядок на странице тегов).
 var ComplaintRoles = []ComplaintRole{ComplaintRoleValidator, ComplaintRoleWarehouse}
 
+// Valid — известная ли роль (валидатор или склад).
+func (r ComplaintRole) Valid() bool {
+	switch r {
+	case ComplaintRoleValidator, ComplaintRoleWarehouse:
+		return true
+	default:
+		return false
+	}
+}
+
 // RoleLabel — русская подпись роли для страницы тегов.
 func (r ComplaintRole) RoleLabel() string {
 	switch r {

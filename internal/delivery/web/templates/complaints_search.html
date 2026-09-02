@@ -111,15 +111,36 @@
                 if (xhr.readyState !== 4 || xhr.status !== 200) { return; }
                 var items;
                 try { items = JSON.parse(xhr.responseText); } catch (e) { return; }
-                var html = '';
-                for (var i = 0; i < items.length; i++) {
-                    html += '<div class="product-hit" data-id="' + items[i].id + '" data-name="' +
-                        items[i].name.replace(/"/g, '&quot;') + '">' + items[i].name +
-                        ' <span class="readonly-hint">[' + items[i].internal_code + ']</span></div>';
-                }
-                results.innerHTML = html || '<div class="readonly-hint">Ничего не найдено</div>';
+                renderHits(results, items);
             };
             xhr.send();
+        }
+
+        // renderHits рисует подсказки каталога. Имя товара — пользовательский
+        // текст: узлы строятся через textContent (никаких innerHTML с ним),
+        // атрибуты data-* — через setAttribute. JSON-ответ сервера для HTML
+        // не экранирован — innerHTML с ним был бы DOM-XSS.
+        function renderHits(results, items) {
+            results.innerHTML = '';
+            if (!items.length) {
+                var empty = document.createElement('div');
+                empty.className = 'readonly-hint';
+                empty.textContent = 'Ничего не найдено';
+                results.appendChild(empty);
+                return;
+            }
+            for (var i = 0; i < items.length; i++) {
+                var div = document.createElement('div');
+                div.className = 'product-hit';
+                div.setAttribute('data-id', items[i].id);
+                div.setAttribute('data-name', items[i].name);
+                div.textContent = items[i].name;
+                var code = document.createElement('span');
+                code.className = 'readonly-hint';
+                code.textContent = '[' + items[i].internal_code + ']';
+                div.appendChild(code);
+                results.appendChild(div);
+            }
         }
 
         initProductFilter();

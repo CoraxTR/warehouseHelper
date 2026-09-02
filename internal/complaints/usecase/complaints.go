@@ -28,6 +28,7 @@ var (
 	ErrComplaintNoOrderNumber = errors.New("укажите номер заказа в МойСклад")
 	ErrComplaintNoDeadline    = errors.New("укажите дедлайн")
 	ErrComplaintBadTag        = errors.New("тег не указан")
+	ErrComplaintBadRole       = errors.New("роль не предусмотрена")
 )
 
 // ComplaintInput — данные обращения из формы (создание и редактирование).
@@ -131,6 +132,9 @@ func (uc *UseCase) SetRoleTag(ctx context.Context, role domain.ComplaintRole, ta
 	done := metrics.Track(trackPkg, "SetRoleTag")
 	defer done()
 
+	if !role.Valid() {
+		return ErrComplaintBadRole
+	}
 	tag = strings.TrimSpace(tag)
 	if tag == "" {
 		return ErrComplaintBadTag
@@ -138,20 +142,18 @@ func (uc *UseCase) SetRoleTag(ctx context.Context, role domain.ComplaintRole, ta
 	if err := uc.repo.SetComplaintRoleTag(ctx, role, tag); err != nil {
 		return err
 	}
-	slog.Info(fmt.Sprintf("complaints: тег роли %s зарегистрирован", role))
 	return nil
 }
 
-// DeleteRoleTag удаляет тег роли.
+// DeleteRoleTag удаляет тег роли (идемпотентно).
 func (uc *UseCase) DeleteRoleTag(ctx context.Context, role domain.ComplaintRole) error {
 	done := metrics.Track(trackPkg, "DeleteRoleTag")
 	defer done()
 
-	if err := uc.repo.DeleteComplaintRoleTag(ctx, role); err != nil {
-		return err
+	if !role.Valid() {
+		return ErrComplaintBadRole
 	}
-	slog.Info(fmt.Sprintf("complaints: тег роли %s удалён", role))
-	return nil
+	return uc.repo.DeleteComplaintRoleTag(ctx, role)
 }
 
 // roleTag — тег роли из репозитория (пустая строка — тег не зарегистрирован).
