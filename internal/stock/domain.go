@@ -24,7 +24,9 @@ type Lot struct {
 	TelegramManual *int16 `json:"discount_telegram_manual"`
 }
 
-// Product — товар с остатками по лотам (кэш модуля).
+// Product — товар каталога с лотами остатков (кэш модуля «Сроки»).
+// Lots пуст, если по товару нет ни одной строки product_stock — строка
+// всё равно показывается на страницах (пустые клетки, «нет в наличии»).
 type Product struct {
 	ID           string `json:"id"`
 	InternalCode string `json:"internal_code"`
