@@ -85,16 +85,20 @@ func (a *App) initAverageSales() {
 	a.di.AverageSalesUC().BackfillMissing()
 }
 
-// initStockCache прогревает кэш остатков модуля «Сроки» всеми лотами.
-// Ошибка не роняет приложение: без схемы product_stock страницы «Сроки»
-// покажут пустую таблицу (примените схему и перезапустите).
+// initStockCache прогревает кэш остатков модуля «Сроки» всем каталогом.
+// Ошибка не роняет приложение (схема product_stock может быть не применена),
+// но пишется в ERROR: страницы «Сроки» пусты — по логу должно быть видно,
+// почему (INFO при LOG_LEVEL=ERROR/INFO не пробивается).
 func (a *App) initStockCache() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	if err := a.di.StockUC().WarmUp(ctx); err != nil {
-		slog.Info(fmt.Sprintf("прогрев кэша остатков: %v (страницы «Сроки» пусты, примените product_stock_schema.sql и перезапустите)", err))
+	uc := a.di.StockUC()
+	if err := uc.WarmUp(ctx); err != nil {
+		slog.Error(fmt.Sprintf("прогрев кэша остатков: %v (страницы «Сроки» пусты; примените product_stock_schema.sql и перезапустите)", err))
+		return
 	}
+	slog.Info(fmt.Sprintf("кэш остатков прогрет: %d товаров (страницы «Сроки»/«Шорт-лист»)", len(uc.Snapshot())))
 }
 
 // initDayState запускает фоновую задачу утреннего снапшота состояний по дням
