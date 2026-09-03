@@ -85,13 +85,18 @@ func (m *mockRepo) AcceptStockLots(_ context.Context, lots []stock.LotIn) error 
 	return nil
 }
 
-// mockPub — публикатор-заглушка, копит события.
+// mockPub — публикатор-заглушка, копит события и снапшоты каталога.
 type mockPub struct {
-	events []stock.Event
+	events    []stock.Event
+	snapshots [][]stock.Product
 }
 
 func (m *mockPub) PublishStockChange(e stock.Event) {
 	m.events = append(m.events, e)
+}
+
+func (m *mockPub) PublishCatalogSnapshot(rows []stock.Product) {
+	m.snapshots = append(m.snapshots, rows)
 }
 
 func i16(v int16) *int16 { return &v }
@@ -169,6 +174,62 @@ func TestWarmUpEmpty(t *testing.T) {
 	}
 	if snap := uc.Snapshot(); len(snap) != 0 {
 		t.Fatalf("Snapshot пустого кэша: len = %d, want 0", len(snap))
+	}
+}
+
+// TestReloadCatalog — шов goods «каталог изменился»: после перечитывания
+// новый товар каталога (появился в БД уже после старта) попадает в снапшот,
+// и клиентам рассылается свежий снапшот.
+func TestReloadCatalog(t *testing.T) {
+	repo := &mockRepo{products: testStock()}
+	pub := &mockPub{}
+	uc := newTestUC(repo, pub)
+	if err := uc.WarmUp(context.Background()); err != nil {
+		t.Fatalf("WarmUp: %v", err)
+	}
+	if snap := uc.Snapshot(); len(snap) != 2 {
+		t.Fatalf("WarmUp: len = %d, want 2", len(snap))
+	}
+
+	// Товар добавлен в products после старта приложения (выгрузка из МС).
+	repo.products = append(testStock(), stock.Product{
+		ID: "p3", InternalCode: "30100003", Name: "Сыр", GroupName: "Молочные", ShortList: true,
+	})
+	if err := uc.ReloadCatalog(context.Background()); err != nil {
+		t.Fatalf("ReloadCatalog: %v", err)
+	}
+
+	snap := uc.Snapshot()
+	if len(snap) != 3 {
+		t.Fatalf("ReloadCatalog: len = %d, want 3 (весь каталог)", len(snap))
+	}
+	if id, ok := uc.byCode["30100003"]; !ok || id != "p3" {
+		t.Errorf("byCode[30100003] = %q, %v; want p3, true", id, ok)
+	}
+	if len(pub.snapshots) != 1 || len(pub.snapshots[0]) != 3 {
+		t.Errorf("PublishCatalogSnapshot: %d вызовов, want 1 с 3 строками", len(pub.snapshots))
+	}
+}
+
+// TestReloadCatalogError — ошибка чтения каталога не трогает текущий кэш
+// и не публикует снапшот (следующая выгрузка повторит перечитывание).
+func TestReloadCatalogError(t *testing.T) {
+	repo := &mockRepo{products: testStock()}
+	pub := &mockPub{}
+	uc := newTestUC(repo, pub)
+	if err := uc.WarmUp(context.Background()); err != nil {
+		t.Fatalf("WarmUp: %v", err)
+	}
+
+	repo.err = errors.New("pg down")
+	if err := uc.ReloadCatalog(context.Background()); err == nil {
+		t.Fatal("ReloadCatalog: want error, got nil")
+	}
+	if snap := uc.Snapshot(); len(snap) != 2 {
+		t.Fatalf("кэш после ошибки: len = %d, want 2 (прежний)", len(snap))
+	}
+	if len(pub.snapshots) != 0 {
+		t.Errorf("PublishCatalogSnapshot на ошибке: %d, want 0", len(pub.snapshots))
 	}
 }
 

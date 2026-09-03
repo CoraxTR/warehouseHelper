@@ -103,6 +103,18 @@ func (h *Hub) PublishStockChange(e stock.Event) {
 	h.broadcast(msg)
 }
 
+// PublishCatalogSnapshot — реализация usecase.Publisher: рассылает клиентам
+// полный снапшот каталога с остатками (шов goods: каталог перечитан после
+// выгрузки/правки товаров — открытые страницы обновляются без рестарта).
+func (h *Hub) PublishCatalogSnapshot(rows []stock.Product) {
+	msg, err := json.Marshal(Message{Type: "snapshot", Rows: rows})
+	if err != nil {
+		slog.Error(fmt.Sprintf("ws: marshal catalog snapshot: %v", err))
+		return
+	}
+	h.broadcast(msg)
+}
+
 // ServeConn обслуживает одно соединение: регистрирует клиента со снапшотом
 // и запускает read/write-горутины.
 func (h *Hub) ServeConn(w http.ResponseWriter, r *http.Request, snapshot []byte) {

@@ -382,10 +382,15 @@ func (d *DIContainer) StockHub() *stockws.Hub {
 // StockUC — сценарии модуля «Сроки»: кэш остатков и ручные скидки.
 // PGClient реализует sucase.Repository, StockHub — sucase.Publisher,
 // DayStateUC — sucase.DayStateRecorder (шов состояния по дням).
-// Кэш прогревается при старте (app.initStockCache).
+// Кэш прогревается при старте (app.initStockCache); шов «каталог изменился»:
+// goods после выгрузки/правки товаров перечитывает кэш через ReloadCatalog
+// (новые позиции видны на страницах без рестарта).
 func (d *DIContainer) StockUC() *sucase.StockUseCase {
 	if d.stockUC == nil {
 		d.stockUC = sucase.NewStockUseCase(d.OrdersRepository(), d.StockHub(), d.DayStateUC())
+		// GoodsUC() создаётся здесь же (DayStateUC → GoodsUC), рекурсии нет:
+		// goods не тянет StockUC. Вызов до первого запроса — слушатель на месте.
+		d.GoodsUC().SetCatalogChangeListener(d.stockUC)
 	}
 
 	return d.stockUC

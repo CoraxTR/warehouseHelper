@@ -447,6 +447,18 @@ func TestUpdateAverageWeight(t *testing.T) {
 	}
 }
 
+// stubCatalogListener — шов «каталог изменился» (ReloadCatalog): считает
+// перечитывания кэша сроков.
+type stubCatalogListener struct {
+	reloads int
+	err     error
+}
+
+func (s *stubCatalogListener) ReloadCatalog(_ context.Context) error {
+	s.reloads++
+	return s.err
+}
+
 const (
 	uomKgHref = "https://api.moysklad.ru/api/remap/1.2/entity/uom/kg-uuid"
 	uomPcHref = "https://api.moysklad.ru/api/remap/1.2/entity/uom/pc-uuid"
@@ -463,7 +475,9 @@ func TestExportProducts_HappyPath(t *testing.T) {
 		uomNames: map[string]string{uomKgHref: "кг", uomPcHref: "шт"},
 	}
 	repo := &stubProductsRepo{}
+	ls := &stubCatalogListener{}
 	uc := NewGoodsUseCase(&stubProductFolderClient{}, pc, repo, nil)
+	uc.SetCatalogChangeListener(ls)
 
 	errs, err := uc.ExportProducts(context.Background(), []ExportItem{
 		{ProductID: "p1", GroupPath: testGroupA},
@@ -502,6 +516,11 @@ func TestExportProducts_HappyPath(t *testing.T) {
 	// Кэш uom: два товара, но разные href — два запроса; второй запуск одного href — один.
 	if len(pc.uomCalls) != 2 {
 		t.Errorf("запросов uom: %d, ожидалось 2 (по уникальным href)", len(pc.uomCalls))
+	}
+
+	// Шов «каталог изменился»: после выгрузки модуль «Сроки» перечитан ровно раз.
+	if ls.reloads != 1 {
+		t.Errorf("перечитываний кэша сроков после выгрузки: %d, want 1", ls.reloads)
 	}
 }
 
@@ -722,7 +741,9 @@ func TestGetProduct(t *testing.T) {
 
 func TestSaveProduct(t *testing.T) {
 	repo := &stubProductsRepo{}
+	ls := &stubCatalogListener{}
 	uc := NewGoodsUseCase(&stubProductFolderClient{}, &stubProductClient{}, repo, nil)
+	uc.SetCatalogChangeListener(ls)
 
 	p := &domain.Product{ID: "p1", Name: "Говядина"}
 	if err := uc.SaveProduct(context.Background(), p); err != nil {
@@ -730,6 +751,21 @@ func TestSaveProduct(t *testing.T) {
 	}
 	if len(repo.saved) != 1 || repo.saved[0].Name != "Говядина" {
 		t.Errorf("сохранено: %+v", repo.saved)
+	}
+	if ls.reloads != 1 {
+		t.Errorf("перечитываний кэша сроков: %d, want 1 (шов после правки товара)", ls.reloads)
+	}
+
+	// Ошибка перечитывания не роняет правку товара: лог, следующий синк повторит.
+	repo = &stubProductsRepo{}
+	ls2 := &stubCatalogListener{err: errors.New("pg down")}
+	uc2 := NewGoodsUseCase(&stubProductFolderClient{}, &stubProductClient{}, repo, nil)
+	uc2.SetCatalogChangeListener(ls2)
+	if err := uc2.SaveProduct(context.Background(), &domain.Product{ID: "p2", Name: "Масло"}); err != nil {
+		t.Fatalf("SaveProduct с падающим слушателем: %v", err)
+	}
+	if len(repo.saved) != 1 || ls2.reloads != 1 {
+		t.Errorf("saved=%d reloads=%d, want 1/1", len(repo.saved), ls2.reloads)
 	}
 }
 

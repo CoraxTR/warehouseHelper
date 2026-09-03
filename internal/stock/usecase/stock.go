@@ -52,6 +52,11 @@ type Repository interface {
 // Publisher — получатель событий об изменениях остатков (вебсокет-хаб).
 type Publisher interface {
 	PublishStockChange(e stock.Event)
+
+	// PublishCatalogSnapshot рассылает клиентам полный снапшот каталога
+	// с остатками — после перечитывания кэша (шов goods: выгрузка/правка
+	// товаров меняет products; страницы обновляются без рестарта).
+	PublishCatalogSnapshot(rows []stock.Product)
 }
 
 // DayStateRecorder — наблюдатель состояния товара по дням (модуль daystate):
@@ -104,7 +109,9 @@ func (uc *StockUseCase) notifyDayState(ctx context.Context, productIDs ...string
 	}
 }
 
-// WarmUp прогревает кэш всеми лотами при включении программы.
+// WarmUp прогревает кэш всем каталогом с лотами остатков при включении
+// программы (товары без остатков — пустой Lots: страницы показывают весь
+// ассортимент, а не только позиции в наличии).
 func (uc *StockUseCase) WarmUp(ctx context.Context) error {
 	done := metrics.Track(trackPkg, "WarmUp")
 	defer done()
@@ -113,6 +120,16 @@ func (uc *StockUseCase) WarmUp(ctx context.Context) error {
 		return fmt.Errorf("warm up stock cache: %w", err)
 	}
 
+	uc.mu.Lock()
+	uc.swapCacheLocked(products)
+	uc.mu.Unlock()
+
+	return nil
+}
+
+// swapCacheLocked строит кэш и byCode из списка каталога (без лока —
+// вызывающий держит mu).
+func (uc *StockUseCase) swapCacheLocked(products []stock.Product) {
 	cache := make(map[string]*stock.Product, len(products))
 	byCode := make(map[string]string, len(products))
 	for i := range products {
@@ -122,12 +139,31 @@ func (uc *StockUseCase) WarmUp(ctx context.Context) error {
 		}
 		cache[p.ID] = p
 	}
-
-	uc.mu.Lock()
 	uc.cache = cache
 	uc.byCode = byCode
+}
+
+// ReloadCatalog перечитывает каталог с остатками из БД и рассылает клиентам
+// свежий снапшот. Шов goods: выгрузка/правка товаров из МС меняет products,
+// а кэш греется только при старте — без перечитывания новые позиции не
+// появятся на «Сроках» до перезапуска. Ошибка чтения: кэш остаётся прежним
+// (следующая выгрузка повторит), публикации нет.
+func (uc *StockUseCase) ReloadCatalog(ctx context.Context) error {
+	done := metrics.Track(trackPkg, "ReloadCatalog")
+	defer done()
+	products, err := uc.repo.LoadAllStock(ctx)
+	if err != nil {
+		return fmt.Errorf("reload stock catalog: %w", err)
+	}
+
+	uc.mu.Lock()
+	uc.swapCacheLocked(products)
 	uc.mu.Unlock()
 
+	// Открытым страницам — полный снапшот (клиент умеет applySnapshot).
+	if uc.pub != nil {
+		uc.pub.PublishCatalogSnapshot(uc.Snapshot())
+	}
 	return nil
 }
 
