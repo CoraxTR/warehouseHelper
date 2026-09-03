@@ -19,6 +19,7 @@ import (
 	"warehouseHelper/internal/domain"
 	gucase "warehouseHelper/internal/goods/usecase"
 	msucase "warehouseHelper/internal/msclient/usecase"
+	msordersuc "warehouseHelper/internal/msorders/usecase"
 	msu "warehouseHelper/internal/mssuppliers/usecase"
 	qucase "warehouseHelper/internal/qrcodes/usecase"
 	rucase "warehouseHelper/internal/receiving/usecase"
@@ -46,9 +47,10 @@ type Handler struct {
 	receiveUC    *rucase.BarcodeEditor
 	receivingUC  *rucase.ReceivingUseCase
 	complaintsUC *cucase.UseCase
+	msOrdersUC   *msordersuc.UseCase
 }
 
-func NewHandler(syncUC *msucase.SyncUseCase, ordersUC *msucase.OrdersUseCase, exportUC *rgucase.ExportToExcelUseCase, pdfUC *rgucase.ExportOrderPDFUseCase, barcodeUC *rgucase.ExportBarcodesToExcelUseCase, refGoUC *rgucase.RefGoCheckAgainstUseCase, wikiUC *wucase.WikiUseCase, goodsUC *gucase.GoodsUseCase, dayStateUC *ducecase.UseCase, qrUC *qucase.QRUseCase, msUC *msu.MSSuppliersUseCase, stockUC *sucase.StockUseCase, stockHub *stockws.Hub, receiveUC *rucase.BarcodeEditor, receivingUC *rucase.ReceivingUseCase, complaintsUC *cucase.UseCase) *Handler {
+func NewHandler(syncUC *msucase.SyncUseCase, ordersUC *msucase.OrdersUseCase, exportUC *rgucase.ExportToExcelUseCase, pdfUC *rgucase.ExportOrderPDFUseCase, barcodeUC *rgucase.ExportBarcodesToExcelUseCase, refGoUC *rgucase.RefGoCheckAgainstUseCase, wikiUC *wucase.WikiUseCase, goodsUC *gucase.GoodsUseCase, dayStateUC *ducecase.UseCase, qrUC *qucase.QRUseCase, msUC *msu.MSSuppliersUseCase, stockUC *sucase.StockUseCase, stockHub *stockws.Hub, receiveUC *rucase.BarcodeEditor, receivingUC *rucase.ReceivingUseCase, complaintsUC *cucase.UseCase, msOrdersUC *msordersuc.UseCase) *Handler {
 	return &Handler{
 		syncUC:       syncUC,
 		ordersUC:     ordersUC,
@@ -66,6 +68,7 @@ func NewHandler(syncUC *msucase.SyncUseCase, ordersUC *msucase.OrdersUseCase, ex
 		receiveUC:    receiveUC,
 		receivingUC:  receivingUC,
 		complaintsUC: complaintsUC,
+		msOrdersUC:   msOrdersUC,
 	}
 }
 

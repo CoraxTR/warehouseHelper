@@ -51,6 +51,9 @@ type MSMeta struct {
 
 type MSAgent struct {
 	Meta MSMeta `json:"meta"`
+	// Name приезжает только при expand=agent: в обычных списках agent —
+	// краткая meta-ссылка без имени.
+	Name string `json:"name"`
 }
 
 type MSAgentInfo struct {
@@ -95,6 +98,7 @@ type MSOrder struct {
 	HREF                  string         `json:"href"`
 	Meta                  MSMeta         `json:"meta"`
 	Name                  string         `json:"name"`
+	Moment                string         `json:"moment"`
 	Sum                   float64        `json:"sum"`
 	Agent                 MSAgent        `json:"agent"`
 	Attributes            []MSAttributes `json:"attributes"`
