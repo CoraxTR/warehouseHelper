@@ -261,6 +261,17 @@
                 }
             }
             document.getElementById('stock-body').innerHTML = html;
+            renderDataCount();
+        }
+
+        // Диагностика в статусе соединения: после рендера показывает, сколько
+        // позиций пришло в снапшоте («онлайн · 25 поз.»). Пусто/нет вызова =
+        // снапшот не пришёл или рендер упал.
+        function renderDataCount() {
+            var el = document.getElementById('ws-status');
+            if (el && STOCK.products.length) {
+                el.textContent = 'онлайн · ' + STOCK.products.length + ' поз.';
+            }
         }
 
         // Состояние группы: явное переключение («+»/«-») или дефолт страницы
