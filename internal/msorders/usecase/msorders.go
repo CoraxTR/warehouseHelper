@@ -27,6 +27,10 @@ var ErrEmptyName = errors.New("введите номер заказа")
 // *client.MSAPIClient.
 type OrderSearchClient interface {
 	SearchCustomerOrdersByName(ctx context.Context, name string) ([]client.MSOrder, error)
+	// FetchOrderAgentByHREF — имя контрагента по agent.meta.href строки.
+	// МС игнорирует expand=agent при filter=name (проверено контрольными
+	// запросами), поэтому имя дотягивается отдельным запросом на строку.
+	FetchOrderAgentByHREF(ctx context.Context, o *client.MSOrder) (string, string, error)
 }
 
 // OrderRow — строка результата поиска, готовая для показа в таблице:
@@ -68,17 +72,37 @@ func (uc *UseCase) Search(ctx context.Context, name string) ([]OrderRow, error) 
 	}
 
 	rows := make([]OrderRow, 0, len(orders))
-	for _, o := range orders {
+	for i := range orders {
+		o := &orders[i]
 		rows = append(rows, OrderRow{
 			Name:         o.Name,
 			Created:      shortDate(o.Moment),
-			AgentName:    orDash(o.Agent.Name),
+			AgentName:    orDash(uc.agentName(ctx, o)),
 			DeliveryDate: shortDate(o.DeliveryPlannedMoment),
 			Href:         o.Meta.HREF,
 		})
 	}
 
 	return rows, nil
+}
+
+// agentName возвращает имя контрагента заказа. Если имя не приехало в строке
+// (expand=agent игнорируется МС при filter=name) — дотягивает по
+// agent.meta.href отдельным запросом (воркерпул рейт-лимитит). Ошибка хопа
+// не роняет поиск: клиент уже залогировал её, имя остаётся пустым — в строке
+// таблицы будет «—» (вторичные данные, как barcodes на форме поставщика).
+func (uc *UseCase) agentName(ctx context.Context, o *client.MSOrder) string {
+	if name := strings.TrimSpace(o.Agent.Name); name != "" {
+		return name
+	}
+	if o.Agent.Meta.HREF == "" {
+		return ""
+	}
+	name, _, err := uc.ms.FetchOrderAgentByHREF(ctx, o)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(name)
 }
 
 // shortDate режет момент МС («2006-01-02 15:04:05.000») до даты ДД.ММ.ГГГГ.
