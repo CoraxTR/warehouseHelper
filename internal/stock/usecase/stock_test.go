@@ -172,6 +172,40 @@ func TestWarmUpEmpty(t *testing.T) {
 	}
 }
 
+// TestWarmUpKeepsProductsWithoutLots — LoadAllStock отдаёт ВЕСЬ каталог:
+// товар без строк в product_stock приходит с пустым Lots и не теряется
+// (страницы «Сроки» показывают ассортимент, клетки заполняются по мере
+// прихода партий).
+func TestWarmUpKeepsProductsWithoutLots(t *testing.T) {
+	repo := &mockRepo{products: append(testStock(), stock.Product{
+		ID: "p3", InternalCode: "30100003", Name: "Сыр без остатков",
+		GroupName: "Молочные", ShortList: true,
+	})}
+	uc := newTestUC(repo, nil)
+	if err := uc.WarmUp(context.Background()); err != nil {
+		t.Fatalf("WarmUp: %v", err)
+	}
+
+	snap := uc.Snapshot()
+	if len(snap) != 3 {
+		t.Fatalf("Snapshot: len = %d, want 3 (весь каталог)", len(snap))
+	}
+	// p3 — в «Молочные» после «Молоко» (товары группы по алфавиту имени).
+	if snap[0].ID != "p2" || snap[1].ID != "p3" || snap[1].Name != "Сыр без остатков" {
+		t.Errorf("Snapshot порядок: %q, %q; want p2 (Молоко), p3 (Сыр без остатков)", snap[0].Name, snap[1].Name)
+	}
+	if len(snap[1].Lots) != 0 {
+		t.Errorf("Lots товара без остатков: %+v, want пустой", snap[1].Lots)
+	}
+	if !snap[1].ShortList {
+		t.Error("short_list товара без остатков потерян")
+	}
+	// byCode строится по всему каталогу, не только по товарам с остатками.
+	if id, ok := uc.byCode["30100003"]; !ok || id != "p3" {
+		t.Errorf("byCode[30100003] = %q, %v; want p3, true", id, ok)
+	}
+}
+
 func TestSetManualDiscount(t *testing.T) {
 	repo := &mockRepo{products: testStock()}
 	pub := &mockPub{}
