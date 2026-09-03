@@ -240,7 +240,7 @@
                 }
             }
 
-            var head = '<tr><th class="col-name">Наименование</th>';
+            var head = '<tr><th class="col-toggle"></th><th class="col-name">Наименование</th>';
             for (k = 0; k < n; k++) {
                 head += '<th>Кол-во</th><th>Срок</th>';
             }
@@ -276,18 +276,33 @@
             render();
         }
 
-        // Строка группы: «+»/«-» (раскрыть/свернуть) + название (клик — «Обновить
-        // сроки группы», обработчик onBodyClick). Только ES5, без инлайн-обработчиков.
+        // Строка группы: отдельная ячейка «+»/«-» слева + название (клик по
+        // названию — «Обновить сроки группы», обработчик onBodyClick).
+        // Отображаемое имя — последний сегмент group_name после «/»
+        // («Ассортимент на продажу/003 - Cresud» → «003 - Cresud»).
         function groupRow(g, collapsed, colspan) {
             var sign = collapsed ? '+' : '-';
-            return '<tr class="group-row"><td colspan="' + colspan + '" data-role="group" data-group="' + esc(g) + '">' +
-                '<span class="group-toggle" data-role="group-toggle" data-group="' + esc(g) + '" title="' + (collapsed ? 'Развернуть группу' : 'Свернуть группу') + '">' + sign + '</span>' +
-                esc(g || 'Без группы') + '</td></tr>';
+            var label = groupLabel(g) || 'Без группы';
+            return '<tr class="group-row">' +
+                '<td class="col-toggle" data-role="group-toggle" data-group="' + esc(g) + '" title="' + (collapsed ? 'Развернуть группу' : 'Свернуть группу') + '">' + sign + '</td>' +
+                '<td colspan="' + colspan + '" data-role="group" data-group="' + esc(g) + '">' + esc(label) + '</td></tr>';
+        }
+
+        // Усечённое имя группы для отображения: последний сегмент полного пути
+        // group_name («Ассортимент на продажу/003 - Cresud» → «003 - Cresud»).
+        function groupLabel(g) {
+            var s = String(g || '');
+            var i = s.lastIndexOf('/');
+            if (i >= 0) {
+                s = s.slice(i + 1);
+            }
+            return s.replace(/^\s+|\s+$/g, '');
         }
 
         function productRow(p, n) {
             var lots = visibleLots(p);
             var html = '<tr>';
+            html += '<td class="col-toggle"></td>';
             html += '<td class="col-name" data-role="name" data-product="' + esc(p.id) + '">' + esc(p.name) + '</td>';
             for (var k = 0; k < n; k++) {
                 if (k < lots.length) {
@@ -529,7 +544,7 @@
             if (!code) {
                 return; // в названии нет номера группы — обновление по группе недоступно
             }
-            var display = groupName || 'Без группы';
+            var display = groupLabel(groupName) || 'Без группы';
             UPDATE_CTX = { kind: 'group', code: code, name: display };
             var html = '<div class="modal-title">' + esc(display) + '</div>';
             html += '<div class="modal-line">Группа: ' + code + '</div>';
@@ -540,9 +555,11 @@
             showModal(html);
         }
 
-        // Первые 3 цифры названия группы — номер группы в internal_code (индексы 1..3).
+        // Первые 3 цифры ОТОБРАЖАЕМОГО названия группы — номер группы в
+        // internal_code (индексы 1..3). Полный group_name усекается до
+        // последнего сегмента («…/003 - Cresud» → «003»).
         function groupCode(name) {
-            var m = /^(\d{3})/.exec(name || '');
+            var m = /^(\d{3})/.exec(groupLabel(name));
             return m ? m[1] : null;
         }
 
