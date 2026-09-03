@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"mime"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -73,21 +74,22 @@ type complaintsListData struct {
 
 // complaintFormData — страница обращения (создание или карточка).
 type complaintFormData struct {
-	IsEdit       bool
-	ID           string // пусто при создании
-	OrderNumber  string
-	Phone        string
-	Description  string
-	Actions      string
-	Status       string // выбранный статус (код)
-	Statuses     []domain.ComplaintStatus
-	Deadline     string // локальное время, формат datetime-local: 2006-01-02T15:04
-	Products     []complaintProductCell
-	Photos       []photostore.Photo
-	PhotoCount   int
-	Error        string
-	Msg          string
-	SearchReturn string // ссылка «← к списку/поиску», если открыли из поиска
+	IsEdit          bool
+	ID              string // пусто при создании
+	OrderNumber     string
+	Phone           string
+	Description     string
+	Actions         string
+	Status          string // выбранный статус (код)
+	Statuses        []domain.ComplaintStatus
+	Deadline        string // локальное время, формат datetime-local: 2006-01-02T15:04
+	DeadlineInitial string // что форма показала при открытии (hidden deadline_initial); «не менял» = deadline == initial
+	Products        []complaintProductCell
+	Photos          []photostore.Photo
+	PhotoCount      int
+	Error           string
+	Msg             string
+	SearchReturn    string // ссылка «← к списку/поиску», если открыли из поиска
 }
 
 // complaintsTagsPageData — страница «Зарегистрировать tg-теги».
@@ -130,18 +132,20 @@ func complaintRowsFromSummaries(list []domain.ComplaintSummary) []complaintListR
 }
 
 func complaintFormDataFromComplaint(c *domain.Complaint, msg, searchReturn string) complaintFormData {
+	deadline := c.Deadline.In(procLoc).Format("2006-01-02T15:04")
 	d := complaintFormData{
-		IsEdit:       true,
-		ID:           strconv.FormatInt(c.ID, 10),
-		OrderNumber:  c.MSOrderNumber,
-		Phone:        domain.FormatPhone(c.Phone),
-		Description:  c.Description,
-		Actions:      c.Actions,
-		Status:       string(c.Status),
-		Statuses:     domain.ComplaintStatuses,
-		Deadline:     c.Deadline.In(procLoc).Format("2006-01-02T15:04"),
-		Msg:          msg,
-		SearchReturn: searchReturn,
+		IsEdit:          true,
+		ID:              strconv.FormatInt(c.ID, 10),
+		OrderNumber:     c.MSOrderNumber,
+		Phone:           domain.FormatPhone(c.Phone),
+		Description:     c.Description,
+		Actions:         c.Actions,
+		Status:          string(c.Status),
+		Statuses:        domain.ComplaintStatuses,
+		Deadline:        deadline,
+		DeadlineInitial: deadline,
+		Msg:             msg,
+		SearchReturn:    searchReturn,
 	}
 	for _, it := range c.Items {
 		d.Products = append(d.Products, complaintProductCell{ProductID: it.ProductID, Name: it.ProductName})
@@ -169,6 +173,19 @@ func closeComplaintFiles(files []io.Closer) {
 func parseComplaintID(r *http.Request) (int64, bool) {
 	id, err := strconv.ParseInt(r.FormValue("id"), 10, 64)
 	return id, err == nil && id > 0
+}
+
+// parseComplaintForm разбирает тело POST: multipart/form-data (создание,
+// добавление фото) или обычную urlencoded-форму (карточка). Оба вида
+// кладут значения в r.Form — дальше читаются FormValue/r.Form. Навязчивый
+// ParseMultipartForm на urlencoded-запросе — всегда ошибка (карточка не
+// мультипарт: фото добавляются отдельным POST).
+func parseComplaintForm(r *http.Request) error {
+	mt, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err == nil && mt == "multipart/form-data" {
+		return r.ParseMultipartForm(32 << 20)
+	}
+	return r.ParseForm()
 }
 
 // parseDeadlineLocal разбирает значение datetime-local как локальное время
@@ -203,7 +220,14 @@ func complaintFormFromRequest(r *http.Request) (complaintFormResult, error) {
 	if !res.in.Status.Valid() {
 		res.in.Status = domain.ComplaintStatusCreated
 	}
-	dl, err := parseDeadlineLocal(r.FormValue("deadline"))
+	// «Дедлайн не задан вручную»: значение поля равно показанному при
+	// открытии формы (hidden deadline_initial). Сравнение строк
+	// datetime-local (точность — минута); при создании форма подставляет
+	// «сейчас», на карточке — сохранённый дедлайн, поэтому пустого
+	// initial не бывает.
+	deadline := r.FormValue("deadline")
+	res.in.DeadlineAuto = deadline != "" && deadline == r.FormValue("deadline_initial")
+	dl, err := parseDeadlineLocal(deadline)
 	if err != nil {
 		return res, errBadDeadlineFormat
 	}
@@ -228,7 +252,10 @@ func complaintFormFromRequest(r *http.Request) (complaintFormResult, error) {
 
 	// Фото из multipart (при создании; на карточке фото добавляются
 	// отдельным запросом). Ошибки чтения файлов накапливаем — вернём первую.
-	files := r.MultipartForm.File["photos"]
+	var files []*multipart.FileHeader
+	if r.MultipartForm != nil {
+		files = r.MultipartForm.File["photos"]
+	}
 	res.opened = make([]io.Closer, 0, len(files))
 	var first error
 	for _, fh := range files {
@@ -370,9 +397,14 @@ func (h *Handler) ComplaintNewForm(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	// Дедлайн подставляется «сейчас»: менеджер, не меняя поле, получает
+	// ровно +24 часа от момента сохранения (DeadlineAuto в usecase).
+	deadline := time.Now().In(procLoc).Format("2006-01-02T15:04")
 	data := complaintFormData{
-		Statuses: domain.ComplaintStatuses,
-		Status:   string(domain.ComplaintStatusCreated),
+		Statuses:        domain.ComplaintStatuses,
+		Status:          string(domain.ComplaintStatusCreated),
+		Deadline:        deadline,
+		DeadlineInitial: deadline,
 	}
 	if err := complaintFormTmpl.Execute(w, data); err != nil {
 		slog.Info(fmt.Sprintf("complaints: render new form: %v", err))
@@ -387,20 +419,21 @@ func (h *Handler) ComplaintCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, complaintMaxBodyBytes)
-	if err := r.ParseMultipartForm(32 << 20); err != nil {
+	if err := parseComplaintForm(r); err != nil {
 		http.Error(w, "Не удалось прочитать отправленные данные.", http.StatusBadRequest)
 		return
 	}
 	renderErr := func(msg string) {
 		data := complaintFormData{
-			OrderNumber: strings.TrimSpace(r.FormValue("ms_order")),
-			Phone:       r.FormValue("phone"),
-			Description: r.FormValue("description"),
-			Actions:     r.FormValue("actions"),
-			Statuses:    domain.ComplaintStatuses,
-			Status:      r.FormValue("status"),
-			Deadline:    r.FormValue("deadline"),
-			Error:       msg,
+			OrderNumber:     strings.TrimSpace(r.FormValue("ms_order")),
+			Phone:           r.FormValue("phone"),
+			Description:     r.FormValue("description"),
+			Actions:         r.FormValue("actions"),
+			Statuses:        domain.ComplaintStatuses,
+			Status:          r.FormValue("status"),
+			Deadline:        r.FormValue("deadline"),
+			DeadlineInitial: r.FormValue("deadline_initial"),
+			Error:           msg,
 		}
 		for i := 0; i < len(r.Form["product_id"]); i++ {
 			data.Products = append(data.Products, complaintProductCell{ProductID: r.Form["product_id"][i], Name: formName(r, i)})
@@ -445,7 +478,10 @@ func (h *Handler) ComplaintSave(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Не указан id обращения.", http.StatusBadRequest)
 		return
 	}
-	if err := r.ParseMultipartForm(32 << 20); err != nil {
+	// Карточка шлёт обычную urlencoded-форму (без фото) — multipart тут
+	// не нужен; безусловный ParseMultipartForm ронял каждое сохранение
+	// с 400 «Не удалось прочитать отправленные данные».
+	if err := parseComplaintForm(r); err != nil {
 		http.Error(w, "Не удалось прочитать отправленные данные.", http.StatusBadRequest)
 		return
 	}
@@ -682,7 +718,7 @@ func (h *Handler) ComplaintPhotoAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, complaintMaxBodyBytes)
-	if err := r.ParseMultipartForm(32 << 20); err != nil {
+	if err := parseComplaintForm(r); err != nil {
 		http.Error(w, "Не удалось прочитать файлы.", http.StatusBadRequest)
 		return
 	}

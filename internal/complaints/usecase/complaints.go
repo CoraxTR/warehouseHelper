@@ -39,7 +39,12 @@ type ComplaintInput struct {
 	Actions       string
 	Status        domain.ComplaintStatus
 	Deadline      time.Time
-	Items         []domain.ComplaintItem // product_id + product_name из формы
+	// DeadlineAuto — менеджер дедлайн не задавал (значение поля формы не
+	// менялось с момента открытия). Модуль сам ставит +24 часа от момента
+	// сохранения при создании и при смене статуса; без смены статуса
+	// дедлайн остаётся прежним.
+	DeadlineAuto bool
+	Items        []domain.ComplaintItem // product_id + product_name из формы
 }
 
 // ComplaintRepository — хранилище обращений (реализация: postgres.PGClient).
@@ -168,16 +173,24 @@ func (uc *UseCase) roleTag(ctx context.Context, role domain.ComplaintRole) strin
 	return ""
 }
 
-// Create создаёт обращение с товарами и, если менеджер сразу выставил
-// статус «На рассмотрении» или «Завершено», отправляет мгновенное
-// уведомление в common_chat. Фото сохраняются архивом <id>.zip; при
-// ошибке сохранения фото созданное обращение удаляется.
+// Create создаёт обращение с товарами. Дедлайн, который менеджер не задавал
+// вручную (DeadlineAuto), — ровно +24 часа от момента сохранения. При
+// создании сразу со статусом, отличным от «Создано», в common_chat уходит
+// мгновенное уведомление (текст и тег по статусу). Фото сохраняются
+// архивом <id>.zip; при ошибке сохранения фото созданное обращение удаляется.
 func (uc *UseCase) Create(ctx context.Context, in ComplaintInput, uploads []photostore.Upload) (int64, error) {
 	done := metrics.Track(trackPkg, "Create")
 	defer done()
 
+	if in.DeadlineAuto {
+		in.Deadline = uc.now().Add(24 * time.Hour)
+	}
+
 	c, err := uc.buildComplaint(ctx, in)
 	if err != nil {
+		return 0, err
+	}
+	if err := uc.checkDeadline(c); err != nil {
 		return 0, err
 	}
 
@@ -198,13 +211,21 @@ func (uc *UseCase) Create(ctx context.Context, in ComplaintInput, uploads []phot
 	}
 
 	c.ID = id
-	uc.notifyIfInstant(ctx, c)
+	if c.Status != domain.ComplaintStatusCreated {
+		// Создание сразу в рабочем статусе — уведомляем один раз
+		// (напоминания дальше — по дедлайну). «Создано» молчит.
+		uc.notifyStatus(ctx, c)
+	}
 	return id, nil
 }
 
 // Update сохраняет изменения обращения. Уведомление в common_chat шлётся
-// только при ПЕРЕХОДЕ статуса в «На рассмотрении» или «Завершено»
-// (единственные мгновенные уведомления по смене статуса).
+// при каждой смене статуса — один раз (текст и тег по новому статусу);
+// повторное сохранение того же статуса молчит. Дедлайн, который менеджер
+// не задавал вручную (DeadlineAuto): без смены статуса остаётся прежним
+// (в т.ч. просроченный — тикер по нему и так напоминает); при смене
+// статуса — ровно +24 часа от момента сохранения; при переходе в
+// «Завершено» не трогается (тикер завершённые не обслуживает).
 func (uc *UseCase) Update(ctx context.Context, id int64, in ComplaintInput) error {
 	done := metrics.Track(trackPkg, "Update")
 	defer done()
@@ -214,25 +235,43 @@ func (uc *UseCase) Update(ctx context.Context, id int64, in ComplaintInput) erro
 		return err
 	}
 
+	if in.DeadlineAuto {
+		if in.Status == old.Status || in.Status == domain.ComplaintStatusCompleted {
+			in.Deadline = old.Deadline
+		} else {
+			in.Deadline = uc.now().Add(24 * time.Hour)
+		}
+	}
+
 	c, err := uc.buildComplaint(ctx, in)
 	if err != nil {
 		return err
 	}
 	c.ID = id
 
+	// Валидируем только фактическое изменение дедлайна: «оставленный как
+	// есть» дедлайн (в т.ч. просроченный у незавершённого обращения) —
+	// состояние, которое уже обслуживает тикер, а не новая ошибка ввода.
+	if !c.Deadline.Equal(old.Deadline) {
+		if err := uc.checkDeadline(c); err != nil {
+			return err
+		}
+	}
+
 	if err := uc.repo.UpdateComplaint(ctx, c); err != nil {
 		return fmt.Errorf("update complaint %d: %w", id, err)
 	}
 
 	if old.Status != c.Status {
-		uc.notifyIfInstant(ctx, c)
+		uc.notifyStatus(ctx, c)
 	}
 	return nil
 }
 
 // buildComplaint собирает доменную модель из данных формы с валидацией:
-// нормализация телефона, обязательные поля, дедлайн строго в будущем,
-// товары — минимум один, имена-снимки из каталога.
+// нормализация телефона, обязательные поля, товары — минимум один,
+// имена-снимки из каталога. Проверка дедлайна — в Create/Update
+// (checkDeadline): правило зависит от смены статуса и авто-значения.
 func (uc *UseCase) buildComplaint(ctx context.Context, in ComplaintInput) (*domain.Complaint, error) {
 	orderNumber := strings.TrimSpace(in.MSOrderNumber)
 	if orderNumber == "" {
@@ -242,13 +281,6 @@ func (uc *UseCase) buildComplaint(ctx context.Context, in ComplaintInput) (*doma
 	phone, err := domain.NormalizePhone(in.Phone)
 	if err != nil {
 		return nil, ErrComplaintBadPhone
-	}
-
-	if in.Deadline.IsZero() {
-		return nil, ErrComplaintNoDeadline
-	}
-	if !in.Deadline.After(uc.now()) {
-		return nil, ErrComplaintDeadlinePast
 	}
 
 	if !in.Status.Valid() {
@@ -269,6 +301,19 @@ func (uc *UseCase) buildComplaint(ctx context.Context, in ComplaintInput) (*doma
 		Deadline:      in.Deadline,
 		Items:         items,
 	}, nil
+}
+
+// checkDeadline — дедлайн обязан быть задан; у незавершённого обращения он
+// должен быть строго в будущем (иначе тикер напоминаний сработает сразу).
+// «Завершено» прошлый дедлайн не мешает — тикер его не обслуживает.
+func (uc *UseCase) checkDeadline(c *domain.Complaint) error {
+	if c.Deadline.IsZero() {
+		return ErrComplaintNoDeadline
+	}
+	if c.Status != domain.ComplaintStatusCompleted && !c.Deadline.After(uc.now()) {
+		return ErrComplaintDeadlinePast
+	}
+	return nil
 }
 
 // resolveItems превращает строки товаров из формы в доменные items:
@@ -423,22 +468,27 @@ func (uc *UseCase) DeletePhoto(ctx context.Context, complaintID int64, name stri
 	return nil
 }
 
-// notifyIfInstant отправляет мгновенное уведомление в common_chat, если
-// статус обращения требует его: «На рассмотрении» и «Завершено» (с тегом
-// валидатора). Ошибка отправки логируется и не роняет операцию.
-func (uc *UseCase) notifyIfInstant(ctx context.Context, c *domain.Complaint) {
-	// Мгновенные уведомления — только «На рассмотрении» и «Завершено»
-	// (с тегом валидатора). Остальные статусы уходят по дедлайну через
-	// тикер Start, поэтому здесь — тихий выход.
-	if c.Status != domain.ComplaintStatusReviewing && c.Status != domain.ComplaintStatusCompleted {
-		return
-	}
-
-	tag := uc.roleTag(ctx, domain.ComplaintRoleValidator)
-	text := uc.notificationText(c.ID, c.Status, tag)
-	if err := uc.notify.NotifyCommonStatus(ctx, text, callbackData(c.ID)); err != nil {
+// notifyStatus отправляет мгновенное уведомление о статусе обращения в
+// common_chat (текст и тег по правилу статуса). Вызывается при создании
+// сразу в рабочем статусе и при каждой смене статуса. Ошибка отправки
+// логируется и не роняет операцию.
+func (uc *UseCase) notifyStatus(ctx context.Context, c *domain.Complaint) {
+	if err := uc.notifyForStatus(ctx, c.ID, c.Status); err != nil {
 		slog.Info(fmt.Sprintf("complaints: уведомление о статусе %s обращения %d: %v", c.Status, c.ID, err))
 	}
+}
+
+// notifyForStatus собирает и отправляет уведомление о статусе обращения.
+// Возвращает ошибку отправки: тикеру нужен успех — дедлайн сдвигается
+// только после реально ушедшего сообщения.
+func (uc *UseCase) notifyForStatus(ctx context.Context, id int64, status domain.ComplaintStatus) error {
+	role, hasTag := domain.TagRoleForStatus(status)
+	tag := ""
+	if hasTag {
+		tag = uc.roleTag(ctx, role)
+	}
+	text := uc.notificationText(id, status, tag)
+	return uc.notify.NotifyCommonStatus(ctx, text, callbackData(id))
 }
 
 // notificationText собирает текст уведомления о статусе: тег (если
@@ -597,14 +647,7 @@ func (uc *UseCase) tickReminders(ctx context.Context) {
 // remindOne — одно напоминание: уведомление по статусу, затем сдвиг
 // дедлайна на сутки. Сдвиг — только после успешной отправки.
 func (uc *UseCase) remindOne(ctx context.Context, d domain.ComplaintDue) {
-	role, hasTag := domain.TagRoleForStatus(d.Status)
-	tag := ""
-	if hasTag {
-		tag = uc.roleTag(ctx, role)
-	}
-	text := uc.notificationText(d.ID, d.Status, tag)
-
-	if err := uc.notify.NotifyCommonStatus(ctx, text, callbackData(d.ID)); err != nil {
+	if err := uc.notifyForStatus(ctx, d.ID, d.Status); err != nil {
 		slog.Info(fmt.Sprintf("complaints: напоминание по обращению %d: %v", d.ID, err))
 		return
 	}

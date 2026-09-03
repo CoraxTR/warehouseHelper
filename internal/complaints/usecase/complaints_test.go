@@ -356,7 +356,10 @@ func TestCreateInstantNotifyOnCompleted(t *testing.T) {
 	}
 }
 
-func TestUpdateNotifiesOnlyOnTransition(t *testing.T) {
+// TestUpdateNotifiesOnAnyStatusTransition — уведомление уходит один раз при
+// КАЖДОЙ смене статуса (текст по новому статусу); повторное сохранение
+// того же статуса молчит; дальше — напоминания по дедлайну (тикер).
+func TestUpdateNotifiesOnAnyStatusTransition(t *testing.T) {
 	repo := newStubRepo()
 	uc, notify, _ := newTestUC(repo, nil)
 
@@ -386,24 +389,75 @@ func TestUpdateNotifiesOnlyOnTransition(t *testing.T) {
 		t.Errorf("нет уведомления о переходе в «На рассмотрении»: %#v", notify.statusTexts)
 	}
 
-	// переход в «Склад» — молча (напоминание придёт по дедлайну)
+	// переход в «Склад» — тоже мгновенно (политика: все смены шлют сразу)
 	in4 := in3
 	in4.Status = domain.ComplaintStatusWarehouse
 	if err := uc.Update(context.Background(), id, in4); err != nil {
 		t.Fatalf("Update error: %v", err)
 	}
-	if len(notify.statusTexts) != 1 {
-		t.Errorf("уведомлений при переходе в «Склад» = %d, want 1 (не больше)", len(notify.statusTexts))
+	if len(notify.statusTexts) != 2 || !strings.Contains(notify.statusTexts[1], "Ожидаем действий от склада") {
+		t.Errorf("нет уведомления о переходе в «Склад»: %#v", notify.statusTexts)
 	}
 
-	// «Завершено» — мгновенное
+	// возврат в «Создано» — уведомление с текстом created
 	in5 := in4
-	in5.Status = domain.ComplaintStatusCompleted
+	in5.Status = domain.ComplaintStatusCreated
 	if err := uc.Update(context.Background(), id, in5); err != nil {
 		t.Fatalf("Update error: %v", err)
 	}
-	if len(notify.statusTexts) != 2 || !strings.Contains(notify.statusTexts[1], "Завершено") {
+	if len(notify.statusTexts) != 3 || !strings.Contains(notify.statusTexts[2], `Статус "Создано"`) {
+		t.Errorf("нет уведомления о возврате в «Создано»: %#v", notify.statusTexts)
+	}
+
+	// «Завершено» — уведомление
+	in6 := in5
+	in6.Status = domain.ComplaintStatusCompleted
+	if err := uc.Update(context.Background(), id, in6); err != nil {
+		t.Fatalf("Update error: %v", err)
+	}
+	if len(notify.statusTexts) != 4 || !strings.Contains(notify.statusTexts[3], "Завершено") {
 		t.Errorf("нет уведомления о «Завершено»: %#v", notify.statusTexts)
+	}
+}
+
+// TestCreateNotifiesForAnyNonCreatedStatus — создание сразу в рабочем
+// статусе шлёт уведомление; «Создано» молчит (напоминание по дедлайну).
+func TestCreateNotifiesForAnyNonCreatedStatus(t *testing.T) {
+	repo := newStubRepo()
+	uc, notify, _ := newTestUC(repo, []domain.ComplaintRoleTag{
+		{Role: domain.ComplaintRoleWarehouse, Tag: "@sklad"},
+	})
+
+	cases := []struct {
+		status domain.ComplaintStatus
+		text   string
+	}{
+		{domain.ComplaintStatusReviewing, "Ожидаем согласования"},
+		{domain.ComplaintStatusWarehouse, "Ожидаем действий от склада"},
+		{domain.ComplaintStatusSupplier, "Ожидаем ответ от поставщика"},
+		{domain.ComplaintStatusClient, "Ожидаем подробностей от клиента"},
+		{domain.ComplaintStatusCompleted, "Завершено"},
+	}
+	for _, tc := range cases {
+		in := validInput()
+		in.Status = tc.status
+		before := len(notify.statusTexts)
+		if _, err := uc.Create(context.Background(), in, nil); err != nil {
+			t.Fatalf("Create(%s) error: %v", tc.status, err)
+		}
+		if len(notify.statusTexts) != before+1 || !strings.Contains(notify.statusTexts[before], tc.text) {
+			t.Errorf("Create(%s): уведомлений = %d, want %d с текстом %q: %#v",
+				tc.status, len(notify.statusTexts), before+1, tc.text, notify.statusTexts)
+		}
+	}
+
+	// «Создано» при создании — молча
+	before := len(notify.statusTexts)
+	if _, err := uc.Create(context.Background(), validInput(), nil); err != nil {
+		t.Fatalf("Create error: %v", err)
+	}
+	if len(notify.statusTexts) != before {
+		t.Errorf("Create(created): уведомлений = %d, want %d", len(notify.statusTexts), before)
 	}
 }
 
@@ -457,6 +511,152 @@ func TestSearchProductIDOverridesName(t *testing.T) {
 	}
 	if repo.lastSearch.ProductName != "" {
 		t.Errorf("ProductName = %q, want пустую (id главнее подстроки)", repo.lastSearch.ProductName)
+	}
+}
+
+// ---- Авто-дедлайн (DeadlineAuto: менеджер поле формы не менял) ----
+
+// TestCreateAutoDeadlineIsSaveTimePlus24 — создание без ручного дедлайна:
+// ровно +24 часа от момента сохранения.
+func TestCreateAutoDeadlineIsSaveTimePlus24(t *testing.T) {
+	repo := newStubRepo()
+	uc, _, _ := newTestUC(repo, nil)
+
+	in := validInput()
+	in.DeadlineAuto = true
+	in.Deadline = time.Time{} // подставленное «сейчас» из формы неважно: авто перетрёт
+	id, err := uc.Create(context.Background(), in, nil)
+	if err != nil {
+		t.Fatalf("Create error: %v", err)
+	}
+	want := uc.now().Add(24 * time.Hour)
+	if got := repo.complaints[id].Deadline; !got.Equal(want) {
+		t.Errorf("Deadline = %v, want %v (now+24h)", got, want)
+	}
+}
+
+// TestUpdateAutoDeadlineResetsOnStatusChange — смена статуса при не тронутом
+// поле дедлайна сбрасывает дедлайн на +24 часа от момента сохранения (даже
+// если раньше менеджер ставил его вручную на больший срок).
+func TestUpdateAutoDeadlineResetsOnStatusChange(t *testing.T) {
+	repo := newStubRepo()
+	uc, _, _ := newTestUC(repo, nil)
+
+	in := validInput()
+	in.Deadline = uc.now().Add(48 * time.Hour) // ручной дедлайн: через двое суток
+	id, err := uc.Create(context.Background(), in, nil)
+	if err != nil {
+		t.Fatalf("Create error: %v", err)
+	}
+
+	in2 := in
+	in2.DeadlineAuto = true // поле показало прежнее значение, его не меняли
+	in2.Status = domain.ComplaintStatusReviewing
+	if err := uc.Update(context.Background(), id, in2); err != nil {
+		t.Fatalf("Update error: %v", err)
+	}
+	want := uc.now().Add(24 * time.Hour)
+	if got := repo.complaints[id].Deadline; !got.Equal(want) {
+		t.Errorf("Deadline = %v, want %v (сброс на now+24h)", got, want)
+	}
+}
+
+// TestUpdateAutoDeadlineSameStatusKeepsOld — без смены статуса дедлайн
+// остаётся прежним, даже если он уже в прошлом (по нему напоминает тикер).
+func TestUpdateAutoDeadlineSameStatusKeepsOld(t *testing.T) {
+	repo := newStubRepo()
+	uc, _, _ := newTestUC(repo, nil)
+
+	in := validInput()
+	in.Deadline = uc.now().Add(24 * time.Hour)
+	id, err := uc.Create(context.Background(), in, nil)
+	if err != nil {
+		t.Fatalf("Create error: %v", err)
+	}
+	// время ушло вперёд — дедлайн обращения теперь в прошлом
+	uc.now = func() time.Time { return time.Date(2026, time.September, 6, 12, 0, 0, 0, time.Now().Location()) }
+
+	in2 := in
+	in2.DeadlineAuto = true
+	in2.Description = "уточнили детали" // статус не менялся
+	if err := uc.Update(context.Background(), id, in2); err != nil {
+		t.Fatalf("Update error: %v", err)
+	}
+	if got := repo.complaints[id].Deadline; !got.Equal(in.Deadline) {
+		t.Errorf("Deadline = %v, want прежний %v", got, in.Deadline)
+	}
+}
+
+// TestUpdateToCompletedKeepsDeadline — переход в «Завершено» дедлайн не
+// трогает (тикер завершённые не обслуживает): прошлый дедлайн допустим.
+func TestUpdateToCompletedKeepsDeadline(t *testing.T) {
+	repo := newStubRepo()
+	uc, notify, _ := newTestUC(repo, nil)
+
+	in := validInput()
+	in.Deadline = uc.now().Add(24 * time.Hour)
+	id, err := uc.Create(context.Background(), in, nil)
+	if err != nil {
+		t.Fatalf("Create error: %v", err)
+	}
+	uc.now = func() time.Time { return time.Date(2026, time.September, 6, 12, 0, 0, 0, time.Now().Location()) }
+
+	in2 := in
+	in2.DeadlineAuto = true // поле не меняли — там прежний (уже прошлый) дедлайн
+	in2.Status = domain.ComplaintStatusCompleted
+	if err := uc.Update(context.Background(), id, in2); err != nil {
+		t.Fatalf("Update error: %v", err)
+	}
+	if got := repo.complaints[id].Deadline; !got.Equal(in.Deadline) {
+		t.Errorf("Deadline = %v, want прежний %v", got, in.Deadline)
+	}
+	if len(notify.statusTexts) != 1 || !strings.Contains(notify.statusTexts[0], "Завершено") {
+		t.Errorf("нет уведомления «Завершено»: %#v", notify.statusTexts)
+	}
+}
+
+// TestUpdateCompletedAllowsPastManualDeadline — завершённое обращение можно
+// править с дедлайном в прошлом (валидация «в будущем» — только для
+// рабочих статусов).
+func TestUpdateCompletedAllowsPastManualDeadline(t *testing.T) {
+	repo := newStubRepo()
+	uc, _, _ := newTestUC(repo, nil)
+
+	in := validInput()
+	in.Deadline = uc.now().Add(24 * time.Hour)
+	id, err := uc.Create(context.Background(), in, nil)
+	if err != nil {
+		t.Fatalf("Create error: %v", err)
+	}
+	uc.now = func() time.Time { return time.Date(2026, time.September, 6, 12, 0, 0, 0, time.Now().Location()) }
+
+	in2 := in
+	in2.Status = domain.ComplaintStatusCompleted
+	in2.Deadline = time.Date(2026, time.September, 4, 12, 0, 0, 0, time.Now().Location()) // в прошлом, вручную
+	if err := uc.Update(context.Background(), id, in2); err != nil {
+		t.Fatalf("Update completed error: %v", err)
+	}
+	if got := repo.complaints[id].Deadline; !got.Equal(in2.Deadline) {
+		t.Errorf("Deadline = %v, want %v", got, in2.Deadline)
+	}
+}
+
+// TestUpdateManualPastDeadlineRejectedOnStatusChange — ручной дедлайн в
+// прошлом при смене статуса рабочего обращения — по-прежнему ошибка
+// (авто-правило +24 действует только когда поле не меняли).
+func TestUpdateManualPastDeadlineRejectedOnStatusChange(t *testing.T) {
+	repo := newStubRepo()
+	uc, _, _ := newTestUC(repo, nil)
+
+	in := validInput()
+	id, err := uc.Create(context.Background(), in, nil)
+	if err != nil {
+		t.Fatalf("Create error: %v", err)
+	}
+	in.Deadline = time.Date(2026, time.September, 1, 12, 0, 0, 0, time.Now().Location())
+	in.Status = domain.ComplaintStatusReviewing
+	if err := uc.Update(context.Background(), id, in); !errors.Is(err, ErrComplaintDeadlinePast) {
+		t.Errorf("Update error = %v, want ErrComplaintDeadlinePast", err)
 	}
 }
 
