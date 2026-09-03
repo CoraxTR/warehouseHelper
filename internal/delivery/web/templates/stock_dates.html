@@ -39,6 +39,15 @@
         // Модуль «Сроки»: таблица остатков по срокам годности, обновление по вебсокету.
         // Только ES5 (старые браузеры склада): без :scope, NodeList.forEach, стрелок и шаблонных строк.
 
+        // Любая ошибка скрипта — в статус соединения: при пустой таблице сразу
+        // видно, что сломалось (рендер, клик, ws-обработчик), без консоли.
+        window.onerror = function (msg) {
+            var el = document.getElementById('ws-status');
+            if (el) {
+                el.textContent = 'JS-ошибка: ' + msg;
+            }
+        };
+
         var STOCK = {
             products: [],   // упорядоченный список (group_name, name, best_before — от сервера)
             index: {},      // product_id -> индекс в products
