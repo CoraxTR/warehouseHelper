@@ -49,6 +49,12 @@ func TestSearchCustomerOrdersByName(t *testing.T) {
 				Name:   "03969",
 				Moment: "2018-01-05 09:00:00.000",
 				Agent:  MSAgent{Name: "ИП Тестов"},
+				// Регресс (реальный кейс из прода): у заказа атрибут типа,
+				// которого unmarshalMSOrderAttributes не знает (long), — поиск
+				// должен разбирать строки без разбора атрибутов и не падать.
+				Attributes: []MSAttributes{
+					{Name: "Кол-во мест", Type: "long", Value: json.RawMessage(`42`)},
+				},
 			},
 		}
 

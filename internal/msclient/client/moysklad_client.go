@@ -1332,12 +1332,20 @@ func (msac *MSAPIClient) SearchCustomerOrdersByName(parentctx context.Context, n
 			return nil, msAPIError(resp.Status, body)
 		}
 
-		unm, err := unmarshalMSFetchOrdersResponse(body)
-		if err != nil {
+		// Атрибуты строк здесь НЕ разбираем: unmarshalMSOrderAttributes падает
+		// на типах вне {string, customentity, employee} (long/double/boolean/
+		// time и т.п.), а поиск по имени возвращает произвольные заказы из
+		// всей базы — разбор атрибутов ломает выдачу. Поиску атрибуты не
+		// нужны (только поля верхнего уровня + agent.name), поэтому — лёгкий
+		// разбор rows.
+		var list struct {
+			Rows []MSOrder `json:"rows"`
+		}
+		if err := json.Unmarshal(body, &list); err != nil {
 			return nil, err
 		}
 
-		return unm.Rows, nil
+		return list.Rows, nil
 	}
 
 	resCh := msac.workerpool.SubmitOther(job)
