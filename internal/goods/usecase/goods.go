@@ -159,6 +159,11 @@ type GoodsUseCase struct {
 	repo     ProductsRepository
 	wiki     ProductPageSynchronizer
 	turnover TurnoverBackfiller // опционально (nil в тестах)
+
+	// catalogListener — шов «каталог изменился»: модуль «Сроки» перечитывает
+	// свой кэш после выгрузки/правки товаров (новые позиции видны без
+	// рестарта). Опционально (nil в тестах).
+	catalogListener CatalogChangeListener
 }
 
 // TurnoverBackfiller — асинхронный первичный бэкфилл оборотов средних продаж
@@ -167,6 +172,14 @@ type GoodsUseCase struct {
 // а не жизнью запроса, который поставил товар.
 type TurnoverBackfiller interface {
 	BackfillProducts(productIDs []string)
+}
+
+// CatalogChangeListener — уведомление об изменении каталога (products).
+// Модуль «Сроки» по этому шву перечитывает кэш: страницы показывают весь
+// каталог, поэтому новые/изменённые товары должны попасть в него без
+// рестарта приложения. Реализует *sucase.StockUseCase.
+type CatalogChangeListener interface {
+	ReloadCatalog(ctx context.Context) error
 }
 
 // NewGoodsUseCase создаёт юзкейс с источником папок, клиентом товаров
@@ -179,6 +192,12 @@ func NewGoodsUseCase(f ProductFolderClient, products ProductClient, repo Product
 // создания юзкейса; nil — отключён, тесты).
 func (uc *GoodsUseCase) SetTurnoverBackfiller(t TurnoverBackfiller) {
 	uc.turnover = t
+}
+
+// SetCatalogChangeListener подключает шов «каталог изменился» (di.go после
+// создания юзкейса; nil — отключён, тесты).
+func (uc *GoodsUseCase) SetCatalogChangeListener(l CatalogChangeListener) {
+	uc.catalogListener = l
 }
 
 // TurnoverProduct — срез товара для модуля средних продаж
@@ -322,6 +341,14 @@ type ProductExportError struct {
 func (uc *GoodsUseCase) ExportProducts(ctx context.Context, items []ExportItem) ([]ProductExportError, error) {
 	done := metrics.Track(trackPkg, "ExportProducts")
 	defer done()
+	// Каталог менялся — в конце (в т.ч. при раннем return по ошибке) шлём
+	// уведомление модулю «Сроки», чтобы он перечитал кэш.
+	changed := false
+	defer func() {
+		if changed {
+			uc.notifyCatalogChanged(ctx)
+		}
+	}()
 	byPath := make(map[string][]ExportItem)
 	for _, it := range items {
 		byPath[it.GroupPath] = append(byPath[it.GroupPath], it)
@@ -383,6 +410,7 @@ func (uc *GoodsUseCase) ExportProducts(ctx context.Context, items []ExportItem) 
 			}
 
 			// Первичный бэкфилл средних продаж — асинхронно, в фоне.
+			changed = true
 			uc.scheduleTurnoverBackfill(prod.ID)
 
 			if err := uc.syncWikiProduct(ctx, prod); err != nil {
@@ -463,6 +491,7 @@ func (uc *GoodsUseCase) SaveProduct(ctx context.Context, p *domain.Product) erro
 	if err := uc.repo.UpsertProduct(ctx, p); err != nil {
 		return err
 	}
+	uc.notifyCatalogChanged(ctx)
 	uc.scheduleTurnoverBackfill(p.ID)
 	return nil
 }
@@ -492,6 +521,7 @@ func (uc *GoodsUseCase) ResyncProduct(ctx context.Context, id string) (*domain.P
 		return nil, err
 	}
 
+	uc.notifyCatalogChanged(ctx)
 	uc.scheduleTurnoverBackfill(prod.ID)
 
 	if err := uc.syncWikiProduct(ctx, prod); err != nil {
@@ -501,6 +531,18 @@ func (uc *GoodsUseCase) ResyncProduct(ctx context.Context, id string) (*domain.P
 	}
 
 	return prod, nil
+}
+
+// notifyCatalogChanged сообщает модулю «Сроки» об изменении каталога: тот
+// перечитывает кэш, чтобы новые/изменённые товары появились на страницах
+// без рестарта. Ошибка не роняет операцию — лог, следующий синк повторит.
+func (uc *GoodsUseCase) notifyCatalogChanged(ctx context.Context) {
+	if uc.catalogListener == nil {
+		return
+	}
+	if err := uc.catalogListener.ReloadCatalog(ctx); err != nil {
+		slog.Error(fmt.Sprintf("goods: перечитывание кэша сроков после изменения каталога: %v", err))
+	}
 }
 
 // scheduleTurnoverBackfill ставит товар в очередь первичного бэкфилла оборотов
