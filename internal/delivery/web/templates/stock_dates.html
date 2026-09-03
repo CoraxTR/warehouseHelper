@@ -43,6 +43,8 @@
             products: [],   // упорядоченный список (group_name, name, best_before — от сервера)
             index: {},      // product_id -> индекс в products
             shortList: false,
+            defaultCollapsed: true, // «Сроки» — группы свёрнуты; шорт-лист — раскрыты
+            collapsed: {},  // явно переключённые группы: group_name -> true/false
             ws: null,
             reconnTimer: null,
             renderTimer: null
@@ -53,6 +55,7 @@
 
         function initStock() {
             STOCK.shortList = (document.body.getAttribute('data-short') === '1');
+            STOCK.defaultCollapsed = !STOCK.shortList;
             document.getElementById('stock-body').addEventListener('click', onBodyClick);
             var overlay = document.getElementById('modal-overlay');
             overlay.addEventListener('click', function (ev) {
@@ -216,19 +219,22 @@
 
         function render() {
             var i, k;
-            var prods = [];
+            var items = [];
             for (i = 0; i < STOCK.products.length; i++) {
                 var p = STOCK.products[i];
                 if (STOCK.shortList && !p.short_list) {
                     continue;
                 }
-                prods.push(p);
+                items.push(p);
             }
 
-            // Ширина таблицы: максимум видимых пар по строкам.
+            // Ширина таблицы: максимум видимых пар по строкам РАСКРЫТЫХ групп.
             var n = 0;
-            for (i = 0; i < prods.length; i++) {
-                var cnt = visibleLots(prods[i]).length;
+            for (i = 0; i < items.length; i++) {
+                if (isGroupCollapsed(items[i].group_name || '')) {
+                    continue;
+                }
+                var cnt = visibleLots(items[i]).length;
                 if (cnt > n) {
                     n = cnt;
                 }
@@ -244,15 +250,39 @@
             var html = '';
             var lastGroup = null;
             var colspan = 2 * n + 3;
-            for (i = 0; i < prods.length; i++) {
-                var g = prods[i].group_name || 'Без группы';
+            for (i = 0; i < items.length; i++) {
+                var g = items[i].group_name || '';
                 if (g !== lastGroup) {
-                    html += '<tr class="group-row"><td colspan="' + colspan + '" data-role="group" data-group="' + esc(prods[i].group_name || '') + '">' + esc(g) + '</td></tr>';
                     lastGroup = g;
+                    html += groupRow(g, isGroupCollapsed(g), colspan);
                 }
-                html += productRow(prods[i], n);
+                if (!isGroupCollapsed(g)) {
+                    html += productRow(items[i], n);
+                }
             }
             document.getElementById('stock-body').innerHTML = html;
+        }
+
+        // Состояние группы: явное переключение («+»/«-») или дефолт страницы
+        // («Сроки» — свёрнуты, шорт-лист — раскрыты).
+        function isGroupCollapsed(g) {
+            return Object.prototype.hasOwnProperty.call(STOCK.collapsed, g)
+                ? STOCK.collapsed[g]
+                : STOCK.defaultCollapsed;
+        }
+
+        function toggleGroup(g) {
+            STOCK.collapsed[g] = !isGroupCollapsed(g);
+            render();
+        }
+
+        // Строка группы: «+»/«-» (раскрыть/свернуть) + название (клик — «Обновить
+        // сроки группы», обработчик onBodyClick). Только ES5, без инлайн-обработчиков.
+        function groupRow(g, collapsed, colspan) {
+            var sign = collapsed ? '+' : '-';
+            return '<tr class="group-row"><td colspan="' + colspan + '" data-role="group" data-group="' + esc(g) + '">' +
+                '<span class="group-toggle" data-role="group-toggle" data-group="' + esc(g) + '" title="' + (collapsed ? 'Развернуть группу' : 'Свернуть группу') + '">' + sign + '</span>' +
+                esc(g || 'Без группы') + '</td></tr>';
         }
 
         function productRow(p, n) {
@@ -344,6 +374,10 @@
                     var role = el.getAttribute('data-role');
                     if (role === 'name') {
                         openNameModal(el.getAttribute('data-product'));
+                        return;
+                    }
+                    if (role === 'group-toggle') {
+                        toggleGroup(el.getAttribute('data-group'));
                         return;
                     }
                     if (role === 'group') {
