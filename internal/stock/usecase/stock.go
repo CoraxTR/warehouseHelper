@@ -27,8 +27,10 @@ const trackPkg = "stock"
 
 // Repository — контракт хранилища остатков, реализуется postgres-репозиторием.
 type Repository interface {
-	// LoadAllStock возвращает все лоты с данными каталога, отсортированные
-	// по (group_name, name, best_before) — клиент рендерит последовательно.
+	// LoadAllStock возвращает все товары каталога с их лотами остатков,
+	// отсортированные по (group_name, name, best_before). Товары без остатков
+	// приходят с пустым Lots — страницы «Сроки» показывают весь ассортимент,
+	// клетки заполняются по мере прихода партий.
 	LoadAllStock(ctx context.Context) ([]stock.Product, error)
 	// SetManualDiscount обновляет ручные скидки лота по PK; строки нет — stock.ErrLotNotFound.
 	SetManualDiscount(ctx context.Context, productID string, bestBefore time.Time, generalManual, telegramManual *int16) error
@@ -77,7 +79,7 @@ type StockUseCase struct {
 	dayState DayStateRecorder
 
 	mu     sync.RWMutex
-	cache  map[string]*stock.Product // product_id → товар (Lots по возрастанию best_before)
+	cache  map[string]*stock.Product // product_id → товар каталога (Lots — по возрастанию best_before, может быть пустым)
 	byCode map[string]string         // internal_code → product_id (шов для будущей приёмки)
 }
 
@@ -167,9 +169,10 @@ func (uc *StockUseCase) ReloadCatalog(ctx context.Context) error {
 	return nil
 }
 
-// Snapshot возвращает копию всех товаров с лотами, отсортированную по
-// (group_name, name) — клиент рендерит группы и строки последовательно.
-// Лоты внутри товара — по возрастанию best_before (ближайший срок слева).
+// Snapshot возвращает копию всего каталога с лотами остатков,
+// отсортированную по (group_name, name) — клиент рендерит группы и строки
+// последовательно. Лоты внутри товара — по возрастанию best_before
+// (ближайший срок слева); товар без остатков — строка с пустыми клетками.
 func (uc *StockUseCase) Snapshot() []stock.Product {
 	done := metrics.Track(trackPkg, "Snapshot")
 	defer done()

@@ -2,13 +2,15 @@ package app
 
 import (
 	"context"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 
-	"fmt"
-	"log/slog"
+	cucase "warehouseHelper/internal/complaints/usecase"
 	"warehouseHelper/internal/config"
 	"warehouseHelper/internal/metrics"
+	"warehouseHelper/internal/telegram"
 )
 
 type App struct {
@@ -43,6 +45,7 @@ func (a *App) initDeps() {
 		a.initDayState,
 		a.initAverageSales,
 		a.initTableSizes,
+		a.initComplaints,
 	}
 
 	for _, init := range inits {
@@ -100,6 +103,38 @@ func (a *App) initStockCache() {
 // недоступная БД).
 func (a *App) initDayState() {
 	a.di.DayStateUC().Start(context.Background(), a.di.Config().DayStateSnapshotTime)
+}
+
+// initComplaints запускает фоновые задачи модуля «Жалобы»:
+//   - тикер напоминаний по дедлайнам (раз в минуту): обращения, у которых
+//     наступил дедлайн и статус не «Завершено», получают уведомление в
+//     common_chat, дедлайн сдвигается на сутки;
+//   - long-polling поллер inline-кнопок «Получить подробности» (отвечает
+//     на нажатия карточкой обращения и фотографиями).
+//
+// Оба переживают сбои: тикер ретраит на следующем тике, поллер логирует
+// ошибки и продолжает. Без токена бота поллер не запускается.
+func (a *App) initComplaints() {
+	uc := a.di.ComplaintsUC()
+	uc.Start(context.Background())
+
+	token := a.di.Config().BotToken
+	if token == "" {
+		slog.Info("complaints: поллер не запущен: токен бота не настроен")
+		return
+	}
+	poller := telegram.NewPoller(token, func(ctx context.Context, cb telegram.CallbackQuery) error {
+		id, ok := cucase.ParseCallbackData(cb.Data)
+		if !ok {
+			return nil // кнопка не нашего модуля — не наше нажатие
+		}
+		return uc.HandleDetailsButton(ctx, cb.ID, cb.ChatID, id)
+	})
+	go func() {
+		if err := poller.Run(context.Background()); err != nil {
+			slog.Info(fmt.Sprintf("complaints: поллер завершился: %v", err))
+		}
+	}()
 }
 
 func (a *App) initHTTPServer() {

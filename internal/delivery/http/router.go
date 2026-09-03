@@ -56,6 +56,20 @@ func NewRouter(h *Handler) *http.ServeMux {
 	mux.HandleFunc("/ms/suppliers/save", h.SupplierSave)     // POST — создание/обновление
 	mux.HandleFunc("/ms/suppliers/delete", h.SupplierDelete) // POST — удаление
 
+	// Модуль «Жалобы»: обращения клиентов с фото и статусами.
+	mux.HandleFunc("GET /complaints", h.ComplaintsPage)                    // активные обращения (статус != «Завершено»)
+	mux.HandleFunc("GET /complaints/all", h.ComplaintsAllPage)             // полный список
+	mux.HandleFunc("GET /complaints/new", h.ComplaintNewForm)              // форма создания
+	mux.HandleFunc("POST /complaints/new", h.ComplaintCreate)              // создание (multipart: поля + фото)
+	mux.HandleFunc("GET /complaints/search", h.ComplaintsSearch)           // поиск обращений
+	mux.HandleFunc("GET /complaints/tags", h.ComplaintsTags)               // страница tg-тегов
+	mux.HandleFunc("POST /complaints/tags", h.ComplaintsTags)              // сохранить/удалить тег роли
+	mux.HandleFunc("GET /complaint", h.ComplaintForm)                      // карточка обращения (просмотр/редактирование)
+	mux.HandleFunc("POST /complaint/save", h.ComplaintSave)                // сохранить карточку
+	mux.HandleFunc("POST /complaint/photo/add", h.ComplaintPhotoAdd)       // добавить фото (multipart)
+	mux.HandleFunc("POST /complaint/photo/delete", h.ComplaintPhotoDelete) // удалить фото
+	mux.HandleFunc("GET /complaint/photo", h.ComplaintPhotoFile)           // раздача фото из архива (img src)
+
 	// Метрики приложения для Prometheus (скрейпит внешний сервер).
 	mux.Handle("/metrics", metrics.Handler())
 

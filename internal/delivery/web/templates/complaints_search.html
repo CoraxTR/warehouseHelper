@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Поиск обращений</title>
+    <link rel="stylesheet" href="/static/raven-guard.css">
+</head>
+
+<body>
+    <header class="brandbar">
+        <a class="brandbar__brand" href="/"><svg class="brandbar__emblem" viewBox="0 0 64 64" aria-hidden="true"><circle cx="35" cy="25" r="14" fill="#F4F1E9"/><polygon points="6,26 30,17 28,27" fill="#F4F1E9"/><polygon points="13,35 28,27 26,36" fill="#F4F1E9"/><circle cx="34" cy="23" r="3.6" fill="#0A0A0D"/><circle cx="33" cy="22" r="1.1" fill="#C02832"/></svg><span class="brandbar__name">ВОРОН&nbsp;&middot;&nbsp;СКЛАД</span></a>
+        <span class="brandbar__motto">Приёмка или смерть</span>
+    </header>
+
+    <h1>Поиск обращений</h1>
+
+    {{if .Error}}<p class="error">{{.Error}}</p>{{end}}
+
+    <form method="GET" action="/complaints/search" class="search-row">
+        <input type="text" name="ms_order" value="{{.OrderNumber}}" placeholder="Номер заказа в МС">
+        <input type="text" name="phone" value="{{.Phone}}" placeholder="Телефон: +7936… / 8936… / 936…">
+        <div class="product-row">
+            <input type="hidden" name="product_id" value="{{.ProductID}}">
+            <input type="hidden" name="product_name" value="{{.ProductName}}">
+            <input type="text" class="product-search" placeholder="Товар: выберите из списка или введите часть названия" value="{{.ProductName}}" autocomplete="off">
+            <div class="product-results"></div>
+        </div>
+        <input type="date" name="date_from" value="{{.DateFrom}}">
+        <input type="date" name="date_to" value="{{.DateTo}}">
+        <button type="submit" class="btn">Найти</button>
+    </form>
+    <span class="readonly-hint">Условия поиска объединяются: можно искать по номеру, телефону, товару и диапазону дат одновременно. Товар: выбранный из списка — точное совпадение; введённый текст ищется по названиям товаров в обращениях.</span>
+
+    {{if .Rows}}
+    <table>
+        <thead>
+            <tr>
+                <th>id</th>
+                <th>Номер заказа в МС</th>
+                <th>Телефон клиента</th>
+                <th>Товар</th>
+                <th>Статус</th>
+            </tr>
+        </thead>
+        <tbody>
+            {{range .Rows}}
+            <tr>
+                <td><a href="/complaint?id={{.ID}}&amp;from={{urlquery "/complaints/search"}}">{{.ID}}</a></td>
+                <td><a href="/complaint?id={{.ID}}&amp;from={{urlquery "/complaints/search"}}">{{.OrderNumber}}</a></td>
+                <td><a href="/complaints/search?phone={{urlquery .Phone}}">{{.PhoneDisplay}}</a></td>
+                <td>
+                    {{range $i, $p := .Products}}{{if $i}}, {{end}}
+                        {{if $p.ProductID}}<a href="/complaints/search?product_id={{urlquery $p.ProductID}}&amp;product_name={{urlquery $p.Name}}">{{$p.Name}}</a>{{else}}{{$p.Name}}{{end}}
+                    {{end}}
+                </td>
+                <td>{{.Status}}</td>
+            </tr>
+            {{end}}
+        </tbody>
+    </table>
+    {{else if .Searched}}
+    <p class="empty">Ничего не найдено.</p>
+    {{end}}
+
+    <a class="back" href="/complaints">← К списку обращений</a>
+
+    <script>
+        // Поиск товара для фильтра: одна строка (виджет как на карточке).
+        var results = null;
+        var xhr = null;
+        var searchInput = null;
+        var idInput = null;
+        var nameInput = null;
+
+        function initProductFilter() {
+            var rows = document.getElementsByClassName('product-row');
+            if (rows.length === 0) { return; }
+            var row = rows[0];
+            var inputs = row.getElementsByTagName('input');
+            idInput = inputs[0];
+            nameInput = inputs[1];
+            searchInput = row.getElementsByClassName('product-search')[0];
+            results = row.getElementsByClassName('product-results')[0];
+            if (!searchInput || !results) { return; }
+
+            var timer = null;
+            searchInput.addEventListener('input', function () {
+                idInput.value = '';
+                nameInput.value = searchInput.value;
+                if (timer) { clearTimeout(timer); }
+                timer = setTimeout(doSearch, 250);
+            });
+            results.addEventListener('click', function (e) {
+                var hit = e.target;
+                if (!hit || hit.className !== 'product-hit') { return; }
+                searchInput.value = hit.getAttribute('data-name');
+                idInput.value = hit.getAttribute('data-id');
+                nameInput.value = hit.getAttribute('data-name');
+                results.innerHTML = '';
+            });
+        }
+
+        function doSearch() {
+            var q = searchInput.value.trim();
+            if (q.length < 3) { results.innerHTML = ''; return; }
+            if (xhr) { xhr.abort(); }
+            xhr = new XMLHttpRequest();
+            xhr.open('GET', '/goods/search/json?q=' + encodeURIComponent(q), true);
+            xhr.onreadystatechange = function () {
+                if (xhr.readyState !== 4 || xhr.status !== 200) { return; }
+                var items;
+                try { items = JSON.parse(xhr.responseText); } catch (e) { return; }
+                renderHits(results, items);
+            };
+            xhr.send();
+        }
+
+        // renderHits рисует подсказки каталога. Имя товара — пользовательский
+        // текст: узлы строятся через textContent (никаких innerHTML с ним),
+        // атрибуты data-* — через setAttribute. JSON-ответ сервера для HTML
+        // не экранирован — innerHTML с ним был бы DOM-XSS.
+        function renderHits(results, items) {
+            results.innerHTML = '';
+            if (!items.length) {
+                var empty = document.createElement('div');
+                empty.className = 'readonly-hint';
+                empty.textContent = 'Ничего не найдено';
+                results.appendChild(empty);
+                return;
+            }
+            for (var i = 0; i < items.length; i++) {
+                var div = document.createElement('div');
+                div.className = 'product-hit';
+                div.setAttribute('data-id', items[i].id);
+                div.setAttribute('data-name', items[i].name);
+                div.textContent = items[i].name;
+                var code = document.createElement('span');
+                code.className = 'readonly-hint';
+                code.textContent = '[' + items[i].internal_code + ']';
+                div.appendChild(code);
+                results.appendChild(div);
+            }
+        }
+
+        initProductFilter();
+    </script>
+</body>
+
+</html>

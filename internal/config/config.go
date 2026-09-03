@@ -20,6 +20,7 @@ type Config struct {
 	*PGConfig
 	*TelegramConfig
 	*QRConfig
+	*ComplaintsConfig
 }
 
 // envFilePath возвращает абсолютный путь к .env: сначала ищет в текущем
@@ -61,18 +62,20 @@ func NewConfig() *Config {
 	pfc := loadPGConfig()
 	tgc := loadTelegramConfig()
 	qrc := loadQRConfig()
+	cpc := loadComplaintsConfig()
 
 	if os.Getenv("RG_LATESTORDER") == "" {
 		panic("RG_LATESTORDER does not exist")
 	}
 
 	return &Config{
-		AppConfig:      apc,
-		MSConfig:       msc,
-		RefGoConfig:    rfc,
-		PGConfig:       pfc,
-		TelegramConfig: tgc,
-		QRConfig:       qrc,
+		AppConfig:        apc,
+		MSConfig:         msc,
+		RefGoConfig:      rfc,
+		PGConfig:         pfc,
+		TelegramConfig:   tgc,
+		QRConfig:         qrc,
+		ComplaintsConfig: cpc,
 	}
 }
 
@@ -112,6 +115,36 @@ func loadQRConfig() *QRConfig {
 	return &QRConfig{
 		PhotosDir:    photosDir,
 		PhotosMaxAge: photosMaxAge,
+	}
+}
+
+// ComplaintsConfig — модуль «Жалобы»: zip-архивы фото обращений и публичный
+// адрес для ссылок в уведомлениях. PhotosDir — папка архивов <id>.zip (по
+// умолчанию ../ComplaintsPhotos — от каталога cmd/, как tempdir "../temp");
+// PublicURL — адрес, по которому приложение видно в локалке (по умолчанию
+// http://warehouse.local:8080; mDNS, поэтому ссылки открываются только в
+// локальной сети).
+type ComplaintsConfig struct {
+	PhotosDir string
+	PublicURL string
+}
+
+func loadComplaintsConfig() *ComplaintsConfig {
+	photosDir := os.Getenv("COMPLAINTS_PHOTOS_DIR")
+	if photosDir == "" {
+		photosDir = "../ComplaintsPhotos"
+	}
+
+	publicURL := os.Getenv("COMPLAINTS_PUBLIC_URL")
+	if publicURL == "" {
+		//nolint:revive // http по умолчанию: ссылки открываются только в локальной
+		// сети (mDNS warehouse.local), TLS-сертификата у приложения нет.
+		publicURL = "http://warehouse.local:8080"
+	}
+
+	return &ComplaintsConfig{
+		PhotosDir: photosDir,
+		PublicURL: publicURL,
 	}
 }
 
