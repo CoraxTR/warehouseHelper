@@ -30,7 +30,7 @@ type OrderSearchClient interface {
 	// FetchOrderAgentByHREF — имя контрагента по agent.meta.href строки.
 	// МС игнорирует expand=agent при filter=name (проверено контрольными
 	// запросами), поэтому имя дотягивается отдельным запросом на строку.
-	FetchOrderAgentByHREF(ctx context.Context, o *client.MSOrder) (string, string, error)
+	FetchOrderAgentByHREF(ctx context.Context, o *client.MSOrder) (name, phone string, err error)
 }
 
 // OrderRow — строка результата поиска, готовая для показа в таблице:

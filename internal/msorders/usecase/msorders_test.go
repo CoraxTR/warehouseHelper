@@ -30,7 +30,7 @@ func (f *fakeOrderSearch) SearchCustomerOrdersByName(_ context.Context, name str
 	return f.orders, nil
 }
 
-func (f *fakeOrderSearch) FetchOrderAgentByHREF(_ context.Context, _ *client.MSOrder) (string, string, error) {
+func (f *fakeOrderSearch) FetchOrderAgentByHREF(_ context.Context, _ *client.MSOrder) (name, phone string, err error) {
 	f.hopCalls++
 	return f.agentName, "", f.agentErr
 }
