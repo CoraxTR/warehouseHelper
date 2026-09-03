@@ -422,9 +422,10 @@ form.search button { margin-left: 8px; }
 /* ---------------- Сроки (stock_dates) ---------------- */
 #stock-table { margin-top: 4px; }
 tr.group-row td { background: #1B1B21 !important; font-weight: 700; text-align: left; padding: 7px 8px; cursor: pointer; color: #F4F1E9; text-transform: uppercase; letter-spacing: 0.08em; font-size: 12px; }
-/* «+»/«-» сворачивания группы: клик — раскрыть/свернуть (не открывает модалку группы) */
-tr.group-row td .group-toggle { display: inline-block; width: 16px; height: 16px; line-height: 15px; margin-right: 9px; border: 1px solid #E0C47E; border-radius: 3px; color: #E0C47E; text-align: center; font-weight: 700; font-size: 14px; cursor: pointer; user-select: none; vertical-align: middle; }
-tr.group-row td .group-toggle:hover { background: #E0C47E; color: #1B1B21; }
+/* «+»/«-» сворачивания группы — отдельная колонка слева от названия */
+td.col-toggle { width: 26px; min-width: 26px; padding: 4px 2px; text-align: center; }
+tr.group-row td.col-toggle { cursor: pointer; color: #E0C47E; user-select: none; }
+tr.group-row td.col-toggle:hover { background: #E0C47E; color: #1B1B21; }
 td.col-name { white-space: nowrap; min-width: 180px; cursor: pointer; }
 td.col-name:hover { background: #1B1B21; }
 td.cell-pair { text-align: center; cursor: pointer; white-space: nowrap; min-width: 56px; padding: 4px 6px; }
