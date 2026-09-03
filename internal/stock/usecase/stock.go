@@ -610,6 +610,11 @@ func mergeLots(lots []stock.Lot, pl *replacePlan) []stock.Lot {
 		}
 	}
 	sort.Slice(out, func(a, b int) bool { return out[a].BestBefore.Before(out[b].BestBefore) })
+	if out == nil {
+		// Пустой результат — пустой МАССИВ, не nil: lots в JSON обязан быть
+		// [], клиент итерирует p.lots.length (null — TypeError).
+		out = []stock.Lot{}
+	}
 	return out
 }
 

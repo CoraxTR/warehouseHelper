@@ -136,6 +136,7 @@ func (pg *PGClient) LoadProductsByCodes(ctx context.Context, codes []string) (ma
 		if err := rows.Scan(&p.ID, &p.InternalCode, &p.Name, &p.GroupName, &p.ShortList); err != nil {
 			return nil, fmt.Errorf("scan product by code: %w", err)
 		}
+		p.Lots = []stock.Lot{} // lots в JSON — [], не null (клиент итерирует p.lots.length)
 		out[p.InternalCode] = p
 	}
 	if err := rows.Err(); err != nil {
@@ -159,6 +160,7 @@ func (pg *PGClient) LoadProductByID(ctx context.Context, productID string) (stoc
 	if err != nil {
 		return stock.Product{}, fmt.Errorf("load product by id: %w", err)
 	}
+	p.Lots = []stock.Lot{} // lots в JSON — [], не null (клиент итерирует p.lots.length)
 
 	return p, nil
 }
