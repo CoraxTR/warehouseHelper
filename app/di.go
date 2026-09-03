@@ -15,6 +15,7 @@ import (
 	"warehouseHelper/internal/msclient/pdfpreloader"
 	msucase "warehouseHelper/internal/msclient/usecase"
 	"warehouseHelper/internal/msclient/workerpool"
+	mordersuc "warehouseHelper/internal/msorders/usecase"
 	msu "warehouseHelper/internal/mssuppliers/usecase"
 	oucase "warehouseHelper/internal/ordercoeff/usecase"
 	"warehouseHelper/internal/qrcodes/photostore"
@@ -66,6 +67,7 @@ type DIContainer struct {
 	dayStateUC      *ducecase.UseCase
 	qrUC            *qucase.QRUseCase
 	msUC            *msu.MSSuppliersUseCase
+	msOrdersUC      *mordersuc.UseCase
 	stockUC         *sucase.StockUseCase
 	stockHub        *stockws.Hub
 	receiveBarcodes *rucase.BarcodeEditor
@@ -418,9 +420,20 @@ func (d *DIContainer) ComplaintsUC() *cucase.UseCase {
 	return d.complaintsUC
 }
 
+// MSOrdersUC — сценарии раздела «Заказы» МойСклад: поиск заказа по номеру
+// для подбора. Схемы БД у модуля нет — MSClient реализует
+// mordersuc.OrderSearchClient.
+func (d *DIContainer) MSOrdersUC() *mordersuc.UseCase {
+	if d.msOrdersUC == nil {
+		d.msOrdersUC = mordersuc.NewUseCase(d.MSClient())
+	}
+
+	return d.msOrdersUC
+}
+
 func (d *DIContainer) Handler() *myhttp.Handler {
 	if d.handlers == nil {
-		d.handlers = myhttp.NewHandler(d.SyncUC(), d.OrdersUC(), d.ExcelExportUC(), d.PdfExportUC(), d.BarcodeExportUC(), d.RefGoCheckAgainstUC(), d.WikiUC(), d.GoodsUC(), d.DayStateUC(), d.QRUC(), d.SuppliersUC(), d.StockUC(), d.StockHub(), d.ReceiveBarcodes(), d.ReceivingUC(), d.ComplaintsUC())
+		d.handlers = myhttp.NewHandler(d.SyncUC(), d.OrdersUC(), d.ExcelExportUC(), d.PdfExportUC(), d.BarcodeExportUC(), d.RefGoCheckAgainstUC(), d.WikiUC(), d.GoodsUC(), d.DayStateUC(), d.QRUC(), d.SuppliersUC(), d.StockUC(), d.StockHub(), d.ReceiveBarcodes(), d.ReceivingUC(), d.ComplaintsUC(), d.MSOrdersUC())
 	}
 
 	return d.handlers

@@ -1291,6 +1291,75 @@ func (msac *MSAPIClient) FetchCounterpartyName(parentctx context.Context, id str
 	}
 }
 
+// SearchCustomerOrdersByName — поиск заказов покупателей по точному имени
+// (GET /entity/customerorder?filter=name=<имя>&expand=agent). expand=agent —
+// чтобы имя контрагента приехало прямо в строке (без expand agent — только
+// meta-ссылка, имя пришлось бы дотягивать отдельным запросом на каждую
+// строку). Возвращаются строки списка как есть, без enrichOrder и кэша:
+// поля верхнего уровня + agent.name. Пагинация не нужна — точное имя даёт
+// 0..несколько заказов, дефолтного лимита МС (100) достаточно.
+func (msac *MSAPIClient) SearchCustomerOrdersByName(parentctx context.Context, name string) ([]MSOrder, error) {
+	if strings.TrimSpace(name) == "" {
+		return nil, errors.New("SearchCustomerOrdersByName: пустое имя заказа")
+	}
+
+	job := func(apiKey string) (any, error) {
+		ctx, cancel := context.WithTimeout(parentctx, 30*time.Second)
+		defer cancel()
+
+		baseURL, err := url.Parse(msac.msConfig.URLstart)
+		if err != nil {
+			return nil, err
+		}
+		baseURL.Path = path.Join(baseURL.Path, "customerorder")
+
+		q := baseURL.Query()
+		q.Set("filter", "name="+name)
+		q.Set("expand", "agent")
+		baseURL.RawQuery = q.Encode()
+
+		body, resp, err := msac.httpRequest(ctx, http.MethodGet, baseURL.String(), apiKey, http.NoBody)
+		if err != nil {
+			return nil, err
+		}
+		defer func() {
+			if cerr := resp.Body.Close(); cerr != nil {
+				slog.Error(fmt.Sprintf("failed to close response body: %v", cerr))
+			}
+		}()
+
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return nil, msAPIError(resp.Status, body)
+		}
+
+		unm, err := unmarshalMSFetchOrdersResponse(body)
+		if err != nil {
+			return nil, err
+		}
+
+		return unm.Rows, nil
+	}
+
+	resCh := msac.workerpool.SubmitOther(job)
+	select {
+	case res := <-resCh:
+		if res.Err != nil {
+			slog.Error(fmt.Sprintf("SearchCustomerOrdersByName failed: %v", res.Err))
+
+			return nil, fmt.Errorf("SearchCustomerOrdersByName failed: %w", res.Err)
+		}
+
+		rows, ok := res.Value.([]MSOrder)
+		if !ok {
+			return nil, errors.New("SearchCustomerOrdersByName failed: unexpected value type")
+		}
+
+		return rows, nil
+	case <-parentctx.Done():
+		return nil, parentctx.Err()
+	}
+}
+
 // productPageLimit — размер страницы при пагинации товаров.
 const productPageLimit = 1000
 
