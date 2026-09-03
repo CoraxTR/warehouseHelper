@@ -18,14 +18,16 @@ const stockProductColumns = `
     ps.discount_general, ps.discount_telegram,
     ps.discount_general_manual, ps.discount_telegram_manual`
 
-// LoadAllStock возвращает все лоты остатков с данными каталога, отсортированные
-// по (group_name, name, best_before). Используется для прогрева кэша модуля
-// «Сроки» при старте — один запрос на всё.
+// LoadAllStock возвращает все товары каталога с их лотами остатков,
+// отсортированные по (group_name, name, best_before). Товар без остатков
+// (нет строк в product_stock) приходит с пустым Lots — страницы «Сроки»
+// показывают весь ассортимент, клетки заполняются по мере прихода партий.
+// Используется для прогрева кэша модуля «Сроки» при старте — один запрос на всё.
 func (pg *PGClient) LoadAllStock(ctx context.Context) ([]stock.Product, error) {
 	rows, err := pg.Pool.Query(ctx, `
         SELECT `+stockProductColumns+`
-        FROM product_stock ps
-        JOIN products p ON p.id = ps.product_id
+        FROM products p
+        LEFT JOIN product_stock ps ON ps.product_id = p.id
         ORDER BY lower(p.group_name), lower(p.name), ps.best_before`)
 	if err != nil {
 		return nil, fmt.Errorf("load all stock: %w", err)
@@ -40,8 +42,8 @@ func (pg *PGClient) LoadAllStock(ctx context.Context) ([]stock.Product, error) {
 		var (
 			pID, internalCode, name, groupName string
 			shortList                          bool
-			bestBefore                         time.Time
-			qty                                int64
+			bestBefore                         *time.Time // NULL — товар без остатков
+			qty                                *int64
 			producedOn                         *time.Time
 			general, telegram                  *int16
 			generalManual, telegramManual      *int16
@@ -64,11 +66,18 @@ func (pg *PGClient) LoadAllStock(ctx context.Context) ([]stock.Product, error) {
 				Name:         name,
 				GroupName:    groupName,
 				ShortList:    shortList,
+				// lots в JSON обязан быть массивом, не null (клиент итерирует
+				// p.lots.length) — товар без остатков = пустой массив.
+				Lots: []stock.Lot{},
 			})
 		}
+		if bestBefore == nil {
+			// LEFT JOIN: товар без строк в product_stock — только карточка.
+			continue
+		}
 		products[i].Lots = append(products[i].Lots, stock.Lot{
-			BestBefore:     bestBefore,
-			Qty:            qty,
+			BestBefore:     *bestBefore,
+			Qty:            *qty,
 			ProducedOn:     producedOn,
 			General:        general,
 			Telegram:       telegram,

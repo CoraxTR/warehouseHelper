@@ -14,6 +14,7 @@ import (
 
 	"fmt"
 	"log/slog"
+	cucase "warehouseHelper/internal/complaints/usecase"
 	ducecase "warehouseHelper/internal/daystate/usecase"
 	"warehouseHelper/internal/domain"
 	gucase "warehouseHelper/internal/goods/usecase"
@@ -29,40 +30,42 @@ import (
 )
 
 type Handler struct {
-	syncUC      *msucase.SyncUseCase
-	ordersUC    *msucase.OrdersUseCase
-	exportUC    *rgucase.ExportToExcelUseCase
-	pdfUC       *rgucase.ExportOrderPDFUseCase
-	barcodeUC   *rgucase.ExportBarcodesToExcelUseCase
-	refGoUC     *rgucase.RefGoCheckAgainstUseCase
-	wikiUC      *wucase.WikiUseCase
-	goodsUC     *gucase.GoodsUseCase
-	dayStateUC  *ducecase.UseCase
-	qrUC        *qucase.QRUseCase
-	msUC        *msu.MSSuppliersUseCase
-	stockUC     *sucase.StockUseCase
-	stockHub    *stockws.Hub
-	receiveUC   *rucase.BarcodeEditor
-	receivingUC *rucase.ReceivingUseCase
+	syncUC       *msucase.SyncUseCase
+	ordersUC     *msucase.OrdersUseCase
+	exportUC     *rgucase.ExportToExcelUseCase
+	pdfUC        *rgucase.ExportOrderPDFUseCase
+	barcodeUC    *rgucase.ExportBarcodesToExcelUseCase
+	refGoUC      *rgucase.RefGoCheckAgainstUseCase
+	wikiUC       *wucase.WikiUseCase
+	goodsUC      *gucase.GoodsUseCase
+	dayStateUC   *ducecase.UseCase
+	qrUC         *qucase.QRUseCase
+	msUC         *msu.MSSuppliersUseCase
+	stockUC      *sucase.StockUseCase
+	stockHub     *stockws.Hub
+	receiveUC    *rucase.BarcodeEditor
+	receivingUC  *rucase.ReceivingUseCase
+	complaintsUC *cucase.UseCase
 }
 
-func NewHandler(syncUC *msucase.SyncUseCase, ordersUC *msucase.OrdersUseCase, exportUC *rgucase.ExportToExcelUseCase, pdfUC *rgucase.ExportOrderPDFUseCase, barcodeUC *rgucase.ExportBarcodesToExcelUseCase, refGoUC *rgucase.RefGoCheckAgainstUseCase, wikiUC *wucase.WikiUseCase, goodsUC *gucase.GoodsUseCase, dayStateUC *ducecase.UseCase, qrUC *qucase.QRUseCase, msUC *msu.MSSuppliersUseCase, stockUC *sucase.StockUseCase, stockHub *stockws.Hub, receiveUC *rucase.BarcodeEditor, receivingUC *rucase.ReceivingUseCase) *Handler {
+func NewHandler(syncUC *msucase.SyncUseCase, ordersUC *msucase.OrdersUseCase, exportUC *rgucase.ExportToExcelUseCase, pdfUC *rgucase.ExportOrderPDFUseCase, barcodeUC *rgucase.ExportBarcodesToExcelUseCase, refGoUC *rgucase.RefGoCheckAgainstUseCase, wikiUC *wucase.WikiUseCase, goodsUC *gucase.GoodsUseCase, dayStateUC *ducecase.UseCase, qrUC *qucase.QRUseCase, msUC *msu.MSSuppliersUseCase, stockUC *sucase.StockUseCase, stockHub *stockws.Hub, receiveUC *rucase.BarcodeEditor, receivingUC *rucase.ReceivingUseCase, complaintsUC *cucase.UseCase) *Handler {
 	return &Handler{
-		syncUC:      syncUC,
-		ordersUC:    ordersUC,
-		exportUC:    exportUC,
-		pdfUC:       pdfUC,
-		barcodeUC:   barcodeUC,
-		refGoUC:     refGoUC,
-		wikiUC:      wikiUC,
-		goodsUC:     goodsUC,
-		dayStateUC:  dayStateUC,
-		qrUC:        qrUC,
-		msUC:        msUC,
-		stockUC:     stockUC,
-		stockHub:    stockHub,
-		receiveUC:   receiveUC,
-		receivingUC: receivingUC,
+		syncUC:       syncUC,
+		ordersUC:     ordersUC,
+		exportUC:     exportUC,
+		pdfUC:        pdfUC,
+		barcodeUC:    barcodeUC,
+		refGoUC:      refGoUC,
+		wikiUC:       wikiUC,
+		goodsUC:      goodsUC,
+		dayStateUC:   dayStateUC,
+		qrUC:         qrUC,
+		msUC:         msUC,
+		stockUC:      stockUC,
+		stockHub:     stockHub,
+		receiveUC:    receiveUC,
+		receivingUC:  receivingUC,
+		complaintsUC: complaintsUC,
 	}
 }
 
