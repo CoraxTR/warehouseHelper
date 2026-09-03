@@ -146,6 +146,13 @@
 
         function applySnapshot(rows) {
             STOCK.products = rows;
+            // lots обязан быть массивом: старые версии сервера могли прислать
+            // null (товар без остатков), рендер читает p.lots.length.
+            for (var i = 0; i < STOCK.products.length; i++) {
+                if (!STOCK.products[i].lots) {
+                    STOCK.products[i].lots = [];
+                }
+            }
             reindex();
         }
 

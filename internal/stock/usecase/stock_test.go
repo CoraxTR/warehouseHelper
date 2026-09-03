@@ -555,6 +555,25 @@ func TestReplaceStockExpiredClearsManual(t *testing.T) {
 	}
 }
 
+// TestMergeLotsResultNeverNil — пустой результат слияния — пустой МАССИВ,
+// не nil: lots в JSON обязан быть [] (клиент итерирует p.lots.length).
+func TestMergeLotsResultNeverNil(t *testing.T) {
+	cases := []struct {
+		name string
+		lots []stock.Lot
+		plan *replacePlan
+	}{
+		{name: "nil-лоты и пустой план", lots: nil, plan: &replacePlan{}},
+		{name: "nil-лоты и удаление", lots: nil, plan: &replacePlan{deletes: []time.Time{day(1)}}},
+		{name: "пустые лоты и пустой план", lots: []stock.Lot{}, plan: &replacePlan{}},
+	}
+	for _, tc := range cases {
+		if got := mergeLots(tc.lots, tc.plan); got == nil {
+			t.Errorf("%s: mergeLots вернул nil, want пустой массив", tc.name)
+		}
+	}
+}
+
 func TestReplaceStockNewProduct(t *testing.T) {
 	repo := replaceRepo() // p3 в каталоге, в кэше нет (нет лотов)
 	pub := &mockPub{}
