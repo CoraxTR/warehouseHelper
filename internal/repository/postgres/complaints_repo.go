@@ -271,8 +271,9 @@ func (pg *PGClient) complaintSummaries(ctx context.Context, where string) ([]dom
 // SearchComplaints ищет обращения по фильтру. Пустые поля фильтра не
 // ограничивают; заданные поля комбинируются (AND). Phone передаётся уже
 // нормализованным (7XXXXXXXXXX); ProductID — точное вхождение товара;
-// From/To — диапазон по дате создания (From включительно, To включительно,
-// локальный день сервера).
+// ProductName — подстрока названия по снимкам товаров (complaint_items,
+// ILIKE); From/To — диапазон по дате создания (From включительно, To
+// включительно, локальный день сервера).
 func (pg *PGClient) SearchComplaints(ctx context.Context, f domain.ComplaintFilter) ([]domain.ComplaintSummary, error) {
 	var (
 		conds []string
@@ -291,6 +292,15 @@ func (pg *PGClient) SearchComplaints(ctx context.Context, f domain.ComplaintFilt
 		args = append(args, f.ProductID)
 		conds = append(conds, fmt.Sprintf(`EXISTS (
 			SELECT 1 FROM complaint_items si WHERE si.complaint_id = c.id AND si.product_id = $%d
+		)`, len(args)))
+	}
+	if f.ProductName != "" {
+		// Подстрока названия по снимкам товаров обращения (ILIKE, как
+		// ms_order_number выше): поиск по «сырому» тексту без выбора
+		// товара из каталога.
+		args = append(args, "%"+f.ProductName+"%")
+		conds = append(conds, fmt.Sprintf(`EXISTS (
+			SELECT 1 FROM complaint_items si WHERE si.complaint_id = c.id AND si.product_name ILIKE $%d
 		)`, len(args)))
 	}
 	if !f.From.IsZero() {

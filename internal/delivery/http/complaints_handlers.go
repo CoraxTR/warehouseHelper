@@ -447,9 +447,9 @@ func (h *Handler) ComplaintCreate(w http.ResponseWriter, r *http.Request) {
 		renderErr(complaintSaveError(firstErr))
 		return
 	}
-	if len(res.uploads) > 0 {
-		defer closeComplaintFiles(res.opened)
-	}
+	// Файлы читаются синхронно в Create ниже — один defer после разбора
+	// закрывает их на любом пути возврата (ошибка, успех, редирект).
+	defer closeComplaintFiles(res.opened)
 
 	id, err := h.complaintsUC.Create(r.Context(), res.in, res.uploads)
 	if err != nil {
@@ -488,19 +488,23 @@ func (h *Handler) ComplaintSave(w http.ResponseWriter, r *http.Request) {
 	res, firstErr := complaintFormFromRequest(r)
 	closeComplaintFiles(res.opened) // фото на карточке добавляются отдельным POST /complaint/photo/add
 	if firstErr != nil {
-		h.complaintFormErr(w, r, id, complaintSaveError(firstErr))
+		h.complaintFormErr(w, r, id, res.in, complaintSaveError(firstErr))
 		return
 	}
 	if err := h.complaintsUC.Update(r.Context(), id, res.in); err != nil {
-		h.complaintFormErr(w, r, id, complaintSaveError(err))
+		h.complaintFormErr(w, r, id, res.in, complaintSaveError(err))
 		return
 	}
 	http.Redirect(w, r, fmt.Sprintf("/complaint?id=%d&msg=%s", id, url.QueryEscape("Сохранено")), http.StatusSeeOther)
 }
 
-// complaintFormErr перерисовывает карточку с ошибкой (без потери ввода):
-// берёт актуальное обращение из БД и подставляет введённые значения.
-func (h *Handler) complaintFormErr(w http.ResponseWriter, r *http.Request, id int64, msg string) {
+// complaintFormErr перерисовывает карточку с ошибкой без потери ввода:
+// текстовые поля, статус, дедлайн и товары берутся из уже разобранного
+// ввода формы (in) — ровно как их ввёл менеджер; фото и ссылка возврата —
+// из БД/запроса. Повторно форму не читаем: имена полей — контракт
+// HTML ↔ хендлер, чтение другим именем молча теряет ввод (рецидив:
+// order_number вместо ms_order).
+func (h *Handler) complaintFormErr(w http.ResponseWriter, r *http.Request, id int64, in usecase.ComplaintInput, msg string) {
 	c, err := h.complaintsUC.Get(r.Context(), id)
 	if err != nil {
 		http.Error(w, msg, http.StatusInternalServerError)
@@ -508,31 +512,23 @@ func (h *Handler) complaintFormErr(w http.ResponseWriter, r *http.Request, id in
 	}
 	photos, _ := h.complaintsUC.Photos(r.Context(), id)
 	data := complaintFormDataFromComplaint(c, "", r.FormValue("from"))
-	// Введённые значения поверх данных из БД.
-	if v := strings.TrimSpace(r.FormValue("order_number")); v != "" {
-		data.OrderNumber = v
-	}
-	if v := r.FormValue("phone"); v != "" {
-		data.Phone = v
-	}
-	if v := r.FormValue("description"); v != "" {
-		data.Description = v
-	}
-	if v := r.FormValue("actions"); v != "" {
-		data.Actions = v
-	}
-	if v := r.FormValue("deadline"); v != "" {
-		data.Deadline = v
-	}
-	if v := r.FormValue("status"); v != "" {
-		data.Status = v
+	// Введённые значения поверх данных из БД — безусловно (WYSIWYG):
+	// очищенное менеджером поле не должно «воскреснуть» из БД.
+	data.OrderNumber = in.MSOrderNumber
+	data.Phone = in.Phone
+	data.Description = in.Description
+	data.Actions = in.Actions
+	data.Status = string(in.Status)
+	if !in.Deadline.IsZero() {
+		data.Deadline = in.Deadline.In(procLoc).Format("2006-01-02T15:04")
+	} else {
+		// Пустой/неразобранный дедлайн: показываем сырую строку формы —
+		// менеджер видит, что именно он ввёл.
+		data.Deadline = r.FormValue("deadline")
 	}
 	data.Products = nil
-	for i := 0; i < len(r.Form["product_id"]); i++ {
-		data.Products = append(data.Products, complaintProductCell{
-			ProductID: r.Form["product_id"][i],
-			Name:      formName(r, i),
-		})
+	for _, it := range in.Items {
+		data.Products = append(data.Products, complaintProductCell{ProductID: it.ProductID, Name: it.ProductName})
 	}
 	data.Photos = photos
 	data.PhotoCount = len(photos)
@@ -577,14 +573,8 @@ func (h *Handler) ComplaintsSearch(w http.ResponseWriter, r *http.Request) {
 		DateFrom:    q.Get("date_from"),
 		DateTo:      q.Get("date_to"),
 	}
+	// Пустая форма — просто показываем страницу поиска, не ищем всё подряд.
 	if !complaintHasSearchFilter(data) {
-		_ = complaintsSearchTmpl.Execute(w, data)
-		return
-	}
-	if data.ProductName != "" && data.ProductID == "" {
-		// Текст в поле товара без выбора из подсказок каталога: поиск идёт
-		// только по товарам базы, фильтра по «сырому» названию нет.
-		data.Error = "Выберите товар из выпадающего списка, затем нажмите «Найти»."
 		_ = complaintsSearchTmpl.Execute(w, data)
 		return
 	}
@@ -593,6 +583,7 @@ func (h *Handler) ComplaintsSearch(w http.ResponseWriter, r *http.Request) {
 		MSOrderNumber: data.OrderNumber,
 		Phone:         data.Phone,
 		ProductID:     data.ProductID,
+		ProductName:   data.ProductName,
 	}
 	if data.DateFrom != "" {
 		from, err := time.ParseInLocation(time.DateOnly, data.DateFrom, procLoc)
@@ -624,7 +615,7 @@ func (h *Handler) ComplaintsSearch(w http.ResponseWriter, r *http.Request) {
 // complaintHasSearchFilter — задан хотя бы один фильтр поиска.
 func complaintHasSearchFilter(d complaintsSearchData) bool {
 	return d.OrderNumber != "" || d.Phone != "" || d.ProductID != "" ||
-		d.DateFrom != "" || d.DateTo != ""
+		d.ProductName != "" || d.DateFrom != "" || d.DateTo != ""
 }
 
 type complaintsSearchData struct {
@@ -732,17 +723,16 @@ func (h *Handler) ComplaintPhotoAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	res, firstErr := complaintFormFromRequest(r)
+	// Файлы читаются синхронно в AddPhotos ниже — один defer после разбора.
+	defer closeComplaintFiles(res.opened)
 	if firstErr != nil {
-		closeComplaintFiles(res.opened)
 		http.Redirect(w, r, fmt.Sprintf("/complaint?id=%d&msg=%s", id, url.QueryEscape(complaintSaveError(firstErr))), http.StatusSeeOther)
 		return
 	}
 	if len(res.uploads) == 0 {
-		closeComplaintFiles(res.opened)
 		http.Redirect(w, r, fmt.Sprintf("/complaint?id=%d&msg=%s", id, url.QueryEscape("Выберите фотографии")), http.StatusSeeOther)
 		return
 	}
-	defer closeComplaintFiles(res.opened)
 	if err := h.complaintsUC.AddPhotos(r.Context(), id, res.uploads); err != nil {
 		slog.Info(fmt.Sprintf("complaints: add photos to %d: %v", id, err))
 		http.Redirect(w, r, fmt.Sprintf("/complaint?id=%d&msg=%s", id, url.QueryEscape("Фото не сохранились")), http.StatusSeeOther)

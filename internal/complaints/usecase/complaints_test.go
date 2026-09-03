@@ -22,7 +22,8 @@ type stubRepo struct {
 	tags       []domain.ComplaintRoleTag
 	due        []domain.ComplaintDue
 	shifted    []int64
-	err        error // общая ошибка хранилища (если задана)
+	lastSearch domain.ComplaintFilter // последний фильтр Search (для проверок)
+	err        error                  // общая ошибка хранилища (если задана)
 }
 
 func newStubRepo() *stubRepo {
@@ -94,7 +95,8 @@ func (s *stubRepo) ListAllComplaintSummaries(_ context.Context) ([]domain.Compla
 	return nil, nil
 }
 
-func (s *stubRepo) SearchComplaints(_ context.Context, _ domain.ComplaintFilter) ([]domain.ComplaintSummary, error) {
+func (s *stubRepo) SearchComplaints(_ context.Context, f domain.ComplaintFilter) ([]domain.ComplaintSummary, error) {
+	s.lastSearch = f
 	return nil, nil
 }
 
@@ -472,6 +474,43 @@ func TestUpdateRejectsPastDeadline(t *testing.T) {
 	in.Deadline = time.Date(2026, time.September, 1, 12, 0, 0, 0, time.Now().Location())
 	if err := uc.Update(context.Background(), id, in); !errors.Is(err, ErrComplaintDeadlinePast) {
 		t.Errorf("Update error = %v, want ErrComplaintDeadlinePast", err)
+	}
+}
+
+// TestSearchByProductName — текстовая подстрока названия товара (без выбора
+// из каталога) уходит в фильтр как есть.
+func TestSearchByProductName(t *testing.T) {
+	repo := newStubRepo()
+	uc, _, _ := newTestUC(repo, nil)
+
+	f := domain.ComplaintFilter{ProductName: "микроволнов"}
+	if _, err := uc.Search(context.Background(), f); err != nil {
+		t.Fatalf("Search error: %v", err)
+	}
+	if repo.lastSearch.ProductName != "микроволнов" {
+		t.Errorf("ProductName в фильтре = %q, want %q", repo.lastSearch.ProductName, "микроволнов")
+	}
+}
+
+// TestSearchProductIDOverridesName — выбранный из каталога товар (ProductID)
+// главнее текстовой подстроки: имя в снимке обращения могло отличаться от
+// текущего (товар переименовывали), точное вхождение — источник истины.
+func TestSearchProductIDOverridesName(t *testing.T) {
+	repo := newStubRepo()
+	uc, _, _ := newTestUC(repo, nil)
+
+	f := domain.ComplaintFilter{
+		ProductID:   "abc-123",
+		ProductName: "старое название",
+	}
+	if _, err := uc.Search(context.Background(), f); err != nil {
+		t.Fatalf("Search error: %v", err)
+	}
+	if repo.lastSearch.ProductID != "abc-123" {
+		t.Errorf("ProductID в фильтре = %q, want abc-123", repo.lastSearch.ProductID)
+	}
+	if repo.lastSearch.ProductName != "" {
+		t.Errorf("ProductName = %q, want пустую (id главнее подстроки)", repo.lastSearch.ProductName)
 	}
 }
 

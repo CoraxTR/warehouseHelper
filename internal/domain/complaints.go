@@ -165,11 +165,15 @@ type ComplaintSummary struct {
 
 // ComplaintFilter — условия поиска обращений. Пустые поля не фильтруют;
 // From/To — диапазон по дате создания (From включительно, To включительно,
-// локальный день сервера).
+// локальный день сервера). ProductID — точное вхождение товара (выбор из
+// каталога); ProductName — подстрока названия по снимкам товаров обращения
+// (когда товар не выбирали из каталога); при заданном ProductID текстовая
+// подстрока игнорируется (решает usecase).
 type ComplaintFilter struct {
 	MSOrderNumber string
 	Phone         string // нормализуется в usecase
 	ProductID     string
+	ProductName   string // подстрока названия товара (по снимкам complaint_items)
 	From          time.Time
 	To            time.Time
 }
