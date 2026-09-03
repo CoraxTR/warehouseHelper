@@ -104,13 +104,13 @@ func TestSearchEmptyValuesBecomeDash(t *testing.T) {
 		t.Fatalf("Search() error: %v", err)
 	}
 	r := rows[0]
-	if r.AgentName != "—" {
+	if r.AgentName != dash {
 		t.Errorf("AgentName = %q, want «—» для пустого агента", r.AgentName)
 	}
-	if r.DeliveryDate != "—" {
+	if r.DeliveryDate != dash {
 		t.Errorf("DeliveryDate = %q, want «—» для пустой даты", r.DeliveryDate)
 	}
-	if r.Created != "—" {
+	if r.Created != dash {
 		t.Errorf("Created = %q, want «—» для непарсящейся даты", r.Created)
 	}
 }
