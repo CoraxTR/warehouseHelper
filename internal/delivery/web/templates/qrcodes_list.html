@@ -44,22 +44,90 @@
 
     <a class="back" href="/qrcodes">← Назад</a>
 
-    <div id="lightbox"><img id="lightbox-img" src="" alt="Фото"></div>
+    <div id="lightbox">
+        <img id="lightbox-img" src="" alt="Фото">
+        <button type="button" id="lightbox-prev" class="lightbox-nav" title="Предыдущее фото">&#9664;</button>
+        <button type="button" id="lightbox-next" class="lightbox-nav" title="Следующее фото">&#9654;</button>
+    </div>
 
     <script>
-        const lightbox = document.getElementById('lightbox');
-        const lightboxImg = document.getElementById('lightbox-img');
+        // Лайтбокс полноразмерного просмотра. Стрелки ◀ ▶ на экране и клавиши
+        // ←/→ листают фото ТОЛЬКО текущего заказа: все его фото лежат в одном
+        // контейнере .thumbs, из них и собирается список листания.
+        // Код в ES5: страницу открывают и со старых браузеров склада
+        // (без const/стрелочных функций/NodeList.forEach).
+        (function () {
+            var lightbox = document.getElementById('lightbox');
+            var lightboxImg = document.getElementById('lightbox-img');
+            var prevBtn = document.getElementById('lightbox-prev');
+            var nextBtn = document.getElementById('lightbox-next');
+            var photos = [];      // фото текущего заказа (их src показывает лайтбокс)
+            var photoIndex = 0;
 
-        document.querySelectorAll('.thumbs img').forEach((img) => {
-            img.addEventListener('click', () => {
-                lightboxImg.src = img.src;
+            function openLightbox(orderPhotos, index) {
+                photos = orderPhotos;
+                photoIndex = index;
+                lightboxImg.src = orderPhotos[index].src;
                 lightbox.style.display = 'flex';
-            });
-        });
+                // Стрелки показываем, только когда в заказе больше одного фото.
+                prevBtn.style.display = orderPhotos.length > 1 ? 'block' : 'none';
+                nextBtn.style.display = prevBtn.style.display;
+            }
 
-        lightbox.addEventListener('click', () => {
-            lightbox.style.display = 'none';
-        });
+            function closeLightbox() {
+                lightbox.style.display = 'none';
+            }
+
+            // Листание по кругу в границах текущего заказа.
+            function flip(step) {
+                if (photos.length < 2) {
+                    return;
+                }
+                photoIndex = (photoIndex + step + photos.length) % photos.length;
+                lightboxImg.src = photos[photoIndex].src;
+            }
+
+            var thumbs = document.querySelectorAll('.thumbs img');
+            for (var t = 0; t < thumbs.length; t++) {
+                thumbs[t].addEventListener('click', function () {
+                    // Соседние фото по контейнеру .thumbs — то есть того же заказа.
+                    var groupImgs = this.parentNode.getElementsByTagName('img');
+                    var orderPhotos = [];
+                    for (var g = 0; g < groupImgs.length; g++) {
+                        orderPhotos.push(groupImgs[g]);
+                    }
+                    for (var i = 0; i < orderPhotos.length; i++) {
+                        if (orderPhotos[i] === this) {
+                            openLightbox(orderPhotos, i);
+                            return;
+                        }
+                    }
+                });
+            }
+
+            lightbox.addEventListener('click', closeLightbox);
+            prevBtn.addEventListener('click', function (e) {
+                e.stopPropagation(); // клик по стрелке не должен закрывать просмотр
+                flip(-1);
+            });
+            nextBtn.addEventListener('click', function (e) {
+                e.stopPropagation();
+                flip(1);
+            });
+
+            document.addEventListener('keydown', function (e) {
+                if (lightbox.style.display !== 'flex') {
+                    return; // просмотр закрыт — клавиши работают как обычно
+                }
+                if (e.keyCode === 37) { // ←
+                    e.preventDefault();
+                    flip(-1);
+                } else if (e.keyCode === 39) { // →
+                    e.preventDefault();
+                    flip(1);
+                }
+            });
+        })();
     </script>
 </body>
 

@@ -552,6 +552,27 @@ details.multi-select .ms-empty { color: #66645C; font-size: 13px; margin-top: 6p
     cursor: zoom-out;
 }
 #lightbox img { max-width: 96%; max-height: 96%; border: 1px solid #33333E; }
+
+/* Стрелки ◀ ▶ листания фото заказа в полноэкранном просмотре (#lightbox) */
+#lightbox .lightbox-nav {
+    position: fixed;
+    top: 50%;
+    margin-top: -29px;
+    z-index: 210;
+    width: 58px;
+    height: 58px;
+    padding: 0;
+    border-radius: 50%;
+    background: rgba(10, 10, 13, 0.72);
+    color: #F4F1E9;
+    font-size: 18px;
+    line-height: 56px;
+    text-align: center;
+    display: none;
+}
+#lightbox .lightbox-nav:hover { background: #1E1E26; color: #FFFFFF; border-color: #4A4A55; }
+#lightbox-prev { left: 12px; }
+#lightbox-next { right: 12px; }
 #preview { display: flex; flex-wrap: wrap; margin-top: 10px; }
 #preview img { width: 30%; border-radius: 2px; margin: 0 4px 4px 0; border: 1px solid #26262E; }
 .photo-count { margin: 10px 0 4px; font-size: 14px; color: #A7A49A; }
