@@ -15,6 +15,10 @@ type fakeOrderSearch struct {
 	orders  []client.MSOrder
 	err     error
 	calls   int
+
+	agentName string // имя, возвращаемое хопом
+	agentErr  error  // ошибка хопа
+	hopCalls  int
 }
 
 func (f *fakeOrderSearch) SearchCustomerOrdersByName(_ context.Context, name string) ([]client.MSOrder, error) {
@@ -24,6 +28,11 @@ func (f *fakeOrderSearch) SearchCustomerOrdersByName(_ context.Context, name str
 		return nil, f.err
 	}
 	return f.orders, nil
+}
+
+func (f *fakeOrderSearch) FetchOrderAgentByHREF(_ context.Context, _ *client.MSOrder) (name, phone string, err error) {
+	f.hopCalls++
+	return f.agentName, "", f.agentErr
 }
 
 func sampleMSOrders() []client.MSOrder {
@@ -138,5 +147,72 @@ func TestSearchNotFound(t *testing.T) {
 	}
 	if rows == nil || len(rows) != 0 {
 		t.Errorf("rows = %v, want пустой не-nil слайс (не найдено — не ошибка)", rows)
+	}
+}
+
+// Тесты хопа за именем контрагента: expand=agent МС игнорирует при filter=name,
+// имя дотягивается отдельным запросом по agent.meta.href.
+
+func TestSearchAgentHopFetchesName(t *testing.T) {
+	orders := sampleMSOrders()
+	orders[0].Agent.Name = "" // expand не сработал — имя не приехало
+	orders[0].Agent.Meta.HREF = "https://api.moysklad.ru/api/remap/1.2/entity/counterparty/cp-1"
+	fake := &fakeOrderSearch{orders: orders, agentName: "ООО \"ХОП\""}
+	uc := NewUseCase(fake)
+
+	rows, err := uc.Search(context.Background(), "03969")
+	if err != nil {
+		t.Fatalf("Search() error: %v", err)
+	}
+	if fake.hopCalls != 1 {
+		t.Errorf("хопов = %d, want 1 (имя не приехало в строке)", fake.hopCalls)
+	}
+	if rows[0].AgentName != "ООО \"ХОП\"" {
+		t.Errorf("AgentName = %q, want имя из хопа", rows[0].AgentName)
+	}
+}
+
+func TestSearchAgentHopSkippedWhenNamePresent(t *testing.T) {
+	fake := &fakeOrderSearch{orders: sampleMSOrders()} // Agent.Name уже заполнен
+	uc := NewUseCase(fake)
+
+	if _, err := uc.Search(context.Background(), "03969"); err != nil {
+		t.Fatalf("Search() error: %v", err)
+	}
+	if fake.hopCalls != 0 {
+		t.Errorf("хопов = %d, want 0 (имя уже в строке)", fake.hopCalls)
+	}
+}
+
+func TestSearchAgentHopSkippedWithoutHref(t *testing.T) {
+	orders := sampleMSOrders()
+	orders[0].Agent.Name = "" // href агента не задан — хопа нет
+	fake := &fakeOrderSearch{orders: orders}
+	uc := NewUseCase(fake)
+
+	if _, err := uc.Search(context.Background(), "03969"); err != nil {
+		t.Fatalf("Search() error: %v", err)
+	}
+	if fake.hopCalls != 0 {
+		t.Errorf("хопов = %d, want 0 (нет href агента)", fake.hopCalls)
+	}
+}
+
+func TestSearchAgentHopErrorKeepsDash(t *testing.T) {
+	orders := sampleMSOrders()
+	orders[0].Agent.Name = ""
+	orders[0].Agent.Meta.HREF = "https://api.moysklad.ru/api/remap/1.2/entity/counterparty/cp-1"
+	fake := &fakeOrderSearch{orders: orders, agentErr: errors.New("network")}
+	uc := NewUseCase(fake)
+
+	rows, err := uc.Search(context.Background(), "03969")
+	if err != nil {
+		t.Fatalf("Search() error: %v, want nil (хоп не роняет поиск)", err)
+	}
+	if fake.hopCalls != 1 {
+		t.Errorf("хопов = %d, want 1", fake.hopCalls)
+	}
+	if rows[0].AgentName != dash {
+		t.Errorf("AgentName = %q, want «—» при ошибке хопа", rows[0].AgentName)
 	}
 }
