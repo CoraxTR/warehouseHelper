@@ -46,32 +46,29 @@
 
     <div id="lightbox">
         <img id="lightbox-img" src="" alt="Фото">
-        <button type="button" id="lightbox-prev" class="lightbox-nav" title="Предыдущее фото">&#9664;</button>
-        <button type="button" id="lightbox-next" class="lightbox-nav" title="Следующее фото">&#9654;</button>
     </div>
 
     <script>
-        // Лайтбокс полноразмерного просмотра. Стрелки ◀ ▶ на экране и клавиши
-        // ←/→ листают фото ТОЛЬКО текущего заказа: все его фото лежат в одном
-        // контейнере .thumbs, из них и собирается список листания.
+        // Лайтбокс полноразмерного просмотра. Фото заказа листают:
+        // на ПК — клавиши ←/→, на телефоне — свайп влево/вправо.
+        // Экранных кнопок нет. Листание не выходит за границы текущего заказа:
+        // все его фото лежат в одном контейнере .thumbs, из них и собирается список.
         // Код в ES5: страницу открывают и со старых браузеров склада
         // (без const/стрелочных функций/NodeList.forEach).
         (function () {
             var lightbox = document.getElementById('lightbox');
             var lightboxImg = document.getElementById('lightbox-img');
-            var prevBtn = document.getElementById('lightbox-prev');
-            var nextBtn = document.getElementById('lightbox-next');
             var photos = [];      // фото текущего заказа (их src показывает лайтбокс)
             var photoIndex = 0;
+            var lastSwipeAt = 0;  // время последнего свайпа (для гашения лишнего клика)
+            var touchX = null;    // начало касания для свайпа
+            var touchY = null;
 
             function openLightbox(orderPhotos, index) {
                 photos = orderPhotos;
                 photoIndex = index;
                 lightboxImg.src = orderPhotos[index].src;
                 lightbox.style.display = 'flex';
-                // Стрелки показываем, только когда в заказе больше одного фото.
-                prevBtn.style.display = orderPhotos.length > 1 ? 'block' : 'none';
-                nextBtn.style.display = prevBtn.style.display;
             }
 
             function closeLightbox() {
@@ -86,6 +83,54 @@
                 photoIndex = (photoIndex + step + photos.length) % photos.length;
                 lightboxImg.src = photos[photoIndex].src;
             }
+
+            lightbox.addEventListener('touchstart', function (e) {
+                if (e.touches.length !== 1) {
+                    touchX = null; // несколько пальцев (зум) — свайпы не считаем
+                    return;
+                }
+                touchX = e.touches[0].clientX;
+                touchY = e.touches[0].clientY;
+            });
+
+            lightbox.addEventListener('touchmove', function (e) {
+                if (touchX === null || e.touches.length !== 1) {
+                    return;
+                }
+                var dx = e.touches[0].clientX - touchX;
+                var dy = e.touches[0].clientY - touchY;
+                // Горизонтальный жест не должен скроллить страницу под лайтбоксом.
+                if (Math.abs(dx) > Math.abs(dy)) {
+                    e.preventDefault();
+                }
+            }, { passive: false });
+
+            lightbox.addEventListener('touchend', function (e) {
+                if (touchX === null) {
+                    return;
+                }
+                var t = e.changedTouches[0];
+                var dx = t.clientX - touchX;
+                var dy = t.clientY - touchY;
+                touchX = null;
+                touchY = null;
+                // Свайп: ход от 40px и по горизонтали. Влево — следующее фото,
+                // вправо — предыдущее. Короткое касание — не листание (клик закроет).
+                if (Math.abs(dx) < 40 || Math.abs(dx) <= Math.abs(dy)) {
+                    return;
+                }
+                lastSwipeAt = Date.now();
+                flip(dx < 0 ? 1 : -1);
+            });
+
+            // Клик закрывает просмотр. Браузер сам присылает «клик» сразу после
+            // свайпа — такой клик пропускаем, иначе свайп закроет фото.
+            lightbox.addEventListener('click', function () {
+                if (Date.now() - lastSwipeAt < 500) {
+                    return;
+                }
+                closeLightbox();
+            });
 
             var thumbs = document.querySelectorAll('.thumbs img');
             for (var t = 0; t < thumbs.length; t++) {
@@ -104,16 +149,6 @@
                     }
                 });
             }
-
-            lightbox.addEventListener('click', closeLightbox);
-            prevBtn.addEventListener('click', function (e) {
-                e.stopPropagation(); // клик по стрелке не должен закрывать просмотр
-                flip(-1);
-            });
-            nextBtn.addEventListener('click', function (e) {
-                e.stopPropagation();
-                flip(1);
-            });
 
             document.addEventListener('keydown', function (e) {
                 if (lightbox.style.display !== 'flex') {
