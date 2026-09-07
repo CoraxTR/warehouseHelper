@@ -25,7 +25,7 @@ func (f *fakeOrderDetail) SearchCustomerOrdersByName(context.Context, string) ([
 	return nil, errors.New("SearchCustomerOrdersByName не нужен в Detail-тестах")
 }
 
-func (f *fakeOrderDetail) FetchOrderAgentByHREF(_ context.Context, _ *client.MSOrder) (string, string, error) {
+func (f *fakeOrderDetail) FetchOrderAgentByHREF(_ context.Context, _ *client.MSOrder) (name, phone string, err error) {
 	return f.agentName, f.agentPhone, f.agentErr
 }
 
@@ -184,24 +184,46 @@ func TestDetailRowsSortingGroupsAndFormatting(t *testing.T) {
 		t.Errorf("p3: HasCode=%v Reserve=%v, want код с резервом", rows[0].HasCode, rows[0].Reserve)
 	}
 	if rows[4].HasCode {
-		t.Errorf("p4: HasCode = true, want false (код вне каталога)")
+		t.Error("p4: HasCode = true, want false (код вне каталога)")
 	}
 	if rows[3].HasCode {
-		t.Errorf("p5: HasCode = true, want false (кода нет)")
+		t.Error("p5: HasCode = true, want false (кода нет)")
+	}
+}
+
+// TestDetailRowFormatting — форматы количества и цены (запятая, обрезка
+// хвостовых нулей у килограммов, целые у штучных).
+func TestDetailRowFormatting(t *testing.T) {
+	positions := []client.MSPosition{
+		position("p1", "00220002", "Стейк АМТ", 0.367, 279000, 0),
+		position("p2", "00220002", "Стейк АМТ", 0.4, 279000, 0),
+		position("p5", "", "Фарш (без кода)", 3, 10000, 0),
+	}
+	catalog := &fakeCatalog{byCode: map[string]CatalogProduct{
+		"00220002": {InternalCode: "00220002", Weighted: true},
+	}}
+	uc := NewUseCase(&fakeOrderDetail{order: detailOrder(), positions: positions}, catalog)
+
+	o, err := uc.Detail(context.Background(), "id")
+	if err != nil {
+		t.Fatalf("Detail() error: %v", err)
+	}
+	rows := o.Rows
+	if len(rows) != 3 {
+		t.Fatalf("len(rows) = %d, want 3", len(rows))
 	}
 
-	// Форматирование.
-	if rows[1].QtyText != "0,367 кг" {
-		t.Errorf("QtyText p1 = %q, want «0,367 кг»", rows[1].QtyText)
+	if rows[0].QtyText != "0,367 кг" {
+		t.Errorf("QtyText p1 = %q, want «0,367 кг»", rows[0].QtyText)
 	}
-	if rows[2].QtyText != "0,4 кг" {
-		t.Errorf("QtyText p2 = %q, want «0,4 кг» (хвостовые нули обрезаны)", rows[2].QtyText)
+	if rows[1].QtyText != "0,4 кг" {
+		t.Errorf("QtyText p2 = %q, want «0,4 кг» (хвостовые нули обрезаны)", rows[1].QtyText)
 	}
-	if rows[3].QtyText != "3 шт" {
-		t.Errorf("QtyText p5 = %q, want «3 шт»", rows[3].QtyText)
+	if rows[2].QtyText != "3 шт" {
+		t.Errorf("QtyText p5 = %q, want «3 шт»", rows[2].QtyText)
 	}
-	if rows[1].PriceText != "2790,00" {
-		t.Errorf("PriceText p1 = %q, want «2790,00»", rows[1].PriceText)
+	if rows[0].PriceText != "2790,00" {
+		t.Errorf("PriceText p1 = %q, want «2790,00»", rows[0].PriceText)
 	}
 }
 

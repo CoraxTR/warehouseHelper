@@ -141,8 +141,15 @@ func (uc *UseCase) buildItems(ctx context.Context, positions []client.MSPosition
 	for _, p := range positions {
 		code := strings.TrimSpace(p.Assortment.Code)
 		product, inCatalog := catalog[code]
-
 		weighted := inCatalog && product.Weighted
+
+		qtyText := qtyPiecesText(p.Quantity)
+		reserveText := qtyPiecesText(p.Reserve)
+		if weighted {
+			qtyText = qtyWeightText(p.Quantity)
+			reserveText = qtyWeightText(p.Reserve)
+		}
+
 		items = append(items, OrderItem{
 			ID:          p.ID,
 			Name:        orDash(strings.TrimSpace(p.Assortment.Name)),
@@ -150,11 +157,11 @@ func (uc *UseCase) buildItems(ctx context.Context, positions []client.MSPosition
 			HasCode:     inCatalog,
 			Weighted:    weighted,
 			Qty:         p.Quantity,
-			QtyText:     qtyText(p.Quantity, weighted),
+			QtyText:     qtyText,
 			Price:       p.Price,
 			PriceText:   moneyText(p.Price),
 			Reserve:     p.Reserve,
-			ReserveText: qtyText(p.Reserve, weighted),
+			ReserveText: reserveText,
 			Active:      inCatalog && p.Reserve == 0,
 			CanRepick:   inCatalog && p.Reserve > 0,
 		})
@@ -184,7 +191,7 @@ func (uc *UseCase) loadCatalog(ctx context.Context, positions []client.MSPositio
 	}
 
 	if len(codes) == 0 {
-		return nil, nil
+		return map[string]CatalogProduct{}, nil
 	}
 
 	catalog, err := uc.catalog.LoadCatalogProductsByCodes(ctx, codes)
@@ -254,22 +261,16 @@ func moneyInt(copeck float64) int64 {
 	return int64(copeck + 0.5)
 }
 
-// qtyText форматирует количество: весовые — килограммы с точностью до 3
-// знаков («0,367 кг», хвостовые нули обрезаются), штучные — целые («3 шт»).
-func qtyText(q float64, weighted bool) string {
-	unit := "шт"
-	prec := 0
-	if weighted {
-		unit = "кг"
-		prec = 3
-	}
+// qtyWeightText форматирует килограммы с точностью до 3 знаков
+// («0,367 кг», хвостовые нули обрезаются).
+func qtyWeightText(q float64) string {
+	s := strings.TrimRight(strings.TrimRight(strconv.FormatFloat(q, 'f', 3, 64), "0"), ".")
+	return strings.Replace(s, ".", ",", 1) + " кг"
+}
 
-	s := strconv.FormatFloat(q, 'f', prec, 64)
-	if weighted {
-		s = strings.TrimRight(strings.TrimRight(s, "0"), ".")
-	}
-
-	return strings.Replace(s, ".", ",", 1) + " " + unit
+// qtyPiecesText форматирует штучное количество («3 шт»).
+func qtyPiecesText(q float64) string {
+	return strconv.FormatFloat(q, 'f', 0, 64) + " шт"
 }
 
 // moneyText переводит копейки МС в рубли с двумя знаками («2790,00»).
