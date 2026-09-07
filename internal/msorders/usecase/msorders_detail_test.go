@@ -155,8 +155,8 @@ func TestDetailRowsSortingGroupsAndFormatting(t *testing.T) {
 	}
 
 	// Порядок: HasCode по (code, price): 00210006, затем 00220002×2, потом без кода в исходном порядке (p5, p4).
-	if rows[0].ID != "p3" || rows[1].ID != "p1" || rows[2].ID != "p2" || rows[3].ID != "p5" || rows[4].ID != "p4" {
-		t.Errorf("порядок строк = %s, want [p3 p1 p2 p5 p4]", ids(rows))
+	if got := ids(rows); got != "p3 p1 p2 p5 p4" {
+		t.Errorf("порядок строк = %s, want [p3 p1 p2 p5 p4]", got)
 	}
 
 	// Группы склейки: p1+p2 (00220002, одна цена) — группа 1 размером 2; p3 — одиночная.
