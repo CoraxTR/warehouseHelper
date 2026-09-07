@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"net/http"
 	asucase "warehouseHelper/internal/averagesales/usecase"
 	aucase "warehouseHelper/internal/avgweight/usecase"
@@ -421,14 +422,38 @@ func (d *DIContainer) ComplaintsUC() *cucase.UseCase {
 }
 
 // MSOrdersUC — сценарии раздела «Заказы» МойСклад: поиск заказа по номеру
-// для подбора. Схемы БД у модуля нет — MSClient реализует
-// mordersuc.OrderSearchClient.
+// и детальная страница заказа (подбор). Схемы БД у модуля нет — MSClient
+// реализует mordersuc.OrderClient, каталог склада подключается адаптером
+// (PGClient отдаёт товары типом receiving.ProductRef, модулю нужен свой).
 func (d *DIContainer) MSOrdersUC() *mordersuc.UseCase {
 	if d.msOrdersUC == nil {
-		d.msOrdersUC = mordersuc.NewUseCase(d.MSClient())
+		d.msOrdersUC = mordersuc.NewUseCase(d.MSClient(), orderCatalogAdapter{pg: d.OrdersRepository()})
 	}
 
 	return d.msOrdersUC
+}
+
+// orderCatalogAdapter — конвертация каталога на границе DI: PGClient
+// реализует чужой контракт (receiving), msorders объявляет свой.
+type orderCatalogAdapter struct {
+	pg *postgres.PGClient
+}
+
+func (a orderCatalogAdapter) LoadCatalogProductsByCodes(ctx context.Context, codes []string) (map[string]mordersuc.CatalogProduct, error) {
+	found, err := a.pg.LoadCatalogProductsByCodes(ctx, codes)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make(map[string]mordersuc.CatalogProduct, len(found))
+	for code, p := range found {
+		out[code] = mordersuc.CatalogProduct{
+			InternalCode: p.InternalCode,
+			Weighted:     p.Weighted,
+		}
+	}
+
+	return out, nil
 }
 
 func (d *DIContainer) Handler() *myhttp.Handler {

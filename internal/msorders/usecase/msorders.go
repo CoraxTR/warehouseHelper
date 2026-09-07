@@ -45,14 +45,17 @@ type OrderRow struct {
 	Href         string // meta.href заказа
 }
 
-// UseCase — поиск заказов МС.
+// UseCase — сценарии раздела «Заказы» МС: поиск заказа (страница «Подобрать»)
+// и детальная страница заказа для подбора позиций.
 type UseCase struct {
-	ms OrderSearchClient
+	ms      OrderClient
+	catalog CatalogReader
 }
 
-// NewUseCase создаёт сценарий с переданным клиентом МС.
-func NewUseCase(ms OrderSearchClient) *UseCase {
-	return &UseCase{ms: ms}
+// NewUseCase создаёт сценарии с клиентом МС и каталогом склада (резолв
+// внутренних кодов позиций).
+func NewUseCase(ms OrderClient, catalog CatalogReader) *UseCase {
+	return &UseCase{ms: ms, catalog: catalog}
 }
 
 // Search ищет заказы по точному номеру (name). Пустое поле — ErrEmptyName;
