@@ -78,8 +78,12 @@ type OrderItem struct {
 	PriceText   string  // «2790,00»
 	Reserve     float64 // зарезервировано (те же единицы, что Qty)
 	ReserveText string
-	Group       int // номер группы склейки (0 — вне группы, склейка невозможна)
-	GroupSize   int // строк в группе (>=2 — кнопка «Объединить в одну строку»)
+	Group       int // номер группы склейки (0 — вне группы); группы идут подряд
+	GroupSize   int // строк в группе (1 — кнопка «Объединить» не нужна)
+	// Active — строка подбирается сканами: товар в каталоге и резерв 0.
+	// CanRepick — товар в каталоге и резерв > 0 (кнопка «Переподобрать»).
+	Active    bool
+	CanRepick bool
 }
 
 // Detail собирает страницу заказа: шапка, позиции с резолвом каталога,
@@ -136,20 +140,23 @@ func (uc *UseCase) buildItems(ctx context.Context, positions []client.MSPosition
 	items := make([]OrderItem, 0, len(positions))
 	for _, p := range positions {
 		code := strings.TrimSpace(p.Assortment.Code)
-		cp, hasCode := catalog[code]
+		product, inCatalog := catalog[code]
 
+		weighted := inCatalog && product.Weighted
 		items = append(items, OrderItem{
 			ID:          p.ID,
 			Name:        orDash(strings.TrimSpace(p.Assortment.Name)),
 			Code:        code,
-			HasCode:     hasCode,
-			Weighted:    hasCode && cp.Weighted,
+			HasCode:     inCatalog,
+			Weighted:    weighted,
 			Qty:         p.Quantity,
-			QtyText:     qtyText(p.Quantity, hasCode && cp.Weighted),
+			QtyText:     qtyText(p.Quantity, weighted),
 			Price:       p.Price,
 			PriceText:   moneyText(p.Price),
 			Reserve:     p.Reserve,
-			ReserveText: qtyText(p.Reserve, hasCode && cp.Weighted),
+			ReserveText: qtyText(p.Reserve, weighted),
+			Active:      inCatalog && p.Reserve == 0,
+			CanRepick:   inCatalog && p.Reserve > 0,
 		})
 	}
 

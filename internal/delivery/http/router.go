@@ -58,6 +58,8 @@ func NewRouter(h *Handler) *http.ServeMux {
 	mux.HandleFunc("GET /ms/orders", h.MSOrdersPage)             // раздел «Заказы»
 	mux.HandleFunc("GET /ms/orders/pick", h.MSOrdersPickForm)    // подбор: форма/результат (?name=)
 	mux.HandleFunc("POST /ms/orders/pick", h.MSOrdersPickSearch) // подбор: запуск поиска (PRG → GET ?name=)
+	// Детальная страница заказа (литерал /ms/orders/pick специфичнее {id} — конфликта нет).
+	mux.HandleFunc("GET /ms/orders/{id}", h.MSOrderDetailPage)
 
 	// Модуль «Жалобы»: обращения клиентов с фото и статусами.
 	mux.HandleFunc("GET /complaints", h.ComplaintsPage)                    // активные обращения (статус != «Завершено»)

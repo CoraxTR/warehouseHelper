@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Заказ — МойСклад</title>
+    <link rel="stylesheet" href="/static/raven-guard.css">
+</head>
+
+<body>
+    <header class="brandbar">
+        <a class="brandbar__brand" href="/"><svg class="brandbar__emblem" viewBox="0 0 64 64" aria-hidden="true"><circle cx="35" cy="25" r="14" fill="#F4F1E9"/><polygon points="6,26 30,17 28,27" fill="#F4F1E9"/><polygon points="13,35 28,27 26,36" fill="#F4F1E9"/><circle cx="34" cy="23" r="3.6" fill="#0A0A0D"/><circle cx="33" cy="22" r="1.1" fill="#C02832"/></svg><span class="brandbar__name">ВОРОН&nbsp;&middot;&nbsp;СКЛАД</span></a>
+        <span class="brandbar__motto">Приёмка или смерть</span>
+    </header>
+
+    {{if .Error}}
+    <h1>Заказ не загружен</h1>
+    <p class="error-msg">{{.Error}}</p>
+    <p><a class="back" href="/ms/orders/pick">← К поиску заказов</a></p>
+    {{else}}
+    <h1>Заказ {{.Order.Name}}</h1>
+
+    <div class="order-info">
+        <p><b>Контрагент:</b> {{.Order.AgentName}}{{if .Order.AgentPhone}} · {{.Order.AgentPhone}}{{end}}</p>
+        <p><b>Адрес доставки:</b> <span class="addr">{{if .Order.Address}}{{.Order.Address}}{{else}}—{{end}}{{if .Order.AddressComment}}<br>{{.Order.AddressComment}}{{end}}</span></p>
+        <p><b>Плановая дата отгрузки:</b> {{.Order.DeliveryDate}}</p>
+        {{if ne .Order.Comment "—"}}<p><b>Комментарий:</b> {{.Order.Comment}}</p>{{end}}
+    </div>
+
+    <table class="order-items">
+        <thead>
+            <tr>
+                <th>Товар</th>
+                <th>Внутр. артикул</th>
+                <th>Кол-во (вес)</th>
+                <th>Цена</th>
+                <th>Резерв</th>
+                <th>Подбор</th>
+            </tr>
+        </thead>
+        <tbody>
+            {{range .Order.Rows}}
+            <tr class="order-row{{if and .HasCode (gt .GroupSize 1)}} merge-row{{end}}"
+                data-id="{{.ID}}" data-code="{{.Code}}" data-hascode="{{if .HasCode}}1{{else}}0{{end}}"
+                data-weighted="{{if .Weighted}}1{{else}}0{{end}}" data-qty="{{.Qty}}"
+                data-group="{{.Group}}" data-gsize="{{.GroupSize}}"
+                data-active="{{if .Active}}1{{else}}0{{end}}" data-canrepick="{{if .CanRepick}}1{{else}}0{{end}}">
+                <td class="cell-name">{{.Name}}</td>
+                <td class="mono">{{if .HasCode}}{{.Code}}{{else}}—{{end}}</td>
+                <td class="cell-qty">{{.QtyText}}</td>
+                <td class="cell-price">{{.PriceText}}</td>
+                <td class="cell-reserve">{{.ReserveText}}</td>
+                <td class="cell-action">
+                    {{if .Active}}
+                    <input type="text" class="scan-input" autocomplete="off" placeholder="штрих-код куска…">
+                    <div class="picked"></div>
+                    {{else if .CanRepick}}
+                    <button type="button" class="btn-secondary repick-btn">Переподобрать</button>
+                    {{else}}
+                    <span class="muted">—</span>
+                    {{end}}
+                </td>
+            </tr>
+            {{end}}
+        </tbody>
+    </table>
+    <p id="order-status" class="hint"></p>
+    <p><a class="back" href="/ms/orders/pick">← К поиску заказов</a></p>
+    {{end}}
+
+    <script>
+        // Подбор позиций: скан куска (29 цифр) сверяется по первым 8 цифрам
+        // с внутренним кодом активной строки. Весовая строка готова после
+        // первого засчитанного скана, штучная — после qty сканов. Кнопка
+        // «Объединить» появляется, когда все строки группы забиты.
+        (function () {
+            'use strict';
+
+            var statusBox = document.getElementById('order-status');
+            if (!statusBox) { return; } // страница с ошибкой — скрипт не нужен
+
+            // ---- состояние строк ----
+            var rows = [];
+            var trs = document.querySelectorAll('tr.order-row');
+            for (var i = 0; i < trs.length; i++) {
+                var tr = trs[i];
+                var row = {
+                    tr: tr,
+                    code: tr.getAttribute('data-code'),
+                    hascode: tr.getAttribute('data-hascode') === '1',
+                    weighted: tr.getAttribute('data-weighted') === '1',
+                    qty: parseFloat(tr.getAttribute('data-qty')) || 0,
+                    group: parseInt(tr.getAttribute('data-group'), 10) || 0,
+                    gsize: parseInt(tr.getAttribute('data-gsize'), 10) || 0,
+                    active: tr.getAttribute('data-active') === '1',
+                    done: false,
+                    merged: false,
+                    records: [] // {w: граммы, bb: ДДММГГГГ}
+                };
+                rows.push(row);
+
+                var input = tr.querySelector('.scan-input');
+                if (input) {
+                    (function (r, inp) {
+                        inp.addEventListener('keydown', function (e) {
+                            if (e.keyCode === 13) {
+                                e.preventDefault();
+                                handleScan(r, inp);
+                            }
+                        });
+                    })(row, input);
+                }
+
+                var repick = tr.querySelector('.repick-btn');
+                if (repick) {
+                    (function (r, btn) {
+                        btn.addEventListener('click', function () { repickRow(r); });
+                    })(row, repick);
+                }
+            }
+
+            // ---- бип ошибки (Web Audio; без fallback — на очень старых
+            // браузерах склада сработает только красная подсветка) ----
+            var beepCtx = null;
+            function beep() {
+                try {
+                    var AC = window.AudioContext || window.webkitAudioContext;
+                    if (!AC) { return; }
+                    if (!beepCtx) { beepCtx = new AC(); }
+                    var osc = beepCtx.createOscillator();
+                    var gain = beepCtx.createGain();
+                    osc.connect(gain);
+                    gain.connect(beepCtx.destination);
+                    osc.frequency.value = 880;
+                    gain.gain.value = 0.8;
+                    osc.start(0);
+                    setTimeout(function () { osc.stop(0); }, 250);
+                } catch (e) { /* звука нет — подсветка остаётся */ }
+            }
+
+            function setStatus(msg) {
+                statusBox.textContent = msg || '';
+            }
+
+            function flashError(tr, msg) {
+                beep();
+                setStatus(msg);
+                if (tr) {
+                    tr.className = tr.className + ' row-flash';
+                    setTimeout(function () {
+                        tr.className = tr.className.replace(' row-flash', '');
+                    }, 400);
+                }
+            }
+
+            // ---- форматирование чисел (запятая) ----
+            function num(s) { return String(s).replace('.', ','); }
+
+            function fmtKgText(grams) {
+                var kg = (grams / 1000).toFixed(3);
+                kg = kg.replace(/0+$/, '').replace(/\.$/, '');
+                return num(kg) + ' кг';
+            }
+
+            function fmtQtyText(n, weighted) {
+                if (weighted) {
+                    var s = n.toFixed(3).replace(/0+$/, '').replace(/\.$/, '');
+                    return num(s) + ' кг';
+                }
+                return String(Math.round(n)) + ' шт';
+            }
+
+            function rowPickedText(r) {
+                if (r.weighted) {
+                    var g = 0;
+                    for (var i = 0; i < r.records.length; i++) { g += r.records[i].w; }
+                    return 'набрано ' + fmtKgText(g);
+                }
+                return 'набрано ' + r.records.length + ' из ' + Math.round(r.qty) + ' шт';
+            }
+
+            // ---- скан ----
+            function handleScan(r, input) {
+                var raw = input.value.replace(/^\s+|\s+$/g, '');
+                input.value = '';
+                if (raw === '') { return; }
+                if (!/^\d+$/.test(raw)) {
+                    flashError(r.tr, 'Не похоже на штрих-код: ' + raw);
+                    return;
+                }
+                if (raw.length === 33) {
+                    flashError(r.tr, 'Коробки (33 цифры) на подборе не участвуют — сканируйте куски (29 цифр)');
+                    return;
+                }
+                if (raw.length !== 29) {
+                    flashError(r.tr, 'Нужен штрих-код куска (29 цифр), пришло ' + raw.length);
+                    return;
+                }
+                var codePart = raw.substr(0, 8);
+                if (codePart !== r.code) {
+                    flashError(r.tr, 'Код ' + codePart + ' не совпадает со строкой ' + r.code);
+                    return;
+                }
+
+                var w = parseInt(raw.substr(8, 5), 10);
+                var bb = raw.substr(21, 8);
+                if (w <= 0) {
+                    flashError(r.tr, 'Вес из штрих-кода невалиден');
+                    return;
+                }
+
+                r.records.push({ w: r.weighted ? w : 0, bb: bb });
+                if (r.weighted) {
+                    r.done = true; // одна строка = один кусок
+                } else if (r.records.length >= r.qty) {
+                    r.done = true;
+                }
+
+                var picked = r.tr.querySelector('.picked');
+                if (picked) { picked.textContent = rowPickedText(r); }
+                if (r.done) { markDone(r); }
+
+                checkMergeGroups();
+                focusNext(r);
+            }
+
+            function markDone(r) {
+                r.tr.className = r.tr.className + ' row-done';
+                var input = r.tr.querySelector('.scan-input');
+                if (input) { input.disabled = true; }
+            }
+
+            function activeRow(r) {
+                return r.active && !r.done && !r.merged && r.tr.style.display !== 'none';
+            }
+
+            function focusNext(from) {
+                var start = -1;
+                for (var i = 0; i < rows.length; i++) {
+                    if (rows[i] === from) { start = i; break; }
+                }
+                for (var j = start + 1; j < rows.length; j++) {
+                    if (activeRow(rows[j])) {
+                        var inp = rows[j].tr.querySelector('.scan-input');
+                        if (inp) { inp.focus(); }
+                        setStatus('');
+                        return;
+                    }
+                }
+                // активных строк больше нет
+                var left = 0;
+                for (var k = 0; k < rows.length; k++) {
+                    if (activeRow(rows[k])) { left++; }
+                }
+                if (left === 0) { setStatus('Все активные позиции подобраны'); }
+            }
+
+            // ---- Переподобрать: резерв в 0, строка становится активной ----
+            function repickRow(r) {
+                r.active = true;
+                var cell = r.tr.querySelector('.cell-action');
+                var reserveCell = r.tr.querySelector('.cell-reserve');
+                cell.textContent = '';
+                if (reserveCell) { reserveCell.textContent = fmtQtyText(0, r.weighted); }
+
+                var input = document.createElement('input');
+                input.type = 'text';
+                input.className = 'scan-input';
+                input.setAttribute('autocomplete', 'off');
+                input.placeholder = 'штрих-код куска…';
+                var picked = document.createElement('div');
+                picked.className = 'picked';
+                cell.appendChild(input);
+                cell.appendChild(picked);
+                (function (rr, inp) {
+                    inp.addEventListener('keydown', function (e) {
+                        if (e.keyCode === 13) {
+                            e.preventDefault();
+                            handleScan(rr, inp);
+                        }
+                    });
+                })(r, input);
+                input.focus();
+            }
+
+            // ---- Объединить строки группы (только когда все забиты) ----
+            function groupRows(g) {
+                var out = [];
+                for (var i = 0; i < rows.length; i++) {
+                    if (rows[i].group === g && !rows[i].merged) { out.push(rows[i]); }
+                }
+                return out;
+            }
+
+            function firstActionCell(g) {
+                var grp = groupRows(g);
+                if (grp.length === 0) { return null; }
+                return grp[0].tr.querySelector('.cell-action');
+            }
+
+            function checkMergeGroups() {
+                for (var i = 0; i < rows.length; i++) {
+                    var r = rows[i];
+                    if (r.group === 0 || r.gsize < 2 || r.merged) { continue; }
+                    var grp = groupRows(r.group);
+                    if (grp.length < 2) { continue; }
+                    var allDone = true;
+                    for (var j = 0; j < grp.length; j++) {
+                        if (!grp[j].done) { allDone = false; break; }
+                    }
+                    if (!allDone) { continue; }
+                    if (firstActionCell(r.group).querySelector('.merge-btn')) { continue; }
+
+                    var cell = firstActionCell(r.group);
+                    var btn = document.createElement('button');
+                    btn.type = 'button';
+                    btn.className = 'btn-secondary merge-btn';
+                    btn.textContent = 'Объединить в одну строку';
+                    (function (g, b) {
+                        b.addEventListener('click', function () { mergeGroup(g); });
+                    })(r.group, btn);
+                    cell.appendChild(btn);
+                }
+            }
+
+            function mergeGroup(g) {
+                var grp = groupRows(g);
+                if (grp.length < 2) { return; }
+                var first = grp[0];
+                var totalQty = 0;
+                for (var i = 0; i < grp.length; i++) {
+                    totalQty += grp[i].qty;
+                    if (grp[i] !== first) {
+                        grp[i].merged = true;
+                        grp[i].tr.style.display = 'none';
+                    }
+                }
+                var records = [];
+                for (var j = 0; j < grp.length; j++) {
+                    records = records.concat(grp[j].records);
+                }
+                first.records = records;
+                first.qty = totalQty;
+
+                var qtyCell = first.tr.querySelector('.cell-qty');
+                if (qtyCell) { qtyCell.textContent = fmtQtyText(totalQty, first.weighted); }
+                var picked = first.tr.querySelector('.picked');
+                if (picked) { picked.textContent = rowPickedText(first); }
+
+                var cell = first.tr.querySelector('.cell-action');
+                var btn = cell.querySelector('.merge-btn');
+                if (btn) { btn.parentNode.removeChild(btn); }
+                var doneBadge = document.createElement('span');
+                doneBadge.className = 'muted';
+                doneBadge.textContent = 'объединено';
+                cell.appendChild(doneBadge);
+                markDone(first);
+            }
+
+            // автофокус на первую активную строку
+            for (var a = 0; a < rows.length; a++) {
+                if (activeRow(rows[a])) {
+                    var firstInput = rows[a].tr.querySelector('.scan-input');
+                    if (firstInput) { firstInput.focus(); }
+                    break;
+                }
+            }
+        })();
+    </script>
+</body>
+
+</html>

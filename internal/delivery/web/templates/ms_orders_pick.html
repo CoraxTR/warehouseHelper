@@ -52,6 +52,24 @@
     {{end}}
 
     <a class="back" href="/ms/orders">← Назад к «Заказам»</a>
+
+    <script>
+        // Клик по строке результата — переход на детальную страницу заказа
+        // (id берём из meta.href — последний сегмент; href не хранится в БД).
+        (function () {
+            var rows = document.querySelectorAll('tr[data-href]');
+            for (var i = 0; i < rows.length; i++) {
+                rows[i].addEventListener('click', function () {
+                    var href = this.getAttribute('data-href');
+                    if (!href) { return; }
+                    var parts = href.split('/');
+                    var id = parts[parts.length - 1];
+                    if (!id) { return; }
+                    window.location.href = '/ms/orders/' + id;
+                });
+            }
+        })();
+    </script>
 </body>
 
 </html>
