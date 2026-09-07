@@ -14,12 +14,12 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
-	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"warehouseHelper/internal/metrics"
+	"warehouseHelper/internal/msclient/client"
 	"warehouseHelper/internal/stock"
 )
 
@@ -93,12 +93,14 @@ type submitCache struct {
 }
 
 // submitEntry — сырьё одного заказа: тело GET заказа (эхо для PUT), строки
-// positions как пришли с expand=assortment (порядок МС!) и каталог по кодам.
+// positions как пришли с expand=assortment (порядок МС!), типизированные
+// позиции для страницы и каталог по кодам.
 type submitEntry struct {
-	orderRaw json.RawMessage
-	rowsRaw  []json.RawMessage
-	catalog  map[string]CatalogProduct
-	at       time.Time
+	orderRaw  json.RawMessage
+	rowsRaw   []json.RawMessage
+	positions []client.MSPosition
+	catalog   map[string]CatalogProduct
+	at        time.Time
 }
 
 func newSubmitCache() *submitCache {
@@ -162,7 +164,7 @@ func (uc *UseCase) Submit(ctx context.Context, id string, req SubmitRequest) (Su
 	entry := uc.cache.get(id)
 	if entry == nil {
 		// Промах кэша (рестарт/TTL): догружаем теми же GET, что и Detail.
-		if _, _, entry, err = uc.fetchAndCache(ctx, id); err != nil {
+		if _, entry, err = uc.fetchAndCache(ctx, id); err != nil {
 			return SubmitResult{}, err
 		}
 	}
@@ -359,7 +361,7 @@ func (uc *UseCase) buildSubmitPositions(req SubmitRequest, records map[int][]par
 
 		if !meta.hasCode || meta.reserve > 0 {
 			// пассивная (без кода) / переподбор — как есть
-			out = append(out, json.RawMessage(entry.rowsRaw[meta.idx]))
+			out = append(out, entry.rowsRaw[meta.idx])
 			continue
 		}
 
@@ -451,11 +453,11 @@ func rowMap(raw json.RawMessage) (map[string]any, error) {
 // metaFromRow достаёт из строки id, код и поля для сборки positions.
 func metaFromRow(idx int, m map[string]any, catalog map[string]CatalogProduct) *submitRowMeta {
 	meta := &submitRowMeta{idx: idx, m: m}
-	meta.id, _ = m["id"].(string)
+	meta.id = asString(m["id"])
 	if meta.id == "" {
 		return meta // строка без id (в кэше так не бывает) — не активна
 	}
-	meta.quantity, _ = m["quantity"].(float64)
+	meta.quantity = floatField(m["quantity"])
 	meta.reserve = floatField(m["reserve"])
 
 	if am, ok := m["assortment"].(map[string]any); ok {
@@ -473,14 +475,18 @@ func metaFromRow(idx int, m map[string]any, catalog map[string]CatalogProduct) *
 
 // floatField достаёт число из JSON-значения (null/отсутствие → 0).
 func floatField(v any) float64 {
-	f, _ := v.(float64)
-	return f
+	if f, ok := v.(float64); ok {
+		return f
+	}
+	return 0
 }
 
 // asString приводит JSON-значение к строке (не-строка → пусто).
 func asString(v any) string {
-	s, _ := v.(string)
-	return s
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return ""
 }
 
 // setQtyReserve правит quantity/reserve в сырой строке.
@@ -516,15 +522,4 @@ func buildPutBody(orderRaw json.RawMessage, positions []any) (json.RawMessage, e
 		return nil, fmt.Errorf("marshal order body: %w", err)
 	}
 	return out, nil
-}
-
-// sortLots упорядочивает лоты списания (стабильный порядок для тестов и
-// логов): по товару, затем по сроку.
-func sortLots(lots []stock.PickLotIn) {
-	sort.Slice(lots, func(i, j int) bool {
-		if lots[i].ProductID != lots[j].ProductID {
-			return lots[i].ProductID < lots[j].ProductID
-		}
-		return lots[i].BestBefore.Before(lots[j].BestBefore)
-	})
 }

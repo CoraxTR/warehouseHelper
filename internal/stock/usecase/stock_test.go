@@ -1200,7 +1200,7 @@ func TestPickStockDedupAndNormalize(t *testing.T) {
 		t.Fatalf("WarmUp: %v", err)
 	}
 
-	local := time.Date(2026, 9, 5, 12, 0, 0, 0, time.FixedZone("MSK", 3*3600))
+	local := time.Date(2026, time.September, 5, 12, 0, 0, 0, time.FixedZone("MSK", 3*3600))
 	if err := uc.PickStock(context.Background(), []stock.PickLotIn{
 		{ProductID: "p1", BestBefore: local, Qty: 1},
 		{ProductID: "p1", BestBefore: d(2026, 9, 5), Qty: 2},

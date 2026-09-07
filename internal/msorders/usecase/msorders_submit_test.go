@@ -64,13 +64,11 @@ func decodePutPositions(t *testing.T, raw json.RawMessage) []map[string]any {
 	return body.Positions
 }
 
-func rowQty(t *testing.T, rows []map[string]any, id string) (float64, float64) {
+func rowQty(t *testing.T, rows []map[string]any, id string) (qty float64, reserve float64) {
 	t.Helper()
 	for _, r := range rows {
 		if r["id"] == id {
-			q, _ := r["quantity"].(float64)
-			rs, _ := r["reserve"].(float64)
-			return q, rs
+			return floatField(r["quantity"]), floatField(r["reserve"])
 		}
 	}
 	t.Fatalf("строка %q не найдена в positions: %v", id, rows)
@@ -119,8 +117,7 @@ func TestSubmitPartialPiece(t *testing.T) {
 	for _, r := range rows {
 		if _, ok := r["id"]; !ok {
 			stubs++
-			q, _ := r["quantity"].(float64)
-			if q != 0.001 {
+			if q := floatField(r["quantity"]); q != 0.001 {
 				t.Errorf("заглушка qty = %v, want 0.001", q)
 			}
 		}
@@ -270,7 +267,7 @@ func TestSubmitUncoveredPieceSplit(t *testing.T) {
 	for _, r := range rows {
 		if _, ok := r["id"]; !ok {
 			stubs++
-			if q, _ := r["quantity"].(float64); q != 0.001 {
+			if q := floatField(r["quantity"]); q != 0.001 {
 				t.Errorf("заглушка qty = %v, want 0.001", q)
 			}
 		}
@@ -308,7 +305,7 @@ func TestSubmitValidation(t *testing.T) {
 				t.Errorf("Submit err = %v, want %v", err, tc.want)
 			}
 			if len(fake.putBody) != 0 {
-				t.Errorf("PUT выполнен при битом запросе")
+				t.Error("PUT выполнен при битом запросе")
 			}
 		})
 	}
@@ -328,7 +325,7 @@ func TestSubmitMissingPosition(t *testing.T) {
 		t.Errorf("Submit err = %v, want ErrSubmitRowMissing", err)
 	}
 	if len(fake.putBody) != 0 {
-		t.Errorf("PUT выполнен с чужой позицией")
+		t.Error("PUT выполнен с чужой позицией")
 	}
 }
 
@@ -348,7 +345,7 @@ func TestSubmitOverpick(t *testing.T) {
 		t.Errorf("Submit err = %v, want ErrSubmitOverpick", err)
 	}
 	if len(fake.putBody) != 0 {
-		t.Errorf("PUT выполнен при переборе")
+		t.Error("PUT выполнен при переборе")
 	}
 }
 

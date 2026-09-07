@@ -916,10 +916,9 @@ func normalizePickLots(lots []stock.PickLotIn) ([]stock.PickLotIn, error) {
 // applyPickCacheLocked применяет списание к кэшу и собирает события и группы
 // дефицитов. Вызывается только под mu.Lock. Дефицит считается по кэшу —
 // зеркалу БД (обе записи идут одним писателем, синхронно).
-func (uc *StockUseCase) applyPickCacheLocked(lots []stock.PickLotIn) ([]stock.Event, []string) {
-	events := make([]stock.Event, 0, len(lots))
+func (uc *StockUseCase) applyPickCacheLocked(lots []stock.PickLotIn) (events []stock.Event, deficitGroups []string) {
+	events = make([]stock.Event, 0, len(lots))
 	groupSeen := make(map[string]struct{})
-	var deficitGroups []string
 
 	for _, l := range lots {
 		cur, ok := uc.cache[l.ProductID]

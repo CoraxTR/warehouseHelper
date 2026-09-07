@@ -111,12 +111,12 @@ func (uc *UseCase) Detail(ctx context.Context, id string) (*Order, error) {
 		return nil, ErrEmptyOrderID
 	}
 
-	order, positions, entry, err := uc.fetchAndCache(ctx, id)
+	order, entry, err := uc.fetchAndCache(ctx, id)
 	if err != nil {
 		return nil, err
 	}
 
-	rows := buildItems(positions, entry.catalog)
+	rows := buildItems(entry.positions, entry.catalog)
 
 	agentName, agentPhone, _ := uc.ms.FetchOrderAgentByHREF(ctx, order)
 
@@ -136,31 +136,32 @@ func (uc *UseCase) Detail(ctx context.Context, id string) (*Order, error) {
 // fetchAndCache загружает заказ и позиции одним путём для Detail и Submit
 // (догрузка при промахе кэша отправки): типизированные данные для страницы
 // + сырьё (заказ, строки positions, каталог) в кэш отправки.
-func (uc *UseCase) fetchAndCache(ctx context.Context, id string) (*client.MSOrder, []client.MSPosition, *submitEntry, error) {
+func (uc *UseCase) fetchAndCache(ctx context.Context, id string) (*client.MSOrder, *submitEntry, error) {
 	order, orderRaw, err := uc.ms.FetchOrderByID(ctx, id)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("fetch order %s: %w", id, err)
+		return nil, nil, fmt.Errorf("fetch order %s: %w", id, err)
 	}
 
 	positions, rowsRaw, err := uc.ms.FetchOrderPositionsByHREF(ctx, order)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("fetch positions %s: %w", id, err)
+		return nil, nil, fmt.Errorf("fetch positions %s: %w", id, err)
 	}
 
 	catalog, err := uc.loadCatalog(ctx, positions)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
 
 	entry := &submitEntry{
-		orderRaw: orderRaw,
-		rowsRaw:  rowsRaw,
-		catalog:  catalog,
-		at:       time.Now(),
+		orderRaw:  orderRaw,
+		rowsRaw:   rowsRaw,
+		catalog:   catalog,
+		positions: positions,
+		at:        time.Now(),
 	}
 	uc.cache.store(id, entry)
 
-	return order, positions, entry, nil
+	return order, entry, nil
 }
 
 // buildItems резолвит позиции через каталог, сортирует и проставляет группы.
