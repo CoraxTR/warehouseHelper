@@ -17,7 +17,7 @@ func jpegOrientation(path string) int {
 	if err != nil {
 		return 1
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	r := bufio.NewReader(f)
 	if b, err := r.ReadByte(); err != nil || b != 0xFF {
@@ -56,8 +56,8 @@ func jpegOrientation(path string) int {
 	}
 }
 
-// nextMarker читает очередной маркер JPEG, пропуская fill-байты (не FF),
-// байты FF FF и встроенные FF 00. Возвращает код маркера без FF.
+// nextMarker читает очередной маркер JPEG, пропуская fill-байты, повторные
+// FF и встроенные FF 00. Возвращает код маркера без FF.
 func nextMarker(r *bufio.Reader) (byte, error) {
 	for {
 		b, err := r.ReadByte()
@@ -105,7 +105,7 @@ func tiffOrientation(t []byte) int {
 		return 1
 	}
 	count := int(order.Uint16(t[ifd0 : ifd0+2]))
-	for i := 0; i < count; i++ {
+	for i := range count {
 		// Запись IFD: tag(2) type(2) count(4) value(4).
 		e := ifd0 + 2 + i*12
 		if e+12 > len(t) {

@@ -19,19 +19,11 @@ import (
 	"time"
 )
 
-// realJPEG возвращает настоящий JPEG w x h (декодируется Go).
+// realJPEG возвращает настоящий JPEG w x h (декодируется Go). Изображение
+// чёрное — для тестов важны размеры и декодируемость, а не содержимое.
 func realJPEG(t *testing.T, w, h int) []byte {
 	t.Helper()
 	img := image.NewRGBA(image.Rect(0, 0, w, h))
-	for y := 0; y < h; y++ {
-		for x := 0; x < w; x++ {
-			i := y*img.Stride + x*4
-			img.Pix[i] = uint8((x*7 + y*13) % 256)
-			img.Pix[i+1] = uint8((x*5 + y*3) % 256)
-			img.Pix[i+2] = uint8((y*11 + x*17) % 256)
-			img.Pix[i+3] = 255
-		}
-	}
 	var buf bytes.Buffer
 	if err := jpeg.Encode(&buf, img, &jpeg.Options{Quality: 90}); err != nil {
 		t.Fatalf("jpeg encode: %v", err)
@@ -46,27 +38,32 @@ func withOrientation(t *testing.T, base []byte, orient uint16) []byte {
 	if len(base) < 2 || base[0] != 0xFF || base[1] != 0xD8 {
 		t.Fatal("ожидался JPEG с SOI")
 	}
-	var tiff bytes.Buffer
-	tiff.WriteString("II")
-	_ = binary.Write(&tiff, binary.LittleEndian, uint16(42))
-	_ = binary.Write(&tiff, binary.LittleEndian, uint32(8)) // IFD0 сразу после заголовка
-	_ = binary.Write(&tiff, binary.LittleEndian, uint16(1)) // одна запись
-	_ = binary.Write(&tiff, binary.LittleEndian, uint16(0x0112))
-	_ = binary.Write(&tiff, binary.LittleEndian, uint16(3)) // SHORT
-	_ = binary.Write(&tiff, binary.LittleEndian, uint32(1))
-	_ = binary.Write(&tiff, binary.LittleEndian, uint16(orient))
-	_ = binary.Write(&tiff, binary.LittleEndian, uint16(0)) // паддинг до 4 байт value
-	_ = binary.Write(&tiff, binary.LittleEndian, uint32(0)) // следующего IFD нет
+	// IFD0 из одной записи: заголовок TIFF (8) + счётчик записей (2) +
+	// запись (12) + указатель следующего IFD (4). Длины константны — длина
+	// сегмента APP1 собирается без int-конверсий (их метит gosec G115).
+	const tiffLen = 8 + 2 + 12 + 4
+	tiff := make([]byte, tiffLen)
+	tiff[0], tiff[1] = 'I', 'I'
+	binary.LittleEndian.PutUint16(tiff[2:4], 42)
+	binary.LittleEndian.PutUint32(tiff[4:8], 8) // IFD0 сразу после заголовка
+	binary.LittleEndian.PutUint16(tiff[8:10], 1)
+	binary.LittleEndian.PutUint16(tiff[10:12], 0x0112) // Orientation
+	binary.LittleEndian.PutUint16(tiff[12:14], 3)      // SHORT
+	binary.LittleEndian.PutUint32(tiff[14:18], 1)
+	binary.LittleEndian.PutUint16(tiff[18:20], orient)
 
-	payload := append([]byte("Exif\x00\x00"), tiff.Bytes()...)
-	var out bytes.Buffer
-	out.Write(base[:2]) // SOI
-	out.WriteByte(0xFF)
-	out.WriteByte(0xE1)
-	_ = binary.Write(&out, binary.BigEndian, uint16(len(payload)+2))
-	out.Write(payload)
-	out.Write(base[2:])
-	return out.Bytes()
+	// APP1: маркер FF E1 + длина сегмента (2 байта BE, включает себя и
+	// payload «Exif\0\0» + TIFF).
+	const exifHeader = 6 // «Exif\0\0»
+	seg := make([]byte, 0, 4+exifHeader+tiffLen)
+	seg = append(seg, 0xFF, 0xE1, 0x00, 0x00)
+	binary.BigEndian.PutUint16(seg[2:4], 2+exifHeader+tiffLen)
+	seg = append(seg, "Exif\x00\x00"...)
+	seg = append(seg, tiff...)
+
+	out := append([]byte{}, base[:2]...)
+	out = append(out, seg...)
+	return append(out, base[2:]...)
 }
 
 // jpegDims декодирует JPEG по пути и возвращает его размеры.
@@ -76,7 +73,7 @@ func jpegDims(t *testing.T, path string) (w, h int) {
 	if err != nil {
 		t.Fatalf("открытие %s: %v", path, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	img, err := jpeg.Decode(f)
 	if err != nil {
 		t.Fatalf("декодирование %s: %v", path, err)
@@ -85,23 +82,26 @@ func jpegDims(t *testing.T, path string) (w, h int) {
 	return b.Dx(), b.Dy()
 }
 
-// writeOriginal кладёт файл-оригинал <id>.<ext> в хранилище напрямую (без
+// writeOriginal кладёт файл-оригинал testID.<ext> в хранилище напрямую (без
 // Save — имитация фото, сохранённого до появления уменьшенных копий).
-func writeOriginal(t *testing.T, dir, id, ext string, data []byte) {
+func writeOriginal(t *testing.T, dir, ext string, data []byte) {
 	t.Helper()
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		t.Fatalf("MkdirAll(%s): %v", dir, err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, id+"."+ext), data, 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, testID+"."+ext), data, 0o600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 }
+
+// secondID — второй валидный id фото для тестов, где нужны две записи.
+const secondID = "fedcba9876543210"
 
 // TestMain глушит логи в тестах пакета: сгенерированные INFO-сообщения о
 // пропуске копий (фейковые jpg в старых тестах, HEIC) засоряют вывод.
 func TestMain(m *testing.M) {
 	slog.SetDefault(slog.New(slog.DiscardHandler))
-	os.Exit(m.Run())
+	m.Run()
 }
 
 func TestStoreSaveGeneratesPreviews(t *testing.T) {
@@ -144,12 +144,11 @@ func TestStoreSaveSkipsPreviewsWhenUndecodable(t *testing.T) {
 		t.Fatalf("Save HEIC error: %v", err)
 	}
 	// Фейковый jpg: магия есть, декодировать нечего.
-	id2 := "fedcba9876543210"
-	if err := s.Save(ctx, id2, "jpg", bytes.NewReader(jpgData("фото"))); err != nil {
+	if err := s.Save(ctx, secondID, "jpg", bytes.NewReader(jpgData("фото"))); err != nil {
 		t.Fatalf("Save fake jpg error: %v", err)
 	}
 
-	for _, id := range []string{testID, id2} {
+	for _, id := range []string{testID, secondID} {
 		for _, kind := range previewKindsOrder {
 			if _, err := os.Stat(PreviewPath(s.dir, kind, id)); !os.IsNotExist(err) {
 				t.Errorf("копия %s/%s не должна существовать (err=%v)", kind, id, err)
@@ -161,7 +160,7 @@ func TestStoreSaveSkipsPreviewsWhenUndecodable(t *testing.T) {
 func TestEnsurePreviewCreatesFromExistingOriginal(t *testing.T) {
 	root, s := newTestStore(t)
 
-	writeOriginal(t, filepath.Join(root, "QRCodes"), testID, "jpg", realJPEG(t, 640, 480))
+	writeOriginal(t, filepath.Join(root, "QRCodes"), "jpg", realJPEG(t, 640, 480))
 
 	path, err := EnsurePreview(context.Background(), s.dir, ThumbKind, testID)
 	if err != nil {
@@ -220,7 +219,7 @@ func TestEnsurePreviewErrors(t *testing.T) {
 	}
 
 	// Оригинал HEIC: копию не построить.
-	writeOriginal(t, filepath.Join(root, "QRCodes"), testID, "heic", heicData())
+	writeOriginal(t, filepath.Join(root, "QRCodes"), "heic", heicData())
 	if _, err := EnsurePreview(ctx, s.dir, ThumbKind, testID); !errors.Is(err, ErrPreviewUnsupported) {
 		t.Errorf("ошибка = %v, want ErrPreviewUnsupported", err)
 	}
@@ -231,7 +230,7 @@ func TestEnsurePreviewRespectsEXIFOrientation(t *testing.T) {
 
 	// Ориентация 6 (90° по часовой): 80x40 → 40x80; копия должна учесть поворот.
 	jpg := withOrientation(t, realJPEG(t, 80, 40), 6)
-	writeOriginal(t, filepath.Join(root, "QRCodes"), testID, "jpg", jpg)
+	writeOriginal(t, filepath.Join(root, "QRCodes"), "jpg", jpg)
 
 	path, err := EnsurePreview(context.Background(), s.dir, ThumbKind, testID)
 	if err != nil {
@@ -252,7 +251,7 @@ func TestDecodeOrientedFormats(t *testing.T) {
 	if err := png.Encode(&pngBuf, pngImg); err != nil {
 		t.Fatalf("png encode: %v", err)
 	}
-	writeOriginal(t, dir, testID, "png", pngBuf.Bytes())
+	writeOriginal(t, dir, "png", pngBuf.Bytes())
 	img, err := decodeOriented(filepath.Join(dir, testID+".png"), "png")
 	if err != nil {
 		t.Fatalf("decodeOriented png: %v", err)
@@ -263,8 +262,7 @@ func TestDecodeOrientedFormats(t *testing.T) {
 
 	// WebP: декодер x/image/webp (энкодера в тесте нет — ветка decodeOriented
 	// для webp тонкая, ошибки декодирования покрыты тестом ниже).
-	id2 := "fedcba9876543210"
-	if _, err := decodeOriented(filepath.Join(dir, id2+".jpg"), "webp"); err == nil {
+	if _, err := decodeOriented(filepath.Join(dir, secondID+".jpg"), "webp"); err == nil {
 		t.Error("ожидалась ошибка декодирования для несуществующего файла webp")
 	}
 
@@ -331,20 +329,19 @@ func TestRemoveAllDeletesPreviews(t *testing.T) {
 	}
 
 	// Удаление оригинала убирает и обе копии.
-	id2 := "fedcba9876543210"
-	if err := s.Save(ctx, id2, "jpg", bytes.NewReader(realJPEG(t, 300, 200))); err != nil {
+	if err := s.Save(ctx, secondID, "jpg", bytes.NewReader(realJPEG(t, 300, 200))); err != nil {
 		t.Fatalf("Save error: %v", err)
 	}
-	if err := s.RemoveAll(ctx, id2+".jpg"); err != nil {
+	if err := s.RemoveAll(ctx, secondID+".jpg"); err != nil {
 		t.Fatalf("RemoveAll(оригинал) error: %v", err)
 	}
 	for _, kind := range previewKindsOrder {
-		if _, err := os.Stat(PreviewPath(s.dir, kind, id2)); !os.IsNotExist(err) {
-			t.Errorf("копия %s/%s не удалена (err=%v)", kind, id2, err)
+		if _, err := os.Stat(PreviewPath(s.dir, kind, secondID)); !os.IsNotExist(err) {
+			t.Errorf("копия %s/%s не удалена (err=%v)", kind, secondID, err)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(root, "QRCodes", id2+".jpg")); !os.IsNotExist(err) {
-		t.Errorf("оригинал %s не удалён (err=%v)", id2, err)
+	if _, err := os.Stat(filepath.Join(root, "QRCodes", secondID+".jpg")); !os.IsNotExist(err) {
+		t.Errorf("оригинал %s не удалён (err=%v)", secondID, err)
 	}
 }
 

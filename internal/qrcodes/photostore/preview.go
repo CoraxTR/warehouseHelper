@@ -75,10 +75,10 @@ func PreviewPath(dir, kind, id string) string {
 	return filepath.Join(dir, kind, id+".jpg")
 }
 
-// Original возвращает путь к файлу-оригиналу фото и его расширение:
-// <dir>/<id>.<ext> новой схемы или <dir>/<id>/photo.<ext> старой. Ошибка —
-// оригинал не найден.
-func Original(dir, id string) (string, string, error) {
+// Original возвращает путь к файлу-оригиналу фото и его расширение: файл
+// QRCodes/<id>.<ext> новой схемы или QRCodes/<id>/photo.<ext> старой (для
+// фото, сохранённых до перехода на плоские файлы).
+func Original(dir, id string) (origPath, ext string, err error) {
 	if !idRe.MatchString(id) {
 		return "", "", fmt.Errorf("photostore: недопустимый id фото %q", id)
 	}
@@ -166,7 +166,7 @@ func decodeOriented(path, ext string) (image.Image, error) {
 	if err != nil {
 		return nil, fmt.Errorf("photostore: открытие фото %s: %w", path, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	var img image.Image
 	switch ext {
@@ -227,8 +227,8 @@ func rotate(src *image.RGBA, dstW, dstH int, srcFn func(x, y int) (int, int)) *i
 	dst := image.NewRGBA(image.Rect(0, 0, dstW, dstH))
 	s, d := src.Pix, dst.Pix
 	ss, ds := src.Stride, dst.Stride
-	for y := 0; y < dstH; y++ {
-		for x := 0; x < dstW; x++ {
+	for y := range dstH {
+		for x := range dstW {
 			sx, sy := srcFn(x, y)
 			i := sy*ss + sx*4
 			j := y*ds + x*4
@@ -247,10 +247,7 @@ func writePreview(ctx context.Context, src image.Image, path, kind string) error
 	}
 	b := src.Bounds()
 	w, h := b.Dx(), b.Dy()
-	long := w
-	if h > long {
-		long = h
-	}
+	long := max(w, h)
 	nw, nh := w, h
 	if long > s.maxSide {
 		k := float64(s.maxSide) / float64(long)
