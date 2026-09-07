@@ -65,6 +65,8 @@
         </tbody>
     </table>
     <p id="order-status" class="hint"></p>
+    <p id="submit-status" class="hint"></p>
+    <button type="button" id="submit-btn" class="resync-btn">Отправить в МС</button>
     <p><a class="back" href="/ms/orders/pick">← К поиску заказов</a></p>
     {{end}}
 
@@ -356,6 +358,102 @@
                 cell.appendChild(doneBadge);
                 markDone(first);
             }
+
+            // ---- Отправить в МС: набранные строки уходят на сервер, он
+            // пересобирает positions заказа из своего кэша и PUT-ит заказ.
+            // Клиент шлёт только покрытые строки (records>0): смёрженная
+            // группа — одним элементом с id всех её строк (первая — живая),
+            // остальные строки сервер заглушает сам (0,001/0,0001).
+            var submitBtn = document.getElementById('submit-btn');
+            var submitStatus = document.getElementById('submit-status');
+            var orderId = location.pathname.split('/').pop();
+            var submitting = false;
+
+            function collectSubmitRows() {
+                var out = [];
+                for (var i = 0; i < rows.length; i++) {
+                    var r = rows[i];
+                    if (r.merged || r.records.length === 0) { continue; }
+                    var ids = [r.tr.getAttribute('data-id')];
+                    if (r.group !== 0) {
+                        // смёрженные хвосты группы ушли в первую строку — их id
+                        // тоже покрыты (сервер выведет их из positions)
+                        for (var j = 0; j < rows.length; j++) {
+                            var s = rows[j];
+                            if (s !== r && s.group === r.group && s.merged) {
+                                ids.push(s.tr.getAttribute('data-id'));
+                            }
+                        }
+                    }
+                    var recs = [];
+                    for (var k = 0; k < r.records.length; k++) {
+                        recs.push({ w: r.records[k].w, bb: r.records[k].bb });
+                    }
+                    out.push({ ids: ids, records: recs });
+                }
+                return out;
+            }
+
+            function releaseSubmit() {
+                submitting = false;
+                submitBtn.disabled = false;
+                submitBtn.textContent = 'Отправить в МС';
+            }
+
+            function doSubmit() {
+                if (submitting) { return; }
+                var payload = collectSubmitRows();
+                if (payload.length === 0) {
+                    setStatus('Нет набранных позиций — отсканируйте хотя бы одну');
+                    return;
+                }
+
+                submitting = true;
+                submitBtn.disabled = true;
+                submitBtn.textContent = 'Отправка…';
+                submitStatus.textContent = '';
+
+                var xhr = new XMLHttpRequest();
+                xhr.open('POST', '/ms/orders/' + orderId + '/submit', true);
+                xhr.setRequestHeader('Content-Type', 'application/json');
+                xhr.timeout = 120000; // PUT в МС через воркерпул может идти долго
+
+                xhr.onreadystatechange = function () {
+                    if (xhr.readyState !== 4) { return; }
+                    if (xhr.status === 200) {
+                        var warn = '';
+                        try {
+                            var res = JSON.parse(xhr.responseText);
+                            warn = res && res.stock_warn ? res.stock_warn : '';
+                        } catch (e) { /* нет тела — обычный успех */ }
+                        if (warn) {
+                            // заказ в МС обновлён, но списание сроков не прошло —
+                            // повторная отправка невозможна; показать и вернуть
+                            submitStatus.textContent = 'Заказ отправлен в МС. ' + warn;
+                            setTimeout(function () { location.href = '/ms/orders/pick'; }, 5000);
+                            return;
+                        }
+                        location.href = '/ms/orders/pick';
+                        return;
+                    }
+                    // 400/502/500: http.Error отдаёт текст ошибки plain/text —
+                    // показываем под кнопкой, сканы в строках живы (повтор без
+                    // пересканирования), F5 сбрасывает страницу целиком
+                    submitStatus.textContent = xhr.responseText || 'Не удалось отправить заказ';
+                    releaseSubmit();
+                };
+                xhr.onerror = function () {
+                    submitStatus.textContent = 'Сервер недоступен — попробуйте ещё раз';
+                    releaseSubmit();
+                };
+                xhr.ontimeout = function () {
+                    submitStatus.textContent = 'МойСклад не ответил вовремя — попробуйте ещё раз';
+                    releaseSubmit();
+                };
+                xhr.send(JSON.stringify({ rows: payload }));
+            }
+
+            submitBtn.addEventListener('click', doSubmit);
 
             // автофокус на первую активную строку
             for (var a = 0; a < rows.length; a++) {

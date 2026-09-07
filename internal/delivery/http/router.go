@@ -60,6 +60,9 @@ func NewRouter(h *Handler) *http.ServeMux {
 	mux.HandleFunc("POST /ms/orders/pick", h.MSOrdersPickSearch) // подбор: запуск поиска (PRG → GET ?name=)
 	// Детальная страница заказа (литерал /ms/orders/pick специфичнее {id} — конфликта нет).
 	mux.HandleFunc("GET /ms/orders/{id}", h.MSOrderDetailPage)
+	// Отправка подбора в МС (итерация 3): сервер пересобирает positions из кэша
+	// страницы и PUT-ит заказ; 200 — смена локации на /ms/orders/pick на клиенте.
+	mux.HandleFunc("POST /ms/orders/{id}/submit", h.MSOrderSubmit)
 
 	// Модуль «Жалобы»: обращения клиентов с фото и статусами.
 	mux.HandleFunc("GET /complaints", h.ComplaintsPage)                    // активные обращения (статус != «Завершено»)

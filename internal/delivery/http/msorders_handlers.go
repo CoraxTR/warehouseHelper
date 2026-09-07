@@ -4,6 +4,8 @@
 package http
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
 	"net/http"
@@ -11,6 +13,7 @@ import (
 	"strings"
 
 	"log/slog"
+	"warehouseHelper/internal/msclient/client"
 	msordersuc "warehouseHelper/internal/msorders/usecase"
 )
 
@@ -87,6 +90,69 @@ func (h *Handler) renderOrderPick(w http.ResponseWriter, d *OrderPickData) {
 	if err := msOrdersPickTmpl.Execute(w, d); err != nil {
 		slog.Info(fmt.Sprintf("ms_orders_pick template: %v", err))
 	}
+}
+
+// MSOrderSubmit — POST /ms/orders/{id}/submit: отправка подбора в МС.
+// Тело — JSON msordersuc.SubmitRequest (только набранные сканы; сервер
+// пересобирает positions из кэша страницы). 200 — заказ обновлён
+// (stock_warn — если списание сроков не прошло и нужен ручной пересчёт);
+// 400 — ошибка валидации (текст под кнопкой); 502 — МС не принял заказ
+// (текст его errors); 500 — внутренняя ошибка. Конвенция проекта: клиенту —
+// общее/существенное сообщение, детали в лог.
+func (h *Handler) MSOrderSubmit(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" {
+		http.Error(w, "не указан id заказа", http.StatusBadRequest)
+		return
+	}
+
+	var req msordersuc.SubmitRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "не удалось разобрать запрос", http.StatusBadRequest)
+		return
+	}
+
+	res, err := h.msOrdersUC.Submit(r.Context(), id, req)
+	if err != nil {
+		slog.Info(fmt.Sprintf("ms order submit %q: %v", id, err))
+		var apiErr *client.MSAPIError
+		switch {
+		case isSubmitValidationErr(err):
+			http.Error(w, err.Error(), http.StatusBadRequest)
+		case errors.As(err, &apiErr):
+			http.Error(w, "МойСклад не принял заказ: "+apiErr.Error(), http.StatusBadGateway)
+		default:
+			http.Error(w, "не удалось отправить заказ в МойСклад", http.StatusInternalServerError)
+		}
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(res); err != nil {
+		slog.Info(fmt.Sprintf("ms order submit %q: encode: %v", id, err))
+	}
+}
+
+// isSubmitValidationErr отличает ошибки валидации submit (400) от ошибок
+// клиента МС (502) и внутренних (500).
+func isSubmitValidationErr(err error) bool {
+	for _, e := range []error{
+		msordersuc.ErrEmptyOrderID,
+		msordersuc.ErrSubmitEmptyRows,
+		msordersuc.ErrSubmitBadRow,
+		msordersuc.ErrSubmitNoRecords,
+		msordersuc.ErrSubmitDuplicateID,
+		msordersuc.ErrSubmitRowMissing,
+		msordersuc.ErrSubmitRowUnavailable,
+		msordersuc.ErrSubmitBadBB,
+		msordersuc.ErrSubmitBadWeight,
+		msordersuc.ErrSubmitOverpick,
+	} {
+		if errors.Is(err, e) {
+			return true
+		}
+	}
+	return false
 }
 
 // MSOrderDetailPage — GET /ms/orders/{id}: детальная страница заказа
