@@ -39,10 +39,10 @@ func withOrientation(t *testing.T, base []byte, orient uint16) []byte {
 		t.Fatal("ожидался JPEG с SOI")
 	}
 	// IFD0 из одной записи: заголовок TIFF (8) + счётчик записей (2) +
-	// запись (12) + указатель следующего IFD (4). Длины константны — длина
-	// сегмента APP1 собирается без int-конверсий (их метит gosec G115).
-	const tiffLen = 8 + 2 + 12 + 4
-	tiff := make([]byte, tiffLen)
+	// запись (12) + указатель следующего IFD (4) = 26 байт. Длина сегмента
+	// APP1 (2 + «Exif\0\0» + 26) собирается без int-конверсий (их метит
+	// gosec G115), а литерал длины в make — чтобы gosec видел границы слайса.
+	tiff := make([]byte, 26)
 	tiff[0], tiff[1] = 'I', 'I'
 	binary.LittleEndian.PutUint16(tiff[2:4], 42)
 	binary.LittleEndian.PutUint32(tiff[4:8], 8) // IFD0 сразу после заголовка
@@ -55,9 +55,9 @@ func withOrientation(t *testing.T, base []byte, orient uint16) []byte {
 	// APP1: маркер FF E1 + длина сегмента (2 байта BE, включает себя и
 	// payload «Exif\0\0» + TIFF).
 	const exifHeader = 6 // «Exif\0\0»
-	seg := make([]byte, 0, 4+exifHeader+tiffLen)
+	seg := make([]byte, 0, 4+exifHeader+26)
 	seg = append(seg, 0xFF, 0xE1, 0x00, 0x00)
-	binary.BigEndian.PutUint16(seg[2:4], 2+exifHeader+tiffLen)
+	binary.BigEndian.PutUint16(seg[2:4], 2+exifHeader+26)
 	seg = append(seg, "Exif\x00\x00"...)
 	seg = append(seg, tiff...)
 
