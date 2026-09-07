@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -9,7 +10,8 @@ import (
 	"warehouseHelper/internal/msclient/client"
 )
 
-// fakeOrderDetail — фейк OrderClient для Detail: заказ, позиции, агент-хоп.
+// fakeOrderDetail — фейк OrderClient для Detail/Submit: заказ, позиции,
+// агент-хоп, сырьё (эхо для PUT) и перехват PUT.
 type fakeOrderDetail struct {
 	order          *client.MSOrder
 	positions      []client.MSPosition
@@ -19,6 +21,10 @@ type fakeOrderDetail struct {
 	agentPhone     string
 	agentErr       error
 	fetchByIDCalls int
+	orderRaw       json.RawMessage   // сырое тело GET заказа (nil — из order)
+	rowsRaw        []json.RawMessage // сырые строки positions (nil — из positions)
+	putBody        []json.RawMessage // тела PUT (UpdateCustomerOrder)
+	putErr         error
 }
 
 func (f *fakeOrderDetail) SearchCustomerOrdersByName(context.Context, string) ([]client.MSOrder, error) {
@@ -29,19 +35,59 @@ func (f *fakeOrderDetail) FetchOrderAgentByHREF(_ context.Context, _ *client.MSO
 	return f.agentName, f.agentPhone, f.agentErr
 }
 
-func (f *fakeOrderDetail) FetchOrderByID(_ context.Context, _ string) (*client.MSOrder, error) {
+func (f *fakeOrderDetail) FetchOrderByID(_ context.Context, _ string) (*client.MSOrder, json.RawMessage, error) {
 	f.fetchByIDCalls++
 	if f.orderErr != nil {
-		return nil, f.orderErr
+		return nil, nil, f.orderErr
 	}
-	return f.order, nil
+	raw, err := f.rawOrder()
+	if err != nil {
+		return nil, nil, err
+	}
+	return f.order, raw, nil
 }
 
-func (f *fakeOrderDetail) FetchOrderPositionsByHREF(_ context.Context, _ *client.MSOrder) ([]client.MSPosition, error) {
+func (f *fakeOrderDetail) FetchOrderPositionsByHREF(_ context.Context, _ *client.MSOrder) ([]client.MSPosition, []json.RawMessage, error) {
 	if f.positionsErr != nil {
-		return nil, f.positionsErr
+		return nil, nil, f.positionsErr
 	}
-	return f.positions, nil
+	raw, err := f.rawRows()
+	if err != nil {
+		return nil, nil, err
+	}
+	return f.positions, raw, nil
+}
+
+func (f *fakeOrderDetail) UpdateCustomerOrder(_ context.Context, _ string, body json.RawMessage) error {
+	if f.putErr != nil {
+		return f.putErr
+	}
+	f.putBody = append(f.putBody, body)
+	return nil
+}
+
+// rawOrder — сырое тело GET заказа (явное или из модели).
+func (f *fakeOrderDetail) rawOrder() (json.RawMessage, error) {
+	if f.orderRaw != nil {
+		return f.orderRaw, nil
+	}
+	return json.Marshal(f.order)
+}
+
+// rawRows — сырые строки positions (явные или из моделей позиций).
+func (f *fakeOrderDetail) rawRows() ([]json.RawMessage, error) {
+	if f.rowsRaw != nil {
+		return f.rowsRaw, nil
+	}
+	out := make([]json.RawMessage, 0, len(f.positions))
+	for i := range f.positions {
+		b, err := json.Marshal(&f.positions[i])
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, b)
+	}
+	return out, nil
 }
 
 // fakeCatalog — фейк CatalogReader.
@@ -88,7 +134,7 @@ func position(id, code, name string, qty, price, reserve float64) client.MSPosit
 
 func TestDetailHeader(t *testing.T) {
 	fake := &fakeOrderDetail{order: detailOrder(), agentName: "ООО Ромашка", agentPhone: "+7 900 123-45-67"}
-	uc := NewUseCase(fake, &fakeCatalog{})
+	uc := NewUseCase(fake, &fakeCatalog{}, &fakePicker{})
 
 	o, err := uc.Detail(context.Background(), detailOrder().ID)
 	if err != nil {
@@ -119,7 +165,7 @@ func TestDetailAddressFallbackToShipmentAddress(t *testing.T) {
 	order := detailOrder()
 	order.ShipmentAddressFull = client.MSAddressFull{} // полный адрес пуст
 	fake := &fakeOrderDetail{order: order}
-	uc := NewUseCase(fake, &fakeCatalog{})
+	uc := NewUseCase(fake, &fakeCatalog{}, &fakePicker{})
 
 	o, err := uc.Detail(context.Background(), order.ID)
 	if err != nil {
@@ -142,7 +188,7 @@ func TestDetailRowsSortingGroupsAndFormatting(t *testing.T) {
 		"00220002": {InternalCode: "00220002", Weighted: true},
 		"00210006": {InternalCode: "00210006", Weighted: true},
 	}}
-	uc := NewUseCase(&fakeOrderDetail{order: detailOrder(), positions: positions}, catalog)
+	uc := NewUseCase(&fakeOrderDetail{order: detailOrder(), positions: positions}, catalog, &fakePicker{})
 
 	o, err := uc.Detail(context.Background(), "id")
 	if err != nil {
@@ -202,7 +248,7 @@ func TestDetailRowFormatting(t *testing.T) {
 	catalog := &fakeCatalog{byCode: map[string]CatalogProduct{
 		"00220002": {InternalCode: "00220002", Weighted: true},
 	}}
-	uc := NewUseCase(&fakeOrderDetail{order: detailOrder(), positions: positions}, catalog)
+	uc := NewUseCase(&fakeOrderDetail{order: detailOrder(), positions: positions}, catalog, &fakePicker{})
 
 	o, err := uc.Detail(context.Background(), "id")
 	if err != nil {
@@ -230,7 +276,7 @@ func TestDetailRowFormatting(t *testing.T) {
 func TestDetailResolveRequiresCatalog(t *testing.T) {
 	positions := []client.MSPosition{position("p1", "00220002", "Стейк", 0.367, 279000, 0)}
 	catalog := &fakeCatalog{err: errors.New("db down")}
-	uc := NewUseCase(&fakeOrderDetail{order: detailOrder(), positions: positions}, catalog)
+	uc := NewUseCase(&fakeOrderDetail{order: detailOrder(), positions: positions}, catalog, &fakePicker{})
 
 	if _, err := uc.Detail(context.Background(), "id"); err == nil {
 		t.Fatal("Detail() error = nil, want ошибку каталога (нельзя показать строки без резолва)")
@@ -239,7 +285,7 @@ func TestDetailResolveRequiresCatalog(t *testing.T) {
 
 func TestDetailPositionsError(t *testing.T) {
 	fake := &fakeOrderDetail{order: detailOrder(), positionsErr: errors.New("network")}
-	uc := NewUseCase(fake, &fakeCatalog{})
+	uc := NewUseCase(fake, &fakeCatalog{}, &fakePicker{})
 
 	if _, err := uc.Detail(context.Background(), "id"); err == nil {
 		t.Fatal("Detail() error = nil, want ошибку клиента по позициям")
@@ -247,7 +293,7 @@ func TestDetailPositionsError(t *testing.T) {
 }
 
 func TestDetailEmptyID(t *testing.T) {
-	uc := NewUseCase(&fakeOrderDetail{}, &fakeCatalog{})
+	uc := NewUseCase(&fakeOrderDetail{}, &fakeCatalog{}, &fakePicker{})
 
 	if _, err := uc.Detail(context.Background(), "   "); !errors.Is(err, ErrEmptyOrderID) {
 		t.Fatalf("Detail(' ') error = %v, want ErrEmptyOrderID", err)
@@ -256,7 +302,7 @@ func TestDetailEmptyID(t *testing.T) {
 
 func TestDetailAgentHopErrorKeepsDash(t *testing.T) {
 	fake := &fakeOrderDetail{order: detailOrder(), agentErr: errors.New("network")}
-	uc := NewUseCase(fake, &fakeCatalog{})
+	uc := NewUseCase(fake, &fakeCatalog{}, &fakePicker{})
 
 	o, err := uc.Detail(context.Background(), "id")
 	if err != nil {
