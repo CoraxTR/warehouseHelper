@@ -43,7 +43,8 @@ func withOrientation(t *testing.T, base []byte, orient uint16) []byte {
 	// APP1 (2 + «Exif\0\0» + 26) собирается без int-конверсий (их метит
 	// gosec G115), а литерал длины в make — чтобы gosec видел границы слайса.
 	tiff := make([]byte, 26)
-	tiff[0], tiff[1] = 'I', 'I'
+	tiff[0] = 'I'
+	tiff[1] = 'I'
 	binary.LittleEndian.PutUint16(tiff[2:4], 42)
 	binary.LittleEndian.PutUint32(tiff[4:8], 8) // IFD0 сразу после заголовка
 	binary.LittleEndian.PutUint16(tiff[8:10], 1)
