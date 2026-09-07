@@ -102,12 +102,85 @@ func (msac *MSAPIClient) FetchOrderAgentByHREF(parentCtx context.Context, o *MSO
 	}
 }
 
+// FetchOrderByID — лёгкий фетч заказа по id: только поля верхнего уровня
+// (name, description, даты, адрес, shipmentAddressFull) + meta-ссылки agent
+// и positions для последующих хопов. Без enrichOrder — агент и позиции
+// тянутся отдельными запросами по href.
+func (msac *MSAPIClient) FetchOrderByID(parentctx context.Context, id string) (*MSOrder, error) {
+	job := func(apiKey string) (any, error) {
+		ctx, cancel := context.WithTimeout(parentctx, 300*time.Second)
+		defer cancel()
+
+		endpoint, err := msac.entityEndpoint("customerorder", id)
+		if err != nil {
+			return nil, err
+		}
+
+		body, resp, err := msac.httpRequest(ctx, http.MethodGet, endpoint, apiKey, http.NoBody)
+		if err != nil {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			default:
+				return nil, err
+			}
+		}
+
+		defer func() {
+			err = resp.Body.Close()
+			if err != nil {
+				slog.Error(fmt.Sprintf("failed to close response body: %v", err))
+			}
+		}()
+
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("API returned %s: %s", resp.Status, string(body))
+		}
+
+		var order MSOrder
+		if err := json.Unmarshal(body, &order); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal order: %w", err)
+		}
+
+		return &order, nil
+	}
+
+	resCh := msac.workerpool.SubmitOther(job)
+
+	select {
+	case res := <-resCh:
+		if res.Err != nil {
+			return nil, fmt.Errorf("FetchOrderByID failed: %w", res.Err)
+		}
+
+		order, ok := res.Value.(*MSOrder)
+		if !ok {
+			return nil, errors.New("FetchOrderByID failed: unexpected value type")
+		}
+
+		return order, nil
+	case <-parentctx.Done():
+		return nil, parentctx.Err()
+	}
+}
+
+// FetchOrderPositionsByHREF — позиции заказа с expand=assortment: имя и
+// внутренний код (assortment.code) приезжают прямо в строке, хопы на каждую
+// позицию не нужны. Ход проверен контрольным запросом на живом API.
 func (msac *MSAPIClient) FetchOrderPositionsByHREF(parentCtx context.Context, o *MSOrder) ([]MSPosition, error) {
 	job := func(apiKey string) (any, error) {
 		ctx, cancel := context.WithTimeout(parentCtx, 300*time.Second)
 		defer cancel()
 
-		body, resp, err := msac.httpRequest(ctx, http.MethodGet, o.MSPositions.Meta.HREF, apiKey, nil)
+		positionsURL := o.MSPositions.Meta.HREF
+		if u, err := url.Parse(positionsURL); err == nil {
+			q := u.Query()
+			q.Set("expand", "assortment")
+			u.RawQuery = q.Encode()
+			positionsURL = u.String()
+		}
+
+		body, resp, err := msac.httpRequest(ctx, http.MethodGet, positionsURL, apiKey, nil)
 		if err != nil {
 			select {
 			case <-ctx.Done():
