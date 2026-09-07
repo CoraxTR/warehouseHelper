@@ -259,3 +259,46 @@ func (pg *PGClient) AcceptStockLots(ctx context.Context, lots []stock.LotIn) err
 
 	return nil
 }
+
+// PickStockLots списывает подобранные под заказ единицы в одной транзакции:
+// qty -= n; лот, списанный до нуля, удаляется (строк с qty 0 не остаётся —
+// «нет остатка» = нет строки). Лот, отсутствующий в БД, пропускается —
+// дефицит посчитает usecase по кэшу и уведомит склад.
+func (pg *PGClient) PickStockLots(ctx context.Context, lots []stock.PickLotIn) error {
+	tx, err := pg.Pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("pick stock begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }() // после Commit — no-op
+
+	for _, l := range lots {
+		var newQty int64
+		err := tx.QueryRow(ctx, `
+            UPDATE product_stock SET qty = GREATEST(qty - $3, 0)
+            WHERE product_id = $1 AND best_before = $2
+            RETURNING qty`,
+			l.ProductID, l.BestBefore, l.Qty,
+		).Scan(&newQty)
+		if errors.Is(err, pgx.ErrNoRows) {
+			continue // лота нет в остатках — дефицит целиком (посчитает usecase)
+		}
+		if err != nil {
+			return fmt.Errorf("pick stock update (%s, %s): %w", l.ProductID, l.BestBefore.Format(time.DateOnly), err)
+		}
+		if newQty <= 0 {
+			if _, err := tx.Exec(ctx, `
+                DELETE FROM product_stock
+                WHERE product_id = $1 AND best_before = $2`,
+				l.ProductID, l.BestBefore,
+			); err != nil {
+				return fmt.Errorf("pick stock delete (%s, %s): %w", l.ProductID, l.BestBefore.Format(time.DateOnly), err)
+			}
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("pick stock commit: %w", err)
+	}
+
+	return nil
+}

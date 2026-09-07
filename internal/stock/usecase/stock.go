@@ -49,6 +49,10 @@ type Repository interface {
 	// AcceptStockLots добавляет принятые лоты в одной транзакции: upsert
 	// с qty += (существующий срок увеличивается), produced_on — COALESCE.
 	AcceptStockLots(ctx context.Context, lots []stock.LotIn) error
+	// PickStockLots списывает подобранные единицы в одной транзакции:
+	// qty -= n (не ниже 0), лот, списанный до нуля, удаляется; лот без
+	// строки в БД пропускается (дефицит считает usecase по кэшу).
+	PickStockLots(ctx context.Context, lots []stock.PickLotIn) error
 }
 
 // Publisher — получатель событий об изменениях остатков (вебсокет-хаб).
@@ -68,6 +72,12 @@ type DayStateRecorder interface {
 	OnStockChanged(ctx context.Context, productID string) error
 }
 
+// WarehouseNotifier — уведомления в чат склада (Telegram) о дефицитах
+// списания: остаток по сроку закончился раньше подобранных единиц.
+type WarehouseNotifier interface {
+	NotifyWarehouse(text string) error
+}
+
 // maxDiscount — верхняя граница скидки в процентах (CHECK в БД дублирует).
 const maxDiscount = 100
 
@@ -77,6 +87,7 @@ type StockUseCase struct {
 	repo     Repository
 	pub      Publisher
 	dayState DayStateRecorder
+	notifier WarehouseNotifier
 
 	mu     sync.RWMutex
 	cache  map[string]*stock.Product // product_id → товар каталога (Lots — по возрастанию best_before, может быть пустым)
@@ -84,9 +95,10 @@ type StockUseCase struct {
 }
 
 // NewStockUseCase создаёт сценарий с хранилищем и публикатором (хаб может
-// быть nil); dayState — наблюдатель состояния по дням (может быть nil).
-func NewStockUseCase(repo Repository, pub Publisher, dayState DayStateRecorder) *StockUseCase {
-	return &StockUseCase{repo: repo, pub: pub, dayState: dayState}
+// быть nil); dayState — наблюдатель состояния по дням, notifier — уведомления
+// в чат склада (оба могут быть nil — тесты/выключенные каналы).
+func NewStockUseCase(repo Repository, pub Publisher, dayState DayStateRecorder, notifier WarehouseNotifier) *StockUseCase {
+	return &StockUseCase{repo: repo, pub: pub, dayState: dayState, notifier: notifier}
 }
 
 // notifyDayState уведомляет daystate об изменении остатков товаров (без
@@ -819,4 +831,157 @@ func (uc *StockUseCase) applyAcceptCacheLocked(lots []stock.LotIn, byID map[stri
 		})
 	}
 	return events, nil
+}
+
+// PickStock — адаптер модуля подбора заказов (msorders): списание подобранных
+// единиц по срокам годности. qty вычитается из лота (product_id, best_before),
+// остаток не уходит в минус; лот, списанный до нуля, удаляется (событие
+// lot_delete). Лот с остатком меньше запрошенного — дефицит: списывается до
+// нуля, складу уходит «Необходимо обновить сроки по {group_name}» (одно
+// сообщение на группу). Запись синхронна: БД → кэш → события ws.
+func (uc *StockUseCase) PickStock(ctx context.Context, lots []stock.PickLotIn) error {
+	done := metrics.Track(trackPkg, "PickStock")
+	defer done()
+
+	lots, err := normalizePickLots(lots)
+	if err != nil {
+		return err
+	}
+
+	if err := uc.repo.PickStockLots(ctx, lots); err != nil {
+		return fmt.Errorf("pick stock lots: %w", err)
+	}
+
+	uc.mu.Lock()
+	events, deficitGroups := uc.applyPickCacheLocked(lots)
+	uc.mu.Unlock()
+
+	if uc.pub != nil {
+		for _, e := range events {
+			uc.pub.PublishStockChange(e)
+		}
+	}
+
+	ids := make([]string, 0, len(lots))
+	for _, l := range lots {
+		ids = append(ids, l.ProductID)
+	}
+	uc.notifyDayState(ctx, ids...)
+
+	if len(deficitGroups) > 0 && uc.notifier != nil {
+		for _, g := range deficitGroups {
+			text := "Необходимо обновить сроки по " + g
+			if err := uc.notifier.NotifyWarehouse(text); err != nil {
+				slog.Info(fmt.Sprintf("stock: notify warehouse %q: %v", text, err))
+			}
+		}
+	}
+
+	return nil
+}
+
+// normalizePickLots валидирует списание и нормализует даты к UTC-полуночи
+// (питфолл зон — см. stock-update-scan); дубликаты (товар, срок) суммируются.
+func normalizePickLots(lots []stock.PickLotIn) ([]stock.PickLotIn, error) {
+	if len(lots) == 0 {
+		return nil, errors.New("нет списываемых позиций")
+	}
+
+	byKey := make(map[string]int, len(lots)) // key → индекс в out
+	out := make([]stock.PickLotIn, 0, len(lots))
+
+	for _, l := range lots {
+		if strings.TrimSpace(l.ProductID) == "" {
+			return nil, errors.New("не указан товар")
+		}
+		if l.Qty <= 0 {
+			return nil, fmt.Errorf("товар %s: количество должно быть больше нуля", l.ProductID)
+		}
+		if l.BestBefore.IsZero() {
+			return nil, fmt.Errorf("товар %s: не указан срок годности", l.ProductID)
+		}
+		bb := normalizeDate(l.BestBefore)
+		key := l.ProductID + "|" + bb.Format(time.DateOnly)
+		if idx, ok := byKey[key]; ok {
+			out[idx].Qty += l.Qty
+			continue
+		}
+		byKey[key] = len(out)
+		out = append(out, stock.PickLotIn{ProductID: l.ProductID, BestBefore: bb, Qty: l.Qty})
+	}
+
+	return out, nil
+}
+
+// applyPickCacheLocked применяет списание к кэшу и собирает события и группы
+// дефицитов. Вызывается только под mu.Lock. Дефицит считается по кэшу —
+// зеркалу БД (обе записи идут одним писателем, синхронно).
+func (uc *StockUseCase) applyPickCacheLocked(lots []stock.PickLotIn) ([]stock.Event, []string) {
+	events := make([]stock.Event, 0, len(lots))
+	groupSeen := make(map[string]struct{})
+	var deficitGroups []string
+
+	for _, l := range lots {
+		cur, ok := uc.cache[l.ProductID]
+		if !ok {
+			// товар вне кэша (не в каталоге остатков) — списать нечего; имени
+			// группы нет, уведомление по товару пропускаем
+			slog.Info(fmt.Sprintf("stock: pick deficit outside cache: %s %s", l.ProductID, l.BestBefore.Format(time.DateOnly)))
+			continue
+		}
+
+		idx := -1
+		for j := range cur.Lots {
+			if cur.Lots[j].BestBefore.Equal(l.BestBefore) {
+				idx = j
+				break
+			}
+		}
+		if idx < 0 {
+			addDeficitGroup(cur, &deficitGroups, groupSeen)
+			continue
+		}
+
+		lot := cur.Lots[idx]
+		if l.Qty > lot.Qty {
+			addDeficitGroup(cur, &deficitGroups, groupSeen)
+		}
+
+		if l.Qty >= lot.Qty {
+			// списан до нуля — лот удаляется (событие lot_delete)
+			cur.Lots = append(cur.Lots[:idx], cur.Lots[idx+1:]...)
+			if len(cur.Lots) == 0 {
+				cur.Lots = []stock.Lot{} // клиент итерирует — не null
+			}
+			events = append(events, stock.Event{
+				Kind:       stock.EventLotDelete,
+				ProductID:  l.ProductID,
+				BestBefore: lot.BestBefore,
+			})
+			continue
+		}
+
+		cur.Lots[idx].Qty = lot.Qty - l.Qty
+		updated := cur.Lots[idx]
+		events = append(events, stock.Event{
+			Kind:       stock.EventLotUpsert,
+			ProductID:  l.ProductID,
+			BestBefore: updated.BestBefore,
+			Lot:        &updated,
+		})
+	}
+
+	return events, deficitGroups
+}
+
+// addDeficitGroup добавляет группу товара в список групп дефицита (без дублей).
+func addDeficitGroup(cur *stock.Product, groups *[]string, seen map[string]struct{}) {
+	if cur == nil || strings.TrimSpace(cur.GroupName) == "" {
+		return
+	}
+	if _, ok := seen[cur.GroupName]; ok {
+		return
+	}
+	seen[cur.GroupName] = struct{}{}
+	*groups = append(*groups, cur.GroupName)
 }

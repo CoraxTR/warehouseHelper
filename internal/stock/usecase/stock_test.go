@@ -23,6 +23,8 @@ type mockRepo struct {
 	groupNames  map[string]string        // для LoadGroupNameByCode
 	accepted    []stock.LotIn            // принятые партии (AcceptStockLots)
 	acceptErr   error                    // ошибка AcceptStockLots
+	picked      []stock.PickLotIn        // списанные единицы (PickStockLots)
+	pickErr     error                    // ошибка PickStockLots
 }
 
 type updateCall struct {
@@ -85,6 +87,14 @@ func (m *mockRepo) AcceptStockLots(_ context.Context, lots []stock.LotIn) error 
 	return nil
 }
 
+func (m *mockRepo) PickStockLots(_ context.Context, lots []stock.PickLotIn) error {
+	if m.pickErr != nil {
+		return m.pickErr
+	}
+	m.picked = append(m.picked, lots...)
+	return nil
+}
+
 // mockPub — публикатор-заглушка, копит события и снапшоты каталога.
 type mockPub struct {
 	events    []stock.Event
@@ -97,6 +107,20 @@ func (m *mockPub) PublishStockChange(e stock.Event) {
 
 func (m *mockPub) PublishCatalogSnapshot(rows []stock.Product) {
 	m.snapshots = append(m.snapshots, rows)
+}
+
+// mockNotifier — уведомитель склада-заглушка (дефициты списания).
+type mockNotifier struct {
+	texts []string
+	err   error
+}
+
+func (m *mockNotifier) NotifyWarehouse(text string) error {
+	if m.err != nil {
+		return m.err
+	}
+	m.texts = append(m.texts, text)
+	return nil
 }
 
 func i16(v int16) *int16 { return &v }
@@ -127,7 +151,7 @@ func testStock() []stock.Product {
 }
 
 func newTestUC(repo Repository, pub Publisher) *StockUseCase {
-	return NewStockUseCase(repo, pub, nil)
+	return NewStockUseCase(repo, pub, nil, nil)
 }
 
 func TestWarmUp(t *testing.T) {
@@ -1032,4 +1056,246 @@ func TestDayStateRecorderReplace(t *testing.T) {
 	if len(ds.calls) != 1 || ds.calls[0] != "p1" {
 		t.Errorf("замена: вызовы = %v, want [p1]", ds.calls)
 	}
+}
+
+// TestPickStockDecrement — списание с остатка: лот уменьшается, событие
+// lot_upsert, дефицита нет (уведомление складу не шлётся).
+func TestPickStockDecrement(t *testing.T) {
+	repo := &mockRepo{products: testStock()}
+	pub := &mockPub{}
+	notify := &mockNotifier{}
+	uc := NewStockUseCase(repo, pub, nil, notify)
+	if err := uc.WarmUp(context.Background()); err != nil {
+		t.Fatalf("WarmUp: %v", err)
+	}
+
+	if err := uc.PickStock(context.Background(), []stock.PickLotIn{
+		{ProductID: "p1", BestBefore: d(2026, 9, 5), Qty: 2},
+	}); err != nil {
+		t.Fatalf("PickStock: %v", err)
+	}
+
+	if len(repo.picked) != 1 || repo.picked[0].ProductID != "p1" || repo.picked[0].Qty != 2 {
+		t.Errorf("repo.picked = %+v, want p1 qty 2", repo.picked)
+	}
+
+	// Кэш: лот 05.09 стал 3 (было 5).
+	got := lotQty(t, uc, "p1", d(2026, 9, 5))
+	if got != 3 {
+		t.Errorf("лот 05.09 qty = %d, want 3", got)
+	}
+	if len(notify.texts) != 0 {
+		t.Errorf("уведомления = %v, want пусто", notify.texts)
+	}
+
+	// Событие: lot_upsert c обновлённым лотом.
+	if len(pub.events) != 1 {
+		t.Fatalf("events = %d, want 1", len(pub.events))
+	}
+	e := pub.events[0]
+	if e.Kind != stock.EventLotUpsert || e.ProductID != "p1" || e.Lot == nil || e.Lot.Qty != 3 {
+		t.Errorf("event = %+v, want lot_upsert p1 qty 3", e)
+	}
+}
+
+// TestPickStockToZeroDeletesLot — списание до нуля удаляет лот (lot_delete).
+func TestPickStockToZeroDeletesLot(t *testing.T) {
+	repo := &mockRepo{products: testStock()}
+	pub := &mockPub{}
+	notify := &mockNotifier{}
+	uc := NewStockUseCase(repo, pub, nil, notify)
+	if err := uc.WarmUp(context.Background()); err != nil {
+		t.Fatalf("WarmUp: %v", err)
+	}
+
+	// Лот 01.09 — qty 2, списываем ровно 2.
+	if err := uc.PickStock(context.Background(), []stock.PickLotIn{
+		{ProductID: "p1", BestBefore: d(2026, 9, 1), Qty: 2},
+	}); err != nil {
+		t.Fatalf("PickStock: %v", err)
+	}
+
+	// Лот удалён из кэша (строка с qty 0 не живёт).
+	snap := uc.Snapshot()
+	p1 := findTestProduct(snap, "p1")
+	for _, l := range p1.Lots {
+		if l.BestBefore.Equal(d(2026, 9, 1)) {
+			t.Errorf("лот 01.09 остался в кэше: %+v", l)
+		}
+	}
+
+	if len(pub.events) != 1 {
+		t.Fatalf("events = %d, want 1", len(pub.events))
+	}
+	e := pub.events[0]
+	if e.Kind != stock.EventLotDelete || e.ProductID != "p1" || !e.BestBefore.Equal(d(2026, 9, 1)) {
+		t.Errorf("event = %+v, want lot_delete p1 01.09", e)
+	}
+	if len(notify.texts) != 0 {
+		t.Errorf("уведомления = %v, want пусто (дефицита нет)", notify.texts)
+	}
+}
+
+// TestPickStockDeficitNotifiesGroup — остаток меньше списания: списывается до
+// нуля, склад получает одно сообщение на группу.
+func TestPickStockDeficitNotifiesGroup(t *testing.T) {
+	repo := &mockRepo{products: testStock()}
+	pub := &mockPub{}
+	notify := &mockNotifier{}
+	uc := NewStockUseCase(repo, pub, nil, notify)
+	if err := uc.WarmUp(context.Background()); err != nil {
+		t.Fatalf("WarmUp: %v", err)
+	}
+
+	// Лот 01.09 — qty 2, списываем 5 (дефицит 3).
+	if err := uc.PickStock(context.Background(), []stock.PickLotIn{
+		{ProductID: "p1", BestBefore: d(2026, 9, 1), Qty: 5},
+	}); err != nil {
+		t.Fatalf("PickStock: %v", err)
+	}
+
+	if len(notify.texts) != 1 || notify.texts[0] != "Необходимо обновить сроки по Хлебобулочные" {
+		t.Errorf("notify.texts = %v", notify.texts)
+	}
+
+	// Лот удалён (списан до нуля), событие lot_delete.
+	if len(pub.events) != 1 || pub.events[0].Kind != stock.EventLotDelete {
+		t.Errorf("events = %+v, want lot_delete", pub.events)
+	}
+}
+
+// TestPickStockMissingLotDeficit — лота с таким сроком нет вообще: списания
+// нет, уведомление группе уходит, событий нет.
+func TestPickStockMissingLotDeficit(t *testing.T) {
+	repo := &mockRepo{products: testStock()}
+	pub := &mockPub{}
+	notify := &mockNotifier{}
+	uc := NewStockUseCase(repo, pub, nil, notify)
+	if err := uc.WarmUp(context.Background()); err != nil {
+		t.Fatalf("WarmUp: %v", err)
+	}
+
+	if err := uc.PickStock(context.Background(), []stock.PickLotIn{
+		{ProductID: "p1", BestBefore: d(2026, 9, 20), Qty: 1},
+	}); err != nil {
+		t.Fatalf("PickStock: %v", err)
+	}
+
+	if len(notify.texts) != 1 || notify.texts[0] != "Необходимо обновить сроки по Хлебобулочные" {
+		t.Errorf("notify.texts = %v", notify.texts)
+	}
+	if len(pub.events) != 0 {
+		t.Errorf("events = %+v, want пусто", pub.events)
+	}
+}
+
+// TestPickStockDedupAndNormalize — дубликаты (товар, срок) суммируются, даты
+// приводятся к UTC-полуночи (лот в кэше — локальная зона, ключ — UTC).
+func TestPickStockDedupAndNormalize(t *testing.T) {
+	repo := &mockRepo{products: testStock()}
+	pub := &mockPub{}
+	notify := &mockNotifier{}
+	uc := NewStockUseCase(repo, pub, nil, notify)
+	if err := uc.WarmUp(context.Background()); err != nil {
+		t.Fatalf("WarmUp: %v", err)
+	}
+
+	local := time.Date(2026, 9, 5, 12, 0, 0, 0, time.FixedZone("MSK", 3*3600))
+	if err := uc.PickStock(context.Background(), []stock.PickLotIn{
+		{ProductID: "p1", BestBefore: local, Qty: 1},
+		{ProductID: "p1", BestBefore: d(2026, 9, 5), Qty: 2},
+	}); err != nil {
+		t.Fatalf("PickStock: %v", err)
+	}
+
+	// Одна запись в репо с qty 3 (дедуп), дата UTC-полночь.
+	if len(repo.picked) != 1 {
+		t.Fatalf("repo.picked = %+v, want 1 запись", repo.picked)
+	}
+	if repo.picked[0].Qty != 3 || !repo.picked[0].BestBefore.Equal(d(2026, 9, 5)) {
+		t.Errorf("repo.picked[0] = %+v, want qty 3 на 05.09 UTC", repo.picked[0])
+	}
+}
+
+// TestPickStockValidation — пустые/нулевые входные данные отклоняются до записи.
+func TestPickStockValidation(t *testing.T) {
+	repo := &mockRepo{products: testStock()}
+	uc := newTestUC(repo, nil)
+	if err := uc.WarmUp(context.Background()); err != nil {
+		t.Fatalf("WarmUp: %v", err)
+	}
+
+	cases := []struct {
+		name string
+		lots []stock.PickLotIn
+	}{
+		{"пусто", nil},
+		{"qty 0", []stock.PickLotIn{{ProductID: "p1", BestBefore: d(2026, 9, 1), Qty: 0}}},
+		{"нет товара", []stock.PickLotIn{{BestBefore: d(2026, 9, 1), Qty: 1}}},
+		{"нет срока", []stock.PickLotIn{{ProductID: "p1", Qty: 1}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := uc.PickStock(context.Background(), tc.lots); err == nil {
+				t.Error("PickStock: err = nil, want ошибку валидации")
+			}
+			if len(repo.picked) != 0 {
+				t.Errorf("repo.picked = %+v, want пусто", repo.picked)
+			}
+		})
+	}
+}
+
+// TestPickStockRepoError — ошибка БД: операция не применяется к кэшу,
+// событий и уведомлений нет.
+func TestPickStockRepoError(t *testing.T) {
+	repo := &mockRepo{products: testStock(), pickErr: errors.New("pg down")}
+	pub := &mockPub{}
+	notify := &mockNotifier{}
+	uc := NewStockUseCase(repo, pub, nil, notify)
+	if err := uc.WarmUp(context.Background()); err != nil {
+		t.Fatalf("WarmUp: %v", err)
+	}
+
+	err := uc.PickStock(context.Background(), []stock.PickLotIn{
+		{ProductID: "p1", BestBefore: d(2026, 9, 5), Qty: 2},
+	})
+	if err == nil {
+		t.Fatal("PickStock: err = nil, want ошибку репо")
+	}
+	if len(pub.events) != 0 {
+		t.Errorf("events = %+v, want пусто", pub.events)
+	}
+	if len(notify.texts) != 0 {
+		t.Errorf("notify.texts = %v, want пусто", notify.texts)
+	}
+	if q := lotQty(t, uc, "p1", d(2026, 9, 5)); q != 5 {
+		t.Errorf("лот 05.09 qty = %d, want 5 (кэш не тронут)", q)
+	}
+}
+
+// lotQty достаёт остаток лота из снапшота (helper для проверок кэша).
+func lotQty(t *testing.T, uc *StockUseCase, productID string, bb time.Time) int64 {
+	t.Helper()
+	for _, p := range uc.Snapshot() {
+		if p.ID != productID {
+			continue
+		}
+		for _, l := range p.Lots {
+			if l.BestBefore.Equal(bb) {
+				return l.Qty
+			}
+		}
+	}
+	return -1
+}
+
+// findTestProduct ищет товар в снапшоте по id (helper для проверок кэша).
+func findTestProduct(snap []stock.Product, id string) stock.Product {
+	for _, p := range snap {
+		if p.ID == id {
+			return p
+		}
+	}
+	return stock.Product{}
 }
