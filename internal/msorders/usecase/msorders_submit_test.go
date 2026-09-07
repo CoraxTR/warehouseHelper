@@ -64,7 +64,7 @@ func decodePutPositions(t *testing.T, raw json.RawMessage) []map[string]any {
 	return body.Positions
 }
 
-func rowQty(t *testing.T, rows []map[string]any, id string) (qty float64, reserve float64) {
+func rowQty(t *testing.T, rows []map[string]any, id string) (qty, reserve float64) {
 	t.Helper()
 	for _, r := range rows {
 		if r["id"] == id {
