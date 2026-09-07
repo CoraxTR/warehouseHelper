@@ -684,3 +684,19 @@ details.multi-select .ms-empty { color: #66645C; font-size: 13px; margin-top: 6p
 @media (max-width: 900px) {
     .complaint-photo { width: 48%; }
 }
+
+/* Страница заказа (подбор): строки-группы склейки, готовность, вспышка ошибки */
+.order-info { max-width: 860px; margin: 0 auto 14px; text-align: left; }
+.order-info p { margin: 4px 0; }
+.order-info .addr { white-space: pre-line; }
+.order-items { width: auto; min-width: 720px; }
+.order-items th:nth-child(6), .order-items td:nth-child(6) { text-align: center; }
+.cell-name { max-width: 380px; }
+.cell-action .scan-input { width: 220px; }
+.picked { min-height: 16px; margin-top: 4px; font-size: 12px; color: #9ccc65; }
+.merge-row td { border-left: 3px solid #d4a017; }
+.merge-btn { margin-top: 4px; }
+.row-done .scan-input { display: none; }
+.row-done .cell-action { color: #9ccc65; }
+.row-flash td { background: rgba(192, 40, 50, 0.25); }
+tr[data-href] { cursor: pointer; }

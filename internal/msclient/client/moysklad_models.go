@@ -76,16 +76,25 @@ type MSPosition struct {
 	Meta struct {
 		HREF string `json:"href"`
 	} `json:"meta"`
+	ID       string  `json:"id"`
 	Quantity float64 `json:"quantity"`
 	// Price float64 in copecks
-	Price      float64 `json:"price"`
-	Assortment struct {
-		Meta MSMeta `json:"meta"`
-	} `json:"assortment"`
-	PositionType string `json:"type"`
+	Price   float64 `json:"price"`
+	Reserve float64 `json:"reserve"`
+	// Assortment — товар позиции. Полные name/code приезжают только при
+	// expand=assortment; без него — краткая meta-ссылка.
+	Assortment   MSAssortment `json:"assortment"`
+	PositionType string       `json:"type"`
 
 	PositionCode   string  `json:"-"`
 	PositionWeight float64 `json:"-"`
+}
+
+// MSAssortment — товар (product/variant) позиции заказа.
+type MSAssortment struct {
+	Meta MSMeta `json:"meta"`
+	Code string `json:"code"`
+	Name string `json:"name"`
 }
 
 type PositionSubInfo struct {
@@ -106,12 +115,22 @@ type MSOrder struct {
 	MSPositions           MSPositions    `json:"positions"`
 	DeliveryPlannedMoment string         `json:"deliveryPlannedMoment"`
 	ShipmentAddress       string         `json:"shipmentAddress"`
+	ShipmentAddressFull   MSAddressFull  `json:"shipmentAddressFull"`
 
 	AttributesMap  map[string]any `json:"-"`
 	AgentName      string         `json:"-"`
 	AgentPhone     string         `json:"-"`
 	RefGoZone      string         `json:"-"`
 	PositionsWInfo []MSPosition   `json:"-"`
+}
+
+// MSAddressFull — полный адрес доставки заказа (shipmentAddressFull),
+// объект; приходит заполненным только когда адрес введён в справочнике
+// адресов. addInfo — адрес текстом (часто дублирует shipmentAddress),
+// comment — доп. указания курьеру (этаж/квартира и т.п.).
+type MSAddressFull struct {
+	AddInfo string `json:"addInfo"`
+	Comment string `json:"comment"`
 }
 
 func (o *MSOrder) SetAgentNameAndPhone(s1, s2 string) {

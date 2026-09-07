@@ -22,10 +22,17 @@ type OrderPickData struct {
 	Error    string
 }
 
+// OrderDetailData — данные страницы заказа (подбор позиций).
+type OrderDetailData struct {
+	Order *msordersuc.Order
+	Error string
+}
+
 // Шаблоны раздела «Заказы», парсятся один раз при старте.
 var (
 	msOrdersTmpl     = template.Must(template.ParseFiles("../internal/delivery/web/templates/ms_orders.html"))
 	msOrdersPickTmpl = template.Must(template.ParseFiles("../internal/delivery/web/templates/ms_orders_pick.html"))
+	msOrderTmpl      = template.Must(template.ParseFiles("../internal/delivery/web/templates/ms_order.html"))
 )
 
 // MSOrdersPage — GET /ms/orders: раздел «Заказы» (кнопка «Подобрать»;
@@ -79,5 +86,29 @@ func (h *Handler) MSOrdersPickSearch(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) renderOrderPick(w http.ResponseWriter, d *OrderPickData) {
 	if err := msOrdersPickTmpl.Execute(w, d); err != nil {
 		slog.Info(fmt.Sprintf("ms_orders_pick template: %v", err))
+	}
+}
+
+// MSOrderDetailPage — GET /ms/orders/{id}: детальная страница заказа
+// (подбор позиций по штрих-кодам). Ошибка клиенту — общим сообщением,
+// детали в лог (конвенция проекта).
+func (h *Handler) MSOrderDetailPage(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(r.PathValue("id"))
+	d := &OrderDetailData{}
+
+	if id == "" {
+		d.Error = "не указан id заказа"
+	} else {
+		order, err := h.msOrdersUC.Detail(r.Context(), id)
+		if err != nil {
+			slog.Info(fmt.Sprintf("ms order detail %q: %v", id, err))
+			d.Error = "не удалось загрузить заказ (МойСклад недоступен или заказ удалён)"
+		} else {
+			d.Order = order
+		}
+	}
+
+	if err := msOrderTmpl.Execute(w, d); err != nil {
+		slog.Info(fmt.Sprintf("ms_order template: %v", err))
 	}
 }
