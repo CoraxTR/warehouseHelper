@@ -30,7 +30,7 @@
                 <td>
                     <div class="thumbs">
                         {{range $order.Photos}}
-                        <img src="/qrcodes/photos/{{.ID}}.{{.Ext}}" alt="Фото заказа {{$order.OrderNumber}}">
+                        <img src="/qrcodes/photos/thumbs/{{.ID}}.jpg" data-full="/qrcodes/photos/view/{{.ID}}.jpg" alt="Фото заказа {{$order.OrderNumber}}" loading="lazy">
                         {{end}}
                     </div>
                 </td>
@@ -49,10 +49,12 @@
     </div>
 
     <script>
-        // Лайтбокс полноразмерного просмотра. Фото заказа листают:
+        // Лайтбокс полноэкранного просмотра. Фото заказа листают:
         // на ПК — клавиши ←/→, на телефоне — свайп влево/вправо.
         // Экранных кнопок нет. Листание не выходит за границы текущего заказа:
         // все его фото лежат в одном контейнере .thumbs, из них и собирается список.
+        // В списке грузятся превью 480px; при открытии лайтбокс показывает превью
+        // сразу (оно уже в кеше), а версия 1920px для просмотра догружается фоном.
         // Код в ES5: страницу открывают и со старых браузеров склада
         // (без const/стрелочных функций/NodeList.forEach).
         (function () {
@@ -63,16 +65,37 @@
             var lastSwipeAt = 0;  // время последнего свайпа (для гашения лишнего клика)
             var touchX = null;    // начало касания для свайпа
             var touchY = null;
+            var fullSeq = 0;      // счётчик запросов полной версии (гасит устаревшие onload)
 
             function openLightbox(orderPhotos, index) {
                 photos = orderPhotos;
                 photoIndex = index;
-                lightboxImg.src = orderPhotos[index].src;
                 lightbox.style.display = 'flex';
+                showPhoto(orderPhotos[index]);
             }
 
             function closeLightbox() {
                 lightbox.style.display = 'none';
+            }
+
+            // Показывает фото в лайтбоксе: сначала превью из списка (мгновенно,
+            // уже загружено), затем — версию для просмотра data-full по мере
+            // загрузки. Быстрое листание не даёт устаревшей загрузке перебить
+            // текущее фото (сверка с fullSeq).
+            function showPhoto(img) {
+                lightboxImg.src = img.src;
+                var full = img.getAttribute('data-full');
+                if (!full) {
+                    return;
+                }
+                var seq = ++fullSeq;
+                var loader = new Image();
+                loader.onload = function () {
+                    if (seq === fullSeq) {
+                        lightboxImg.src = full;
+                    }
+                };
+                loader.src = full;
             }
 
             // Листание по кругу в границах текущего заказа.
@@ -81,7 +104,7 @@
                     return;
                 }
                 photoIndex = (photoIndex + step + photos.length) % photos.length;
-                lightboxImg.src = photos[photoIndex].src;
+                showPhoto(photos[photoIndex]);
             }
 
             lightbox.addEventListener('touchstart', function (e) {

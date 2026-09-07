@@ -109,6 +109,13 @@ func (s *Store) Save(ctx context.Context, id, ext string, data io.Reader) error 
 		s.removeCreated(id, ext)
 		return fmt.Errorf("photostore: проверка файла фото %s: файл пустой", id)
 	}
+
+	// Уменьшенные копии (thumbs/view) генерируются сразу после сохранения
+	// оригинала. Ошибка генерации не откатывает сохранение: копий нет —
+	// раздача отдаст оригинал, а EnsurePreview создаст копию при запросе.
+	if err := s.writePreviews(ctx, id, ext, path); err != nil {
+		slog.Info(fmt.Sprintf("photostore: генерация копий фото %s.%s: %v", id, ext, err))
+	}
 	return nil
 }
 
@@ -141,9 +148,15 @@ func (s *Store) removeCreated(id, ext string) {
 // RemoveAll удаляет запись фото по имени: файл QRCodes/<name> новой схемы или
 // папку QRCodes/<name>/ старой схемы (в обоих случаях передаётся name = id
 // или id.ext из списка ListOlderThan); отсутствие записи не считается ошибкой.
+// Запись-оригинал (файл <id>.<ext> или папка <id>) удаляется вместе со своими
+// уменьшенными копиями <kind>/<id>.jpg. Имена копий (<kind>/<id>.jpg) удаляют
+// только сам файл копии.
 func (s *Store) RemoveAll(ctx context.Context, name string) error {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("photostore: удаление фото %s: %w", name, err)
+	}
+	if id := originalIDFromName(name); id != "" {
+		s.removePreviews(id)
 	}
 	// os.RemoveAll возвращает nil, если путь не существует.
 	if err := os.RemoveAll(filepath.Join(s.dir, name)); err != nil {
@@ -152,11 +165,26 @@ func (s *Store) RemoveAll(ctx context.Context, name string) error {
 	return nil
 }
 
+// originalIDFromName возвращает id для имени записи-оригинала (файл <id>.<ext>
+// новой схемы или папка <id> старой), иначе — пустую строку (имена копий
+// вида <kind>/<id>.jpg и посторонние записи).
+func originalIDFromName(name string) string {
+	if fileRe.MatchString(name) {
+		return name[:strings.LastIndexByte(name, '.')]
+	}
+	if idRe.MatchString(name) {
+		return name
+	}
+	return ""
+}
+
 // ListOlderThan возвращает имена записей фото, изменённых раньше cutoff:
-// файлы QRCodes/<id>.<ext> новой схемы и папки QRCodes/<id>/ старой схемы.
-// Посторонние файлы и папки в корне хранилища пропускаются. ModTime записи
-// не меняется после сохранения (файлы пишутся один раз), поэтому оно и есть
-// время сохранения. Несуществующая директория считается пустой.
+// файлы QRCodes/<id>.<ext> новой схемы, папки QRCodes/<id>/ старой схемы и
+// уменьшенные копии QRCodes/<kind>/<id>.jpg (стареют вместе с оригиналами;
+// сироты без оригинала тоже попадают в список и удаляются). Посторонние
+// файлы и папки в корне хранилища пропускаются. ModTime записи не меняется
+// после сохранения (файлы пишутся один раз), поэтому оно и есть время
+// сохранения. Несуществующая директория считается пустой.
 func (s *Store) ListOlderThan(ctx context.Context, cutoff time.Time) ([]string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("photostore: список фото: %w", err)
@@ -187,6 +215,31 @@ func (s *Store) ListOlderThan(ctx context.Context, cutoff time.Time) ([]string, 
 		}
 		if info.ModTime().Before(cutoff) {
 			old = append(old, name)
+		}
+	}
+
+	// Уменьшенные копии: <kind>/<id>.jpg, старше cutoff.
+	for _, kind := range previewKindsOrder {
+		sub := filepath.Join(s.dir, kind)
+		subEntries, err := os.ReadDir(sub)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue // папки копий может не быть вовсе
+			}
+			return nil, fmt.Errorf("photostore: чтение директории %s: %w", sub, err)
+		}
+		for _, e := range subEntries {
+			name := e.Name()
+			if e.IsDir() || !previewFileRe.MatchString(name) {
+				continue
+			}
+			info, err := e.Info()
+			if err != nil {
+				return nil, fmt.Errorf("photostore: метаданные записи %s: %w", name, err)
+			}
+			if info.ModTime().Before(cutoff) {
+				old = append(old, kind+"/"+name)
+			}
 		}
 	}
 	return old, nil

@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"log/slog"
 	"warehouseHelper/internal/domain"
+	qstore "warehouseHelper/internal/qrcodes/photostore"
 	qucase "warehouseHelper/internal/qrcodes/usecase"
 )
 
@@ -185,17 +186,29 @@ func (h *Handler) QRList(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// qrPhotoPathRe — допустимый путь к файлу фото внутри корня QRCodes:
+// qrPhotoPathRe — допустимый путь к файлу-оригиналу фото внутри корня QRCodes:
 // QRCodes/<id>.<ext> (новая схема) или QRCodes/<id>/photo.<ext> (старая
 // схема) — без листинга и обхода каталогов.
 var qrPhotoPathRe = regexp.MustCompile(`^([a-f0-9]{16})(?:/photo)?\.([a-z0-9]{1,8})$`)
 
-// qrPhotosHandler раздаёт файлы фото из корня QRCodes: принимает только
-// точные пути <id>.<ext> и <id>/photo.<ext>, листинг каталогов не отдаёт,
-// на все ответы ставит X-Content-Type-Options: nosniff (защита от
-// переинтерпретации содержимого как HTML/JS). Если файла новой схемы
-// <id>.<ext> нет — пробует старую схему <id>/photo.<ext>, чтобы фото,
-// сохранённые до перехода на плоские файлы, продолжали отображаться.
+// qrPreviewPathRe — допустимый путь к уменьшенной копии: QRCodes/<kind>/<id>.jpg
+// (kind — thumbs или view); страницы грузят только копии.
+var qrPreviewPathRe = regexp.MustCompile(`^(thumbs|view)/([a-f0-9]{16})\.jpg$`)
+
+// qrPhotoCacheControl — фото (оригиналы и копии) неизменяемы: имя файла —
+// уникальный id, файл пишется один раз и не перезаписывается, поэтому кеш
+// браузера можно не перевалидировать (immutable). Срок — неделя: дольше фото
+// не живут, а id повторно не используется.
+const qrPhotoCacheControl = "public, max-age=604800, immutable"
+
+// qrPhotosHandler раздаёт файлы фото из корня QRCodes. Уменьшенные копии
+// (<kind>/<id>.jpg) отдаются из подпапок; если копии ещё нет (фото сохранено
+// до появления копий) — генерируется на лету и сохраняется. Оригиналы
+// (<id>.<ext> и <id>/photo.<ext>) принимаются для обратной совместимости
+// (старые вкладки, прямые ссылки) и как запасной путь, когда копию построить
+// нельзя (HEIC/HEIF). Листинг каталогов не отдаётся; на все ответы ставятся
+// X-Content-Type-Options: nosniff (защита от переинтерпретации содержимого
+// как HTML/JS) и Cache-Control: immutable.
 func qrPhotosHandler(dir string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -206,20 +219,36 @@ func qrPhotosHandler(dir string) http.Handler {
 		}
 
 		rel := strings.TrimPrefix(r.URL.Path, "/")
-		m := qrPhotoPathRe.FindStringSubmatch(rel)
-		if m == nil {
+		var path string
+
+		// Уменьшенная копия: <kind>/<id>.jpg.
+		if m := qrPreviewPathRe.FindStringSubmatch(rel); m != nil {
+			preview, err := qstore.EnsurePreview(r.Context(), dir, m[1], m[2])
+			if err == nil {
+				path = preview
+			} else {
+				// Оригинал не декодируется (HEIC/HEIF) или не найден —
+				// отдаём оригинал, как до появления копий.
+				if orig, _, oerr := qstore.Original(dir, m[2]); oerr == nil {
+					path = orig
+				}
+			}
+		} else if m := qrPhotoPathRe.FindStringSubmatch(rel); m != nil {
+			// Оригинал новой схемы <id>.<ext>, затем старой <id>/photo.<ext>.
+			path = filepath.Join(dir, rel)
+			if _, err := os.Stat(path); err != nil {
+				path = filepath.Join(dir, m[1], "photo."+m[2])
+			}
+		}
+
+		if path == "" {
 			http.NotFound(w, r)
 
 			return
 		}
 
-		path := filepath.Join(dir, rel)
-		if _, err := os.Stat(path); err != nil {
-			// Старая схема: <id>/photo.<ext>.
-			path = filepath.Join(dir, m[1], "photo."+m[2])
-		}
-
 		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Cache-Control", qrPhotoCacheControl)
 		http.ServeFile(w, r, path)
 	})
 }
