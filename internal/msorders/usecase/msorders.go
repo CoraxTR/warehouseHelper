@@ -50,12 +50,21 @@ type OrderRow struct {
 type UseCase struct {
 	ms      OrderClient
 	catalog CatalogReader
+	picker  StockPicker // шов stock: списание сроков после успешного PUT
+
+	// submitCache — сырые ответы МС для отправки подбора (см. msorders_submit.go).
+	cache *submitCache
 }
 
-// NewUseCase создаёт сценарии с клиентом МС и каталогом склада (резолв
-// внутренних кодов позиций).
-func NewUseCase(ms OrderClient, catalog CatalogReader) *UseCase {
-	return &UseCase{ms: ms, catalog: catalog}
+// NewUseCase создаёт сценарии с клиентом МС, каталогом склада (резолв
+// внутренних кодов позиций) и модулем остатков (списание сроков подбора).
+func NewUseCase(ms OrderClient, catalog CatalogReader, picker StockPicker) *UseCase {
+	return &UseCase{
+		ms:      ms,
+		catalog: catalog,
+		picker:  picker,
+		cache:   newSubmitCache(),
+	}
 }
 
 // Search ищет заказы по точному номеру (name). Пустое поле — ErrEmptyName;

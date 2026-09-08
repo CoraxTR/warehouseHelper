@@ -111,13 +111,18 @@ func TestFetchOrderByID(t *testing.T) {
 		}
 	})
 
-	order, err := msac.FetchOrderByID(context.Background(), "053b3dfc-926b-11f1-0a80-135d00113455")
+	order, raw, err := msac.FetchOrderByID(context.Background(), "053b3dfc-926b-11f1-0a80-135d00113455")
 	if err != nil {
 		t.Fatalf("FetchOrderByID() error: %v", err)
 	}
 
 	if gotPath != "/entity/customerorder/053b3dfc-926b-11f1-0a80-135d00113455" {
 		t.Errorf("path = %q, want одиночный фетч customerorder/{id}", gotPath)
+	}
+	// сырое тело GET — эхо для PUT при отправке подбора.
+	var rawOrder MSOrder
+	if err := json.Unmarshal(raw, &rawOrder); err != nil || rawOrder.Name != "05685" {
+		t.Errorf("raw не разбирается в заказ: %v", err)
 	}
 	if order.Name != "05685" || order.Description != "самовывоз, уточнить по оплате" {
 		t.Errorf("поля шапки не разобраны: name=%q description=%q", order.Name, order.Description)
@@ -151,7 +156,7 @@ func TestFetchOrderPositionsByHREF(t *testing.T) {
 	// positions.meta.href в тесте — адрес httptest-сервера, не живой МС
 	// (в orderBody стоит реальный href из контрольного запроса).
 	order.MSPositions.Meta.HREF = server.URL + "/entity/customerorder/053b3dfc-926b-11f1-0a80-135d00113455/positions"
-	positions, err := msac.FetchOrderPositionsByHREF(context.Background(), &order)
+	positions, rawRows, err := msac.FetchOrderPositionsByHREF(context.Background(), &order)
 	if err != nil {
 		t.Fatalf("FetchOrderPositionsByHREF() error: %v", err)
 	}
@@ -164,6 +169,16 @@ func TestFetchOrderPositionsByHREF(t *testing.T) {
 	}
 	if len(positions) != 2 {
 		t.Fatalf("len(positions) = %d, want 2", len(positions))
+	}
+	// сырые строки — эхо для PUT; порядок совпадает с positions.
+	if len(rawRows) != 2 {
+		t.Fatalf("len(rawRows) = %d, want 2", len(rawRows))
+	}
+	var rawFirst struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(rawRows[0], &rawFirst); err != nil || rawFirst.ID != "pos-1" {
+		t.Errorf("rawRows[0] не разбирается: %v (id=%q)", err, rawFirst.ID)
 	}
 
 	p := positions[0]

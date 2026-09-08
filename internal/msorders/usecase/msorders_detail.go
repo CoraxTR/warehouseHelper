@@ -7,11 +7,13 @@ package usecase
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"warehouseHelper/internal/metrics"
 	"warehouseHelper/internal/msclient/client"
@@ -24,10 +26,16 @@ var ErrEmptyOrderID = errors.New("пустой id заказа")
 // *client.MSAPIClient.
 type OrderDetailClient interface {
 	// FetchOrderByID — заказ по id: поля шапки + meta-ссылки agent/positions.
-	FetchOrderByID(ctx context.Context, id string) (*client.MSOrder, error)
+	// Сырое тело GET возвращается вторым значением: тот самый JSON, который
+	// уходит эхом в PUT при отправке подбора (msorders Submit).
+	FetchOrderByID(ctx context.Context, id string) (*client.MSOrder, json.RawMessage, error)
 	// FetchOrderPositionsByHREF — позиции заказа с expand=assortment
-	// (имя и внутренний код товара приезжают в строке).
-	FetchOrderPositionsByHREF(ctx context.Context, o *client.MSOrder) ([]client.MSPosition, error)
+	// (имя и внутренний код товара приезжают в строке). Второе значение —
+	// сырые JSON-строки rows (тот же порядок): эхо для PUT при отправке.
+	FetchOrderPositionsByHREF(ctx context.Context, o *client.MSOrder) ([]client.MSPosition, []json.RawMessage, error)
+	// UpdateCustomerOrder — PUT entity/customerorder/{id} сырым телом
+	// (полный ответ GET заказа с отредактированным positions). Не-2xx — MSAPIError.
+	UpdateCustomerOrder(ctx context.Context, id string, body json.RawMessage) error
 }
 
 // OrderClient — полный контракт модуля к клиенту МС: поиск заказа
@@ -39,6 +47,7 @@ type OrderClient interface {
 
 // CatalogProduct — товар каталога склада, найденный по внутреннему коду.
 type CatalogProduct struct {
+	ProductID    string // products.id (товар склада, ключ остатков)
 	InternalCode string
 	Weighted     bool // весовой (учёт в кг) или штучный (в штуках)
 }
@@ -91,6 +100,8 @@ type OrderItem struct {
 // целиком (позиции без резолва кодов показать нельзя — строки молча стали
 // бы пассивными). Ошибка хопа за контрагентом НЕ роняет: имя/телефон
 // остаются пустыми (вторичные данные, клиент уже залогировал).
+// Побочно кладёт сырые ответы МС в кэш отправки (те же GET, что и так
+// делались для рендера) — на submit новые запросы не нужны.
 func (uc *UseCase) Detail(ctx context.Context, id string) (*Order, error) {
 	done := metrics.Track(trackPkg, "Detail")
 	defer done()
@@ -100,20 +111,12 @@ func (uc *UseCase) Detail(ctx context.Context, id string) (*Order, error) {
 		return nil, ErrEmptyOrderID
 	}
 
-	order, err := uc.ms.FetchOrderByID(ctx, id)
-	if err != nil {
-		return nil, fmt.Errorf("fetch order %s: %w", id, err)
-	}
-
-	positions, err := uc.ms.FetchOrderPositionsByHREF(ctx, order)
-	if err != nil {
-		return nil, fmt.Errorf("fetch positions %s: %w", id, err)
-	}
-
-	rows, err := uc.buildItems(ctx, positions)
+	order, entry, err := uc.fetchAndCache(ctx, id)
 	if err != nil {
 		return nil, err
 	}
+
+	rows := buildItems(entry.positions, entry.catalog)
 
 	agentName, agentPhone, _ := uc.ms.FetchOrderAgentByHREF(ctx, order)
 
@@ -130,13 +133,39 @@ func (uc *UseCase) Detail(ctx context.Context, id string) (*Order, error) {
 	}, nil
 }
 
-// buildItems резолвит позиции через каталог, сортирует и проставляет группы.
-func (uc *UseCase) buildItems(ctx context.Context, positions []client.MSPosition) ([]OrderItem, error) {
-	catalog, err := uc.loadCatalog(ctx, positions)
+// fetchAndCache загружает заказ и позиции одним путём для Detail и Submit
+// (догрузка при промахе кэша отправки): типизированные данные для страницы
+// + сырьё (заказ, строки positions, каталог) в кэш отправки.
+func (uc *UseCase) fetchAndCache(ctx context.Context, id string) (*client.MSOrder, *submitEntry, error) {
+	order, orderRaw, err := uc.ms.FetchOrderByID(ctx, id)
 	if err != nil {
-		return nil, err
+		return nil, nil, fmt.Errorf("fetch order %s: %w", id, err)
 	}
 
+	positions, rowsRaw, err := uc.ms.FetchOrderPositionsByHREF(ctx, order)
+	if err != nil {
+		return nil, nil, fmt.Errorf("fetch positions %s: %w", id, err)
+	}
+
+	catalog, err := uc.loadCatalog(ctx, positions)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	entry := &submitEntry{
+		orderRaw:  orderRaw,
+		rowsRaw:   rowsRaw,
+		catalog:   catalog,
+		positions: positions,
+		at:        time.Now(),
+	}
+	uc.cache.store(id, entry)
+
+	return order, entry, nil
+}
+
+// buildItems резолвит позиции через каталог, сортирует и проставляет группы.
+func buildItems(positions []client.MSPosition, catalog map[string]CatalogProduct) []OrderItem {
 	items := make([]OrderItem, 0, len(positions))
 	for _, p := range positions {
 		code := strings.TrimSpace(p.Assortment.Code)
@@ -170,7 +199,7 @@ func (uc *UseCase) buildItems(ctx context.Context, positions []client.MSPosition
 	sortItems(items)
 	assignGroups(items)
 
-	return items, nil
+	return items
 }
 
 // loadCatalog запрашивает каталог по уникальным кодам позиций. Пусто, когда

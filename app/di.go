@@ -393,7 +393,7 @@ func (d *DIContainer) StockHub() *stockws.Hub {
 // (новые позиции видны на страницах без рестарта).
 func (d *DIContainer) StockUC() *sucase.StockUseCase {
 	if d.stockUC == nil {
-		d.stockUC = sucase.NewStockUseCase(d.OrdersRepository(), d.StockHub(), d.DayStateUC())
+		d.stockUC = sucase.NewStockUseCase(d.OrdersRepository(), d.StockHub(), d.DayStateUC(), d.TelegramNotifier())
 		// GoodsUC() создаётся здесь же (DayStateUC → GoodsUC), рекурсии нет:
 		// goods не тянет StockUC. Вызов до первого запроса — слушатель на месте.
 		d.GoodsUC().SetCatalogChangeListener(d.stockUC)
@@ -425,9 +425,10 @@ func (d *DIContainer) ComplaintsUC() *cucase.UseCase {
 // и детальная страница заказа (подбор). Схемы БД у модуля нет — MSClient
 // реализует mordersuc.OrderClient, каталог склада подключается адаптером
 // (PGClient отдаёт товары типом receiving.ProductRef, модулю нужен свой).
+// Шов списания сроков — StockUC (PickStock): интерфейс совпадает дословно.
 func (d *DIContainer) MSOrdersUC() *mordersuc.UseCase {
 	if d.msOrdersUC == nil {
-		d.msOrdersUC = mordersuc.NewUseCase(d.MSClient(), orderCatalogAdapter{pg: d.OrdersRepository()})
+		d.msOrdersUC = mordersuc.NewUseCase(d.MSClient(), orderCatalogAdapter{pg: d.OrdersRepository()}, d.StockUC())
 	}
 
 	return d.msOrdersUC
@@ -448,6 +449,7 @@ func (a orderCatalogAdapter) LoadCatalogProductsByCodes(ctx context.Context, cod
 	out := make(map[string]mordersuc.CatalogProduct, len(found))
 	for code, p := range found {
 		out[code] = mordersuc.CatalogProduct{
+			ProductID:    p.ProductID,
 			InternalCode: p.InternalCode,
 			Weighted:     p.Weighted,
 		}

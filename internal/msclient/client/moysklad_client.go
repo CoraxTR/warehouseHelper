@@ -105,8 +105,14 @@ func (msac *MSAPIClient) FetchOrderAgentByHREF(parentCtx context.Context, o *MSO
 // FetchOrderByID — лёгкий фетч заказа по id: только поля верхнего уровня
 // (name, description, даты, адрес, shipmentAddressFull) + meta-ссылки agent
 // и positions для последующих хопов. Без enrichOrder — агент и позиции
-// тянутся отдельными запросами по href.
-func (msac *MSAPIClient) FetchOrderByID(parentctx context.Context, id string) (*MSOrder, error) {
+// тянутся отдельными запросами по href. Вместе с моделью возвращает сырое
+// тело GET: оно уходит эхом в PUT при отправке подбора (msorders Submit).
+func (msac *MSAPIClient) FetchOrderByID(parentctx context.Context, id string) (order *MSOrder, raw json.RawMessage, err error) {
+	type orderFetch struct {
+		order *MSOrder
+		raw   json.RawMessage
+	}
+
 	job := func(apiKey string) (any, error) {
 		ctx, cancel := context.WithTimeout(parentctx, 300*time.Second)
 		defer cancel()
@@ -137,12 +143,12 @@ func (msac *MSAPIClient) FetchOrderByID(parentctx context.Context, id string) (*
 			return nil, fmt.Errorf("API returned %s: %s", resp.Status, string(body))
 		}
 
-		var order MSOrder
-		if err := json.Unmarshal(body, &order); err != nil {
+		var msOrder MSOrder
+		if err := json.Unmarshal(body, &msOrder); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal order: %w", err)
 		}
 
-		return &order, nil
+		return &orderFetch{order: &msOrder, raw: json.RawMessage(body)}, nil
 	}
 
 	resCh := msac.workerpool.SubmitOther(job)
@@ -150,24 +156,26 @@ func (msac *MSAPIClient) FetchOrderByID(parentctx context.Context, id string) (*
 	select {
 	case res := <-resCh:
 		if res.Err != nil {
-			return nil, fmt.Errorf("FetchOrderByID failed: %w", res.Err)
+			return nil, nil, fmt.Errorf("FetchOrderByID failed: %w", res.Err)
 		}
 
-		order, ok := res.Value.(*MSOrder)
+		fetch, ok := res.Value.(*orderFetch)
 		if !ok {
-			return nil, errors.New("FetchOrderByID failed: unexpected value type")
+			return nil, nil, errors.New("FetchOrderByID failed: unexpected value type")
 		}
 
-		return order, nil
+		return fetch.order, fetch.raw, nil
 	case <-parentctx.Done():
-		return nil, parentctx.Err()
+		return nil, nil, parentctx.Err()
 	}
 }
 
 // FetchOrderPositionsByHREF — позиции заказа с expand=assortment: имя и
 // внутренний код (assortment.code) приезжают прямо в строке, хопы на каждую
 // позицию не нужны. Ход проверен контрольным запросом на живом API.
-func (msac *MSAPIClient) FetchOrderPositionsByHREF(parentCtx context.Context, o *MSOrder) ([]MSPosition, error) {
+// Вместе с моделями возвращает сырые JSON-строки (тот же порядок): они
+// уходят эхом в PUT при отправке подбора (msorders Submit).
+func (msac *MSAPIClient) FetchOrderPositionsByHREF(parentCtx context.Context, o *MSOrder) (positions []MSPosition, rawRows []json.RawMessage, err error) {
 	job := func(apiKey string) (any, error) {
 		ctx, cancel := context.WithTimeout(parentCtx, 300*time.Second)
 		defer cancel()
@@ -203,12 +211,12 @@ func (msac *MSAPIClient) FetchOrderPositionsByHREF(parentCtx context.Context, o 
 			return nil, fmt.Errorf("API returned %s", resp.Status)
 		}
 
-		positions, err := unmarshalPositions(body)
+		rows, err := unmarshalPositionRows(body)
 		if err != nil {
 			return nil, err
 		}
 
-		return positions.Rows, nil
+		return rows, nil
 	}
 
 	resultCh := msac.workerpool.SubmitOther(job)
@@ -216,19 +224,19 @@ func (msac *MSAPIClient) FetchOrderPositionsByHREF(parentCtx context.Context, o 
 	select {
 	case res := <-resultCh:
 		if res.Err != nil {
-			return nil, fmt.Errorf("FetchOrderPositionsByHREF failed: %w", res.Err)
+			return nil, nil, fmt.Errorf("FetchOrderPositionsByHREF failed: %w", res.Err)
 		}
 
-		positions, ok := res.Value.([]MSPosition)
+		fetch, ok := res.Value.(*msPositionsFetch)
 		if !ok {
-			return nil, errors.New("FetchOrderPositionsByHREF failed: unexpected value type")
+			return nil, nil, errors.New("FetchOrderPositionsByHREF failed: unexpected value type")
 		}
 
-		return positions, nil
+		return fetch.positions, fetch.rawRows, nil
 	case <-parentCtx.Done():
 		slog.Error(fmt.Sprintf("FetchOrderPositionsByHREF timed out: %v", parentCtx.Err()))
 
-		return nil, nil
+		return nil, nil, parentCtx.Err()
 	}
 }
 
@@ -839,7 +847,7 @@ func (msac *MSAPIClient) enrichOrder(ctx context.Context, order *MSOrder) {
 		order.AgentPhone = phone
 	}
 
-	positions, err := msac.FetchOrderPositionsByHREF(ctx, order)
+	positions, _, err := msac.FetchOrderPositionsByHREF(ctx, order)
 	if err != nil {
 		slog.Error(fmt.Sprintf("failed to fetch positions for order %s: %v", order.ID, err))
 
@@ -1057,6 +1065,60 @@ func (msac *MSAPIClient) CreateDemand(parentctx context.Context, template json.R
 	case res := <-resCh:
 		if res.Err != nil {
 			return fmt.Errorf("CreateDemand failed: %w", res.Err)
+		}
+
+		return nil
+	case <-parentctx.Done():
+		return parentctx.Err()
+	}
+}
+
+// UpdateCustomerOrder — PUT entity/customerorder/{id} сырым телом (полный
+// ответ GET заказа с заменённым positions — эхо-обновление, семантика
+// полной замены позиций проверена на живом API 07.09.2026: строки с id
+// обновляются, без id создаются, отсутствующие удаляются). Не-2xx →
+// MSAPIError с текстом errors[] (показывается оператору).
+func (msac *MSAPIClient) UpdateCustomerOrder(parentctx context.Context, id string, body json.RawMessage) error {
+	job := func(apiKey string) (any, error) {
+		ctx, cancel := context.WithTimeout(parentctx, 300*time.Second)
+		defer cancel()
+
+		endpoint, err := msac.entityEndpoint("customerorder", id)
+		if err != nil {
+			return nil, err
+		}
+
+		respBody, resp, err := msac.httpRequest(ctx, http.MethodPut, endpoint, apiKey, bytes.NewReader(body))
+		if err != nil {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			default:
+				return nil, err
+			}
+		}
+
+		defer func() {
+			err = resp.Body.Close()
+			if err != nil {
+				slog.Error(fmt.Sprintf("failed to close response body: %v", err))
+			}
+		}()
+
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return nil, msAPIError(resp.Status, respBody)
+		}
+
+		//nolint:nilnil // контракт: успешный ответ без возврата тела
+		return nil, nil
+	}
+
+	resCh := msac.workerpool.SubmitOther(job)
+
+	select {
+	case res := <-resCh:
+		if res.Err != nil {
+			return fmt.Errorf("UpdateCustomerOrder failed: %w", res.Err)
 		}
 
 		return nil

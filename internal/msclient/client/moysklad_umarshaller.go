@@ -88,15 +88,35 @@ func unmarshalAgentInfo(body []byte) (*MSAgentInfo, error) {
 	return response, nil
 }
 
-func unmarshalPositions(body []byte) (*MSPositions, error) {
-	var response *MSPositions
+// msPositionsFetch — позиции заказа и их сырые JSON-строки из одного тела
+// ответа (сырьё уходит эхом в PUT при отправке подбора, см. msorders Submit).
+type msPositionsFetch struct {
+	positions []MSPosition
+	rawRows   []json.RawMessage
+}
 
-	err := json.Unmarshal(body, &response)
-	if err != nil {
-		return nil, err
+// unmarshalPositionRows разбирает тело ответа {rows:[...]} в модели + сырьё.
+func unmarshalPositionRows(body []byte) (*msPositionsFetch, error) {
+	var env struct {
+		Rows []json.RawMessage `json:"rows"`
+	}
+	if err := json.Unmarshal(body, &env); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal positions: %w", err)
 	}
 
-	return response, nil
+	fetch := &msPositionsFetch{
+		positions: make([]MSPosition, 0, len(env.Rows)),
+		rawRows:   env.Rows,
+	}
+	for _, raw := range env.Rows {
+		var p MSPosition
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal position row: %w", err)
+		}
+		fetch.positions = append(fetch.positions, p)
+	}
+
+	return fetch, nil
 }
 
 func unmarshalPositionSubInfo(body []byte) (PositionSubInfo, error) {
