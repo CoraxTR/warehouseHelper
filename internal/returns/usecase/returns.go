@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strings"
 	"time"
 
 	"warehouseHelper/internal/msclient/client"
@@ -304,15 +305,15 @@ func (uc *UseCase) messageText(ev *returns.ReturnEvent, expected []returns.Expec
 		return fmt.Sprintf("Заказ %s был переведён в статус «Отменён»", ev.OrderName)
 	}
 
-	var b []byte
-	b = append(b, fmt.Sprintf("Из заказа %s удалили:", ev.OrderName)...)
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "Из заказа %s удалили:", ev.OrderName)
 	for _, e := range expected {
-		b = append(b, "\n— "...)
-		b = append(b, e.Name...)
-		b = append(b, ' ')
-		b = append(b, formatQty(e)...)
+		sb.WriteString("\n— ")
+		sb.WriteString(e.Name)
+		sb.WriteByte(' ')
+		sb.WriteString(formatQty(e))
 	}
-	return string(b)
+	return sb.String()
 }
 
 // formatQty — количество строки ожидания для текста/страницы:

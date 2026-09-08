@@ -41,7 +41,8 @@ func pos(productID, name string, qty, reserve float64) client.MSPosition {
 
 func TestTick_FirstRunSetsCursorAndScansNothing(t *testing.T) {
 	repo := newStubRepo()
-	uc, audit, _, _ := newTestUC(repo)
+	env := newTestEnv(repo)
+	uc, audit := env.uc, env.audit
 
 	if err := uc.tick(context.Background()); err != nil {
 		t.Fatalf("tick: %v", err)
@@ -60,7 +61,8 @@ func TestTick_FirstRunSetsCursorAndScansNothing(t *testing.T) {
 func TestTick_SkipsOurApiSource(t *testing.T) {
 	repo := newStubRepo()
 	repo.cursor = &[]time.Time{time.Now().Add(-time.Hour).UTC()}[0]
-	uc, audit, _, notify := newTestUC(repo)
+	env := newTestEnv(repo)
+	uc, audit, notify := env.uc, env.audit, env.notify
 	audit.pageRows = []client.AuditRow{auditRow("remap-1.2")} // наш PUT: полная замена positions
 	audit.details[auditID] = []client.AuditEventRow{detailRow(removedDiffJSON(prodA, "Чак ролл", 0.657, 0.657, "кг"), "19191")}
 
@@ -78,7 +80,8 @@ func TestTick_SkipsOurApiSource(t *testing.T) {
 func TestTick_RemovedReservedSendsNotification(t *testing.T) {
 	repo := newStubRepo()
 	repo.cursor = &[]time.Time{time.Now().Add(-time.Hour).UTC()}[0]
-	uc, audit, _, notify := newTestUC(repo)
+	env := newTestEnv(repo)
+	uc, audit, notify := env.uc, env.audit, env.notify
 
 	audit.pageRows = []client.AuditRow{auditRow("app")}
 	// Удалена отложенная позиция (quantity == reserved) — склад должен вернуть кусок.
@@ -113,7 +116,8 @@ func TestTick_RemovedReservedSendsNotification(t *testing.T) {
 func TestTick_CancelledWithoutReserveCreatesNothing(t *testing.T) {
 	repo := newStubRepo()
 	repo.cursor = &[]time.Time{time.Now().Add(-time.Hour).UTC()}[0]
-	uc, audit, _, notify := newTestUC(repo)
+	env := newTestEnv(repo)
+	uc, audit, notify := env.uc, env.audit, env.notify
 
 	audit.pageRows = []client.AuditRow{auditRow("app")}
 	audit.details[auditID] = []client.AuditEventRow{detailRow(cancelledDiffJSON(), "19379")}
@@ -131,7 +135,8 @@ func TestTick_CancelledWithoutReserveCreatesNothing(t *testing.T) {
 func TestTick_CancelledSendsNotification(t *testing.T) {
 	repo := newStubRepo()
 	repo.cursor = &[]time.Time{time.Now().Add(-time.Hour).UTC()}[0]
-	uc, audit, _, notify := newTestUC(repo)
+	env := newTestEnv(repo)
+	uc, audit, notify := env.uc, env.audit, env.notify
 
 	audit.pageRows = []client.AuditRow{auditRow("app")}
 	audit.details[auditID] = []client.AuditEventRow{detailRow(cancelledDiffJSON(), "19379")}
@@ -153,7 +158,8 @@ func TestTick_CancelledSendsNotification(t *testing.T) {
 func TestTick_AlreadyTrackedSkipped(t *testing.T) {
 	repo := newStubRepo()
 	repo.cursor = &[]time.Time{time.Now().Add(-time.Hour).UTC()}[0]
-	uc, audit, _, notify := newTestUC(repo)
+	env := newTestEnv(repo)
+	uc, audit, notify := env.uc, env.audit, env.notify
 
 	// Событие уже отслеживается (предыдущий тик успел обработать).
 	repo.events[auditID] = &returns.ReturnEvent{ID: auditID, Kind: returns.KindRemoved, OrderID: orderID, OrderName: "19191", Status: returns.StatusSent}
@@ -174,7 +180,8 @@ func TestTick_AlreadyTrackedSkipped(t *testing.T) {
 
 func TestRetryNew_ResendsAfterFailedSend(t *testing.T) {
 	repo := newStubRepo()
-	uc, audit, _, notify := newTestUC(repo)
+	env := newTestEnv(repo)
+	uc, audit, notify := env.uc, env.audit, env.notify
 
 	// Событие зависло в new (упали между InsertEvent и MarkSent).
 	repo.events[auditID] = &returns.ReturnEvent{ID: auditID, Kind: returns.KindRemoved, OrderID: orderID, OrderName: "19191", Status: returns.StatusNew}
@@ -200,7 +207,8 @@ func TestAcceptReturn_HappyPath(t *testing.T) {
 		ID: auditID, Kind: returns.KindCancelled, OrderID: orderID, OrderName: "19379",
 		Status: returns.StatusSent, ChatID: &chat, MessageID: &msg,
 	}
-	uc, audit, stockS, notify := newTestUC(repo)
+	env := newTestEnv(repo)
+	uc, audit, stockS, notify := env.uc, env.audit, env.stock, env.notify
 	audit.positions[orderID] = []client.MSPosition{pos(prodA, "Чак ролл", 0.657, 0.657)}
 
 	n, err := uc.AcceptReturn(context.Background(), auditID, []string{
@@ -230,7 +238,8 @@ func TestAcceptReturn_HappyPath(t *testing.T) {
 func TestAcceptReturn_AlreadyDoneRejected(t *testing.T) {
 	repo := newStubRepo()
 	repo.events[auditID] = &returns.ReturnEvent{ID: auditID, Kind: returns.KindCancelled, OrderID: orderID, Status: returns.StatusDone}
-	uc, _, stockS, notify := newTestUC(repo)
+	env := newTestEnv(repo)
+	uc, stockS, notify := env.uc, env.stock, env.notify
 
 	_, err := uc.AcceptReturn(context.Background(), auditID, []string{etiketa(codeA, 657, "01092026", "15092026")})
 	if !errors.Is(err, returns.ErrAlreadyDone) {
@@ -247,7 +256,8 @@ func TestAcceptReturn_ValidationRejected(t *testing.T) {
 	repo.events[auditID] = &returns.ReturnEvent{
 		ID: auditID, Kind: returns.KindCancelled, OrderID: orderID, Status: returns.StatusSent, ChatID: &chat, MessageID: &msg,
 	}
-	uc, audit, stockS, notify := newTestUC(repo)
+	env := newTestEnv(repo)
+	uc, audit, stockS, notify := env.uc, env.audit, env.stock, env.notify
 	audit.positions[orderID] = []client.MSPosition{pos(prodA, "Чак ролл", 0.657, 0.657)}
 
 	_, err := uc.AcceptReturn(context.Background(), auditID, []string{etiketa(codeA, 654, "01092026", "15092026")})
@@ -273,7 +283,8 @@ func TestCloseManual(t *testing.T) {
 		ID: auditID, Kind: returns.KindCancelled, OrderID: orderID, OrderName: "19379",
 		Status: returns.StatusSent, ChatID: &chat, MessageID: &msg,
 	}
-	uc, audit, stockS, notify := newTestUC(repo)
+	env := newTestEnv(repo)
+	uc, audit, stockS, notify := env.uc, env.audit, env.stock, env.notify
 	audit.positions[orderID] = []client.MSPosition{pos(prodA, "Чак ролл", 0.657, 0.657)}
 
 	if err := uc.CloseManual(context.Background(), auditID); err != nil {
@@ -294,7 +305,8 @@ func TestCloseManual(t *testing.T) {
 func TestEventPage_DoneDoesNotFetch(t *testing.T) {
 	repo := newStubRepo()
 	repo.events[auditID] = &returns.ReturnEvent{ID: auditID, Kind: returns.KindCancelled, OrderID: orderID, Status: returns.StatusDone}
-	uc, audit, _, _ := newTestUC(repo)
+	env := newTestEnv(repo)
+	uc, audit := env.uc, env.audit
 
 	state, err := uc.EventPage(context.Background(), auditID)
 	if err != nil {

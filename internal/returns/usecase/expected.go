@@ -22,8 +22,25 @@ type candidate struct {
 
 // qtyInt — количество в единицах сверки: весовой товар → граммы
 // (round кг×1000 — вес этикетки 29 в граммах), штучный → штуки (round).
-func qtyInt(v float64, weighted bool) int64 {
+// qtyUnit — единица сверки количества строки возврата: весовой товар
+// сводится в граммы (кг этикетки/диффа ×1000), штучный — в единицы.
+type qtyUnit uint8
+
+const (
+	qtyGrams  qtyUnit = iota // весовой: сравнение/накопление в граммах
+	qtyPieces                // штучный: по количеству единиц
+)
+
+// unitOf — единица сверки товара каталога.
+func unitOf(weighted bool) qtyUnit {
 	if weighted {
+		return qtyGrams
+	}
+	return qtyPieces
+}
+
+func qtyInt(v float64, u qtyUnit) int64 {
+	if u == qtyGrams {
 		return int64(math.Round(v * 1000))
 	}
 	return int64(math.Round(v))
@@ -33,8 +50,8 @@ func qtyInt(v float64, weighted bool) int64 {
 // без допуска (решение пользователя). Сравнение в единицах сверки (int),
 // не float по кг — 0.657 и 0.657 в double равны, но округление защищает
 // от хвостов вида 0.6570000000001.
-func reservedEquals(q, r float64, weighted bool) bool {
-	return qtyInt(q, weighted) == qtyInt(r, weighted)
+func reservedEquals(q, r float64, u qtyUnit) bool {
+	return qtyInt(q, u) == qtyInt(r, u)
 }
 
 // candidates — строки-кандидаты по виду события. Источник правды —
@@ -123,7 +140,7 @@ func (uc *UseCase) buildExpected(ctx context.Context, ev *returns.ReturnEvent) (
 		if !ok || p.InternalCode == "" {
 			continue // нет в каталоге или без кода склада — не складской товар
 		}
-		if !reservedEquals(c.Quantity, c.Reserve, p.Weighted) {
+		if !reservedEquals(c.Quantity, c.Reserve, unitOf(p.Weighted)) {
 			continue // не отложен физически — возвращать нечего
 		}
 
@@ -138,7 +155,7 @@ func (uc *UseCase) buildExpected(ctx context.Context, ev *returns.ReturnEvent) (
 			agg[c.ProductID] = e
 			order = append(order, c.ProductID)
 		}
-		e.ExpectedQty += qtyInt(c.Quantity, p.Weighted)
+		e.ExpectedQty += qtyInt(c.Quantity, unitOf(p.Weighted))
 	}
 
 	if len(order) == 0 {

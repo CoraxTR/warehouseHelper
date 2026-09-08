@@ -252,12 +252,9 @@ func (msac *MSAPIClient) FetchAuditDetail(parentctx context.Context, auditID str
 				}
 				return nil, err
 			}
-			defer func() {
-				err = resp.Body.Close()
-				if err != nil {
-					slog.Error(fmt.Sprintf("failed to close response body: %v", err))
-				}
-			}()
+			// Тело уже прочитано httpRequest; закрываем сразу (defer в цикле
+			// накопил бы открытые соединения на пагинации).
+			_ = resp.Body.Close()
 
 			if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 				return nil, msAPIError(resp.Status, body)

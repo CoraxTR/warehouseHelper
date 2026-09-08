@@ -68,81 +68,107 @@ func returnKindText(k returns.EventKind) string {
 	}
 }
 
-// returnQtyText — ожидание строки для показа: кг (3 знака) или штуки.
-func returnQtyText(q int64, weighted bool) string {
-	if weighted {
-		return fmt.Sprintf("%.3f кг", float64(q)/1000)
+// qtyTextFor — ожидание строки для показа: кг (3 знака) или штуки.
+func qtyTextFor(e returns.Expected) string {
+	if e.Weighted {
+		return fmt.Sprintf("%.3f кг", float64(e.ExpectedQty)/1000)
 	}
-	return fmt.Sprintf("%d шт", q)
+	return fmt.Sprintf("%d шт", e.ExpectedQty)
 }
 
 // ReturnsPage — GET /goods/return: список активных событий (без ?e=) или
 // карточка события (?e=<id>). Данные события перечитываются из МС.
 func (h *Handler) ReturnsPage(w http.ResponseWriter, r *http.Request) {
-	eventID := r.URL.Query().Get("e")
+	if r.URL.Query().Get("e") == "" {
+		h.returnsListPage(w, r)
 
-	data := returnPageData{EventID: eventID}
-	if eventID == "" {
-		active, err := h.returnsUC.ListEvents(r.Context())
-		if err != nil {
-			slog.Error(fmt.Sprintf("returns list: %v", err))
-			http.Error(w, "не удалось загрузить список", http.StatusInternalServerError)
-
-			return
-		}
-		for _, ev := range active {
-			data.ActiveRows = append(data.ActiveRows, returnActiveRow{
-				ID:        ev.ID,
-				OrderName: ev.OrderName,
-				KindText:  returnKindText(ev.Kind),
-				Moment:    ev.Moment.In(mskLoc).Format("02.01.2006 15:04:05"),
-				Status:    eventStatusText(ev),
-			})
-		}
-	} else {
-		state, err := h.returnsUC.EventPage(r.Context(), eventID)
-		if err != nil {
-			if errors.Is(err, returns.ErrEventNotFound) {
-				http.Error(w, "событие не найдено (удалено из журнала?)", http.StatusNotFound)
-
-				return
-			}
-			slog.Error(fmt.Sprintf("returns event page %s: %v", eventID, err))
-			http.Error(w, "не удалось загрузить событие — попробуйте позже", http.StatusInternalServerError)
-
-			return
-		}
-
-		data.HasEvent = true
-		data.OrderName = state.Event.OrderName
-		data.KindText = returnKindText(state.Event.Kind)
-		data.Moment = state.Event.Moment.In(mskLoc).Format("02.01.2006 15:04:05")
-		data.Done = state.Done
-		data.Manual = state.Event.Manual
-
-		if !state.Done {
-			expect := make([]returnRowData, 0, len(state.Expected))
-			for _, e := range state.Expected {
-				expect = append(expect, returnRowData{
-					Code:     e.InternalCode,
-					Name:     e.Name,
-					QtyText:  returnQtyText(e.ExpectedQty, e.Weighted),
-					Target:   e.ExpectedQty,
-					Weighted: e.Weighted,
-				})
-			}
-			data.Empty = len(expect) == 0
-			data.Rows = expect
-			expectJSON, err := json.Marshal(expect)
-			if err != nil {
-				slog.Error(fmt.Sprintf("returns expect json: %v", err))
-				http.Error(w, "не удалось собрать ожидания", http.StatusInternalServerError)
-
-				return
-			}
-			data.ExpectJSON = string(expectJSON)
-		}
+		return
 	}
+	h.returnsEventCard(w, r, r.URL.Query().Get("e"))
+}
+
+// returnsListPage — GET /goods/return (без ?e=): активные события аудита
+// (new/sent), свежие сверху; карточка открывается по ссылке.
+func (h *Handler) returnsListPage(w http.ResponseWriter, r *http.Request) {
+	active, err := h.returnsUC.ListEvents(r.Context())
+	if err != nil {
+		slog.Error(fmt.Sprintf("returns list: %v", err))
+		http.Error(w, "не удалось загрузить список", http.StatusInternalServerError)
+
+		return
+	}
+
+	data := returnPageData{}
+	for _, ev := range active {
+		data.ActiveRows = append(data.ActiveRows, returnActiveRow{
+			ID:        ev.ID,
+			OrderName: ev.OrderName,
+			KindText:  returnKindText(ev.Kind),
+			Moment:    ev.Moment.In(mskLoc).Format("02.01.2006 15:04:05"),
+			Status:    eventStatusText(ev),
+		})
+	}
+
+	if err := returnTmpl.Execute(w, data); err != nil {
+		slog.Error(fmt.Sprintf("return template: %v", err))
+	}
+}
+
+// returnsEventCard — GET /goods/return?e=<id>: карточка события с ожиданиями
+// (клиентская сверка по data-expect; сервер — авторитет). Обработанное
+// событие — страница «возврат готов» без запросов к МС.
+func (h *Handler) returnsEventCard(w http.ResponseWriter, r *http.Request, eventID string) {
+	state, err := h.returnsUC.EventPage(r.Context(), eventID)
+	if err != nil {
+		if errors.Is(err, returns.ErrEventNotFound) {
+			http.Error(w, "событие не найдено (удалено из журнала?)", http.StatusNotFound)
+
+			return
+		}
+		slog.Error(fmt.Sprintf("returns event page %s: %v", eventID, err))
+		http.Error(w, "не удалось загрузить событие — попробуйте позже", http.StatusInternalServerError)
+
+		return
+	}
+
+	data := returnPageData{
+		HasEvent:  true,
+		EventID:   state.Event.ID,
+		OrderName: state.Event.OrderName,
+		KindText:  returnKindText(state.Event.Kind),
+		Moment:    state.Event.Moment.In(mskLoc).Format("02.01.2006 15:04:05"),
+		Done:      state.Done,
+		Manual:    state.Event.Manual,
+	}
+
+	if state.Done {
+		if err := returnTmpl.Execute(w, data); err != nil {
+			slog.Error(fmt.Sprintf("return template: %v", err))
+		}
+
+		return
+	}
+
+	expect := make([]returnRowData, 0, len(state.Expected))
+	for _, e := range state.Expected {
+		expect = append(expect, returnRowData{
+			Code:     e.InternalCode,
+			Name:     e.Name,
+			QtyText:  qtyTextFor(e),
+			Target:   e.ExpectedQty,
+			Weighted: e.Weighted,
+		})
+	}
+	data.Empty = len(expect) == 0
+	data.Rows = expect
+	expectJSON, err := json.Marshal(expect)
+	if err != nil {
+		slog.Error(fmt.Sprintf("returns expect json: %v", err))
+		http.Error(w, "не удалось собрать ожидания", http.StatusInternalServerError)
+
+		return
+	}
+	data.ExpectJSON = string(expectJSON)
 
 	if err := returnTmpl.Execute(w, data); err != nil {
 		slog.Error(fmt.Sprintf("return template: %v", err))

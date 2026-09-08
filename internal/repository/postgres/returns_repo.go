@@ -139,7 +139,7 @@ func (pg *PGClient) ListActive(ctx context.Context) ([]returns.ReturnEvent, erro
 	}
 	defer rows.Close()
 
-	var events []returns.ReturnEvent
+	var events = make([]returns.ReturnEvent, 0)
 	for rows.Next() {
 		ev, err := scanReturnEvent(rows)
 		if err != nil {
@@ -184,6 +184,8 @@ func (pg *PGClient) ProductsByMSIDs(ctx context.Context, ids []string) (map[stri
 		switch strings.TrimSpace(uom) { // весовой: кг/г/т (комментарий products_schema)
 		case "кг", "г", "т":
 			cp.Weighted = true
+		default:
+			// штучные и прочие единицы
 		}
 		out[cp.ProductID] = cp
 	}

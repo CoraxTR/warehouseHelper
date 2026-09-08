@@ -472,7 +472,7 @@ func (d *DIContainer) ReturnsUC() *retucase.UseCase {
 			retucase.Config{
 				CancelledStateID: msc.CancelledStateID,
 				SkipSources:      msc.SkipAuditSources,
-				PublicURL:        d.Config().ComplaintsConfig.PublicURL,
+				PublicURL:        d.Config().PublicURL,
 			},
 			d.MSClient(),
 			d.OrdersRepository(),

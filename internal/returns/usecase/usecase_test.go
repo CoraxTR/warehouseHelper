@@ -134,7 +134,7 @@ type stubNotifier struct {
 	err       error
 }
 
-func (s *stubNotifier) SendWarehouseReturn(_ context.Context, text, buttonURL string) (int64, int64, error) {
+func (s *stubNotifier) SendWarehouseReturn(_ context.Context, text, buttonURL string) (tgChatID int64, tgMessageID int64, err error) {
 	if s.err != nil {
 		return 0, 0, s.err
 	}
@@ -198,7 +198,16 @@ func jsonNumber(v float64) string {
 	return string(b)
 }
 
-func newTestUC(repo Repo) (*UseCase, *stubAudit, *stubStock, *stubNotifier) {
+// testEnv — окружение юнит-теста: usecase + стабы (один результат вместо
+// четырёх — revive function-result-limit).
+type testEnv struct {
+	uc     *UseCase
+	audit  *stubAudit
+	stock  *stubStock
+	notify *stubNotifier
+}
+
+func newTestEnv(repo Repo) *testEnv {
 	audit := &stubAudit{details: map[string][]client.AuditEventRow{}, positions: map[string][]client.MSPosition{}}
 	stockS := &stubStock{}
 	notify := &stubNotifier{chatID: -100999, messageID: 42}
@@ -207,14 +216,15 @@ func newTestUC(repo Repo) (*UseCase, *stubAudit, *stubStock, *stubNotifier) {
 		SkipSources:      []string{"remap-1.2"},
 		PublicURL:        "http://warehouse.local:8080",
 	}, audit, repo, testCatalog(), stockS, notify)
-	return uc, audit, stockS, notify
+	return &testEnv{uc: uc, audit: audit, stock: stockS, notify: notify}
 }
 
 // ── buildExpected ───────────────────────────────────────────────────────────
 
 func TestBuildExpected_CancelledOnlyPhysicallyReserved(t *testing.T) {
 	repo := newStubRepo()
-	uc, audit, _, _ := newTestUC(repo)
+	env := newTestEnv(repo)
+	uc, audit := env.uc, env.audit
 
 	audit.positions[orderID] = []client.MSPosition{
 		{Assortment: client.MSAssortment{Meta: client.MSMeta{HREF: "…/product/" + prodA}, Name: "Чак ролл"}, Quantity: 0.657, Reserve: 0.657},  // отложен
@@ -237,7 +247,8 @@ func TestBuildExpected_CancelledOnlyPhysicallyReserved(t *testing.T) {
 
 func TestBuildExpected_AggregatesSameProduct(t *testing.T) {
 	repo := newStubRepo()
-	uc, audit, _, _ := newTestUC(repo)
+	env := newTestEnv(repo)
+	uc, audit := env.uc, env.audit
 
 	audit.positions[orderID] = []client.MSPosition{
 		{Assortment: client.MSAssortment{Meta: client.MSMeta{HREF: "…/product/" + prodA}, Name: "Чак ролл"}, Quantity: 0.4, Reserve: 0.4},
@@ -256,7 +267,8 @@ func TestBuildExpected_AggregatesSameProduct(t *testing.T) {
 
 func TestBuildExpected_RemovedWithoutReserveIsNothing(t *testing.T) {
 	repo := newStubRepo()
-	uc, audit, _, _ := newTestUC(repo)
+	env := newTestEnv(repo)
+	uc, audit := env.uc, env.audit
 
 	// Удаление неотложенной позиции (reserve 0) — возвращать нечего.
 	audit.details[auditID] = []client.AuditEventRow{detailRow(removedDiffJSON(prodA, "Чак ролл", 0.657, 0, "кг"), "19191")}
