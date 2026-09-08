@@ -64,7 +64,7 @@ func TestTick_SkipsOurApiSource(t *testing.T) {
 	env := newTestEnv(repo)
 	uc, audit, notify := env.uc, env.audit, env.notify
 	audit.pageRows = []client.AuditRow{auditRow("remap-1.2")} // наш PUT: полная замена positions
-	audit.details[auditID] = []client.AuditEventRow{detailRow(removedDiffJSON(0.657, 0.657, "кг"), "19191")}
+	audit.details[auditID] = []client.AuditEventRow{detailRow(removedDiffJSON(0.657, "кг"), "19191")}
 
 	if err := uc.tick(context.Background()); err != nil {
 		t.Fatalf("tick: %v", err)
@@ -85,7 +85,7 @@ func TestTick_RemovedReservedSendsNotification(t *testing.T) {
 
 	audit.pageRows = []client.AuditRow{auditRow("app")}
 	// Удалена отложенная позиция (quantity == reserved) — склад должен вернуть кусок.
-	audit.details[auditID] = []client.AuditEventRow{detailRow(removedDiffJSON(0.657, 0.657, "кг"), "19191")}
+	audit.details[auditID] = []client.AuditEventRow{detailRow(removedDiffJSON(0.657, "кг"), "19191")}
 
 	if err := uc.tick(context.Background()); err != nil {
 		t.Fatalf("tick: %v", err)
@@ -165,7 +165,7 @@ func TestTick_AlreadyTrackedSkipped(t *testing.T) {
 	repo.events[auditID] = &returns.ReturnEvent{ID: auditID, Kind: returns.KindRemoved, OrderID: orderID, OrderName: "19191", Status: returns.StatusSent}
 
 	audit.pageRows = []client.AuditRow{auditRow("app")}
-	audit.details[auditID] = []client.AuditEventRow{detailRow(removedDiffJSON(0.657, 0.657, "кг"), "19191")}
+	audit.details[auditID] = []client.AuditEventRow{detailRow(removedDiffJSON(0.657, "кг"), "19191")}
 
 	if err := uc.tick(context.Background()); err != nil {
 		t.Fatalf("tick: %v", err)
@@ -185,7 +185,7 @@ func TestRetryNew_ResendsAfterFailedSend(t *testing.T) {
 
 	// Событие зависло в new (упали между InsertEvent и MarkSent).
 	repo.events[auditID] = &returns.ReturnEvent{ID: auditID, Kind: returns.KindRemoved, OrderID: orderID, OrderName: "19191", Status: returns.StatusNew}
-	audit.details[auditID] = []client.AuditEventRow{detailRow(removedDiffJSON(0.657, 0.657, "кг"), "19191")}
+	audit.details[auditID] = []client.AuditEventRow{detailRow(removedDiffJSON(0.657, "кг"), "19191")}
 
 	if err := uc.retryNew(context.Background()); err != nil {
 		t.Fatalf("retryNew: %v", err)
