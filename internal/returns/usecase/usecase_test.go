@@ -185,8 +185,10 @@ func detailRow(diffJSON, name string) client.AuditEventRow {
 	return row
 }
 
-func removedDiffJSON(reserve float64, uom string) string {
-	return `{"positions":[{"oldValue":{"assortment":{"meta":{"href":"https://api.moysklad.ru/api/remap/1.2/entity/product/` + prodA + `"},"name":"Чак ролл"},"quantity":0.657,"reserve":` + f(reserve) + `,"uom":"` + uom + `"}}]}`
+// removedDiffJSON — diff удаления позиции Чак ролл (весовая, uom «кг»):
+// oldValue без newValue. quantity/reserve фиксированы вариантами тестов.
+func removedDiffJSON(reserve float64) string {
+	return `{"positions":[{"oldValue":{"assortment":{"meta":{"href":"https://api.moysklad.ru/api/remap/1.2/entity/product/` + prodA + `"},"name":"Чак ролл"},"quantity":0.657,"reserve":` + f(reserve) + `,"uom":"кг"}}]}`
 }
 func f(v float64) string {
 	return jsonNumber(v)
@@ -272,7 +274,7 @@ func TestBuildExpected_RemovedWithoutReserveIsNothing(t *testing.T) {
 	uc, audit := env.uc, env.audit
 
 	// Удаление неотложенной позиции (reserve 0) — возвращать нечего.
-	audit.details[auditID] = []client.AuditEventRow{detailRow(removedDiffJSON(0, "кг"), "19191")}
+	audit.details[auditID] = []client.AuditEventRow{detailRow(removedDiffJSON(0), "19191")}
 
 	ev := &returns.ReturnEvent{ID: auditID, Kind: returns.KindRemoved, OrderID: orderID}
 	_, err := uc.buildExpected(context.Background(), ev)
