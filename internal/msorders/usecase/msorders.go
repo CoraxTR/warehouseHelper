@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -83,6 +84,9 @@ func (uc *UseCase) Search(ctx context.Context, name string) ([]OrderRow, error) 
 		return nil, fmt.Errorf("search orders: %w", err)
 	}
 
+	// Свежие сверху: МС не гарантирует порядок при фильтре по номеру.
+	sortByMomentDesc(orders)
+
 	rows := make([]OrderRow, 0, len(orders))
 	for i := range orders {
 		o := &orders[i]
@@ -137,4 +141,21 @@ func orDash(s string) string {
 		return dash
 	}
 	return s
+}
+
+// sortByMomentDesc упорядочивает заказы по дате создания (moment) по убыванию:
+// свежие сверху. Момент МС — строка «2006-01-02 15:04:05.000», лексикографическое
+// сравнение совпадает с хронологическим. Заказы без даты — в конец; равные
+// моменты сохраняют порядок МС (стабильная сортировка).
+func sortByMomentDesc(orders []client.MSOrder) {
+	sort.SliceStable(orders, func(i, j int) bool {
+		a, b := orders[i].Moment, orders[j].Moment
+		if a == "" || a == b {
+			return false // без даты — в конец; равные — без перестановки
+		}
+		if b == "" {
+			return true
+		}
+		return a > b
+	})
 }
