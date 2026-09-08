@@ -40,13 +40,13 @@ type returnPageData struct {
 	ActiveRows []returnActiveRow
 }
 
-// returnRowData — строка ожидания возврата для шаблона и JS.
+// returnRowData — строка ожидания возврата для шаблона и JS (data-expect).
 type returnRowData struct {
-	Code     string // internal_code — по нему резолвится скан
-	Name     string // название товара (из диффа/заказа)
-	QtyText  string // «0.657 кг» / «2 шт» — ожидание для показа
-	Target   int64  // ожидание для сверки: граммы (весовой) или штуки
-	Weighted bool
+	Code     string `json:"code"`    // internal_code — по нему резолвится скан
+	Name     string `json:"name"`    // название товара (из диффа/заказа)
+	QtyText  string `json:"qtyText"` // «0.657 кг» / «2 шт» — ожидание для показа
+	Target   int64  `json:"target"`  // ожидание для сверки: граммы (весовой) или штуки
+	Weighted bool   `json:"weighted"`
 }
 
 type returnActiveRow struct {

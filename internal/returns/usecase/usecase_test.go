@@ -173,7 +173,7 @@ func etiketa(code string, weightG int, prod, exp string) string {
 }
 
 // detailRow — строка раскрытия events (JSON по мотивам живого ответа).
-func detailRow(diffJSON string, name string) client.AuditEventRow {
+func detailRow(diffJSON, name string) client.AuditEventRow {
 	raw := `{"source":"app","eventType":"update","entityType":"customerorder","uid":"sklad@steakhome",` +
 		`"moment":"2026-09-08 23:11:52.918","name":"` + name + `","diff":` + diffJSON + `,` +
 		`"entity":{"meta":{"href":"https://api.moysklad.ru/api/remap/1.2/entity/customerorder/` + orderID + `"}}}`
@@ -191,7 +191,10 @@ func f(v float64) string {
 	return jsonNumber(v)
 }
 func jsonNumber(v float64) string {
-	b, _ := json.Marshal(v)
+	b, err := json.Marshal(v)
+	if err != nil {
+		panic(err) // float64 сериализуется всегда
+	}
 	return string(b)
 }
 

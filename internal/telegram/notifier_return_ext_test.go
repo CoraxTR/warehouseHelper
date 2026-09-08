@@ -13,6 +13,10 @@ import (
 // Тесты модуля returns: сообщение складу с URL-кнопкой «Расформировать»
 // (возврат message_id для удаления) и deleteMessage обработанного сообщения.
 
+// tgSendMessagePath — путь Bot API (токен тестовый); константа, чтобы
+// goconst не видел три одинаковых литерала в пакете telegram.
+const tgSendMessagePath = "/bottest-token/sendMessage"
+
 func TestSendWarehouseReturnSendsURLButton(t *testing.T) {
 	var (
 		gotPath string
@@ -41,8 +45,8 @@ func TestSendWarehouseReturnSendsURLButton(t *testing.T) {
 		t.Fatalf("SendWarehouseReturn error: %v", err)
 	}
 
-	if gotPath != "/bottest-token/sendMessage" {
-		t.Errorf("path = %q, want /bottest-token/sendMessage", gotPath)
+	if gotPath != tgSendMessagePath {
+		t.Errorf("path = %q, want %s", gotPath, tgSendMessagePath)
 	}
 	if chatID != -100999 {
 		t.Errorf("chatID = %d, want -100999", chatID)

@@ -297,7 +297,7 @@ func loadMSConfig() *MSConfig {
 	// Пусто — допустимо: модуль returns не детектит отмены (warn при старте).
 
 	skipAuditSources := make([]string, 0, 1)
-	for _, v := range strings.Split(os.Getenv("MSAPI_SKIP_AUDIT_SOURCES"), ",") {
+	for v := range strings.SplitSeq(os.Getenv("MSAPI_SKIP_AUDIT_SOURCES"), ",") {
 		if v = strings.TrimSpace(v); v != "" {
 			skipAuditSources = append(skipAuditSources, v)
 		}

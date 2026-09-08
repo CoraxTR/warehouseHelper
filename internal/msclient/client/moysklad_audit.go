@@ -66,16 +66,20 @@ type msAuditListResponse struct {
 // AuditEventRow — строка раскрытия GET audit/<id>/events: полный diff
 // изменения + имя сущности и ссылка на неё.
 type AuditEventRow struct {
-	AdditionalInfo string                `json:"additionalInfo"`
-	Audit          struct{ Meta MSMeta } `json:"audit"`
-	Diff           AuditDiff             `json:"diff"`
-	Entity         struct{ Meta MSMeta } `json:"entity"`
-	EntityType     string                `json:"entityType"`
-	EventType      string                `json:"eventType"`
-	Moment         string                `json:"moment"`
-	Name           string                `json:"name"` // номер заказа и т.п.
-	Source         *string               `json:"source"`
-	UID            string                `json:"uid"`
+	AdditionalInfo string `json:"additionalInfo"`
+	Audit          struct {
+		Meta MSMeta `json:"meta"`
+	} `json:"audit"`
+	Diff   AuditDiff `json:"diff"`
+	Entity struct {
+		Meta MSMeta `json:"meta"`
+	} `json:"entity"`
+	EntityType string  `json:"entityType"`
+	EventType  string  `json:"eventType"`
+	Moment     string  `json:"moment"`
+	Name       string  `json:"name"` // номер заказа и т.п.
+	Source     *string `json:"source"`
+	UID        string  `json:"uid"`
 }
 
 // AuditDiff — изменённые поля события. В JSON приходят только изменившиеся

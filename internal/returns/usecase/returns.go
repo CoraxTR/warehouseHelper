@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"time"
 
 	"warehouseHelper/internal/msclient/client"
@@ -326,7 +327,7 @@ func formatQty(e returns.Expected) string {
 // returnURL — адрес страницы «Возврат в продажу» для URL-кнопки.
 func (uc *UseCase) returnURL(eventID string) string {
 	base := uc.cfg.PublicURL
-	for len(base) > 0 && base[len(base)-1] == '/' {
+	for base != "" && base[len(base)-1] == '/' {
 		base = base[:len(base)-1]
 	}
 	return base + "/goods/return?e=" + eventID
@@ -338,10 +339,5 @@ func (uc *UseCase) skippedSource(source *string) bool {
 	if source == nil {
 		return false
 	}
-	for _, s := range uc.cfg.SkipSources {
-		if *source == s {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(uc.cfg.SkipSources, *source)
 }
