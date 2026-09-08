@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Возврат в продажу</title>
+    <link rel="stylesheet" href="/static/raven-guard.css">
+</head>
+
+<body data-event-id="{{.EventID}}" data-expect='{{.ExpectJSON}}'>
+
+    <header class="brandbar">
+        <a class="brandbar__brand" href="/"><svg class="brandbar__emblem" viewBox="0 0 64 64" aria-hidden="true"><circle cx="35" cy="25" r="14" fill="#F4F1E9"/><polygon points="6,26 30,17 28,27" fill="#F4F1E9"/><polygon points="13,35 28,27 26,36" fill="#F4F1E9"/><circle cx="34" cy="23" r="3.6" fill="#0A0A0D"/><circle cx="33" cy="22" r="1.1" fill="#C02832"/></svg><span class="brandbar__name">ВОРОН&nbsp;&middot;&nbsp;СКЛАД</span></a>
+        <span class="brandbar__motto">Приёмка или смерть</span>
+    </header>
+
+    {{if .HasEvent}}
+    <!-- Карточка события: ожидания и сканирование кусков -->
+    <div class="topbar">
+        <a class="btn btn-cancel cancel" href="/goods/return">← К списку</a>
+        <h1>Возврат в продажу</h1>
+        <div class="constraint">{{.KindText}} · заказ {{.OrderName}} · {{.Moment}}</div>
+    </div>
+
+    {{if .Done}}
+    <div class="card">
+        {{if .Manual}}
+        <p><b>Возврат закрыт вручную.</b> Куски не возвращались в остатки (потеряны / списаны / не нашлись). Сообщение в чате удалено.</p>
+        {{else}}
+        <p><b>Возврат принят.</b> Товары вернулись в продажу, сообщение в чате удалено.</p>
+        {{end}}
+    </div>
+    {{else}}
+    <div class="scan-block">
+        {{if .Empty}}
+        <div class="constraint hint">В этом событии нет отложенных позиций с кодом склада — возвращать нечего (заказ изменился после уведомления). Закройте событие вручную.</div>
+        <div class="save-row">
+            <button id="close-btn" class="btn btn-cancel" type="button">Закрыть возврат</button>
+        </div>
+        {{else}}
+        <div class="constraint hint">Сканируйте этикетки кусков (29 цифр). Вес должен сойтись строго: куски одного товара складываются, пока не наберётся нужный вес/количество. Невалидный или лишний штрих-код не принимается: бип и отказ.</div>
+        <input id="scan-input" type="text" autocomplete="off" placeholder="Отсканируйте этикетку куска…">
+        <div id="scan-error" class="error" style="display:none;"></div>
+        <div id="expect-list" class="section"></div>
+        <div id="scan-list"></div>
+        <div class="save-row">
+            <button id="save-btn" class="btn btn-save" type="button" disabled>Сохранить возврат</button>
+            <button id="close-btn" class="btn btn-cancel" type="button">Закрыть вручную</button>
+        </div>
+        <div id="counter" class="counter"></div>
+        {{end}}
+    </div>
+    {{end}}
+
+    {{else}}
+    <!-- Список активных событий (без ?e=) -->
+    <div class="topbar">
+        <a class="btn btn-cancel cancel" href="/goods">← Продукция</a>
+        <h1>Возврат в продажу</h1>
+    </div>
+
+    {{if .ActiveRows}}
+    <div class="section">
+        {{range .ActiveRows}}
+        <div class="card">
+            <a href="/goods/return?e={{.ID}}"><b>{{.OrderName}}</b> — {{.KindText}}</a>
+            <span class="muted small">{{.Moment}} · {{.Status}}</span>
+        </div>
+        {{end}}
+    </div>
+    {{else}}
+    <div class="card"><p class="muted">Нет активных событий: удаления отложенных позиций и отмены заказов появятся здесь автоматически.</p></div>
+    {{end}}
+    {{end}}
+
+    <script>
+        // Страница «Возврат в продажу»: сверка сканов с ожиданиями события.
+        // Только ES5 (старые браузеры склада). Локальная проверка дублирует
+        // серверную (авторитетную): неполный возврат сохранить нельзя.
+        var RETURN = { scans: [], busy: false, expect: [] };
+
+        function el(id) {
+            return document.getElementById(id);
+        }
+
+        function fmtAmt(v, weighted) {
+            if (weighted) {
+                return (v / 1000).toFixed(3) + ' кг';
+            }
+            return v + ' шт';
+        }
+
+        function parseExpect() {
+            var raw = document.body.getAttribute('data-expect');
+            if (!raw) {
+                return;
+            }
+            try {
+                RETURN.expect = JSON.parse(raw);
+            } catch (e) {
+                RETURN.expect = [];
+            }
+        }
+
+        function showError(msg) {
+            var e = el('scan-error');
+            if (!e) {
+                return;
+            }
+            e.innerHTML = msg;
+            e.style.display = 'block';
+        }
+
+        function hideError() {
+            var e = el('scan-error');
+            if (e) {
+                e.style.display = 'none';
+            }
+        }
+
+        // Громкий бип (Web Audio); нет звука — сообщение об ошибке всё равно видно.
+        var beepCtx = null;
+        function beep() {
+            try {
+                var AC = window.AudioContext || window.webkitAudioContext;
+                if (!AC) {
+                    return;
+                }
+                if (!beepCtx) {
+                    beepCtx = new AC();
+                }
+                var osc = beepCtx.createOscillator();
+                var gain = beepCtx.createGain();
+                osc.connect(gain);
+                gain.connect(beepCtx.destination);
+                osc.frequency.value = 880;
+                gain.gain.value = 0.5;
+                osc.start(0);
+                setTimeout(function () { osc.stop(0); }, 180);
+            } catch (e) { /* тишина */ }
+        }
+
+        // Строка ожидания по internal_code этикетки. null — нет в списке.
+        function expectByCode(code) {
+            for (var i = 0; i < RETURN.expect.length; i++) {
+                if (RETURN.expect[i].code === code) {
+                    return RETURN.expect[i];
+                }
+            }
+            return null;
+        }
+
+        // Накоплено по строке: граммы (весовой) или штуки.
+        function gotFor(exp) {
+            var sum = 0;
+            for (var i = 0; i < RETURN.scans.length; i++) {
+                var raw = RETURN.scans[i];
+                if (raw.slice(0, 8) !== exp.code) {
+                    continue;
+                }
+                if (exp.weighted) {
+                    sum += parseInt(raw.slice(8, 13), 10);
+                } else {
+                    sum += 1;
+                }
+            }
+            return sum;
+        }
+
+        function allMatched() {
+            for (var i = 0; i < RETURN.expect.length; i++) {
+                if (gotFor(RETURN.expect[i]) !== RETURN.expect[i].target) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        function updateSaveBtn() {
+            var btn = el('save-btn');
+            if (!btn) {
+                return;
+            }
+            var done = allMatched();
+            btn.disabled = !done;
+            if (done) {
+                btn.innerHTML = 'Сохранить возврат';
+            }
+        }
+
+        // Локальная проверка скана. null — принят, иначе текст отказа.
+        function checkScan(raw) {
+            if (raw.length !== 29) {
+                return 'Не этикетка куска: ожидается 29 цифр (коробки 33 не участвуют)';
+            }
+            var exp = expectByCode(raw.slice(0, 8));
+            if (!exp) {
+                return 'Товар с кодом ' + raw.slice(0, 8) + ' не в списке возврата';
+            }
+            var add = exp.weighted ? parseInt(raw.slice(8, 13), 10) : 1;
+            if (gotFor(exp) + add > exp.target) {
+                return 'Перебор: ' + exp.name + ' — осталось набрать ' + fmtAmt(exp.target - gotFor(exp), exp.weighted);
+            }
+            return null;
+        }
+
+        function submitScan() {
+            var input = el('scan-input');
+            var raw = input.value.replace(/^\s+|\s+$/g, '');
+            if (raw === '') {
+                return;
+            }
+            var err = checkScan(raw);
+            if (err) {
+                beep();
+                showError(err);
+                input.value = '';
+                input.focus();
+                return;
+            }
+            hideError();
+            RETURN.scans.push(raw);
+            input.value = '';
+            input.focus();
+            renderAll();
+        }
+
+        function renderAll() {
+            var list = el('expect-list');
+            var html = '';
+            for (var i = 0; i < RETURN.expect.length; i++) {
+                var exp = RETURN.expect[i];
+                var got = gotFor(exp);
+                var done = got === exp.target;
+                html += '<div class="scan-row' + (done ? ' done' : '') + '"><span class="code">' + exp.name + '</span>'
+                    + ' <span class="muted">' + fmtAmt(got, exp.weighted) + ' из ' + exp.qtyText + '</span>'
+                    + (done ? ' ✓' : '') + '</div>';
+            }
+            list.innerHTML = html;
+
+            var scans = el('scan-list');
+            var shtml = '';
+            for (var j = 0; j < RETURN.scans.length; j++) {
+                shtml += '<div class="scan-row"><span class="code">' + RETURN.scans[j] + '</span>'
+                    + '<button type="button" class="rm" data-idx="' + j + '">✕</button></div>';
+            }
+            scans.innerHTML = shtml;
+
+            var c = el('counter');
+            if (c) {
+                var left = 0;
+                for (var k = 0; k < RETURN.expect.length; k++) {
+                    if (gotFor(RETURN.expect[k]) !== RETURN.expect[k].target) {
+                        left++;
+                    }
+                }
+                c.innerHTML = left === 0 ? 'Всё собрано — можно сохранять.' : 'Осталось строк: ' + left + ' · Сканов: ' + RETURN.scans.length;
+            }
+            updateSaveBtn();
+        }
+
+        function removeScan(idx) {
+            RETURN.scans.splice(idx, 1);
+            renderAll();
+        }
+
+        function saveReturn() {
+            if (RETURN.busy) {
+                return;
+            }
+            if (!allMatched()) {
+                showError('Возврат неполный — сохранить нельзя, пока вес не сошёлся');
+                return;
+            }
+            RETURN.busy = true;
+            var btn = el('save-btn');
+            btn.disabled = true;
+            var xhr = new XMLHttpRequest();
+            xhr.open('POST', '/goods/return/save', true);
+            xhr.setRequestHeader('Content-Type', 'application/json');
+            xhr.onreadystatechange = function () {
+                if (xhr.readyState !== 4) {
+                    return;
+                }
+                RETURN.busy = false;
+                btn.disabled = false;
+                if (xhr.status === 204) {
+                    btn.innerHTML = 'Сохранено';
+                    setTimeout(function () { window.location.reload(); }, 600);
+                } else {
+                    beep();
+                    showError(xhr.responseText || ('Не удалось сохранить (HTTP ' + xhr.status + ')'));
+                }
+            };
+            xhr.send(JSON.stringify({
+                event_id: document.body.getAttribute('data-event-id'),
+                scans: RETURN.scans
+            }));
+        }
+
+        function closeReturn() {
+            if (RETURN.busy) {
+                return;
+            }
+            var ok = window.confirm('Закрыть возврат вручную? Куски НЕ вернутся в остатки (потеряны/списаны/не нашлись). Сообщение из чата будет удалено.');
+            if (!ok) {
+                return;
+            }
+            RETURN.busy = true;
+            var xhr = new XMLHttpRequest();
+            xhr.open('POST', '/goods/return/close', true);
+            xhr.setRequestHeader('Content-Type', 'application/json');
+            xhr.onreadystatechange = function () {
+                if (xhr.readyState !== 4) {
+                    return;
+                }
+                if (xhr.status === 204) {
+                    window.location.reload();
+                } else {
+                    RETURN.busy = false;
+                    beep();
+                    showError(xhr.responseText || ('Не удалось закрыть (HTTP ' + xhr.status + ')'));
+                }
+            };
+            xhr.send(JSON.stringify({
+                event_id: document.body.getAttribute('data-event-id')
+            }));
+        }
+
+        function init() {
+            parseExpect();
+            var input = el('scan-input');
+            if (input) {
+                input.addEventListener('keydown', function (ev) {
+                    if (ev.keyCode === 13) {
+                        ev.preventDefault();
+                        submitScan();
+                    }
+                });
+                input.focus();
+            }
+            var scans = el('scan-list');
+            if (scans) {
+                scans.addEventListener('click', function (ev) {
+                    var t = ev.target || ev.srcElement;
+                    while (t && t !== scans) {
+                        if (t.getAttribute && t.getAttribute('data-idx') !== null) {
+                            removeScan(parseInt(t.getAttribute('data-idx'), 10));
+                            return;
+                        }
+                        t = t.parentNode;
+                    }
+                });
+            }
+            var save = el('save-btn');
+            if (save) {
+                save.addEventListener('click', saveReturn);
+            }
+            var close = el('close-btn');
+            if (close) {
+                close.addEventListener('click', closeReturn);
+            }
+            renderAll();
+        }
+
+        init();
+    </script>
+
+</body>
+
+</html>

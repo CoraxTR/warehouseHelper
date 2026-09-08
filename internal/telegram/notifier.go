@@ -106,6 +106,43 @@ func (n *Notifier) NotifyCommonStatus(ctx context.Context, textHTML, callbackDat
 	return n.postJSON(ctx, "sendMessage", payload)
 }
 
+// SendWarehouseReturn отправляет в чат склада сообщение с URL-кнопкой
+// «Расформировать» (модуль returns: возврат в продажу). Текст — обычный,
+// без HTML-разметки (имена товаров могут содержать спецсимволы). Возвращает
+// chat_id и message_id отправленного сообщения — по ним модуль удалит
+// сообщение после обработки возврата. Без токена или chat_id склада — no-op.
+func (n *Notifier) SendWarehouseReturn(ctx context.Context, text, buttonURL string) (chatID, messageID int64, err error) {
+	if n.botToken == "" || n.warehouseChatID == 0 {
+		return 0, 0, nil
+	}
+
+	payload := map[string]any{
+		"chat_id": n.warehouseChatID,
+		"text":    text,
+		"reply_markup": map[string]any{
+			"inline_keyboard": [][]map[string]string{{
+				{"text": "Расформировать", "url": buttonURL},
+			}},
+		},
+	}
+
+	messageID, err = n.postJSONResult(ctx, "sendMessage", payload)
+	return n.warehouseChatID, messageID, err
+}
+
+// DeleteMessage удаляет сообщение из чата (модуль returns убирает из чата
+// обработанное уведомление). Telegram молча игнорирует удаление
+// несуществующего сообщения. Без токена — no-op.
+func (n *Notifier) DeleteMessage(ctx context.Context, chatID, messageID int64) error {
+	if n.botToken == "" || chatID == 0 || messageID == 0 {
+		return nil
+	}
+	return n.postJSON(ctx, "deleteMessage", map[string]any{
+		"chat_id":    chatID,
+		"message_id": messageID,
+	})
+}
+
 // SendDetails отправляет обычное текстовое сообщение в указанный чат
 // (без parse_mode — пользовательский текст, HTML там не размечается).
 // Без токена или chat_id — no-op.
@@ -248,35 +285,59 @@ func (n *Notifier) sendMessage(ctx context.Context, chatID int64, text string) e
 
 // postJSON выполняет POST-запрос к методу Bot API с JSON-телом.
 func (n *Notifier) postJSON(ctx context.Context, method string, payload map[string]any) error {
+	_, err := n.postJSONResult(ctx, method, payload)
+	return err
+}
+
+// postJSONResult выполняет POST-запрос к методу Bot API и разбирает ответ:
+// возвращает message_id из result (0, если метод не возвращает сообщение).
+func (n *Notifier) postJSONResult(ctx context.Context, method string, payload map[string]any) (int64, error) {
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("failed to marshal telegram message: %w", err)
+		return 0, fmt.Errorf("failed to marshal telegram message: %w", err)
 	}
 
 	url := fmt.Sprintf("%s/bot%s/%s", n.apiBaseURL, n.botToken, method)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return fmt.Errorf("failed to create telegram request: %w", err)
+		return 0, fmt.Errorf("failed to create telegram request: %w", err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := n.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("telegram request failed: %w", err)
+		return 0, fmt.Errorf("telegram request failed: %w", err)
 	}
-
 	defer func() {
 		if err := resp.Body.Close(); err != nil {
 			slog.Error(fmt.Sprintf("failed to close telegram response body: %v", err))
 		}
 	}()
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		bodySnippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return fmt.Errorf("telegram API returned %s: %s", resp.Status, string(bodySnippet))
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	if err != nil {
+		return 0, fmt.Errorf("failed to read telegram response: %w", err)
 	}
 
-	return nil
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return 0, fmt.Errorf("telegram API returned %s: %s", resp.Status, string(respBody))
+	}
+
+	// Пустой 2xx-ответ (часть тестовых серверов) — сообщение без id.
+	if len(bytes.TrimSpace(respBody)) == 0 {
+		return 0, nil
+	}
+
+	var r struct {
+		OK     bool `json:"ok"`
+		Result struct {
+			MessageID int64 `json:"message_id"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(respBody, &r); err != nil {
+		return 0, fmt.Errorf("failed to parse telegram response: %w", err)
+	}
+	return r.Result.MessageID, nil
 }

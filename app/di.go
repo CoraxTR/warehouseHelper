@@ -27,6 +27,7 @@ import (
 	"warehouseHelper/internal/refgo/registry"
 	rgucase "warehouseHelper/internal/refgo/usecase"
 	"warehouseHelper/internal/repository/postgres"
+	retucase "warehouseHelper/internal/returns/usecase"
 	sucase "warehouseHelper/internal/stock/usecase"
 	stockws "warehouseHelper/internal/stock/ws"
 	"warehouseHelper/internal/telegram"
@@ -69,6 +70,7 @@ type DIContainer struct {
 	qrUC            *qucase.QRUseCase
 	msUC            *msu.MSSuppliersUseCase
 	msOrdersUC      *mordersuc.UseCase
+	returnsUC       *retucase.UseCase
 	stockUC         *sucase.StockUseCase
 	stockHub        *stockws.Hub
 	receiveBarcodes *rucase.BarcodeEditor
@@ -458,9 +460,34 @@ func (a orderCatalogAdapter) LoadCatalogProductsByCodes(ctx context.Context, cod
 	return out, nil
 }
 
+// ReturnsUC — «Возврат в продажу»: наблюдатель журнала действий МС (audit)
+// и страница расформирования отменённых/урезанных заказов. PGClient
+// реализует Repo (return_events/return_cursor) и Catalog (чтение products),
+// MSClient — AuditAPI (audit/positions), StockUC принимает остатки,
+// TelegramNotifier шлёт сообщения складу и удаляет их после обработки.
+func (d *DIContainer) ReturnsUC() *retucase.UseCase {
+	if d.returnsUC == nil {
+		msc := d.Config().MSConfig
+		d.returnsUC = retucase.NewUseCase(
+			retucase.Config{
+				CancelledStateID: msc.CancelledStateID,
+				SkipSources:      msc.SkipAuditSources,
+				PublicURL:        d.Config().PublicURL,
+			},
+			d.MSClient(),
+			d.OrdersRepository(),
+			d.OrdersRepository(),
+			d.StockUC(),
+			d.TelegramNotifier(),
+		)
+	}
+
+	return d.returnsUC
+}
+
 func (d *DIContainer) Handler() *myhttp.Handler {
 	if d.handlers == nil {
-		d.handlers = myhttp.NewHandler(d.SyncUC(), d.OrdersUC(), d.ExcelExportUC(), d.PdfExportUC(), d.BarcodeExportUC(), d.RefGoCheckAgainstUC(), d.WikiUC(), d.GoodsUC(), d.DayStateUC(), d.QRUC(), d.SuppliersUC(), d.StockUC(), d.StockHub(), d.ReceiveBarcodes(), d.ReceivingUC(), d.ComplaintsUC(), d.MSOrdersUC())
+		d.handlers = myhttp.NewHandler(d.SyncUC(), d.OrdersUC(), d.ExcelExportUC(), d.PdfExportUC(), d.BarcodeExportUC(), d.RefGoCheckAgainstUC(), d.WikiUC(), d.GoodsUC(), d.DayStateUC(), d.QRUC(), d.SuppliersUC(), d.StockUC(), d.StockHub(), d.ReceiveBarcodes(), d.ReceivingUC(), d.ComplaintsUC(), d.MSOrdersUC(), d.ReturnsUC())
 	}
 
 	return d.handlers

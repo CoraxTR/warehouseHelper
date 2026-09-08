@@ -209,6 +209,12 @@ type MSConfig struct {
 	URLstart         string
 	AuthHeader       string
 	EncodeHeader     string
+	// CancelledStateID — id статуса заказа «Отменён» (audit-наблюдатель,
+	// модуль returns). Пусто — перевод в «Отменён» не детектится.
+	CancelledStateID string
+	// SkipAuditSources — source-источники событий audit, которые поллер
+	// пропускает (наши API-изменения). По умолчанию remap-1.2.
+	SkipAuditSources []string
 }
 
 func loadMSConfig() *MSConfig {
@@ -287,6 +293,21 @@ func loadMSConfig() *MSConfig {
 		os.Exit(1)
 	}
 
+	cancelledStateID := os.Getenv("MSAPI_CANCELLED_STATE_ID")
+	// Пусто — допустимо: модуль returns не детектит отмены (warn при старте).
+
+	skipAuditSources := make([]string, 0, 1)
+	for v := range strings.SplitSeq(os.Getenv("MSAPI_SKIP_AUDIT_SOURCES"), ",") {
+		if v = strings.TrimSpace(v); v != "" {
+			skipAuditSources = append(skipAuditSources, v)
+		}
+	}
+	if len(skipAuditSources) == 0 {
+		// Безопасный дефолт: события, порождённые нашими API-правками
+		// (source=remap-1.2), не должны триггерить уведомления складу.
+		skipAuditSources = append(skipAuditSources, "remap-1.2")
+	}
+
 	return &MSConfig{
 		Refs: msrefs,
 
@@ -301,6 +322,8 @@ func loadMSConfig() *MSConfig {
 		URLstart:         urlstart,
 		AuthHeader:       authheader,
 		EncodeHeader:     encodeheader,
+		CancelledStateID: cancelledStateID,
+		SkipAuditSources: skipAuditSources,
 	}
 }
 
