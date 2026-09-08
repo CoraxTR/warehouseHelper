@@ -272,42 +272,78 @@
         // Safari < 14.1, IE/Edge Legacy). Без него накопление недоступно:
         // drop-зона предупредит и откроет диалог выбора, форма отправит
         // файлы из обычного input[type=file] как есть.
+        //
+        // Превью — миниатюры в canvas: полные <img src=objectURL> держали бы
+        // в памяти растр 3000×4000×4 ≈ 48 МБ на каждое фото и валили вкладку
+        // на 5–6 снимках. Вместо этого файлы декодируются строго по одному
+        // (очередь), рисуются в canvas ≤ 480px, и растр оригинала сразу
+        // освобождается — objectURL живёт только на время декода.
         var supportsDT = !!(window.DataTransfer && window.DataTransfer.prototype &&
             window.DataTransfer.prototype.items && window.DataTransfer.prototype.files);
         var dt = supportsDT ? new DataTransfer() : null;
-        var objectUrls = [];
         var photosInput = document.getElementById('photos');
         var preview = document.getElementById('preview');
         var count = document.getElementById('photo-count');
 
-        function renderPreview() {
-            if (!dt) { return; }
-            for (var i = 0; i < objectUrls.length; i++) { URL.revokeObjectURL(objectUrls[i]); }
-            objectUrls = [];
-            preview.innerHTML = '';
-            for (var i = 0; i < dt.files.length; i++) {
-                var img = document.createElement('img');
-                img.src = URL.createObjectURL(dt.files[i]);
-                objectUrls.push(img.src);
-                preview.appendChild(img);
-            }
-            count.textContent = dt.files.length > 0 ? 'Добавлено фото: ' + dt.files.length : '';
+        var thumbQueue = []; // очередь файлов на декод
+        var thumbBusy = false;
+
+        function pumpThumbs() {
+            if (thumbBusy || thumbQueue.length === 0) { return; }
+            thumbBusy = true;
+            makeThumb(thumbQueue.shift(), function () {
+                thumbBusy = false;
+                pumpThumbs();
+            });
+        }
+
+        function queueThumb(file) {
+            thumbQueue.push(file);
+            pumpThumbs();
+        }
+
+        // Декодирует файл во временный Image, рисует миниатюру (длинная
+        // сторона ≤ 480px) в canvas. EXIF-поворот применяет браузер; после
+        // отрисовки objectURL отзывается — растр оригинала освобождается.
+        function makeThumb(file, done) {
+            var url = URL.createObjectURL(file);
+            var img = new Image();
+            img.onload = function () {
+                URL.revokeObjectURL(url);
+                var long = img.width > img.height ? img.width : img.height;
+                var k = Math.min(1, 480 / long);
+                var canvas = document.createElement('canvas');
+                canvas.width = Math.max(1, Math.round(img.width * k));
+                canvas.height = Math.max(1, Math.round(img.height * k));
+                canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+                preview.appendChild(canvas);
+                done();
+            };
+            img.onerror = function () {
+                URL.revokeObjectURL(url); // битый файл: без превью, но в форму уйдёт
+                done();
+            };
+            img.src = url;
         }
 
         function addFiles(fileList) {
             if (!dt) { return; }
             for (var i = 0; i < fileList.length; i++) {
                 dt.items.add(fileList[i]);
+                queueThumb(fileList[i]);
             }
             if (photosInput) { photosInput.files = dt.files; }
-            renderPreview();
+            count.textContent = dt.files.length > 0 ? 'Добавлено фото: ' + dt.files.length : '';
         }
 
         if (photosInput) {
             photosInput.addEventListener('change', function () {
                 if (!dt) { return; } // старый браузер: файлы уйдут формой как есть
-                addFiles(photosInput.files);
+                var picked = photosInput.files;
+                // Сброс до переназначения: очистка ПОСЛЕ addFiles стёрла бы и
+                // накопленные файлы (value = '' очищает input[type=file]).
                 photosInput.value = '';
+                addFiles(picked);
             });
         }
 

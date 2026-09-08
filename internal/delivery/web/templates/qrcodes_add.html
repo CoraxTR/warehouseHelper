@@ -40,23 +40,63 @@
         // (DataTransfer), а не заменяют друг друга. На Android срабатывает
         // и серийная съёмка (multiple + capture), она тоже складывается сюда.
         // Ограничения на количество фото нет — сколько сняли, столько и уйдёт.
+        //
+        // Превью — миниатюры в canvas: файлы декодируются строго по одному,
+        // и большой растр (3000×4000×4 ≈ 48 МБ) живёт только на время одного
+        // декода. Полные <img src=objectURL> висели бы в DOM все разом — на
+        // 5–6 фото браузер убивал вкладку по лимиту памяти.
         const input = document.getElementById('photos');
         const preview = document.getElementById('preview');
         const count = document.getElementById('photo-count');
         const clearBtn = document.getElementById('clear-photos');
         const dt = new DataTransfer();
-        const objectUrls = [];
 
-        function renderPreview() {
-            for (const url of objectUrls) URL.revokeObjectURL(url);
-            objectUrls.length = 0;
-            preview.innerHTML = '';
-            for (const file of dt.files) {
-                const img = document.createElement('img');
-                img.src = URL.createObjectURL(file);
-                objectUrls.push(img.src);
-                preview.appendChild(img);
+        // Номер поколения превью: «Очистить фото» инвалидирует очередь — уже
+        // декодирующиеся файлы не добавят canvas в очищенный список.
+        let previewVersion = 0;
+
+        // Очередь декодирования: следующий файл обрабатывается после
+        // завершения предыдущего (promise-цепочка), поэтому пик памяти не
+        // зависит от числа выбранных фото.
+        let thumbQueue = Promise.resolve();
+
+        function addThumb(file) {
+            const version = previewVersion;
+            thumbQueue = thumbQueue
+                .then(() => makeThumb(file))
+                .then(canvas => {
+                    if (canvas && version === previewVersion) preview.appendChild(canvas);
+                })
+                .catch(() => {}); // битый файл не роняет очередь — сервер разберётся
+        }
+
+        // Декодирует файл во временный Image, рисует миниатюру (длинная
+        // сторона ≤ 480px) в canvas и сразу освобождает растр оригинала.
+        // EXIF-поворот применяет сам браузер; objectURL живёт только на
+        // время декода — после отрисовки revoke.
+        async function makeThumb(file) {
+            const url = URL.createObjectURL(file);
+            try {
+                const img = new Image();
+                img.decoding = 'async';
+                await new Promise((resolve, reject) => {
+                    img.onload = resolve;
+                    img.onerror = () => reject(new Error('не удалось декодировать'));
+                    img.src = url;
+                });
+                const long = Math.max(img.width, img.height);
+                const k = Math.min(1, 480 / long);
+                const canvas = document.createElement('canvas');
+                canvas.width = Math.max(1, Math.round(img.width * k));
+                canvas.height = Math.max(1, Math.round(img.height * k));
+                canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+                return canvas;
+            } finally {
+                URL.revokeObjectURL(url);
             }
+        }
+
+        function updateCount() {
             count.textContent = dt.files.length > 0 ? 'Добавлено фото: ' + dt.files.length : '';
             clearBtn.style.display = dt.files.length > 0 ? 'inline-block' : 'none';
         }
@@ -64,16 +104,19 @@
         input.addEventListener('change', () => {
             for (const file of input.files) {
                 dt.items.add(file);
+                addThumb(file);
             }
             input.value = ''; // сброс, чтобы можно было снять ещё раз те же сцены
             input.files = dt.files; // в форму уйдут все накопленные файлы
-            renderPreview();
+            updateCount();
         });
 
         clearBtn.addEventListener('click', () => {
             while (dt.items.length) dt.items.remove(0);
             input.files = dt.files;
-            renderPreview();
+            preview.innerHTML = '';
+            previewVersion++;
+            updateCount();
         });
     </script>
 </body>

@@ -553,7 +553,7 @@ details.multi-select .ms-empty { color: #66645C; font-size: 13px; margin-top: 6p
 }
 #lightbox img { max-width: 96%; max-height: 96%; border: 1px solid #33333E; }
 #preview { display: flex; flex-wrap: wrap; margin-top: 10px; }
-#preview img { width: 30%; border-radius: 2px; margin: 0 4px 4px 0; border: 1px solid #26262E; }
+#preview img, #preview canvas { width: 30%; border-radius: 2px; margin: 0 4px 4px 0; border: 1px solid #26262E; }
 .photo-count { margin: 10px 0 4px; font-size: 14px; color: #A7A49A; }
 
 /* ---------------- Списки и прочее ---------------- */
