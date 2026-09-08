@@ -53,6 +53,31 @@ var previewFileRe = regexp.MustCompile(`^[a-f0-9]{16}\.jpg$`)
 // (HEIC/HEIF): уменьшенную копию не построить, раздача отдаст оригинал.
 var ErrPreviewUnsupported = errors.New("формат оригинала не поддерживает уменьшенные копии")
 
+// previewSem — семафор генерации уменьшенных копий: один слот на весь процесс.
+// Декод оригинала 3000×4000 с поворотом и ресайзом держит в пике ~40–60 МБ
+// (раньше, с полными RGBA-копиями при повороте, — 150–250 МБ), и без семафора
+// пик рос бы с числом параллельных сохранений (POST) и просмотров (страница
+// открывает до 6 картинок, каждая — EnsurePreview по GET). Слот один — память
+// процесса перестаёт зависеть от количества людей на складе.
+var previewSem = make(chan struct{}, 1)
+
+// acquirePreviewSem занимает слот семафора генерации копий; при отмене
+// контекста возвращает ошибку, не дожидаясь слота (брошенный клиентом запрос
+// не стоит в очереди на декод).
+func acquirePreviewSem(ctx context.Context) error {
+	select {
+	case previewSem <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// releasePreviewSem освобождает слот, занятый acquirePreviewSem.
+func releasePreviewSem() {
+	<-previewSem
+}
+
 // spec — параметры копии одного вида.
 type spec struct {
 	maxSide int
@@ -115,6 +140,9 @@ func extFromName(name string) string {
 // JPEG; если оригинал не декодируется (HEIC/HEIF) или не найден, возвращается
 // ошибка, и раздача отдаст оригинал как раньше. Файл пишется атомарно
 // (временный + rename): параллельные запросы одной копии безопасны.
+// Генерация идёт под семафором previewSem: страница открывает до 6 картинок
+// разом, и без семафора параллельные декоды оригиналов складывали бы пики
+// памяти (см. previewSem).
 func EnsurePreview(ctx context.Context, dir, kind, id string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -133,11 +161,20 @@ func EnsurePreview(ctx context.Context, dir, kind, id string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	img, err := decodeOriented(origPath, ext)
+	if err := acquirePreviewSem(ctx); err != nil {
+		return "", err
+	}
+	defer releasePreviewSem()
+	// Пока ждали слот, параллельный запрос мог успеть создать копию — вторая
+	// проверка избавляет от лишнего декода.
+	if _, err := os.Stat(path); err == nil {
+		return path, nil
+	}
+	img, orient, err := decodeImage(origPath, ext)
 	if err != nil {
 		return "", err
 	}
-	if err := writePreview(ctx, img, path, kind); err != nil {
+	if err := writePreview(ctx, img, orient, path, kind); err != nil {
 		return "", err
 	}
 	return path, nil
@@ -145,33 +182,45 @@ func EnsurePreview(ctx context.Context, dir, kind, id string) (string, error) {
 
 // writePreviews генерирует все уменьшенные копии оригинала (вызывается после
 // успешного сохранения файла). Ошибка не откатывает сохранение: копий нет —
-// раздача отдаст оригинал.
+// раздача отдаст оригинал. Генерация идёт под семафором previewSem — пик
+// памяти декода не складывается между параллельными запросами (своими POST
+// и чужими GET через EnsurePreview).
 func (s *Store) writePreviews(ctx context.Context, id, ext, origPath string) error {
-	img, err := decodeOriented(origPath, ext)
+	if err := acquirePreviewSem(ctx); err != nil {
+		return err
+	}
+	defer releasePreviewSem()
+	img, orient, err := decodeImage(origPath, ext)
 	if err != nil {
 		return err
 	}
 	for _, kind := range previewKindsOrder {
-		if err := writePreview(ctx, img, PreviewPath(s.dir, kind, id), kind); err != nil {
+		if err := writePreview(ctx, img, orient, PreviewPath(s.dir, kind, id), kind); err != nil {
 			return fmt.Errorf("photostore: копия %s фото %s.%s: %w", kind, id, ext, err)
 		}
 	}
 	return nil
 }
 
-// decodeOriented декодирует изображение по расширению и, если это JPEG с
-// EXIF-ориентацией, разворачивает пиксели так, как их показал бы браузер.
-func decodeOriented(path, ext string) (image.Image, error) {
+// decodeImage декодирует изображение по расширению. Для JPEG дополнительно
+// возвращает EXIF-ориентацию (1 — поворот не нужен). Поворот здесь НЕ
+// применяется: он перенесён в writePreview, чтобы уменьшать копию сразу из
+// декодированного растра и разворачивать уже маленький RGBA (раньше поворот
+// оригинала целиком держал две полные RGBA-копии ~48 МБ на фото 3000×4000).
+func decodeImage(path, ext string) (img image.Image, orient int, err error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, fmt.Errorf("photostore: открытие фото %s: %w", path, err)
+		return nil, 1, fmt.Errorf("photostore: открытие фото %s: %w", path, err)
 	}
 	defer func() { _ = f.Close() }()
 
-	var img image.Image
+	orient = 1
 	switch ext {
 	case "jpg", "jpeg":
 		img, err = jpeg.Decode(f)
+		if err == nil {
+			orient = jpegOrientation(path)
+		}
 	case "png":
 		img, err = png.Decode(f)
 	case "gif":
@@ -179,17 +228,12 @@ func decodeOriented(path, ext string) (image.Image, error) {
 	case "webp":
 		img, err = webp.Decode(f)
 	default:
-		return nil, fmt.Errorf("%w: %s", ErrPreviewUnsupported, ext)
+		return nil, 1, fmt.Errorf("%w: %s", ErrPreviewUnsupported, ext)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("photostore: декодирование %s: %w", path, err)
+		return nil, 1, fmt.Errorf("photostore: декодирование %s: %w", path, err)
 	}
-	if (ext == "jpg" || ext == "jpeg") && img != nil {
-		if orient := jpegOrientation(path); orient != 1 {
-			img = rotateImage(img, orient)
-		}
-	}
-	return img, nil
+	return img, orient, nil
 }
 
 // rotateImage разворачивает изображение согласно EXIF-ориентации:
@@ -238,16 +282,32 @@ func rotate(src *image.RGBA, dstW, dstH int, srcFn func(x, y int) (int, int)) *i
 	return dst
 }
 
-// writePreview масштабирует изображение до длинной стороны вида (изображения
+// writePreview масштабирует оригинал до длинной стороны вида (изображения
 // меньше размера копии не увеличиваются) и пишет JPEG-копию по пути.
-func writePreview(ctx context.Context, src image.Image, path, kind string) error {
+//
+// EXIF-поворот применяется ПОСЛЕ уменьшения: масштабирование идёт напрямую
+// из декодированного растра (у JPEG — *image.YCbCr, ~1.5 байта/пиксель) в
+// маленький RGBA, а поворот переставляет пиксели уже уменьшенной копии —
+// rotateImage получает RGBA и не конвертирует полный растр оригинала.
+// Пик памяти на фото падает со 150–250 МБ до ~40–60 МБ. Поворот и уменьшение
+// коммутируют (коэффициент один на обе оси), так что результат совпадает со
+// старым порядком «сначала поворот, потом ресайз» с точностью до округления.
+func writePreview(ctx context.Context, src image.Image, orient int, path, kind string) error {
 	s, err := specFor(kind)
 	if err != nil {
 		return err
 	}
 	b := src.Bounds()
 	w, h := b.Dx(), b.Dy()
-	long := max(w, h)
+	// Отображаемые размеры: каким фото будет после поворота (ориентации 6/8
+	// меняют стороны местами, 3 — нет).
+	dispW, dispH := w, h
+	if orient == 6 || orient == 8 {
+		dispW, dispH = h, w
+	}
+	// Масштаб считается по отображаемой длинной стороне, но применяется к
+	// сторонам декодированного растра — поворот в конце довернёт размеры.
+	long := max(dispW, dispH)
 	nw, nh := w, h
 	if long > s.maxSide {
 		k := float64(s.maxSide) / float64(long)
@@ -258,6 +318,9 @@ func writePreview(ctx context.Context, src image.Image, path, kind string) error
 		dst := image.NewRGBA(image.Rect(0, 0, nw, nh))
 		xdraw.CatmullRom.Scale(dst, dst.Bounds(), src, b, xdraw.Src, nil)
 		out = dst
+	}
+	if orient != 1 {
+		out = rotateImage(out, orient)
 	}
 	if err := ctx.Err(); err != nil {
 		return err

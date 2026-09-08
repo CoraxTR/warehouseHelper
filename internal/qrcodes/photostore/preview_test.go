@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"image"
 	"image/jpeg"
 	"image/png"
@@ -15,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 )
@@ -243,7 +245,7 @@ func TestEnsurePreviewRespectsEXIFOrientation(t *testing.T) {
 	}
 }
 
-func TestDecodeOrientedFormats(t *testing.T) {
+func TestDecodeImageFormats(t *testing.T) {
 	root, _ := newTestStore(t)
 	dir := filepath.Join(root, "QRCodes")
 
@@ -254,22 +256,39 @@ func TestDecodeOrientedFormats(t *testing.T) {
 		t.Fatalf("png encode: %v", err)
 	}
 	writeOriginal(t, dir, "png", pngBuf.Bytes())
-	img, err := decodeOriented(filepath.Join(dir, testID+".png"), "png")
+	img, orient, err := decodeImage(filepath.Join(dir, testID+".png"), "png")
 	if err != nil {
-		t.Fatalf("decodeOriented png: %v", err)
+		t.Fatalf("decodeImage png: %v", err)
 	}
 	if img.Bounds().Dx() != 30 || img.Bounds().Dy() != 20 {
 		t.Errorf("png = %v, want 30x20", img.Bounds())
 	}
+	if orient != 1 {
+		t.Errorf("ориентация png = %d, want 1", orient)
+	}
 
-	// WebP: декодер x/image/webp (энкодера в тесте нет — ветка decodeOriented
-	// для webp тонкая, ошибки декодирования покрыты тестом ниже).
-	if _, err := decodeOriented(filepath.Join(dir, secondID+".jpg"), "webp"); err == nil {
+	// JPEG: decodeImage не поворачивает — ориентация возвращается отдельно,
+	// растр остаётся как в файле (поворот применяет writePreview к копии).
+	writeOriginal(t, dir, "jpg", withOrientation(t, realJPEG(t, 80, 40), 6))
+	img, orient, err = decodeImage(filepath.Join(dir, testID+".jpg"), "jpg")
+	if err != nil {
+		t.Fatalf("decodeImage jpg: %v", err)
+	}
+	if img.Bounds().Dx() != 80 || img.Bounds().Dy() != 40 {
+		t.Errorf("jpg = %v, want 80x40 (декод без поворота)", img.Bounds())
+	}
+	if orient != 6 {
+		t.Errorf("ориентация jpg = %d, want 6", orient)
+	}
+
+	// WebP: декодер x/image/webp (энкодера в тесте нет — ветка decodeImage
+	// для webp тонкая, ошибки декодирования покрыты проверкой ниже).
+	if _, _, err := decodeImage(filepath.Join(dir, secondID+".jpg"), "webp"); err == nil {
 		t.Error("ожидалась ошибка декодирования для несуществующего файла webp")
 	}
 
 	// Неизвестный формат — ErrPreviewUnsupported (файл существует: png выше).
-	if _, err := decodeOriented(filepath.Join(dir, testID+".png"), "heic"); !errors.Is(err, ErrPreviewUnsupported) {
+	if _, _, err := decodeImage(filepath.Join(dir, testID+".png"), "heic"); !errors.Is(err, ErrPreviewUnsupported) {
 		t.Errorf("ошибка = %v, want ErrPreviewUnsupported", err)
 	}
 }
@@ -423,5 +442,113 @@ func TestListOlderThanPicksOrphanPreview(t *testing.T) {
 	want := []string{ThumbKind + "/" + orphanID + ".jpg"}
 	if !reflect.DeepEqual(names, want) {
 		t.Errorf("ListOlderThan = %v, want %v", names, want)
+	}
+}
+
+// TestSaveAppliesEXIFOrientation — поворот применяется к уже уменьшенным
+// копиям (см. writePreview), но итоговые размеры должны быть как у повёрнутого
+// оригинала: ориентации 6/8 меняют стороны местами, 3 — нет.
+func TestSaveAppliesEXIFOrientation(t *testing.T) {
+	_, s := newTestStore(t)
+	ctx := context.Background()
+
+	tests := []struct {
+		name      string
+		orient    uint16
+		wantThumb [2]int // (w, h)
+		wantView  [2]int
+	}{
+		{name: "ориентация 3 (180°)", orient: 3, wantThumb: [2]int{480, 360}, wantView: [2]int{1000, 750}},
+		{name: "ориентация 6 (90° по часовой)", orient: 6, wantThumb: [2]int{360, 480}, wantView: [2]int{750, 1000}},
+		{name: "ориентация 8 (90° против часовой)", orient: 8, wantThumb: [2]int{360, 480}, wantView: [2]int{750, 1000}},
+	}
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			id := fmt.Sprintf("%016x", i)
+			jpg := withOrientation(t, realJPEG(t, 1000, 750), tt.orient)
+			if err := s.Save(ctx, id, "jpg", bytes.NewReader(jpg)); err != nil {
+				t.Fatalf("Save error: %v", err)
+			}
+			if w, h := jpegDims(t, PreviewPath(s.dir, ThumbKind, id)); w != tt.wantThumb[0] || h != tt.wantThumb[1] {
+				t.Errorf("thumb = %dx%d, want %dx%d", w, h, tt.wantThumb[0], tt.wantThumb[1])
+			}
+			if w, h := jpegDims(t, PreviewPath(s.dir, ViewKind, id)); w != tt.wantView[0] || h != tt.wantView[1] {
+				t.Errorf("view = %dx%d, want %dx%d", w, h, tt.wantView[0], tt.wantView[1])
+			}
+		})
+	}
+}
+
+// TestPreviewSem — слот один: повторный acquire ждёт release, а отменённый
+// контекст выходит сразу, не занимая очередь на декод.
+func TestPreviewSem(t *testing.T) {
+	ctx := context.Background()
+	if err := acquirePreviewSem(ctx); err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+
+	// Второй acquire блокируется, пока слот занят.
+	second := make(chan error, 1)
+	go func() { second <- acquirePreviewSem(ctx) }()
+	select {
+	case err := <-second:
+		t.Fatalf("второй acquire не должен пройти, пока слот занят (err=%v)", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	// Ждущий acquire выходит по отмене контекста, не дожидаясь слота.
+	waiting, cancelWaiting := context.WithCancel(ctx)
+	waitErr := make(chan error, 1)
+	go func() { waitErr <- acquirePreviewSem(waiting) }()
+	cancelWaiting()
+	select {
+	case err := <-waitErr:
+		if err == nil {
+			t.Error("ждавший acquire должен был выйти с ошибкой отмены")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("ждавший acquire не вышел по отмене контекста")
+	}
+
+	// После release второй acquire проходит.
+	releasePreviewSem()
+	select {
+	case err := <-second:
+		if err != nil {
+			t.Fatalf("acquire после release error: %v", err)
+		}
+		releasePreviewSem()
+	case <-time.After(time.Second):
+		t.Fatal("acquire не разблокировался после release")
+	}
+}
+
+// TestEnsurePreviewConcurrentSameID — параллельные запросы одной копии (как
+// 6 картинок страницы, открытой до генерации) не портят файл: семафор
+// сериализует генерацию, атомарный rename — запись.
+func TestEnsurePreviewConcurrentSameID(t *testing.T) {
+	root, s := newTestStore(t)
+	writeOriginal(t, filepath.Join(root, "QRCodes"), "jpg", realJPEG(t, 640, 480))
+
+	const n = 4
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	paths := make([]string, n)
+	for i := range n {
+		wg.Go(func() {
+			paths[i], errs[i] = EnsurePreview(context.Background(), s.dir, ThumbKind, testID)
+		})
+	}
+	wg.Wait()
+	for i := range n {
+		if errs[i] != nil {
+			t.Fatalf("EnsurePreview #%d error: %v", i, errs[i])
+		}
+		if paths[i] != PreviewPath(s.dir, ThumbKind, testID) {
+			t.Errorf("EnsurePreview #%d = %q, want %q", i, paths[i], PreviewPath(s.dir, ThumbKind, testID))
+		}
+	}
+	if w, h := jpegDims(t, PreviewPath(s.dir, ThumbKind, testID)); w != 480 || h != 360 {
+		t.Errorf("thumb = %dx%d, want 480x360", w, h)
 	}
 }
