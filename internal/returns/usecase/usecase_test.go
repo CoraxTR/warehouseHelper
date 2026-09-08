@@ -134,7 +134,7 @@ type stubNotifier struct {
 	err       error
 }
 
-func (s *stubNotifier) SendWarehouseReturn(_ context.Context, text, buttonURL string) (tgChatID int64, tgMessageID int64, err error) {
+func (s *stubNotifier) SendWarehouseReturn(_ context.Context, text, buttonURL string) (tgChatID, tgMessageID int64, err error) {
 	if s.err != nil {
 		return 0, 0, s.err
 	}
@@ -168,8 +168,9 @@ func testCatalog() stubCatalog {
 }
 
 // etiketa — этикетка куска 29: internal_code(8)+вес_г(5)+выработка(8)+срок(8).
-func etiketa(code string, weightG int, prod, exp string) string {
-	return code + fmt.Sprintf("%05d", weightG) + prod + exp
+func etiketa(code string, weightG int, exp string) string {
+	// выработка в тестовых этикетках фиксирована: 01.09.2026
+	return code + fmt.Sprintf("%05d", weightG) + "01092026" + exp
 }
 
 // detailRow — строка раскрытия events (JSON по мотивам живого ответа).
@@ -184,8 +185,8 @@ func detailRow(diffJSON, name string) client.AuditEventRow {
 	return row
 }
 
-func removedDiffJSON(code, name string, qty, reserve float64, uom string) string {
-	return `{"positions":[{"oldValue":{"assortment":{"meta":{"href":"https://api.moysklad.ru/api/remap/1.2/entity/product/` + code + `"},"name":"` + name + `"},"quantity":` + f(qty) + `,"reserve":` + f(reserve) + `,"uom":"` + uom + `"}}]}`
+func removedDiffJSON(name string, qty, reserve float64, uom string) string {
+	return `{"positions":[{"oldValue":{"assortment":{"meta":{"href":"https://api.moysklad.ru/api/remap/1.2/entity/product/` + prodA + `"},"name":"` + name + `"},"quantity":` + f(qty) + `,"reserve":` + f(reserve) + `,"uom":"` + uom + `"}}]}`
 }
 func f(v float64) string {
 	return jsonNumber(v)
@@ -271,7 +272,7 @@ func TestBuildExpected_RemovedWithoutReserveIsNothing(t *testing.T) {
 	uc, audit := env.uc, env.audit
 
 	// Удаление неотложенной позиции (reserve 0) — возвращать нечего.
-	audit.details[auditID] = []client.AuditEventRow{detailRow(removedDiffJSON(prodA, "Чак ролл", 0.657, 0, "кг"), "19191")}
+	audit.details[auditID] = []client.AuditEventRow{detailRow(removedDiffJSON("Чак ролл", 0.657, 0, "кг"), "19191")}
 
 	ev := &returns.ReturnEvent{ID: auditID, Kind: returns.KindRemoved, OrderID: orderID}
 	_, err := uc.buildExpected(context.Background(), ev)
@@ -286,8 +287,8 @@ func TestMatchScans_WeightedAccumulation(t *testing.T) {
 	expected := []returns.Expected{{ProductID: prodA, InternalCode: codeA, Name: "Чак ролл", Weighted: true, ExpectedQty: 657}}
 
 	units, err := matchScans([]string{
-		etiketa(codeA, 400, "01092026", "15092026"),
-		etiketa(codeA, 257, "01092026", "15092026"),
+		etiketa(codeA, 400, "15092026"),
+		etiketa(codeA, 257, "15092026"),
 	}, expected)
 	if err != nil {
 		t.Fatalf("matchScans: %v", err)
@@ -300,7 +301,7 @@ func TestMatchScans_WeightedAccumulation(t *testing.T) {
 func TestMatchScans_StrictWeightNoTolerance(t *testing.T) {
 	expected := []returns.Expected{{ProductID: prodA, InternalCode: codeA, Name: "Чак ролл", Weighted: true, ExpectedQty: 657}}
 
-	_, err := matchScans([]string{etiketa(codeA, 654, "01092026", "15092026")}, expected)
+	_, err := matchScans([]string{etiketa(codeA, 654, "15092026")}, expected)
 	var ve *ValidationError
 	if !errors.As(err, &ve) || !strings.Contains(ve.Reason, "вес не сходится") {
 		t.Fatalf("want ValidationError «вес не сходится», got %v", err)
@@ -311,8 +312,8 @@ func TestMatchScans_OverflowRejected(t *testing.T) {
 	expected := []returns.Expected{{ProductID: prodA, InternalCode: codeA, Name: "Чак ролл", Weighted: true, ExpectedQty: 657}}
 
 	_, err := matchScans([]string{
-		etiketa(codeA, 400, "01092026", "15092026"),
-		etiketa(codeA, 300, "01092026", "15092026"),
+		etiketa(codeA, 400, "15092026"),
+		etiketa(codeA, 300, "15092026"),
 	}, expected)
 	var ve *ValidationError
 	if !errors.As(err, &ve) {
@@ -323,7 +324,7 @@ func TestMatchScans_OverflowRejected(t *testing.T) {
 func TestMatchScans_UnknownProductRejected(t *testing.T) {
 	expected := []returns.Expected{{ProductID: prodA, InternalCode: codeA, Name: "Чак ролл", Weighted: true, ExpectedQty: 657}}
 
-	_, err := matchScans([]string{etiketa("00999000", 657, "01092026", "15092026")}, expected)
+	_, err := matchScans([]string{etiketa("00999000", 657, "15092026")}, expected)
 	var ve *ValidationError
 	if !errors.As(err, &ve) || !strings.Contains(ve.Reason, "не в списке возврата") {
 		t.Fatalf("want ValidationError «не в списке», got %v", err)
@@ -346,8 +347,8 @@ func TestMatchScans_PieceGoodsByCount(t *testing.T) {
 	expected := []returns.Expected{{ProductID: prodD, InternalCode: codeD, Name: "Соус", Weighted: false, ExpectedQty: 2}}
 
 	units, err := matchScans([]string{
-		etiketa(codeD, 1, "01092026", "15092026"), // вес-заглушка 00001 не участвует
-		etiketa(codeD, 1, "01092026", "15092026"),
+		etiketa(codeD, 1, "15092026"), // вес-заглушка 00001 не участвует
+		etiketa(codeD, 1, "15092026"),
 	}, expected)
 	if err != nil {
 		t.Fatalf("matchScans: %v", err)
@@ -360,9 +361,9 @@ func TestMatchScans_PieceGoodsByCount(t *testing.T) {
 func TestAggregateLots_GroupsByProductAndDate(t *testing.T) {
 	expected := returns.Expected{ProductID: prodA, InternalCode: codeA, Weighted: true}
 	units := []scannedUnit{
-		{expected: &expected, expDate: time.Date(2026, 9, 15, 0, 0, 0, 0, time.UTC)},
-		{expected: &expected, expDate: time.Date(2026, 9, 15, 0, 0, 0, 0, time.UTC)},
-		{expected: &expected, expDate: time.Date(2026, 9, 20, 0, 0, 0, 0, time.UTC)},
+		{expected: &expected, expDate: time.Date(2026, time.September, 15, 0, 0, 0, 0, time.UTC)},
+		{expected: &expected, expDate: time.Date(2026, time.September, 15, 0, 0, 0, 0, time.UTC)},
+		{expected: &expected, expDate: time.Date(2026, time.September, 20, 0, 0, 0, 0, time.UTC)},
 	}
 
 	lots := aggregateLots(units)

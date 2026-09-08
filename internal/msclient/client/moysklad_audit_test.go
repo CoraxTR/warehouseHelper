@@ -49,7 +49,7 @@ func TestParseAuditMoment(t *testing.T) {
 		t.Fatalf("ParseAuditMoment() error: %v", err)
 	}
 
-	want := time.Date(2026, 9, 8, 20, 11, 52, 918000000, time.UTC)
+	want := time.Date(2026, time.September, 8, 20, 11, 52, 918000000, time.UTC)
 	if !got.Equal(want) {
 		t.Errorf("ParseAuditMoment() = %v, want %v (МСК 23:11:52.918 → UTC 20:11:52.918)", got, want)
 	}
@@ -77,7 +77,7 @@ func TestFetchAuditPage(t *testing.T) {
 		}
 	})
 
-	since := time.Date(2026, 9, 8, 20, 10, 0, 0, time.UTC) // 23:10 МСК
+	since := time.Date(2026, time.September, 8, 20, 10, 0, 0, time.UTC) // 23:10 МСК
 	rows, size, err := msac.FetchAuditPage(context.Background(), since, 0)
 	if err != nil {
 		t.Fatalf("FetchAuditPage() error: %v", err)

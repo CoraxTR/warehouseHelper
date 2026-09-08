@@ -31,14 +31,6 @@ const (
 	qtyPieces                // штучный: по количеству единиц
 )
 
-// unitOf — единица сверки товара каталога.
-func unitOf(weighted bool) qtyUnit {
-	if weighted {
-		return qtyGrams
-	}
-	return qtyPieces
-}
-
 func qtyInt(v float64, u qtyUnit) int64 {
 	if u == qtyGrams {
 		return int64(math.Round(v * 1000))
@@ -140,7 +132,12 @@ func (uc *UseCase) buildExpected(ctx context.Context, ev *returns.ReturnEvent) (
 		if !ok || p.InternalCode == "" {
 			continue // нет в каталоге или без кода склада — не складской товар
 		}
-		if !reservedEquals(c.Quantity, c.Reserve, unitOf(p.Weighted)) {
+
+		unit := qtyPieces
+		if p.Weighted {
+			unit = qtyGrams
+		}
+		if !reservedEquals(c.Quantity, c.Reserve, unit) {
 			continue // не отложен физически — возвращать нечего
 		}
 
@@ -155,7 +152,7 @@ func (uc *UseCase) buildExpected(ctx context.Context, ev *returns.ReturnEvent) (
 			agg[c.ProductID] = e
 			order = append(order, c.ProductID)
 		}
-		e.ExpectedQty += qtyInt(c.Quantity, unitOf(p.Weighted))
+		e.ExpectedQty += qtyInt(c.Quantity, unit)
 	}
 
 	if len(order) == 0 {

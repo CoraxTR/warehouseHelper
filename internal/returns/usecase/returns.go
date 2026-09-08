@@ -64,9 +64,6 @@ type Config struct {
 // машины) хвост догоняется следующими тиками, курсор двигается постранично.
 const tickBudget = 40 * time.Second
 
-// auditPageSize — страница листа аудита (лимит API).
-const auditPageSize = 25
-
 type UseCase struct {
 	cfg     Config
 	audit   AuditAPI
@@ -125,11 +122,7 @@ func (uc *UseCase) tick(ctx context.Context) error {
 	offset := 0
 	page := 0
 
-	for {
-		if time.Now().After(deadline) {
-			break
-		}
-
+	for !time.Now().After(deadline) {
 		rows, size, err := uc.audit.FetchAuditPage(ctx, cursor, offset)
 		if err != nil {
 			return fmt.Errorf("returns fetch audit page: %w", err)
