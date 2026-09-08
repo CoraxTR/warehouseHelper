@@ -89,8 +89,13 @@ type OrderItem struct {
 	ReserveText string
 	Group       int // номер группы склейки (0 — вне группы); группы идут подряд
 	GroupSize   int // строк в группе (1 — кнопка «Объединить» не нужна)
-	// Active — строка подбирается сканами: товар в каталоге и резерв 0.
-	// CanRepick — товар в каталоге и резерв > 0 (кнопка «Переподобрать»).
+	// Active — строка подбирается сканами: товар в каталоге; штучная при
+	// reserve < qty (подбор с нуля при 0, добор при частичном резерве),
+	// весовая только при reserve == 0 (одна строка = один кусок, источник
+	// истины — скан фактического веса).
+	// CanRepick — «Переподобрать»: весовая с любым резервом (перескан
+	// фактического веса после правки менеджером) или штучная, полностью
+	// находящаяся в резерве (reserve >= qty).
 	Active    bool
 	CanRepick bool
 }
@@ -191,8 +196,8 @@ func buildItems(positions []client.MSPosition, catalog map[string]CatalogProduct
 			PriceText:   moneyText(p.Price),
 			Reserve:     p.Reserve,
 			ReserveText: reserveText,
-			Active:      inCatalog && p.Reserve == 0,
-			CanRepick:   inCatalog && p.Reserve > 0,
+			Active:      inCatalog && (p.Reserve == 0 || (!weighted && p.Reserve < p.Quantity)),
+			CanRepick:   inCatalog && p.Reserve > 0 && (weighted || p.Reserve >= p.Quantity),
 		})
 	}
 

@@ -23,11 +23,12 @@ import (
 	"warehouseHelper/internal/stock"
 )
 
-// Кванты-заглушки недобранных активных строк (решение владельца, итер. 3):
-// резерв 0 — строка не «висит» в резервах заказа при закрытии.
+// stubQty — количество строки-заглушки «ожидает единицу» (решение владельца):
+// 0.0001 — минимальное количество, которое МС принимает в quantity товара;
+// ставится, чтобы дельта в сумме заказа при незамеченной заглушке была
+// минимальной. Резерв 0 — строка не «висит» в резервах заказа при закрытии.
 const (
-	pieceStubQty   = 0.001 // штучная строка = «ожидает 1 единицу»
-	weightStubQty  = 0.0001
+	stubQty        = 0.0001
 	bbLayout       = "02012006" // ДДММГГГГ (срез кода ЧЗ, клиент не парсит)
 	submitCacheTTL = 30 * time.Minute
 	submitCacheMax = 50
@@ -63,8 +64,14 @@ type SubmitRequest struct {
 // SubmitRow — одна логическая строка отправки: ids — все позиции МС группы
 // (первая — «живая», остальные смёрженные — выбывают из заказа), records —
 // сканы строки/группы (каждый скан = одна единица товара).
+// From — сколько уже набрано на странице ДО этих сканов: у добора (штучная
+// строка частично в резерве, 0 < reserve < qty) это резерв строки из МС,
+// у обычного подбора и «Переподобрать» — 0. Сервер считает итог строки
+// from + сканы и не судит по своему кэшу резерва (клиент сбрасывает резерв
+// при переподборе).
 type SubmitRow struct {
 	IDs     []string     `json:"ids"`
+	From    float64      `json:"from"`
 	Records []ScanRecord `json:"records"`
 }
 
@@ -215,6 +222,9 @@ func validateSubmit(req SubmitRequest) (map[int][]parsedScan, error) {
 		if len(r.Records) == 0 {
 			return nil, fmt.Errorf("строка %d: %w", i+1, ErrSubmitNoRecords)
 		}
+		if r.From < 0 {
+			return nil, fmt.Errorf("строка %d: %w: отрицательное набранное %v", i+1, ErrSubmitBadRow, r.From)
+		}
 
 		for _, rawID := range r.IDs {
 			id := strings.TrimSpace(rawID)
@@ -273,6 +283,7 @@ type coveredRef struct {
 	live      *submitRowMeta
 	merged    []*submitRowMeta
 	records   []parsedScan
+	from      float64 // набрано на странице до сканов (добор: резерв МС)
 	productID string
 	weighted  bool
 }
@@ -291,11 +302,15 @@ type submitRowMeta struct {
 }
 
 // buildSubmitPositions собирает итоговый список positions (порядок — как в
-// кэше/МС) и лоты списания. Правила владельца (итер. 3): живая покрытая
-// весовая → qty = reserve = Σ вес_г / 1000 кг; штучная покрытая → qty =
-// reserve = число сканов (+ заглушки 0,001 на недобор); ненабранные активные:
-// весовые → 0,0001, штучные → разбиение на N заглушек 0,001; смёрженные
-// хвосты и пассивные строки — исключаются/остаются как есть.
+// кэше/МС) и лоты списания. Правила владельца (итер. 3 + добор): покрытая
+// весовая → qty = reserve = from + Σ вес_г / 1000 (from у весовых всегда 0);
+// покрытая штучная → qty = reserve = from + число сканов; from > 0 — добор
+// строки, частично подобранной ранее (менеджер увеличил количество),
+// from == 0 — подбор/переподбор с нуля; недобранный остаток — заглушки
+// stubQty (0,0001); ненабранные активные: весовые → 0,0001, штучные →
+// разбиение на N заглушек 0,0001; смёрженные хвосты и пассивные строки —
+// исключаются/остаются как есть. Лоты списания — только новые сканы
+// (базовый резерв строки уже списан ранее).
 func (uc *UseCase) buildSubmitPositions(req SubmitRequest, records map[int][]parsedScan, entry *submitEntry) ([]any, []stock.PickLotIn, error) {
 	metas := make([]*submitRowMeta, 0, len(entry.rowsRaw))
 	metaByID := make(map[string]*submitRowMeta, len(entry.rowsRaw))
@@ -326,6 +341,7 @@ func (uc *UseCase) buildSubmitPositions(req SubmitRequest, records map[int][]par
 		ref := &coveredRef{
 			live:      live,
 			records:   records[i],
+			from:      r.From,
 			productID: live.productID,
 			weighted:  live.weighted,
 		}
@@ -367,7 +383,7 @@ func (uc *UseCase) buildSubmitPositions(req SubmitRequest, records map[int][]par
 
 		// Ненабранная активная строка — заглушка по типу товара (B1).
 		if meta.weighted {
-			setQtyReserve(meta.m, weightStubQty, 0)
+			setQtyReserve(meta.m, stubQty, 0)
 			out = append(out, meta.m)
 			continue
 		}
@@ -389,39 +405,49 @@ func applyCovered(ref *coveredRef) ([]any, []stock.PickLotIn, error) {
 		if sum <= 0 {
 			return nil, nil, fmt.Errorf("%w: весовая запись без веса", ErrSubmitBadWeight)
 		}
-		qty := float64(sum) / 1000
+		qty := ref.from + float64(sum)/1000
 		setQtyReserve(ref.live.m, qty, qty)
 		return []any{ref.live.m}, pickLots(ref), nil
 	}
 
+	// Штучная: итог строки = набранное на странице до сканов (from) + новые
+	// сканы. from > 0 — добор: менеджер увеличил количество, часть строки
+	// уже в резерве МС (списана ранее), доканчиваем до qty; from == 0 —
+	// обычный подбор или «Переподобрать» (набираем с нуля). Недобранный
+	// остаток — строки-заглушки stubQty («ожидание единицы», reserve 0).
 	k := len(ref.records)
 	total := ref.live.quantity
 	for _, tail := range ref.merged {
 		total += tail.quantity
 	}
 	units := max(1, int(math.Round(total))) // ожидаемых единиц в группе
-	if k > units {
+	picked := int(math.Round(ref.from)) + k
+	if picked > units {
+		if ref.from > 0 {
+			return nil, nil, fmt.Errorf("%w: %s (в резерве %d из %d, отсканировано %d)",
+				ErrSubmitOverpick, ref.live.code, int(math.Round(ref.from)), units, k)
+		}
 		return nil, nil, fmt.Errorf("%w: %s (в строке %d, отсканировано %d)", ErrSubmitOverpick, ref.live.code, units, k)
 	}
 
-	setQtyReserve(ref.live.m, float64(k), float64(k))
+	setQtyReserve(ref.live.m, float64(picked), float64(picked))
 	out := []any{ref.live.m}
-	if k < units {
-		for i := 0; i < units-k; i++ {
-			out = append(out, createStub(ref.live.m, pieceStubQty))
+	if picked < units {
+		for i := 0; i < units-picked; i++ {
+			out = append(out, createStub(ref.live.m, stubQty))
 		}
 	}
 	return out, pickLots(ref), nil
 }
 
 // stubPieceRow разбивает ненабранную активную штучную строку на N заглушек
-// 0,001: исходная строка становится заглушкой + (N−1) новых без id.
+// 0,0001: исходная строка становится заглушкой + (N−1) новых без id.
 func stubPieceRow(meta *submitRowMeta) []any {
 	units := max(1, int(math.Round(meta.quantity)))
-	setQtyReserve(meta.m, pieceStubQty, 0)
+	setQtyReserve(meta.m, stubQty, 0)
 	out := []any{meta.m}
 	for i := 1; i < units; i++ {
-		out = append(out, createStub(meta.m, pieceStubQty))
+		out = append(out, createStub(meta.m, stubQty))
 	}
 	return out
 }

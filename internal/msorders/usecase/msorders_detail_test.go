@@ -323,3 +323,62 @@ func ids(rows []OrderItem) string {
 	}
 	return sb.String()
 }
+
+// TestDetailRowTopupStates — состояния строк при частичном резерве: штучная
+// 0 < reserve < qty активна как добор (счёт стартует с резерва), полностью
+// зарезервированная штучная и любая весовая с резервом — «Переподобрать»,
+// товар вне каталога пассивен.
+func TestDetailRowTopupStates(t *testing.T) {
+	o := detailOrder()
+	o.MSPositions = client.MSPositions{
+		Meta: client.MSMeta{HREF: "https://api.moysklad.ru/api/remap/1.2/entity/customerorder/" + o.ID + "/positions"},
+	}
+	fake := &fakeOrderDetail{
+		order: o,
+		positions: []client.MSPosition{
+			position("p-part", "21110001", "Хлеб", 5, 30000, 2),       // 0 < r < qty — добор
+			position("p-full", "21110001", "Хлеб", 2, 30000, 2),       // r == qty — переподобрать
+			position("p-zero", "21110001", "Хлеб", 5, 30000, 0),       // подбор с нуля
+			position("p-wgh", "00220002", "Стейк", 0.5, 279000, 0.48), // весовая с резервом — не трогаем
+			position("p-wgh0", "00220002", "Стейк", 0.5, 279000, 0),   // весовая активная
+			position("p-for", "99999999", "Чужое", 1, 10000, 0),       // вне каталога
+		},
+	}
+	uc := NewUseCase(fake, submitCatalog(), &fakePicker{})
+	order, err := uc.Detail(context.Background(), o.ID)
+	if err != nil {
+		t.Fatalf("Detail: %v", err)
+	}
+
+	byID := make(map[string]OrderItem, len(order.Rows))
+	for _, r := range order.Rows {
+		byID[r.ID] = r
+	}
+
+	want := []struct {
+		id        string
+		active    bool
+		canRepick bool
+		reserve   float64
+	}{
+		{"p-zero", true, false, 0},   // reserve 0 — подбор с нуля
+		{"p-part", true, false, 2},   // 0 < reserve < qty — добор
+		{"p-full", false, true, 2},   // reserve == qty — «Переподобрать»
+		{"p-wgh0", true, false, 0},   // весовая без резерва — активна
+		{"p-wgh", false, true, 0.48}, // весовая с резервом — CanRepick
+		{"p-for", false, false, 0},   // вне каталога — пассивна
+	}
+	for _, w := range want {
+		r, ok := byID[w.id]
+		if !ok {
+			t.Errorf("строка %s не найдена в Rows", w.id)
+			continue
+		}
+		if r.Active != w.active || r.CanRepick != w.canRepick {
+			t.Errorf("%s: Active/CanRepick = %v/%v, want %v/%v", w.id, r.Active, r.CanRepick, w.active, w.canRepick)
+		}
+		if r.Reserve != w.reserve {
+			t.Errorf("%s: Reserve = %v, want %v (data-reserve для клиента)", w.id, r.Reserve, w.reserve)
+		}
+	}
+}

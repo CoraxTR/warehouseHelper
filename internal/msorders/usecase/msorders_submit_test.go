@@ -102,7 +102,7 @@ func TestSubmitPartialPiece(t *testing.T) {
 	}
 	rows := decodePutPositions(t, fake.putBody[0])
 
-	// Штучная недобор 2 из 3: живая строка qty=reserve=2 + одна заглушка 0,001.
+	// Штучная недобор 2 из 3: живая строка qty=reserve=2 + одна заглушка 0,0001.
 	q, rs := rowQty(t, rows, "pos-1")
 	if q != 2 || rs != 2 {
 		t.Errorf("pos-1 qty/reserve = %v/%v, want 2/2", q, rs)
@@ -112,13 +112,13 @@ func TestSubmitPartialPiece(t *testing.T) {
 	if q2 != 0.0001 || rs2 != 0 {
 		t.Errorf("pos-2 qty/reserve = %v/%v, want 0,0001/0", q2, rs2)
 	}
-	// Одна строка без id (заглушка 0,001).
+	// Одна строка без id (заглушка 0,0001).
 	var stubs int
 	for _, r := range rows {
 		if _, ok := r["id"]; !ok {
 			stubs++
-			if q := floatField(r["quantity"]); q != 0.001 {
-				t.Errorf("заглушка qty = %v, want 0.001", q)
+			if q := floatField(r["quantity"]); q != 0.0001 {
+				t.Errorf("заглушка qty = %v, want 0.0001", q)
 			}
 		}
 	}
@@ -191,10 +191,10 @@ func TestSubmitWeightedCovered(t *testing.T) {
 	if q != 2.43 || rs != 2.43 {
 		t.Errorf("pos-2 qty/reserve = %v/%v, want 2.43/2.43", q, rs)
 	}
-	// Штучная ненабранная активная pos-1 → заглушка 0,001.
+	// Штучная ненабранная активная pos-1 → заглушка 0,0001.
 	q1, rs1 := rowQty(t, rows, "pos-1")
-	if q1 != 0.001 || rs1 != 0 {
-		t.Errorf("pos-1 qty/reserve = %v/%v, want 0,001/0", q1, rs1)
+	if q1 != 0.0001 || rs1 != 0 {
+		t.Errorf("pos-1 qty/reserve = %v/%v, want 0,0001/0", q1, rs1)
 	}
 	// Записи 1250+1180: две единицы, два разных срока.
 	if len(picker.lots) != 2 {
@@ -248,7 +248,7 @@ func TestSubmitUncoveredPieceSplit(t *testing.T) {
 		t.Fatalf("Detail: %v", err)
 	}
 
-	// Покрыта только весовая; штучная (3 ед.) не тронута → 3 заглушки 0,001.
+	// Покрыта только весовая; штучная (3 ед.) не тронута → 3 заглушки 0,0001.
 	if _, err := uc.Submit(context.Background(), o.ID, SubmitRequest{Rows: []SubmitRow{
 		{IDs: []string{"pos-2"}, Records: []ScanRecord{{WeightG: 1250, BB: "01102026"}}},
 	}}); err != nil {
@@ -260,15 +260,15 @@ func TestSubmitUncoveredPieceSplit(t *testing.T) {
 		t.Fatalf("позиций в PUT = %d, want 4", len(rows))
 	}
 	q1, rs1 := rowQty(t, rows, "pos-1")
-	if q1 != 0.001 || rs1 != 0 {
-		t.Errorf("pos-1 qty/reserve = %v/%v, want 0,001/0", q1, rs1)
+	if q1 != 0.0001 || rs1 != 0 {
+		t.Errorf("pos-1 qty/reserve = %v/%v, want 0,0001/0", q1, rs1)
 	}
 	var stubs int
 	for _, r := range rows {
 		if _, ok := r["id"]; !ok {
 			stubs++
-			if q := floatField(r["quantity"]); q != 0.001 {
-				t.Errorf("заглушка qty = %v, want 0.001", q)
+			if q := floatField(r["quantity"]); q != 0.0001 {
+				t.Errorf("заглушка qty = %v, want 0.0001", q)
 			}
 		}
 	}
@@ -346,6 +346,150 @@ func TestSubmitOverpick(t *testing.T) {
 	}
 	if len(fake.putBody) != 0 {
 		t.Error("PUT выполнен при переборе")
+	}
+}
+
+// topupOrder — заказ с одной штучной позицией в частичном резерве
+// (qty=5, reserve=2): менеджер увеличил количество после первого подбора.
+func topupOrder() (*fakeOrderDetail, *client.MSOrder) {
+	o := detailOrder()
+	o.MSPositions = client.MSPositions{
+		Meta: client.MSMeta{HREF: "https://api.moysklad.ru/api/remap/1.2/entity/customerorder/" + o.ID + "/positions"},
+	}
+	fake := &fakeOrderDetail{
+		order: o,
+		positions: []client.MSPosition{
+			position("pos-1", "21110001", "Хлеб", 5, 30000, 2),
+		},
+	}
+	return fake, o
+}
+
+// TestSubmitTopupFull — добор: строка 5/2, добираем 3 → одна живая строка
+// qty=reserve=5, заглушек нет; в сроки — только 3 новых скана.
+func TestSubmitTopupFull(t *testing.T) {
+	fake, o := topupOrder()
+	picker := &fakePicker{}
+	uc := NewUseCase(fake, submitCatalog(), picker)
+	if _, err := uc.Detail(context.Background(), o.ID); err != nil {
+		t.Fatalf("Detail: %v", err)
+	}
+
+	if _, err := uc.Submit(context.Background(), o.ID, SubmitRequest{Rows: []SubmitRow{
+		{IDs: []string{"pos-1"}, From: 2, Records: []ScanRecord{
+			{WeightG: 0, BB: "10102026"},
+			{WeightG: 0, BB: "10102026"},
+			{WeightG: 0, BB: "10102026"},
+		}},
+	}}); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+
+	rows := decodePutPositions(t, fake.putBody[0])
+	if len(rows) != 1 {
+		t.Fatalf("позиций в PUT = %d, want 1 (полный добор без заглушек)", len(rows))
+	}
+	q, rs := rowQty(t, rows, "pos-1")
+	if q != 5 || rs != 5 {
+		t.Errorf("pos-1 qty/reserve = %v/%v, want 5/5 (2 в резерве + 3 добранных)", q, rs)
+	}
+	if len(picker.lots) != 3 {
+		t.Errorf("lots = %d, want 3 (только новые сканы, базовые 2 уже списаны)", len(picker.lots))
+	}
+}
+
+// TestSubmitTopupPartial — недобор при доборе: добираем 2 из 3 → живая
+// строка qty=reserve=4 + одна заглушка 0,0001 на недостающую единицу.
+func TestSubmitTopupPartial(t *testing.T) {
+	fake, o := topupOrder()
+	picker := &fakePicker{}
+	uc := NewUseCase(fake, submitCatalog(), picker)
+	if _, err := uc.Detail(context.Background(), o.ID); err != nil {
+		t.Fatalf("Detail: %v", err)
+	}
+
+	if _, err := uc.Submit(context.Background(), o.ID, SubmitRequest{Rows: []SubmitRow{
+		{IDs: []string{"pos-1"}, From: 2, Records: []ScanRecord{
+			{WeightG: 0, BB: "10102026"},
+			{WeightG: 0, BB: "10102026"},
+		}},
+	}}); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+
+	rows := decodePutPositions(t, fake.putBody[0])
+	q, rs := rowQty(t, rows, "pos-1")
+	if q != 4 || rs != 4 {
+		t.Errorf("pos-1 qty/reserve = %v/%v, want 4/4 (2 + 2 добранных)", q, rs)
+	}
+	var stubs int
+	for _, r := range rows {
+		if _, ok := r["id"]; !ok {
+			stubs++
+			if q := floatField(r["quantity"]); q != 0.0001 {
+				t.Errorf("заглушка qty = %v, want 0.0001", q)
+			}
+		}
+	}
+	if stubs != 1 {
+		t.Errorf("заглушек = %d, want 1 (одна недостающая единица)", stubs)
+	}
+	if len(picker.lots) != 2 {
+		t.Errorf("lots = %d, want 2", len(picker.lots))
+	}
+}
+
+// TestSubmitTopupOverpick — больше сканов, чем недобрано (4 при недоборе 3) —
+// 400 до PUT.
+func TestSubmitTopupOverpick(t *testing.T) {
+	fake, o := topupOrder()
+	uc := NewUseCase(fake, submitCatalog(), &fakePicker{})
+	if _, err := uc.Detail(context.Background(), o.ID); err != nil {
+		t.Fatalf("Detail: %v", err)
+	}
+
+	_, err := uc.Submit(context.Background(), o.ID, SubmitRequest{Rows: []SubmitRow{
+		{IDs: []string{"pos-1"}, From: 2, Records: []ScanRecord{
+			{WeightG: 0, BB: "10102026"},
+			{WeightG: 0, BB: "10102026"},
+			{WeightG: 0, BB: "10102026"},
+			{WeightG: 0, BB: "10102026"},
+		}},
+	}})
+	if !errors.Is(err, ErrSubmitOverpick) {
+		t.Errorf("Submit err = %v, want ErrSubmitOverpick", err)
+	}
+	if len(fake.putBody) != 0 {
+		t.Error("PUT выполнен при переборе добора")
+	}
+}
+
+// TestSubmitTopupFromZero — переподбор частично зарезервированной строки
+// с нуля (клиент сбросил резерв): From 0 + 5 сканов → qty=reserve=5.
+func TestSubmitTopupFromZero(t *testing.T) {
+	fake, o := topupOrder()
+	picker := &fakePicker{}
+	uc := NewUseCase(fake, submitCatalog(), picker)
+	if _, err := uc.Detail(context.Background(), o.ID); err != nil {
+		t.Fatalf("Detail: %v", err)
+	}
+
+	if _, err := uc.Submit(context.Background(), o.ID, SubmitRequest{Rows: []SubmitRow{
+		{IDs: []string{"pos-1"}, From: 0, Records: []ScanRecord{
+			{WeightG: 0, BB: "10102026"},
+			{WeightG: 0, BB: "10102026"},
+			{WeightG: 0, BB: "10102026"},
+			{WeightG: 0, BB: "10102026"},
+			{WeightG: 0, BB: "10102026"},
+		}},
+	}}); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+
+	rows := decodePutPositions(t, fake.putBody[0])
+	q, rs := rowQty(t, rows, "pos-1")
+	if q != 5 || rs != 5 {
+		t.Errorf("pos-1 qty/reserve = %v/%v, want 5/5 (переподбор с нуля)", q, rs)
 	}
 }
 
