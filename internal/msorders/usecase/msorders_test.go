@@ -152,6 +152,36 @@ func TestSearchClientError(t *testing.T) {
 	}
 }
 
+// TestSearchSortedByMomentDesc — результаты поиска упорядочены по дате создания
+// по убыванию (свежие сверху); заказы без даты — в конец. МС не гарантирует
+// порядок при фильтре по номеру — сортировка на нашей стороне.
+func TestSearchSortedByMomentDesc(t *testing.T) {
+	fake := &fakeOrderSearch{orders: []client.MSOrder{
+		{ID: "o-old", Name: "00001", Moment: "2017-08-11 16:13:00.000"},
+		{ID: "o-none", Name: "00004", Moment: ""},
+		{ID: "o-new", Name: "00002", Moment: "2026-09-07 10:00:00.000"},
+		{ID: "o-mid", Name: "00003", Moment: "2026-09-06 23:59:59.000"},
+	}}
+	uc := NewUseCase(fake, nil, nil)
+
+	rows, err := uc.Search(context.Background(), "03969")
+	if err != nil {
+		t.Fatalf("Search() error: %v", err)
+	}
+	wantOrder := []string{"00002", "00003", "00001", "00004"}
+	if len(rows) != len(wantOrder) {
+		t.Fatalf("len(rows) = %d, want %d", len(rows), len(wantOrder))
+	}
+	for i, want := range wantOrder {
+		if rows[i].Name != want {
+			t.Errorf("rows[%d].Name = %q, want %q (сортировка по дате создания, свежие сверху)", i, rows[i].Name, want)
+		}
+	}
+	if rows[3].Created != dash {
+		t.Errorf("rows[3].Created = %q, want «—» для заказа без даты (в конце)", rows[3].Created)
+	}
+}
+
 func TestSearchNotFound(t *testing.T) {
 	fake := &fakeOrderSearch{orders: []client.MSOrder{}}
 	uc := NewUseCase(fake, nil, nil)
