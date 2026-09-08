@@ -44,6 +44,7 @@
                 data-id="{{.ID}}" data-code="{{.Code}}" data-hascode="{{if .HasCode}}1{{else}}0{{end}}"
                 data-weighted="{{if .Weighted}}1{{else}}0{{end}}" data-qty="{{.Qty}}"
                 data-group="{{.Group}}" data-gsize="{{.GroupSize}}"
+                data-reserve="{{.Reserve}}"
                 data-active="{{if .Active}}1{{else}}0{{end}}" data-canrepick="{{if .CanRepick}}1{{else}}0{{end}}">
                 <td class="cell-name">{{.Name}}</td>
                 <td class="mono">{{if .HasCode}}{{.Code}}{{else}}—{{end}}</td>
@@ -73,7 +74,9 @@
     <script>
         // Подбор позиций: скан куска (29 цифр) сверяется по первым 8 цифрам
         // с внутренним кодом активной строки. Весовая строка готова после
-        // первого засчитанного скана, штучная — после qty сканов. Кнопка
+        // первого засчитанного скана, штучная — когда набрано (резерв + новые
+        // сканы) >= qty: у доборной строки (0 < reserve < qty, менеджер
+        // увеличил количество) счётчик стартует с резерва МС. Кнопка
         // «Объединить» появляется, когда все строки группы забиты.
         (function () {
             'use strict';
@@ -94,6 +97,7 @@
                     qty: parseFloat(tr.getAttribute('data-qty')) || 0,
                     group: parseInt(tr.getAttribute('data-group'), 10) || 0,
                     gsize: parseInt(tr.getAttribute('data-gsize'), 10) || 0,
+                    reserve: parseFloat(tr.getAttribute('data-reserve')) || 0,
                     active: tr.getAttribute('data-active') === '1',
                     done: false,
                     merged: false,
@@ -118,6 +122,15 @@
                     (function (r, btn) {
                         btn.addEventListener('click', function () { repickRow(r); });
                     })(row, repick);
+                }
+            }
+
+            // Доборные строки (частично в резерве, 0 < reserve < qty) — счёт
+            // набранного стартует с резерва МС: показать сразу, до сканов.
+            for (var d = 0; d < rows.length; d++) {
+                if (rows[d].active && rows[d].reserve > 0) {
+                    var pickedInit = rows[d].tr.querySelector('.picked');
+                    if (pickedInit) { pickedInit.textContent = rowPickedText(rows[d]); }
                 }
             }
 
@@ -178,7 +191,7 @@
                     for (var i = 0; i < r.records.length; i++) { g += r.records[i].w; }
                     return 'набрано ' + fmtKgText(g);
                 }
-                return 'набрано ' + r.records.length + ' из ' + Math.round(r.qty) + ' шт';
+                return 'набрано ' + (r.records.length + r.reserve) + ' из ' + Math.round(r.qty) + ' шт';
             }
 
             // ---- скан ----
@@ -214,7 +227,7 @@
                 r.records.push({ w: r.weighted ? w : 0, bb: bb });
                 if (r.weighted) {
                     r.done = true; // одна строка = один кусок
-                } else if (r.records.length >= r.qty) {
+                } else if (r.records.length + r.reserve >= r.qty) {
                     r.done = true;
                 }
 
@@ -260,6 +273,7 @@
             // ---- Переподобрать: резерв в 0, строка становится активной ----
             function repickRow(r) {
                 r.active = true;
+                r.reserve = 0; // набираем с нуля: добор не наследуется
                 var cell = r.tr.querySelector('.cell-action');
                 var reserveCell = r.tr.querySelector('.cell-reserve');
                 cell.textContent = '';
@@ -330,8 +344,10 @@
                 if (grp.length < 2) { return; }
                 var first = grp[0];
                 var totalQty = 0;
+                var totalReserve = 0;
                 for (var i = 0; i < grp.length; i++) {
                     totalQty += grp[i].qty;
+                    totalReserve += grp[i].reserve;
                     if (grp[i] !== first) {
                         grp[i].merged = true;
                         grp[i].tr.style.display = 'none';
@@ -343,6 +359,7 @@
                 }
                 first.records = records;
                 first.qty = totalQty;
+                first.reserve = totalReserve;
 
                 var qtyCell = first.tr.querySelector('.cell-qty');
                 if (qtyCell) { qtyCell.textContent = fmtQtyText(totalQty, first.weighted); }
@@ -389,7 +406,7 @@
                     for (var k = 0; k < r.records.length; k++) {
                         recs.push({ w: r.records[k].w, bb: r.records[k].bb });
                     }
-                    out.push({ ids: ids, records: recs });
+                    out.push({ ids: ids, from: r.reserve, records: recs });
                 }
                 return out;
             }
