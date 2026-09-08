@@ -46,6 +46,7 @@ func (a *App) initDeps() {
 		a.initAverageSales,
 		a.initTableSizes,
 		a.initComplaints,
+		a.initReturns,
 	}
 
 	for _, init := range inits {
@@ -137,6 +138,21 @@ func (a *App) initComplaints() {
 	go func() {
 		if err := poller.Run(context.Background()); err != nil {
 			slog.Info(fmt.Sprintf("complaints: поллер завершился: %v", err))
+		}
+	}()
+}
+
+// initReturns запускает наблюдатель журнала действий МС (модуль returns:
+// «Возврат в продажу»): раз в минуту опрос audit с курсора, уведомления в
+// чат склада. Run живёт до завершения процесса: ошибки тиков логируются
+// внутри и не роняют приложение (следующий тик повторит). Без
+// MSAPI_CANCELLED_STATE_ID перевод заказов в «Отменён» не отслеживается
+// (предупреждение в логе модуля) — удаления позиций работают.
+func (a *App) initReturns() {
+	uc := a.di.ReturnsUC()
+	go func() {
+		if err := uc.Run(context.Background()); err != nil {
+			slog.Info(fmt.Sprintf("returns: наблюдатель завершился: %v", err))
 		}
 	}()
 }

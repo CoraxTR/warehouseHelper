@@ -1,0 +1,227 @@
+package http
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"html/template"
+	"net/http"
+	"time"
+
+	"log/slog"
+
+	"warehouseHelper/internal/returns"
+	retucase "warehouseHelper/internal/returns/usecase"
+)
+
+// Страница «Возврат в продажу» (хаб «Продукция»): список активных событий
+// аудита (GET /goods/return), карточка события с ожиданиями (?e=<id>),
+// приём возврата сканированием (POST /goods/return/save) и ручное закрытие
+// (POST /goods/return/close). Страница открывается без авторизации — по
+// URL-кнопке «Расформировать» из Telegram-сообщения склада.
+
+var returnTmpl = template.Must(template.ParseFiles("../internal/delivery/web/templates/return.html"))
+
+// mskLoc — момент события отображается в TZ склада (МСК; сервер в UTC).
+var mskLoc = time.FixedZone("MSK", 3*60*60)
+
+// returnPageData — данные шаблона: карточка события (?e=) или список (?e нет).
+type returnPageData struct {
+	HasEvent   bool
+	EventID    string
+	OrderName  string
+	KindText   string // «Заказ отменён» / «Из заказа удалены позиции»
+	Moment     string // момент события, МСК
+	Done       bool
+	Manual     bool // закрыто вручную (в остатки не писано)
+	Empty      bool // ожиданий нет: событие «опустело» — только ручное закрытие
+	Rows       []returnRowData
+	ExpectJSON string // ожидания для клиентской сверки (data-expect)
+	ActiveRows []returnActiveRow
+}
+
+// returnRowData — строка ожидания возврата для шаблона и JS.
+type returnRowData struct {
+	Code     string // internal_code — по нему резолвится скан
+	Name     string // название товара (из диффа/заказа)
+	QtyText  string // «0.657 кг» / «2 шт» — ожидание для показа
+	Target   int64  // ожидание для сверки: граммы (весовой) или штуки
+	Weighted bool
+}
+
+type returnActiveRow struct {
+	ID        string
+	OrderName string
+	KindText  string
+	Moment    string // МСК
+	Status    string // «уведомлено» / «ожидает отправки»
+}
+
+func returnKindText(k returns.EventKind) string {
+	switch k {
+	case returns.KindCancelled:
+		return "Заказ отменён"
+	case returns.KindRemoved:
+		return "Из заказа удалены позиции"
+	default:
+		return string(k)
+	}
+}
+
+// returnQtyText — ожидание строки для показа: кг (3 знака) или штуки.
+func returnQtyText(q int64, weighted bool) string {
+	if weighted {
+		return fmt.Sprintf("%.3f кг", float64(q)/1000)
+	}
+	return fmt.Sprintf("%d шт", q)
+}
+
+// ReturnsPage — GET /goods/return: список активных событий (без ?e=) или
+// карточка события (?e=<id>). Данные события перечитываются из МС.
+func (h *Handler) ReturnsPage(w http.ResponseWriter, r *http.Request) {
+	eventID := r.URL.Query().Get("e")
+
+	data := returnPageData{EventID: eventID}
+	if eventID == "" {
+		active, err := h.returnsUC.ListEvents(r.Context())
+		if err != nil {
+			slog.Error(fmt.Sprintf("returns list: %v", err))
+			http.Error(w, "не удалось загрузить список", http.StatusInternalServerError)
+
+			return
+		}
+		for _, ev := range active {
+			data.ActiveRows = append(data.ActiveRows, returnActiveRow{
+				ID:        ev.ID,
+				OrderName: ev.OrderName,
+				KindText:  returnKindText(ev.Kind),
+				Moment:    ev.Moment.In(mskLoc).Format("02.01.2006 15:04:05"),
+				Status:    eventStatusText(ev),
+			})
+		}
+	} else {
+		state, err := h.returnsUC.EventPage(r.Context(), eventID)
+		if err != nil {
+			if errors.Is(err, returns.ErrEventNotFound) {
+				http.Error(w, "событие не найдено (удалено из журнала?)", http.StatusNotFound)
+
+				return
+			}
+			slog.Error(fmt.Sprintf("returns event page %s: %v", eventID, err))
+			http.Error(w, "не удалось загрузить событие — попробуйте позже", http.StatusInternalServerError)
+
+			return
+		}
+
+		data.HasEvent = true
+		data.OrderName = state.Event.OrderName
+		data.KindText = returnKindText(state.Event.Kind)
+		data.Moment = state.Event.Moment.In(mskLoc).Format("02.01.2006 15:04:05")
+		data.Done = state.Done
+		data.Manual = state.Event.Manual
+
+		if !state.Done {
+			expect := make([]returnRowData, 0, len(state.Expected))
+			for _, e := range state.Expected {
+				expect = append(expect, returnRowData{
+					Code:     e.InternalCode,
+					Name:     e.Name,
+					QtyText:  returnQtyText(e.ExpectedQty, e.Weighted),
+					Target:   e.ExpectedQty,
+					Weighted: e.Weighted,
+				})
+			}
+			data.Empty = len(expect) == 0
+			data.Rows = expect
+			expectJSON, err := json.Marshal(expect)
+			if err != nil {
+				slog.Error(fmt.Sprintf("returns expect json: %v", err))
+				http.Error(w, "не удалось собрать ожидания", http.StatusInternalServerError)
+
+				return
+			}
+			data.ExpectJSON = string(expectJSON)
+		}
+	}
+
+	if err := returnTmpl.Execute(w, data); err != nil {
+		slog.Error(fmt.Sprintf("return template: %v", err))
+	}
+}
+
+func eventStatusText(ev returns.ReturnEvent) string {
+	if ev.Status == returns.StatusSent {
+		return "уведомлено"
+	}
+	return "ожидает отправки"
+}
+
+// ReturnsSave — POST /goods/return/save: приём возврата. body:
+// {"event_id":"...","scans":["0021...","..."]} Сервер сверяет сканы с
+// ожиданиями (авторитетно, строгое равенство), пишет остатки (AcceptStock)
+// и закрывает событие. 204 — принято; 400 — сканы не сошлись; 409 — уже обработано.
+func (h *Handler) ReturnsSave(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		EventID string   `json:"event_id"`
+		Scans   []string `json:"scans"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.EventID == "" {
+		http.Error(w, "некорректный запрос", http.StatusBadRequest)
+
+		return
+	}
+	if len(req.Scans) == 0 {
+		http.Error(w, "нет сканов", http.StatusBadRequest)
+
+		return
+	}
+
+	if _, err := h.returnsUC.AcceptReturn(r.Context(), req.EventID, req.Scans); err != nil {
+		var ve *retucase.ValidationError
+		switch {
+		case errors.As(err, &ve):
+			http.Error(w, ve.Error(), http.StatusBadRequest)
+		case errors.Is(err, returns.ErrAlreadyDone):
+			http.Error(w, returns.ErrAlreadyDone.Error(), http.StatusConflict)
+		case errors.Is(err, returns.ErrEventNotFound):
+			http.Error(w, returns.ErrEventNotFound.Error(), http.StatusNotFound)
+		default:
+			slog.Error(fmt.Sprintf("returns accept %s: %v", req.EventID, err))
+			http.Error(w, "не удалось принять возврат — попробуйте позже", http.StatusInternalServerError)
+		}
+
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// ReturnsClose — POST /goods/return/close: ручное закрытие (куски не
+// вернулись: потеряны/списаны). В остатки не пишется, сообщение удаляется.
+// body: {"event_id":"..."}; 204 — закрыто; 409 — уже обработано.
+func (h *Handler) ReturnsClose(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		EventID string `json:"event_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.EventID == "" {
+		http.Error(w, "некорректный запрос", http.StatusBadRequest)
+
+		return
+	}
+
+	if err := h.returnsUC.CloseManual(r.Context(), req.EventID); err != nil {
+		switch {
+		case errors.Is(err, returns.ErrAlreadyDone):
+			http.Error(w, returns.ErrAlreadyDone.Error(), http.StatusConflict)
+		case errors.Is(err, returns.ErrEventNotFound):
+			http.Error(w, returns.ErrEventNotFound.Error(), http.StatusNotFound)
+		default:
+			slog.Error(fmt.Sprintf("returns close %s: %v", req.EventID, err))
+			http.Error(w, "не удалось закрыть возврат", http.StatusInternalServerError)
+		}
+
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}

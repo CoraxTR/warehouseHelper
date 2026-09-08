@@ -24,6 +24,7 @@ import (
 	qucase "warehouseHelper/internal/qrcodes/usecase"
 	rucase "warehouseHelper/internal/receiving/usecase"
 	rgucase "warehouseHelper/internal/refgo/usecase"
+	retucase "warehouseHelper/internal/returns/usecase"
 	sucase "warehouseHelper/internal/stock/usecase"
 	stockws "warehouseHelper/internal/stock/ws"
 	"warehouseHelper/internal/tempdir"
@@ -48,9 +49,10 @@ type Handler struct {
 	receivingUC  *rucase.ReceivingUseCase
 	complaintsUC *cucase.UseCase
 	msOrdersUC   *msordersuc.UseCase
+	returnsUC    *retucase.UseCase
 }
 
-func NewHandler(syncUC *msucase.SyncUseCase, ordersUC *msucase.OrdersUseCase, exportUC *rgucase.ExportToExcelUseCase, pdfUC *rgucase.ExportOrderPDFUseCase, barcodeUC *rgucase.ExportBarcodesToExcelUseCase, refGoUC *rgucase.RefGoCheckAgainstUseCase, wikiUC *wucase.WikiUseCase, goodsUC *gucase.GoodsUseCase, dayStateUC *ducecase.UseCase, qrUC *qucase.QRUseCase, msUC *msu.MSSuppliersUseCase, stockUC *sucase.StockUseCase, stockHub *stockws.Hub, receiveUC *rucase.BarcodeEditor, receivingUC *rucase.ReceivingUseCase, complaintsUC *cucase.UseCase, msOrdersUC *msordersuc.UseCase) *Handler {
+func NewHandler(syncUC *msucase.SyncUseCase, ordersUC *msucase.OrdersUseCase, exportUC *rgucase.ExportToExcelUseCase, pdfUC *rgucase.ExportOrderPDFUseCase, barcodeUC *rgucase.ExportBarcodesToExcelUseCase, refGoUC *rgucase.RefGoCheckAgainstUseCase, wikiUC *wucase.WikiUseCase, goodsUC *gucase.GoodsUseCase, dayStateUC *ducecase.UseCase, qrUC *qucase.QRUseCase, msUC *msu.MSSuppliersUseCase, stockUC *sucase.StockUseCase, stockHub *stockws.Hub, receiveUC *rucase.BarcodeEditor, receivingUC *rucase.ReceivingUseCase, complaintsUC *cucase.UseCase, msOrdersUC *msordersuc.UseCase, returnsUC *retucase.UseCase) *Handler {
 	return &Handler{
 		syncUC:       syncUC,
 		ordersUC:     ordersUC,
@@ -69,6 +71,7 @@ func NewHandler(syncUC *msucase.SyncUseCase, ordersUC *msucase.OrdersUseCase, ex
 		receivingUC:  receivingUC,
 		complaintsUC: complaintsUC,
 		msOrdersUC:   msOrdersUC,
+		returnsUC:    returnsUC,
 	}
 }
 
