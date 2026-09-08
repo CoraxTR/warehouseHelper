@@ -1113,7 +1113,10 @@ func (msac *MSAPIClient) UpdateCustomerOrder(parentctx context.Context, id strin
 		return nil, nil
 	}
 
-	resCh := msac.workerpool.SubmitOther(job)
+	// Правки заказов — строго под ключами склада (SubmitWarehouse): все наши
+	// изменения customerorder в аудите МС должны быть помечены складским uid,
+	// чтобы наблюдатель аудита (модуль returns) отличал их от ручных правок.
+	resCh := msac.workerpool.SubmitWarehouse(job)
 
 	select {
 	case res := <-resCh:
