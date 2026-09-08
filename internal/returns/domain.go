@@ -4,7 +4,14 @@
 // данные страницы перечитываются из МС по id события (аудит хранится долго).
 package returns
 
-import "time"
+import (
+	"errors"
+	"time"
+)
+
+// ErrEventNotFound — события аудита с таким id нет в return_events
+// (не отслеживалось или уже удалено).
+var ErrEventNotFound = errors.New("событие возврата не найдено")
 
 // EventKind — вид события аудита, на которое склад реагирует расформированием.
 type EventKind string
@@ -35,9 +42,9 @@ type ReturnEvent struct {
 	OrderName string    // номер заказа (для текста сообщения)
 	Moment    time.Time // момент события (UTC; из audit moment в TZ учётки = МСК)
 	Status    EventStatus
-	Manual    bool  // закрыто вручную (куски не вернулись)
-	ChatID    int64 // TG-чат отправленного сообщения
-	MessageID int64 // TG message_id (deleteMessage после обработки)
+	Manual    bool   // закрыто вручную (куски не вернулись)
+	ChatID    *int64 // TG-чат отправленного сообщения (nil — не отправлено)
+	MessageID *int64 // TG message_id (deleteMessage после обработки)
 }
 
 // Expected — строка ожидания возврата: товар и количество, которое нужно
