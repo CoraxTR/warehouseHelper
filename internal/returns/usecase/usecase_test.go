@@ -168,9 +168,9 @@ func testCatalog() stubCatalog {
 }
 
 // etiketa — этикетка куска 29: internal_code(8)+вес_г(5)+выработка(8)+срок(8).
-func etiketa(code string, weightG int, exp string) string {
-	// выработка в тестовых этикетках фиксирована: 01.09.2026
-	return code + fmt.Sprintf("%05d", weightG) + "01092026" + exp
+// Выработка/срок в тестах фиксированы (01.09.2026 / 15.09.2026).
+func etiketa(code string, weightG int) string {
+	return code + fmt.Sprintf("%05d", weightG) + "01092026" + "15092026"
 }
 
 // detailRow — строка раскрытия events (JSON по мотивам живого ответа).
@@ -185,8 +185,8 @@ func detailRow(diffJSON, name string) client.AuditEventRow {
 	return row
 }
 
-func removedDiffJSON(name string, qty, reserve float64, uom string) string {
-	return `{"positions":[{"oldValue":{"assortment":{"meta":{"href":"https://api.moysklad.ru/api/remap/1.2/entity/product/` + prodA + `"},"name":"` + name + `"},"quantity":` + f(qty) + `,"reserve":` + f(reserve) + `,"uom":"` + uom + `"}}]}`
+func removedDiffJSON(qty, reserve float64, uom string) string {
+	return `{"positions":[{"oldValue":{"assortment":{"meta":{"href":"https://api.moysklad.ru/api/remap/1.2/entity/product/` + prodA + `"},"name":"Чак ролл"},"quantity":` + f(qty) + `,"reserve":` + f(reserve) + `,"uom":"` + uom + `"}}]}`
 }
 func f(v float64) string {
 	return jsonNumber(v)
@@ -272,7 +272,7 @@ func TestBuildExpected_RemovedWithoutReserveIsNothing(t *testing.T) {
 	uc, audit := env.uc, env.audit
 
 	// Удаление неотложенной позиции (reserve 0) — возвращать нечего.
-	audit.details[auditID] = []client.AuditEventRow{detailRow(removedDiffJSON("Чак ролл", 0.657, 0, "кг"), "19191")}
+	audit.details[auditID] = []client.AuditEventRow{detailRow(removedDiffJSON(0.657, 0, "кг"), "19191")}
 
 	ev := &returns.ReturnEvent{ID: auditID, Kind: returns.KindRemoved, OrderID: orderID}
 	_, err := uc.buildExpected(context.Background(), ev)
@@ -287,8 +287,8 @@ func TestMatchScans_WeightedAccumulation(t *testing.T) {
 	expected := []returns.Expected{{ProductID: prodA, InternalCode: codeA, Name: "Чак ролл", Weighted: true, ExpectedQty: 657}}
 
 	units, err := matchScans([]string{
-		etiketa(codeA, 400, "15092026"),
-		etiketa(codeA, 257, "15092026"),
+		etiketa(codeA, 400),
+		etiketa(codeA, 257),
 	}, expected)
 	if err != nil {
 		t.Fatalf("matchScans: %v", err)
@@ -301,7 +301,7 @@ func TestMatchScans_WeightedAccumulation(t *testing.T) {
 func TestMatchScans_StrictWeightNoTolerance(t *testing.T) {
 	expected := []returns.Expected{{ProductID: prodA, InternalCode: codeA, Name: "Чак ролл", Weighted: true, ExpectedQty: 657}}
 
-	_, err := matchScans([]string{etiketa(codeA, 654, "15092026")}, expected)
+	_, err := matchScans([]string{etiketa(codeA, 654)}, expected)
 	var ve *ValidationError
 	if !errors.As(err, &ve) || !strings.Contains(ve.Reason, "вес не сходится") {
 		t.Fatalf("want ValidationError «вес не сходится», got %v", err)
@@ -312,8 +312,8 @@ func TestMatchScans_OverflowRejected(t *testing.T) {
 	expected := []returns.Expected{{ProductID: prodA, InternalCode: codeA, Name: "Чак ролл", Weighted: true, ExpectedQty: 657}}
 
 	_, err := matchScans([]string{
-		etiketa(codeA, 400, "15092026"),
-		etiketa(codeA, 300, "15092026"),
+		etiketa(codeA, 400),
+		etiketa(codeA, 300),
 	}, expected)
 	var ve *ValidationError
 	if !errors.As(err, &ve) {
@@ -324,7 +324,7 @@ func TestMatchScans_OverflowRejected(t *testing.T) {
 func TestMatchScans_UnknownProductRejected(t *testing.T) {
 	expected := []returns.Expected{{ProductID: prodA, InternalCode: codeA, Name: "Чак ролл", Weighted: true, ExpectedQty: 657}}
 
-	_, err := matchScans([]string{etiketa("00999000", 657, "15092026")}, expected)
+	_, err := matchScans([]string{etiketa("00999000", 657)}, expected)
 	var ve *ValidationError
 	if !errors.As(err, &ve) || !strings.Contains(ve.Reason, "не в списке возврата") {
 		t.Fatalf("want ValidationError «не в списке», got %v", err)
@@ -347,8 +347,8 @@ func TestMatchScans_PieceGoodsByCount(t *testing.T) {
 	expected := []returns.Expected{{ProductID: prodD, InternalCode: codeD, Name: "Соус", Weighted: false, ExpectedQty: 2}}
 
 	units, err := matchScans([]string{
-		etiketa(codeD, 1, "15092026"), // вес-заглушка 00001 не участвует
-		etiketa(codeD, 1, "15092026"),
+		etiketa(codeD, 1), // вес-заглушка 00001 не участвует
+		etiketa(codeD, 1),
 	}, expected)
 	if err != nil {
 		t.Fatalf("matchScans: %v", err)
@@ -372,7 +372,7 @@ func TestAggregateLots_GroupsByProductAndDate(t *testing.T) {
 	}
 	byDate := map[string]int64{}
 	for _, l := range lots {
-		byDate[l.BestBefore.Format("2006-01-02")] = l.Qty
+		byDate[l.BestBefore.Format(time.DateOnly)] = l.Qty
 	}
 	if byDate["2026-09-15"] != 2 || byDate["2026-09-20"] != 1 {
 		t.Errorf("qty по срокам = %+v, want 15.09→2, 20.09→1", byDate)

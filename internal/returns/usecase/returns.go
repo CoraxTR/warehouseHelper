@@ -184,7 +184,7 @@ func (uc *UseCase) processRow(ctx context.Context, row client.AuditRow) error {
 
 	out := parseDetail(detail, uc.cfg.CancelledStateID)
 
-	kind := returns.EventKind("")
+	var kind returns.EventKind
 	var orderID, orderName string
 	for _, d := range detail {
 		if d.Name != "" {
