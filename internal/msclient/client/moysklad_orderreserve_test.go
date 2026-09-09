@@ -14,8 +14,14 @@ import (
 )
 
 const (
-	orderIDTest  = "053b3dfc-926b-11f1-0a80-135d00113455"
-	cancelledID  = "8737d8a5-c0b9-11e3-ac8e-002590a28eca"
+	orderIDTest = "053b3dfc-926b-11f1-0a80-135d00113455"
+	cancelledID = "8737d8a5-c0b9-11e3-ac8e-002590a28eca"
+	// whAuthHeader / othAuthHeader — Authorization тестовых ключей пула
+	// (складской / общий); goconst: не дублировать литералы по пакету.
+	whAuthHeader  = "Bearer key-wh"
+	othAuthHeader = "Bearer key-oth"
+	// orderRawTest — сырое тело GET заказа: state (отменён) + 3 позиции,
+	// две из которых в резерве.
 	orderRawTest = `{"id":"` + orderIDTest + `","name":"19191","state":{"meta":{"href":"https://api.moysklad.ru/api/remap/1.2/entity/customerorder/metadata/states/` + cancelledID + `"}},` +
 		`"positions":{"rows":[` +
 		`{"id":"pos-1","quantity":0.657,"reserve":0.657,"price":1000.0,"assortment":{"meta":{"href":"https://api.moysklad.ru/api/remap/1.2/entity/product/a02a"}}},` +
@@ -24,7 +30,9 @@ const (
 		`]}}`
 )
 
-func newReserveTestClient(t *testing.T, handler http.HandlerFunc) (*MSAPIClient, *httptest.Server) {
+// newReserveTestClient поднимает httptest-сервер и клиент на нём (воркерпул
+// валидирует ключ отдельным запросом к организации — на него отвечает orgOK).
+func newReserveTestClient(t *testing.T, handler http.HandlerFunc) *MSAPIClient {
 	t.Helper()
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
@@ -42,13 +50,13 @@ func newReserveTestClient(t *testing.T, handler http.HandlerFunc) (*MSAPIClient,
 	pool := workerpool.NewMSWorkerPool(msCfg)
 	t.Cleanup(pool.Stop)
 
-	return &MSAPIClient{workerpool: pool, msConfig: msCfg}, server
+	return &MSAPIClient{workerpool: pool, msConfig: msCfg}
 }
 
-// orgOK отвечает на проверку ключей пулом (GET организации) и пропускает
-// остальные запросы к замыкаемым переменным.
+// orgOK отвечает на проверку ключей пулом (GET организации) и сообщает,
+// обработан ли запрос.
 func orgOK(w http.ResponseWriter, r *http.Request) bool {
-	if r.URL.Path == "/entity/organization/org-test" {
+	if r.URL.Path == orgTestPath {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"id":"org-test"}`))
 		return true
@@ -62,7 +70,7 @@ func TestClearOrderReserves(t *testing.T) {
 	var gotAuth, gotPath, gotMethod string
 	var putBody []byte
 
-	msac, _ := newReserveTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	msac := newReserveTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if orgOK(w, r) {
 			return
 		}
@@ -93,7 +101,7 @@ func TestClearOrderReserves(t *testing.T) {
 	if gotPath != "/entity/customerorder/"+orderIDTest {
 		t.Errorf("path = %s, want customerorder endpoint", gotPath)
 	}
-	if gotAuth != "Bearer key-wh" {
+	if gotAuth != whAuthHeader {
 		t.Errorf("Authorization = %q, want складской ключ (SubmitWarehouse)", gotAuth)
 	}
 
@@ -127,7 +135,7 @@ func TestClearOrderReserves_NoReserveSkipsPut(t *testing.T) {
 	raw := strings.ReplaceAll(orderRawTest, `"reserve":0.657`, `"reserve":0`)
 	raw = strings.ReplaceAll(raw, `"reserve":0.5`, `"reserve":0`)
 
-	msac, _ := newReserveTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	msac := newReserveTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if orgOK(w, r) {
 			return
 		}
@@ -151,7 +159,7 @@ func TestClearOrderReserves_NoReserveSkipsPut(t *testing.T) {
 
 // TestFetchOrderState — id статуса из state.meta.href заказа.
 func TestFetchOrderState(t *testing.T) {
-	msac, _ := newReserveTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	msac := newReserveTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if orgOK(w, r) {
 			return
 		}
@@ -170,7 +178,7 @@ func TestFetchOrderState(t *testing.T) {
 
 // TestFetchOrderState_NoState — у заказа нет state: пустая строка, не ошибка.
 func TestFetchOrderState_NoState(t *testing.T) {
-	msac, _ := newReserveTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	msac := newReserveTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if orgOK(w, r) {
 			return
 		}

@@ -229,7 +229,7 @@ var manualTmpl = template.Must(template.ParseFiles("../internal/delivery/web/tem
 // ReturnsManualPage — GET /goods/return/manual: пустая страница сканирования
 // кусков. Возврат не привязан к заказу: каждый принятый скан = один кусок
 // в остатки (лот по сроку этикетки).
-func (h *Handler) ReturnsManualPage(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) ReturnsManualPage(w http.ResponseWriter, _ *http.Request) {
 	if err := manualTmpl.Execute(w, nil); err != nil {
 		slog.Error(fmt.Sprintf("manual return template: %v", err))
 	}
@@ -263,7 +263,9 @@ func (h *Handler) ReturnsManualSave(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]int{"returned": n})
+	if err := json.NewEncoder(w).Encode(map[string]int{"returned": n}); err != nil {
+		slog.Error(fmt.Sprintf("returns manual save: %v", err))
+	}
 }
 
 // ReturnsClose — POST /goods/return/close: ручное закрытие (куски не

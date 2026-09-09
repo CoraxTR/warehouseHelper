@@ -10,7 +10,7 @@ import (
 // ── Ручной возврат (ManualReturn) ──────────────────────────────────────────
 
 // boxCode — этикетка коробки 33: internal_code(8)+вес(6)+кол-во(3)+даты(16).
-func boxCode(code string, qty int) string {
+func boxCode(code string) string {
 	return code + "000400" + "003" + "01092026" + "15092026"
 }
 
@@ -74,7 +74,7 @@ func TestManualReturn_BoxRejected(t *testing.T) {
 	env := newTestEnv(newStubRepo())
 	uc, stockS := env.uc, env.stock
 
-	_, err := uc.ManualReturn(context.Background(), []string{boxCode(codeA, 3)})
+	_, err := uc.ManualReturn(context.Background(), []string{boxCode(codeA)})
 	var ve *ValidationError
 	if !errors.As(err, &ve) {
 		t.Fatalf("want ValidationError про коробку, got %v", err)

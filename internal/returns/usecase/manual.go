@@ -25,7 +25,6 @@ func (uc *UseCase) ManualReturn(ctx context.Context, scans []string) (int, error
 		return 0, &ValidationError{Reason: "нет сканов"}
 	}
 
-	codes := make([]string, 0, len(scans))
 	parsed := make([]innercode.Code, 0, len(scans))
 	seen := make(map[string]struct{}, len(scans))
 	for _, raw := range scans {
@@ -36,7 +35,6 @@ func (uc *UseCase) ManualReturn(ctx context.Context, scans []string) (int, error
 		if code.Kind != innercode.KindItem {
 			return 0, &ValidationError{Reason: fmt.Sprintf("штрих-код %q — коробка (33): возвращаются только куски", raw)}
 		}
-		codes = append(codes, code.InternalCode)
 		parsed = append(parsed, code)
 		seen[code.InternalCode] = struct{}{}
 	}

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -181,12 +180,7 @@ func (pg *PGClient) ProductsByMSIDs(ctx context.Context, ids []string) (map[stri
 		if code != nil {
 			cp.InternalCode = *code
 		}
-		switch strings.TrimSpace(uom) { // весовой: кг/г/т (комментарий products_schema)
-		case "кг", "г", "т":
-			cp.Weighted = true
-		default:
-			// штучные и прочие единицы
-		}
+		cp.Weighted = weightedUOM(uom) // весовой: кг/г/т (комментарий products_schema)
 		out[cp.ProductID] = cp
 	}
 	if err := rows.Err(); err != nil {
@@ -222,12 +216,7 @@ func (pg *PGClient) ProductsByInternalCodes(ctx context.Context, codes []string)
 			return nil, fmt.Errorf("returns catalog by codes scan: %w", err)
 		}
 		cp.InternalCode = code
-		switch strings.TrimSpace(uom) { // весовой: кг/г/т (комментарий products_schema)
-		case "кг", "г", "т":
-			cp.Weighted = true
-		default:
-			// штучные и прочие единицы
-		}
+		cp.Weighted = weightedUOM(uom)
 		out[code] = cp
 	}
 	if err := rows.Err(); err != nil {

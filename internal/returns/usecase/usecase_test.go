@@ -169,7 +169,7 @@ type stubOrders struct {
 	clearedIDs []string
 }
 
-func (s *stubOrders) FetchOrderState(_ context.Context, orderID string) (string, error) {
+func (s *stubOrders) FetchOrderState(_ context.Context, _ string) (string, error) {
 	s.stateHits++
 	if s.stateErr != nil {
 		return "", s.stateErr

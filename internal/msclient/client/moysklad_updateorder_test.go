@@ -60,7 +60,7 @@ func TestUpdateCustomerOrderUsesWarehouseKey(t *testing.T) {
 	if gotPath != "/entity/customerorder/053b3dfc-926b-11f1-0a80-135d00113455" {
 		t.Errorf("path = %s, want customerorder endpoint", gotPath)
 	}
-	if gotAuth != "Bearer key-wh" {
+	if gotAuth != whAuthHeader {
 		t.Errorf("Authorization = %q, want warehouse key (Bearer key-wh), got others key", gotAuth)
 	}
 }

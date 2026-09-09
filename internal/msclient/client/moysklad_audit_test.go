@@ -128,7 +128,7 @@ func TestFetchAuditPage(t *testing.T) {
 		t.Errorf("size = %d, want 2", size)
 	}
 	// Audit закрыт для части общих ключей — запрос должен уйти под warehouse-ключом.
-	if gotAuth != "Bearer key-wh" {
+	if gotAuth != whAuthHeader {
 		t.Errorf("Authorization = %q, want warehouse key (Bearer key-wh)", gotAuth)
 	}
 	if len(rows) != 2 {
