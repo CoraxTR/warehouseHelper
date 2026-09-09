@@ -167,3 +167,65 @@ func TestKindString(t *testing.T) {
 		})
 	}
 }
+
+func TestEncodeItem(t *testing.T) {
+	prod := time.Date(2026, time.August, 29, 0, 0, 0, 0, time.UTC)
+	exp := time.Date(2026, time.September, 29, 0, 0, 0, 0, time.UTC)
+	jan := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
+
+	t.Run("roundtrip user example", func(t *testing.T) {
+		raw, err := EncodeItem("00210003", 250, prod, exp)
+		if err != nil {
+			t.Fatalf("EncodeItem error: %v", err)
+		}
+		if raw != itemBarcode {
+			t.Errorf("EncodeItem = %q, want %q", raw, itemBarcode)
+		}
+		// Напечатанная этикетка обязана сканироваться как внутренний код куска.
+		code, err := Parse(raw)
+		if err != nil {
+			t.Fatalf("Parse(EncodeItem) error: %v", err)
+		}
+		if code.Kind != KindItem || code.WeightG != 250 || code.ProdDate != prod || code.ExpDate != exp {
+			t.Errorf("Parse(EncodeItem) = %+v, want item 250 g prod %v exp %v", code, prod, exp)
+		}
+	})
+
+	t.Run("weight zero padded", func(t *testing.T) {
+		raw, err := EncodeItem("00210003", 1, prod, exp)
+		if err != nil {
+			t.Fatalf("EncodeItem error: %v", err)
+		}
+		want := "00210003000012908202629092026"
+		if raw != want {
+			t.Errorf("EncodeItem = %q, want %q", raw, want)
+		}
+	})
+
+	t.Run("errors", func(t *testing.T) {
+		tests := []struct {
+			name     string
+			code     string
+			weightG  int64
+			prodDate time.Time
+			expDate  time.Time
+		}{
+			{name: "internal code mode 3", code: "30210003", weightG: 250, prodDate: prod, expDate: exp},
+			{name: "internal code too short", code: "0021000", weightG: 250, prodDate: prod, expDate: exp},
+			{name: "zero weight", code: "00210003", weightG: 0, prodDate: prod, expDate: exp},
+			{name: "weight too large for 5 digits", code: "00210003", weightG: 100000, prodDate: prod, expDate: exp},
+			{name: "missing prod date", code: "00210003", weightG: 250, prodDate: time.Time{}, expDate: exp},
+			{name: "missing exp date", code: "00210003", weightG: 250, prodDate: prod, expDate: time.Time{}},
+			{name: "exp before prod", code: "00210003", weightG: 250, prodDate: exp, expDate: jan},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				_, err := EncodeItem(tt.code, tt.weightG, tt.prodDate, tt.expDate)
+				if !errors.Is(err, ErrInvalid) {
+					t.Errorf("EncodeItem(%q, %d, %v, %v) error = %v, want ErrInvalid",
+						tt.code, tt.weightG, tt.prodDate, tt.expDate, err)
+				}
+			})
+		}
+	})
+}
