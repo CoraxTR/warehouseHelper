@@ -324,17 +324,14 @@ func (uc *UseCase) messageText(orderName string, kind reservewatch.Kind, items [
 		sb.WriteString("\n— ")
 		sb.WriteString(it.name)
 		sb.WriteString(" — ")
-		switch kind {
-		case reservewatch.KindMissing:
-			sb.WriteString(formatQty(it.quantity, it.unit))
-		case reservewatch.KindWrong:
+		if kind == reservewatch.KindWrong {
 			sb.WriteString("нужно ")
 			sb.WriteString(formatQty(it.quantity, it.unit))
 			sb.WriteString(", отложено ")
 			sb.WriteString(formatQty(it.reserve, it.unit))
-		default:
-			sb.WriteString(formatQty(it.quantity, it.unit))
+			continue
 		}
+		sb.WriteString(formatQty(it.quantity, it.unit))
 	}
 	return sb.String()
 }
