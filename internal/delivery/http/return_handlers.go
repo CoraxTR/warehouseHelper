@@ -222,9 +222,56 @@ func (h *Handler) ReturnsSave(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// ── Ручной возврат (без события аудита) ────────────────────────────────────
+
+var manualTmpl = template.Must(template.ParseFiles("../internal/delivery/web/templates/manual_return.html"))
+
+// ReturnsManualPage — GET /goods/return/manual: пустая страница сканирования
+// кусков. Возврат не привязан к заказу: каждый принятый скан = один кусок
+// в остатки (лот по сроку этикетки).
+func (h *Handler) ReturnsManualPage(w http.ResponseWriter, _ *http.Request) {
+	if err := manualTmpl.Execute(w, nil); err != nil {
+		slog.Error(fmt.Sprintf("manual return template: %v", err))
+	}
+}
+
+// ReturnsManualSave — POST /goods/return/manual/save: приём сканов ручного
+// возврата. body: {"scans":[...]}. 200 {"returned":N} — куски записаны в
+// остатки; 400 — батч отклонён целиком (текст причины); 500 — сбой.
+func (h *Handler) ReturnsManualSave(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Scans []string `json:"scans"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || len(req.Scans) == 0 {
+		http.Error(w, "нет сканов", http.StatusBadRequest)
+
+		return
+	}
+
+	n, err := h.returnsUC.ManualReturn(r.Context(), req.Scans)
+	if err != nil {
+		var ve *retucase.ValidationError
+		switch {
+		case errors.As(err, &ve):
+			http.Error(w, ve.Error(), http.StatusBadRequest)
+		default:
+			slog.Error(fmt.Sprintf("returns manual accept: %v", err))
+			http.Error(w, "не удалось принять возврат — попробуйте позже", http.StatusInternalServerError)
+		}
+
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(map[string]int{"returned": n}); err != nil {
+		slog.Error(fmt.Sprintf("returns manual save: %v", err))
+	}
+}
+
 // ReturnsClose — POST /goods/return/close: ручное закрытие (куски не
-// вернулись: потеряны/списаны). В остатки не пишется, сообщение удаляется.
-// body: {"event_id":"..."}; 204 — закрыто; 409 — уже обработано.
+// вернулись: потеряны/списаны). В остатки не пишется, в МС ничего не
+// меняется, сообщение удаляется. body: {"event_id":"..."};
+// 204 — закрыто; 409 — уже обработано.
 func (h *Handler) ReturnsClose(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		EventID string `json:"event_id"`

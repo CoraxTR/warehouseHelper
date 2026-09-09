@@ -375,3 +375,208 @@ func TestTick_DeepWindowNotLost(t *testing.T) {
 		t.Errorf("cursor = %v, want край окна + 1ms %v", repo.cursor, want)
 	}
 }
+
+// ── Снятие резерва МС при расформировании отмены ──────────────────────────
+
+// sentCancelled — отменённый заказ в работе: событие отправлено в чат.
+func sentCancelled() *returns.ReturnEvent {
+	chat, msg := int64(-100999), int64(42)
+	return &returns.ReturnEvent{
+		ID: auditID, Kind: returns.KindCancelled, OrderID: orderID, OrderName: "19379",
+		Status: returns.StatusSent, ChatID: &chat, MessageID: &msg,
+	}
+}
+
+func TestAcceptReturn_CancelledClearsReserveBeforeStock(t *testing.T) {
+	repo := newStubRepo()
+	repo.events[auditID] = sentCancelled()
+	env := newTestEnv(repo)
+	uc, audit, stockS, orders := env.uc, env.audit, env.stock, env.orders
+	audit.positions[orderID] = []client.MSPosition{pos(prodA, "Чак ролл", 0.657, 0.657)}
+
+	n, err := uc.AcceptReturn(context.Background(), auditID, []string{etiketa(codeA, 657)})
+	if err != nil {
+		t.Fatalf("AcceptReturn: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("принято единиц = %d, want 1", n)
+	}
+	if orders.clearHits != 1 || len(orders.clearedIDs) != 1 || orders.clearedIDs[0] != orderID {
+		t.Fatalf("ClearOrderReserves = %d вызовов %v, want 1 раз по %s", orders.clearHits, orders.clearedIDs, orderID)
+	}
+	if orders.stateHits != 1 {
+		t.Errorf("FetchOrderState должен проверяться до PUT, hits=%d", orders.stateHits)
+	}
+	if len(stockS.accepted) != 1 {
+		t.Fatalf("lots = %+v, want запись в stock", stockS.accepted)
+	}
+	if repo.events[auditID].Status != returns.StatusDone {
+		t.Errorf("status = %s, want done", repo.events[auditID].Status)
+	}
+}
+
+func TestAcceptReturn_ClearReserveErrorAborts(t *testing.T) {
+	repo := newStubRepo()
+	repo.events[auditID] = sentCancelled()
+	env := newTestEnv(repo)
+	uc, audit, stockS, notify, orders := env.uc, env.audit, env.stock, env.notify, env.orders
+	audit.positions[orderID] = []client.MSPosition{pos(prodA, "Чак ролл", 0.657, 0.657)}
+	orders.clearErr = errors.New("МС 400")
+
+	_, err := uc.AcceptReturn(context.Background(), auditID, []string{etiketa(codeA, 657)})
+	if err == nil {
+		t.Fatal("ошибка снятия резерва должна прервать возврат")
+	}
+	if len(stockS.accepted) != 0 {
+		t.Fatal("остатки не принимаются при ошибке МС (порядок: PUT до AcceptStock)")
+	}
+	if repo.events[auditID].Status != returns.StatusSent {
+		t.Errorf("status = %s, want sent (событие живо — повтор безопасен)", repo.events[auditID].Status)
+	}
+	if len(notify.deletes) != 0 {
+		t.Fatal("сообщение не удаляется при ошибке")
+	}
+}
+
+func TestAcceptReturn_RemovedSkipsOrderCalls(t *testing.T) {
+	repo := newStubRepo()
+	repo.events[auditID] = &returns.ReturnEvent{ID: auditID, Kind: returns.KindRemoved, OrderID: orderID, Status: returns.StatusSent}
+	env := newTestEnv(repo)
+	uc, audit, stockS, orders := env.uc, env.audit, env.stock, env.orders
+	audit.details[auditID] = []client.AuditEventRow{detailRow(removedDiffJSON(0.657), "19191")}
+
+	n, err := uc.AcceptReturn(context.Background(), auditID, []string{etiketa(codeA, 657)})
+	if err != nil {
+		t.Fatalf("AcceptReturn: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("принято единиц = %d, want 1", n)
+	}
+	if orders.stateHits != 0 || orders.clearHits != 0 {
+		t.Fatalf("удаление позиций не трогает заказ МС: state=%d clear=%d", orders.stateHits, orders.clearHits)
+	}
+	if len(stockS.accepted) != 1 {
+		t.Fatalf("lots = %+v, want запись в stock", stockS.accepted)
+	}
+}
+
+// ── Авто-закрытие «заказ вернули в работу» ────────────────────────────────
+
+func TestAcceptReturn_OrderBackToWorkAutoCloses(t *testing.T) {
+	repo := newStubRepo()
+	repo.events[auditID] = sentCancelled()
+	env := newTestEnv(repo)
+	uc, audit, stockS, notify, orders := env.uc, env.audit, env.stock, env.notify, env.orders
+	audit.positions[orderID] = []client.MSPosition{pos(prodA, "Чак ролл", 0.657, 0.657)}
+	orders.stateID = "785d7841-1ac2-11f0-0a80-071f000f6177" // «РефГо» — заказ вернули в работу
+
+	_, err := uc.AcceptReturn(context.Background(), auditID, []string{etiketa(codeA, 657)})
+	var ve *ValidationError
+	if !errors.As(err, &ve) {
+		t.Fatalf("want ValidationError про авто-закрытие, got %v", err)
+	}
+	if !strings.Contains(ve.Error(), "закрыто автоматически") {
+		t.Errorf("текст = %q", ve.Error())
+	}
+	ev := repo.events[auditID]
+	if ev.Status != returns.StatusDone || !ev.Manual {
+		t.Fatalf("event = %+v, want done+manual (авто-закрытие)", ev)
+	}
+	if orders.clearHits != 0 {
+		t.Fatal("авто-закрытие не снимает резерв (заказ не отменён — PUT опасен)")
+	}
+	if len(stockS.accepted) != 0 {
+		t.Fatal("остатки не принимаются для вернувшегося в работу заказа")
+	}
+	if len(notify.deletes) != 1 {
+		t.Fatalf("сообщение должно быть удалено при авто-закрытии, deletes=%+v", notify.deletes)
+	}
+}
+
+func TestEventPage_OrderBackToWorkAutoCloses(t *testing.T) {
+	repo := newStubRepo()
+	repo.events[auditID] = sentCancelled()
+	env := newTestEnv(repo)
+	uc, audit, orders := env.uc, env.audit, env.orders
+	audit.positions[orderID] = []client.MSPosition{pos(prodA, "Чак ролл", 0.657, 0.657)}
+	orders.stateID = "785d7841-1ac2-11f0-0a80-071f000f6177"
+
+	state, err := uc.EventPage(context.Background(), auditID)
+	if err != nil {
+		t.Fatalf("EventPage: %v", err)
+	}
+	if !state.Done || !state.Event.Manual {
+		t.Fatalf("state = %+v, want done+manual", state)
+	}
+	if repo.events[auditID].Status != returns.StatusDone {
+		t.Errorf("status = %s, want done", repo.events[auditID].Status)
+	}
+	if audit.posHits != 0 {
+		t.Fatal("авто-закрытие не должно тянуть состав возврата (проверка статуса первой)")
+	}
+}
+
+func TestEventPage_StillCancelledBuildsExpected(t *testing.T) {
+	repo := newStubRepo()
+	repo.events[auditID] = sentCancelled()
+	env := newTestEnv(repo)
+	uc, audit, orders := env.uc, env.audit, env.orders
+	audit.positions[orderID] = []client.MSPosition{pos(prodA, "Чак ролл", 0.657, 0.657)}
+
+	state, err := uc.EventPage(context.Background(), auditID)
+	if err != nil {
+		t.Fatalf("EventPage: %v", err)
+	}
+	if state.Done {
+		t.Fatal("отменённый заказ — страница сканирования, не done")
+	}
+	if len(state.Expected) != 1 || state.Expected[0].ExpectedQty != 657 {
+		t.Fatalf("expected = %+v, want Чак ролл 657 г", state.Expected)
+	}
+	if orders.stateHits != 1 {
+		t.Errorf("FetchOrderState hits = %d, want 1", orders.stateHits)
+	}
+}
+
+func TestEventPage_RemovedSkipsStateCheck(t *testing.T) {
+	repo := newStubRepo()
+	repo.events[auditID] = &returns.ReturnEvent{ID: auditID, Kind: returns.KindRemoved, OrderID: orderID, Status: returns.StatusSent}
+	env := newTestEnv(repo)
+	uc, audit, orders := env.uc, env.audit, env.orders
+	audit.details[auditID] = []client.AuditEventRow{detailRow(removedDiffJSON(0.657), "19191")}
+
+	state, err := uc.EventPage(context.Background(), auditID)
+	if err != nil {
+		t.Fatalf("EventPage: %v", err)
+	}
+	if orders.stateHits != 0 {
+		t.Fatalf("удаление позиций не сверяется со статусом заказа, hits=%d", orders.stateHits)
+	}
+	if state.Done || len(state.Expected) != 1 {
+		t.Fatalf("state = %+v, want живая карточка с ожиданием", state)
+	}
+}
+
+func TestCloseManual_SkipsOrderCallsAndStatusCheck(t *testing.T) {
+	repo := newStubRepo()
+	repo.events[auditID] = sentCancelled()
+	env := newTestEnv(repo)
+	uc, stockS, notify, orders := env.uc, env.stock, env.notify, env.orders
+
+	if err := uc.CloseManual(context.Background(), auditID); err != nil {
+		t.Fatalf("CloseManual: %v", err)
+	}
+	ev := repo.events[auditID]
+	if ev.Status != returns.StatusDone || !ev.Manual {
+		t.Errorf("event = %+v, want done+manual", ev)
+	}
+	if orders.stateHits != 0 || orders.clearHits != 0 {
+		t.Fatalf("ручное закрытие не ходит в МС: state=%d clear=%d", orders.stateHits, orders.clearHits)
+	}
+	if len(stockS.accepted) != 0 {
+		t.Fatal("ручное закрытие не пишет в stock")
+	}
+	if len(notify.deletes) != 1 {
+		t.Fatal("сообщение должно быть удалено")
+	}
+}

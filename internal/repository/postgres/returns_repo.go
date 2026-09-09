@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -181,16 +180,47 @@ func (pg *PGClient) ProductsByMSIDs(ctx context.Context, ids []string) (map[stri
 		if code != nil {
 			cp.InternalCode = *code
 		}
-		switch strings.TrimSpace(uom) { // весовой: кг/г/т (комментарий products_schema)
-		case "кг", "г", "т":
-			cp.Weighted = true
-		default:
-			// штучные и прочие единицы
-		}
+		cp.Weighted = weightedUOM(uom) // весовой: кг/г/т (комментарий products_schema)
 		out[cp.ProductID] = cp
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("returns catalog products: %w", err)
+	}
+	return out, nil
+}
+
+// ProductsByInternalCodes — каталог-шов «Ручного возврата»: товар по коду
+// склада (internal_code) из этикетки куска. internal_code UNIQUE — ключ мапы
+// код → товар. Кода нет в каталоге — его просто нет в мапе (батч отклоняется
+// вызывающей стороной).
+func (pg *PGClient) ProductsByInternalCodes(ctx context.Context, codes []string) (map[string]returns.CatalogProduct, error) {
+	out := make(map[string]returns.CatalogProduct, len(codes))
+	if len(codes) == 0 {
+		return out, nil
+	}
+
+	rows, err := pg.Pool.Query(ctx,
+		`SELECT id, internal_code, uom FROM products WHERE internal_code = ANY($1)`, codes)
+	if err != nil {
+		return nil, fmt.Errorf("returns catalog by codes: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			cp   returns.CatalogProduct
+			code string
+			uom  string
+		)
+		if err := rows.Scan(&cp.ProductID, &code, &uom); err != nil {
+			return nil, fmt.Errorf("returns catalog by codes scan: %w", err)
+		}
+		cp.InternalCode = code
+		cp.Weighted = weightedUOM(uom)
+		out[code] = cp
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("returns catalog by codes: %w", err)
 	}
 	return out, nil
 }
