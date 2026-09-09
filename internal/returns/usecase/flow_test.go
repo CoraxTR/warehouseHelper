@@ -344,7 +344,7 @@ func TestTick_DeepWindowNotLost(t *testing.T) {
 	msk := time.FixedZone("MSK", 3*60*60)
 	base := time.Date(2026, time.September, 9, 10, 17, 0, 0, msk)
 	rows := make([]client.AuditRow, 0, 60)
-	for i := 0; i < 60; i++ {
+	for i := range 60 {
 		rows = append(rows, client.AuditRow{
 			ID:         fmt.Sprintf("evt-%03d", i),
 			Moment:     base.Add(-time.Duration(i) * time.Second).Format("2006-01-02 15:04:05.000"),

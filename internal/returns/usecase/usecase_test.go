@@ -35,10 +35,7 @@ func (s *stubAudit) FetchAuditPage(_ context.Context, _ time.Time, offset int) (
 	if offset >= len(s.rows) {
 		return nil, len(s.rows), nil
 	}
-	end := offset + s.pageSize
-	if end > len(s.rows) {
-		end = len(s.rows)
-	}
+	end := min(offset+s.pageSize, len(s.rows))
 	return s.rows[offset:end], len(s.rows), nil
 }
 func (s *stubAudit) FetchAuditDetail(_ context.Context, id string) ([]client.AuditEventRow, error) {
