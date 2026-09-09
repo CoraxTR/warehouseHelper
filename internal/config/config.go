@@ -317,12 +317,7 @@ func loadMSConfig() *MSConfig {
 	// Id статусов заказов модуля reservewatch («Вес подобран», «Обработан»,
 	// «РефГо», «Курьер», «Перепроверен» — значения из metadata/states).
 	// Пусто — модуль не запускается (аналог CancelledStateID).
-	reserveWatchStates := make([]string, 0, 5)
-	for v := range strings.SplitSeq(os.Getenv("MSAPI_RESERVEWATCH_STATES"), ",") {
-		if v = strings.Trim(strings.TrimSpace(v), `"`); v != "" {
-			reserveWatchStates = append(reserveWatchStates, v)
-		}
-	}
+	reserveWatchStates := reserveWatchStatesEnv()
 
 	return &MSConfig{
 		Refs: msrefs,
@@ -342,6 +337,19 @@ func loadMSConfig() *MSConfig {
 		SkipAuditSources:   skipAuditSources,
 		ReserveWatchStates: reserveWatchStates,
 	}
+}
+
+// reserveWatchStatesEnv — id статусов заказов модуля reservewatch из
+// MSAPI_RESERVEWATCH_STATES (CSV: значения из customerorder/metadata/states).
+// Кавычки снимаем (как у соседних id); пусто — модуль не запускается.
+func reserveWatchStatesEnv() []string {
+	states := make([]string, 0, 5)
+	for v := range strings.SplitSeq(os.Getenv("MSAPI_RESERVEWATCH_STATES"), ",") {
+		if v = strings.Trim(strings.TrimSpace(v), `"`); v != "" {
+			states = append(states, v)
+		}
+	}
+	return states
 }
 
 // MSRefs — идентификаторы сущностей МойСклад, из которых собираются href'ы:

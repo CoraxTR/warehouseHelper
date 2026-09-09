@@ -167,7 +167,7 @@ func (a *App) initReturns() {
 // не запускается (статусы окна не заданы).
 func (a *App) initReserveWatch() {
 	uc := a.di.ReserveWatchUC()
-	if len(a.di.Config().MSConfig.ReserveWatchStates) == 0 {
+	if len(a.di.Config().ReserveWatchStates) == 0 {
 		slog.Info("reservewatch: не запущен: MSAPI_RESERVEWATCH_STATES не задан")
 		return
 	}

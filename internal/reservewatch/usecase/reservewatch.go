@@ -226,7 +226,7 @@ func (uc *UseCase) collectProblems(ctx context.Context, orders []client.MSOrder)
 			name:     ref.pos.Assortment.Name,
 			quantity: q,
 			reserve:  r,
-			weighted: p.Weighted,
+			unit:     unit,
 		}
 		if problems[ref.orderID] == nil {
 			problems[ref.orderID] = make(map[reservewatch.Kind][]problemItem)
@@ -238,12 +238,12 @@ func (uc *UseCase) collectProblems(ctx context.Context, orders []client.MSOrder)
 }
 
 // problemItem — позиция с проблемой резерва (для текста сообщения).
-// quantity/reserve — в единицах сверки (граммы для весовых, штуки иначе).
+// quantity/reserve — в единицах сверки unit (граммы для весовых, штуки иначе).
 type problemItem struct {
 	name     string
 	quantity int64
 	reserve  int64
-	weighted bool
+	unit     qtyUnit
 }
 
 // qtyUnit — единица сверки количества: весовой товар сводится в граммы
@@ -326,12 +326,14 @@ func (uc *UseCase) messageText(orderName string, kind reservewatch.Kind, items [
 		sb.WriteString(" — ")
 		switch kind {
 		case reservewatch.KindMissing:
-			sb.WriteString(formatQty(it.quantity, it.weighted))
+			sb.WriteString(formatQty(it.quantity, it.unit))
 		case reservewatch.KindWrong:
 			sb.WriteString("нужно ")
-			sb.WriteString(formatQty(it.quantity, it.weighted))
+			sb.WriteString(formatQty(it.quantity, it.unit))
 			sb.WriteString(", отложено ")
-			sb.WriteString(formatQty(it.reserve, it.weighted))
+			sb.WriteString(formatQty(it.reserve, it.unit))
+		default:
+			sb.WriteString(formatQty(it.quantity, it.unit))
 		}
 	}
 	return sb.String()
@@ -339,8 +341,8 @@ func (uc *UseCase) messageText(orderName string, kind reservewatch.Kind, items [
 
 // formatQty — количество для текста уведомления: весовой — «0.657 кг»
 // (3 знака), штучный — «2 шт».
-func formatQty(v int64, weighted bool) string {
-	if weighted {
+func formatQty(v int64, unit qtyUnit) string {
+	if unit == qtyGrams {
 		return fmt.Sprintf("%.3f кг", float64(v)/1000)
 	}
 	return fmt.Sprintf("%d шт", v)

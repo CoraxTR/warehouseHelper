@@ -73,7 +73,8 @@ jobs:
             qrcodes_schema.sql \
             wiki_schema.sql \
             complaints_schema.sql \
-            returns_schema.sql; do
+            returns_schema.sql \
+            reservewatch_schema.sql; do
             psql -h localhost -U wh -d wh -v ON_ERROR_STOP=1 -f "internal/repository/postgres/$f" > /dev/null || exit 1
           done
-          echo "Схемы применены: 15/15"
+          echo "Схемы применены: 16/16"

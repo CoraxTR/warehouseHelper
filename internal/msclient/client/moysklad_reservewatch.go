@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -47,11 +48,14 @@ func (msac *MSAPIClient) FetchReserveWatchOrders(parentctx context.Context, wind
 		y, m, d := today.Date()
 		start := time.Date(y, m, d, 0, 0, 0, 0, auditLoc).AddDate(0, 0, -windowDays)
 
-		filter := "deliveryPlannedMoment>=" + start.Format(auditMomentLayout)
+		filter := strings.Builder{}
+		filter.WriteString("deliveryPlannedMoment>=")
+		filter.WriteString(start.Format(auditMomentLayout))
 		for _, id := range stateIDs {
-			filter += ";state=" + msac.refHref("customerorder/metadata/states", id)
+			filter.WriteString(";state=")
+			filter.WriteString(msac.refHref("customerorder/metadata/states", id))
 		}
-		q.Set("filter", filter)
+		q.Set("filter", filter.String())
 		q.Set("limit", strconv.Itoa(reserveWatchPageLimit))
 
 		orders := make([]MSOrder, 0)

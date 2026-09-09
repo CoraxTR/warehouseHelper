@@ -87,7 +87,7 @@ type stubNotifier struct {
 	nextID  int64
 }
 
-func (s *stubNotifier) SendWarehouseButton(_ context.Context, text, buttonText, buttonURL string) (int64, int64, error) {
+func (s *stubNotifier) SendWarehouseButton(_ context.Context, text, buttonText, buttonURL string) (chatID, messageID int64, err error) {
 	s.nextID++
 	mid := 1000 + s.nextID
 	s.sent = append(s.sent, sentMsg{text: text, buttonText: buttonText, buttonURL: buttonURL, messageID: mid})
@@ -307,8 +307,8 @@ func TestMessageTextFormats(t *testing.T) {
 	uc := newUC(&stubOrders{}, newStubRepo(), stubCatalog{}, &stubNotifier{})
 
 	missing := uc.messageText("19191", reservewatch.KindMissing, []problemItem{
-		{name: "Рибай охл.", quantity: 657, weighted: true},
-		{name: "Соус BBQ", quantity: 3, weighted: false},
+		{name: "Рибай охл.", quantity: 657, unit: qtyGrams},
+		{name: "Соус BBQ", quantity: 3, unit: qtyPieces},
 	})
 	wantMissing := "В заказ 19191 нужно отложить:\n— Рибай охл. — 0.657 кг\n— Соус BBQ — 3 шт"
 	if missing != wantMissing {
@@ -316,7 +316,7 @@ func TestMessageTextFormats(t *testing.T) {
 	}
 
 	wrong := uc.messageText("19191", reservewatch.KindWrong, []problemItem{
-		{name: "Соус BBQ", quantity: 5, reserve: 2, weighted: false},
+		{name: "Соус BBQ", quantity: 5, reserve: 2, unit: qtyPieces},
 	})
 	wantWrong := "В заказе 19191 позиции отложены неверно:\n— Соус BBQ — нужно 5 шт, отложено 2 шт"
 	if wrong != wantWrong {
