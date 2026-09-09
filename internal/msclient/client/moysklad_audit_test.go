@@ -68,11 +68,11 @@ func TestParseAuditMomentInvalid(t *testing.T) {
 // newAuditTestClient — как newDetailTestClient, но с warehouse-ключом: audit
 // закрыт для части общих ключей, все audit-запросы идут строго под ключами
 // склада (SubmitWarehouse) — воркерпулу нужен warehouse-воркер.
-func newAuditTestClient(t *testing.T, handler http.HandlerFunc) (*MSAPIClient, *httptest.Server) {
+func newAuditTestClient(t *testing.T, handler http.HandlerFunc) *MSAPIClient {
 	t.Helper()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/entity/organization/org-test" {
+		if r.URL.Path == orgTestPath {
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"id":"org-test"}`))
 			return
@@ -94,13 +94,17 @@ func newAuditTestClient(t *testing.T, handler http.HandlerFunc) (*MSAPIClient, *
 	pool := workerpool.NewMSWorkerPool(msCfg)
 	t.Cleanup(pool.Stop)
 
-	return &MSAPIClient{workerpool: pool, msConfig: msCfg}, server
+	return &MSAPIClient{workerpool: pool, msConfig: msCfg}
 }
+
+// orgTestPath — путь валидации ключа в тестовых серверах (goconst: литерал
+// повторяется по пакету в хелперах).
+const orgTestPath = "/entity/organization/org-test"
 
 func TestFetchAuditPage(t *testing.T) {
 	var gotFilter, gotLimit, gotOffset, gotAuth string
 
-	msac, _ := newAuditTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	msac := newAuditTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/audit" {
 			t.Errorf("path = %s, want /audit", r.URL.Path)
 		}
@@ -169,7 +173,7 @@ func TestFetchAuditPageURLEncoding(t *testing.T) {
 func TestFetchAuditDetail(t *testing.T) {
 	var gotPath string
 
-	msac, _ := newAuditTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	msac := newAuditTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(json.RawMessage(auditDetailFixture)); err != nil {
