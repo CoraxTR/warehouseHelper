@@ -368,9 +368,10 @@ func TestTick_DeepWindowNotLost(t *testing.T) {
 	if len(notify.sends) != 1 {
 		t.Fatalf("want 1 отправку, got %d", len(notify.sends))
 	}
-	// Край окна: последняя строка — 10:16:01 МСК = 07:16:01 UTC.
-	want := time.Date(2026, time.September, 9, 7, 16, 1, 0, time.UTC)
+	// Край окна: последняя строка — 10:16:01 МСК. Курсор = край + 1 секунда
+	// (фильтр листа секундный — событие краевой секунды иначе не выталкивается).
+	want := time.Date(2026, time.September, 9, 7, 16, 2, 0, time.UTC)
 	if repo.cursor == nil || !repo.cursor.Equal(want) {
-		t.Errorf("cursor = %v, want край окна %v", repo.cursor, want)
+		t.Errorf("cursor = %v, want край окна + 1s %v", repo.cursor, want)
 	}
 }
