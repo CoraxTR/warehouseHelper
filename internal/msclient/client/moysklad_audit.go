@@ -170,7 +170,7 @@ func (msac *MSAPIClient) FetchAuditPage(parentctx context.Context, since time.Ti
 			return nil, err
 		}
 		q := u.Query()
-		q.Set("filter", "eventType=update;moment>="+since.In(auditLoc).Format(time.DateTime))
+		q.Set("filter", "eventType=update;moment>="+since.In(auditLoc).Format(auditMomentLayout))
 		q.Set("limit", strconv.Itoa(auditPageLimit))
 		q.Set("offset", strconv.Itoa(offset))
 		u.RawQuery = q.Encode()
