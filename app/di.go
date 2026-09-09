@@ -27,6 +27,7 @@ import (
 	"warehouseHelper/internal/refgo/registry"
 	rgucase "warehouseHelper/internal/refgo/usecase"
 	"warehouseHelper/internal/repository/postgres"
+	rwucase "warehouseHelper/internal/reservewatch/usecase"
 	retucase "warehouseHelper/internal/returns/usecase"
 	sucase "warehouseHelper/internal/stock/usecase"
 	stockws "warehouseHelper/internal/stock/ws"
@@ -71,6 +72,7 @@ type DIContainer struct {
 	msUC            *msu.MSSuppliersUseCase
 	msOrdersUC      *mordersuc.UseCase
 	returnsUC       *retucase.UseCase
+	reserveWatchUC  *rwucase.UseCase
 	stockUC         *sucase.StockUseCase
 	stockHub        *stockws.Hub
 	receiveBarcodes *rucase.BarcodeEditor
@@ -484,6 +486,29 @@ func (d *DIContainer) ReturnsUC() *retucase.UseCase {
 	}
 
 	return d.returnsUC
+}
+
+// ReserveWatchUC — «Контроль резервов заказов»: раз в минуту лист заказов
+// в рабочих статусах с плановой отгрузкой в окне, сверка резерва позиций
+// с quantity, уведомления в чат склада с кнопкой «Подобрать». PGClient
+// реализует Repo (reserve_notices) и Catalog (чтение products), MSClient —
+// Orders (лист окна + позиции), TelegramNotifier шлёт/удаляет сообщения.
+func (d *DIContainer) ReserveWatchUC() *rwucase.UseCase {
+	if d.reserveWatchUC == nil {
+		msc := d.Config().MSConfig
+		d.reserveWatchUC = rwucase.NewUseCase(
+			rwucase.Config{
+				StateIDs:  msc.ReserveWatchStates,
+				PublicURL: d.Config().PublicURL,
+			},
+			d.MSClient(),
+			d.OrdersRepository(),
+			d.OrdersRepository(),
+			d.TelegramNotifier(),
+		)
+	}
+
+	return d.reserveWatchUC
 }
 
 func (d *DIContainer) Handler() *myhttp.Handler {
