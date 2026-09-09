@@ -293,8 +293,10 @@ func loadMSConfig() *MSConfig {
 		os.Exit(1)
 	}
 
-	cancelledStateID := os.Getenv("MSAPI_CANCELLED_STATE_ID")
+	cancelledStateID := strings.Trim(os.Getenv("MSAPI_CANCELLED_STATE_ID"), `"`)
 	// Пусто — допустимо: модуль returns не детектит отмены (warn при старте).
+	// Кавычки снимаем: значение задаётся без них (как соседние id); кавычки
+	// в переменной окружения стали бы частью строки и сломали бы матч статуса.
 
 	skipAuditSources := make([]string, 0, 1)
 	for v := range strings.SplitSeq(os.Getenv("MSAPI_SKIP_AUDIT_SOURCES"), ",") {

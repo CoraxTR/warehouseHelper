@@ -88,6 +88,7 @@ func (uc *UseCase) Run(ctx context.Context) error {
 	if uc.cfg.CancelledStateID == "" {
 		slog.Warn("returns: MSAPI_CANCELLED_STATE_ID не задан — переводы заказов в «Отменён» не отслеживаются")
 	}
+	slog.Info("returns: наблюдатель аудита запущен", "interval", uc.cfg.PollInterval.String())
 
 	ticker := time.NewTicker(uc.cfg.PollInterval)
 	defer ticker.Stop()
@@ -119,36 +120,50 @@ func (uc *UseCase) tick(ctx context.Context) error {
 	}
 
 	deadline := time.Now().Add(tickBudget)
+	// Лист audit МС сортируется по убыванию (свежие сверху — проверено на
+	// живом API): окно [курсор..now] листается offset-ами с НЕИЗМЕННЫМ since.
+	// Курсор двигается ТОЛЬКО когда окно долистано до конца (край = момент
+	// последней обработанной строки). Если двигать курсор после каждой
+	// страницы, при DESC-сортировке он «перепрыгнет» вперёд и всё, что глубже
+	// первой страницы, потеряется навсегда (баг, пойманный на проде 09.09).
+	// Оборванный по бюджету тик повторяет окно с того же since — уже
+	// обработанные события отсеиваются дедупом по id.
+	since := cursor
 	offset := 0
-	page := 0
+	var edge time.Time // момент последней строки окна (край)
+	done := false
 
 	for !time.Now().After(deadline) {
-		rows, size, err := uc.audit.FetchAuditPage(ctx, cursor, offset)
+		rows, size, err := uc.audit.FetchAuditPage(ctx, since, offset)
 		if err != nil {
 			return fmt.Errorf("returns fetch audit page: %w", err)
 		}
 		if len(rows) == 0 {
+			done = true // окно пусто (size == 0)
 			break
 		}
 
 		for _, row := range rows {
 			if err := uc.processRow(ctx, row); err != nil {
-				return err // курсор не двигаем — страница повторится, дедуп защитит
+				return err // курсор не двигаем — окно повторится, дедуп защитит
 			}
 		}
 
-		last, err := client.ParseAuditMoment(rows[len(rows)-1].Moment)
+		edge, err = client.ParseAuditMoment(rows[len(rows)-1].Moment)
 		if err != nil {
 			return fmt.Errorf("returns parse audit moment %q: %w", rows[len(rows)-1].Moment, err)
 		}
-		if err := uc.repo.SetCursor(ctx, last); err != nil {
-			return fmt.Errorf("returns save cursor: %w", err)
-		}
 
 		offset += len(rows)
-		page++
-		if offset >= size || page >= 100 {
+		if offset >= size {
+			done = true
 			break
+		}
+	}
+
+	if done && !edge.IsZero() {
+		if err := uc.repo.SetCursor(ctx, edge); err != nil {
+			return fmt.Errorf("returns save cursor: %w", err)
 		}
 	}
 
@@ -219,6 +234,8 @@ func (uc *UseCase) processRow(ctx context.Context, row client.AuditRow) error {
 	expected, err := uc.buildExpected(ctx, ev)
 	if err != nil {
 		if errors.Is(err, returns.ErrNothingToReturn) {
+			slog.Info("returns: событие без отложенных позиций — пропущено",
+				"event", row.ID, "order", orderName, "kind", kind)
 			return nil
 		}
 		return err
@@ -231,6 +248,7 @@ func (uc *UseCase) processRow(ctx context.Context, row client.AuditRow) error {
 	if !inserted {
 		return nil // дубль на границе окна — другой тик уже обработал
 	}
+	slog.Info("returns: событие аудита принято", "event", row.ID, "order", orderName, "kind", kind)
 
 	if err := uc.sendEventMessage(ctx, ev, expected); err != nil {
 		// Событие остаётся в статусе new — retryNew дослает в следующих тиках.
@@ -254,6 +272,8 @@ func (uc *UseCase) sendEventMessage(ctx context.Context, ev *returns.ReturnEvent
 	if err := uc.repo.MarkSent(ctx, ev.ID, chatID, messageID); err != nil {
 		return fmt.Errorf("returns mark sent %s: %w", ev.ID, err)
 	}
+	slog.Info("returns: уведомление отправлено в чат склада",
+		"event", ev.ID, "order", ev.OrderName, "chat", chatID, "message", messageID)
 	return nil
 }
 
