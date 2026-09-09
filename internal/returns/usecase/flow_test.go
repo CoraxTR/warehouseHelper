@@ -370,7 +370,7 @@ func TestTick_DeepWindowNotLost(t *testing.T) {
 	}
 	// Край окна: последняя строка — 10:16:01.000 МСК. Курсор = край + 1 мс
 	// (фильтр несёт миллисекунды — краевое событие строго выталкивается).
-	want := time.Date(2026, time.September, 9, 7, 16, 1, 1_000_000, time.UTC) // 10:16:01.001 МСК
+	want := time.Date(2026, time.September, 9, 7, 16, 1, 1000000, time.UTC) // 10:16:01.001 МСК
 	if repo.cursor == nil || !repo.cursor.Equal(want) {
 		t.Errorf("cursor = %v, want край окна + 1ms %v", repo.cursor, want)
 	}
