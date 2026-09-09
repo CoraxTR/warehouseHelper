@@ -4,10 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
 	"time"
+
+	"warehouseHelper/internal/config"
+	"warehouseHelper/internal/msclient/workerpool"
 )
 
 // Фикстуры — реальные ответы живого API (проба 08.09.2026): глобальный лист
@@ -61,13 +65,50 @@ func TestParseAuditMomentInvalid(t *testing.T) {
 	}
 }
 
-func TestFetchAuditPage(t *testing.T) {
-	var gotFilter, gotLimit, gotOffset string
+// newAuditTestClient — как newDetailTestClient, но с warehouse-ключом: audit
+// закрыт для части общих ключей, все audit-запросы идут строго под ключами
+// склада (SubmitWarehouse) — воркерпулу нужен warehouse-воркер.
+func newAuditTestClient(t *testing.T, handler http.HandlerFunc) *MSAPIClient {
+	t.Helper()
 
-	msac, _ := newDetailTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == orgTestPath {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"id":"org-test"}`))
+			return
+		}
+		handler(w, r)
+	}))
+	t.Cleanup(server.Close)
+
+	msCfg := &config.MSConfig{
+		URLstart:         server.URL + "/entity/",
+		AuthHeader:       "Bearer",
+		Refs:             &config.MSRefs{OrgID: "org-test"},
+		WarehouseAPIKEYS: []config.MSWorker{{Name: "wh-worker", APIKey: "key-wh"}},
+		OthersAPIKEYS:    []config.MSWorker{{Name: "oth-worker", APIKey: "key-oth"}},
+		TimeSpan:         time.Second,
+		RequestCap:       1000,
+	}
+
+	pool := workerpool.NewMSWorkerPool(msCfg)
+	t.Cleanup(pool.Stop)
+
+	return &MSAPIClient{workerpool: pool, msConfig: msCfg}
+}
+
+// orgTestPath — путь валидации ключа в тестовых серверах (goconst: литерал
+// повторяется по пакету в хелперах).
+const orgTestPath = "/entity/organization/org-test"
+
+func TestFetchAuditPage(t *testing.T) {
+	var gotFilter, gotLimit, gotOffset, gotAuth string
+
+	msac := newAuditTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/audit" {
 			t.Errorf("path = %s, want /audit", r.URL.Path)
 		}
+		gotAuth = r.Header.Get("Authorization")
 		gotFilter = r.URL.Query().Get("filter")
 		gotLimit = r.URL.Query().Get("limit")
 		gotOffset = r.URL.Query().Get("offset")
@@ -85,6 +126,10 @@ func TestFetchAuditPage(t *testing.T) {
 
 	if size != 2 {
 		t.Errorf("size = %d, want 2", size)
+	}
+	// Audit закрыт для части общих ключей — запрос должен уйти под warehouse-ключом.
+	if gotAuth != "Bearer key-wh" {
+		t.Errorf("Authorization = %q, want warehouse key (Bearer key-wh)", gotAuth)
 	}
 	if len(rows) != 2 {
 		t.Fatalf("len(rows) = %d, want 2", len(rows))
@@ -128,7 +173,7 @@ func TestFetchAuditPageURLEncoding(t *testing.T) {
 func TestFetchAuditDetail(t *testing.T) {
 	var gotPath string
 
-	msac, _ := newDetailTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	msac := newAuditTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(json.RawMessage(auditDetailFixture)); err != nil {

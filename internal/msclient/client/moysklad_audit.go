@@ -17,6 +17,11 @@ import (
 // Аудит МойСклад: журнал действий. Глобальный лист живёт в корне remap
 // (НЕ под entity/): https://api.moysklad.ru/api/remap/1.2/audit.
 // Потребитель — модуль returns (наблюдатель «возврат в продажу»).
+//
+// ВАЖНО: эндпоинт audit закрыт для части ключей из общего пула (Others) —
+// все запросы аудита (лист и раскрытие events) идут строго под ключами
+// склада (SubmitWarehouse). Обычные entity-запросы из раскрытия (позиции
+// заказа) общим ключам доступны — остаются на SubmitOther.
 
 // auditPageLimit — размер страницы журнала аудита (проверено на живом API:
 // лимит в ответе 25).
@@ -148,7 +153,8 @@ func (msac *MSAPIClient) auditEndpoint(parts ...string) (string, error) {
 // Момент в фильтре — секунды (без миллисекунд): события той же секунды,
 // что и курсор, повторно попадут в окно и будут отсеяны дедупом по id
 // (PK return_events) — пропуска окна не возникает.
-// Рейт-лимит — воркерпул (SubmitOther), напрямую к МС не ходим.
+// Рейт-лимит — воркерпул (SubmitWarehouse): audit закрыт для части общих
+// ключей, поэтому строго под ключами склада; напрямую к МС не ходим.
 func (msac *MSAPIClient) FetchAuditPage(parentctx context.Context, since time.Time, offset int) ([]AuditRow, int, error) {
 	job := func(apiKey string) (any, error) {
 		ctx, cancel := context.WithTimeout(parentctx, 300*time.Second)
@@ -198,7 +204,7 @@ func (msac *MSAPIClient) FetchAuditPage(parentctx context.Context, since time.Ti
 		return &list, nil
 	}
 
-	resultCh := msac.workerpool.SubmitOther(job)
+	resultCh := msac.workerpool.SubmitWarehouse(job)
 
 	select {
 	case res := <-resultCh:
@@ -274,7 +280,7 @@ func (msac *MSAPIClient) FetchAuditDetail(parentctx context.Context, auditID str
 		return rows, nil
 	}
 
-	resultCh := msac.workerpool.SubmitOther(job)
+	resultCh := msac.workerpool.SubmitWarehouse(job)
 
 	select {
 	case res := <-resultCh:
@@ -343,6 +349,9 @@ func (msac *MSAPIClient) FetchOrderPositions(parentctx context.Context, orderID 
 		return fetch.positions, nil
 	}
 
+	// Позиции заказа — обычный entity-эндпоинт: общим ключам доступен
+	// (SubmitOther), складской пул не тратим. Только сам audit ходит
+	// под ключами склада (см. шапку файла).
 	resultCh := msac.workerpool.SubmitOther(job)
 
 	select {
