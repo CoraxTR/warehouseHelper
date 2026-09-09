@@ -135,9 +135,10 @@ func TestFetchAuditPage(t *testing.T) {
 		t.Fatalf("len(rows) = %d, want 2", len(rows))
 	}
 
-	// Фильтр: moment в TZ учётки (МСК), секунды.
-	if gotFilter != "eventType=update;moment>=2026-09-08 23:10:00" {
-		t.Errorf("filter = %q, want eventType=update;moment>=2026-09-08 23:10:00", gotFilter)
+	// Фильтр: момент в TZ учётки (МСК), с миллисекундами (край + 1мс
+	// выталкивает краевое событие; МС фильтрует с точностью до мс).
+	if gotFilter != "eventType=update;moment>=2026-09-08 23:10:00.000" {
+		t.Errorf("filter = %q, want eventType=update;moment>=2026-09-08 23:10:00.000", gotFilter)
 	}
 	if gotLimit != "25" || gotOffset != "0" {
 		t.Errorf("limit/offset = %s/%s, want 25/0", gotLimit, gotOffset)
