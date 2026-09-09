@@ -17,15 +17,29 @@ import (
 // ── Стабы швов модуля ──────────────────────────────────────────────────────
 
 type stubAudit struct {
-	pageRows   []client.AuditRow
+	// rows — всё окно листа [since..now] как его отдаёт МС: DESC, свежие
+	// сверху. FetchAuditPage режет его страницами по pageSize (эмуляция
+	// offset-пагинации листа).
+	rows       []client.AuditRow
+	pageSize   int // размер страницы листа (0 → 25)
 	details    map[string][]client.AuditEventRow
 	positions  map[string][]client.MSPosition
 	detailHits int
 	posHits    int
 }
 
-func (s *stubAudit) FetchAuditPage(_ context.Context, _ time.Time, _ int) ([]client.AuditRow, int, error) {
-	return s.pageRows, len(s.pageRows), nil
+func (s *stubAudit) FetchAuditPage(_ context.Context, _ time.Time, offset int) ([]client.AuditRow, int, error) {
+	if s.pageSize <= 0 {
+		s.pageSize = 25
+	}
+	if offset >= len(s.rows) {
+		return nil, len(s.rows), nil
+	}
+	end := offset + s.pageSize
+	if end > len(s.rows) {
+		end = len(s.rows)
+	}
+	return s.rows[offset:end], len(s.rows), nil
 }
 func (s *stubAudit) FetchAuditDetail(_ context.Context, id string) ([]client.AuditEventRow, error) {
 	s.detailHits++

@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -22,6 +23,13 @@ func auditRow(source string) client.AuditRow {
 		Source:     strptr(source),
 		UID:        "sklad@steakhome",
 	}
+}
+
+// auditRowAt — как auditRow, но с заданным моментом (для DESC-окон листа).
+func auditRowAt(source, moment string) client.AuditRow {
+	r := auditRow(source)
+	r.Moment = moment
+	return r
 }
 
 func cancelledDiffJSON() string {
@@ -63,7 +71,7 @@ func TestTick_SkipsOurApiSource(t *testing.T) {
 	repo.cursor = &[]time.Time{time.Now().Add(-time.Hour).UTC()}[0]
 	env := newTestEnv(repo)
 	uc, audit, notify := env.uc, env.audit, env.notify
-	audit.pageRows = []client.AuditRow{auditRow("remap-1.2")} // наш PUT: полная замена positions
+	audit.rows = []client.AuditRow{auditRow("remap-1.2")} // наш PUT: полная замена positions
 	audit.details[auditID] = []client.AuditEventRow{detailRow(removedDiffJSON(0.657), "19191")}
 
 	if err := uc.tick(context.Background()); err != nil {
@@ -83,7 +91,7 @@ func TestTick_RemovedReservedSendsNotification(t *testing.T) {
 	env := newTestEnv(repo)
 	uc, audit, notify := env.uc, env.audit, env.notify
 
-	audit.pageRows = []client.AuditRow{auditRow("app")}
+	audit.rows = []client.AuditRow{auditRow("app")}
 	// Удалена отложенная позиция (quantity == reserved) — склад должен вернуть кусок.
 	audit.details[auditID] = []client.AuditEventRow{detailRow(removedDiffJSON(0.657), "19191")}
 
@@ -119,7 +127,7 @@ func TestTick_CancelledWithoutReserveCreatesNothing(t *testing.T) {
 	env := newTestEnv(repo)
 	uc, audit, notify := env.uc, env.audit, env.notify
 
-	audit.pageRows = []client.AuditRow{auditRow("app")}
+	audit.rows = []client.AuditRow{auditRow("app")}
 	audit.details[auditID] = []client.AuditEventRow{detailRow(cancelledDiffJSON(), "19379")}
 	// Заказ 19379: позиции без резерва (ничего не отложено — возвращать нечего).
 	audit.positions[orderID] = []client.MSPosition{pos(prodD, "Соус", 1, 0)}
@@ -138,7 +146,7 @@ func TestTick_CancelledSendsNotification(t *testing.T) {
 	env := newTestEnv(repo)
 	uc, audit, notify := env.uc, env.audit, env.notify
 
-	audit.pageRows = []client.AuditRow{auditRow("app")}
+	audit.rows = []client.AuditRow{auditRow("app")}
 	audit.details[auditID] = []client.AuditEventRow{detailRow(cancelledDiffJSON(), "19379")}
 	audit.positions[orderID] = []client.MSPosition{pos(prodA, "Чак ролл", 0.657, 0.657)} // отложен
 
@@ -164,7 +172,7 @@ func TestTick_AlreadyTrackedSkipped(t *testing.T) {
 	// Событие уже отслеживается (предыдущий тик успел обработать).
 	repo.events[auditID] = &returns.ReturnEvent{ID: auditID, Kind: returns.KindRemoved, OrderID: orderID, OrderName: "19191", Status: returns.StatusSent}
 
-	audit.pageRows = []client.AuditRow{auditRow("app")}
+	audit.rows = []client.AuditRow{auditRow("app")}
 	audit.details[auditID] = []client.AuditEventRow{detailRow(removedDiffJSON(0.657), "19191")}
 
 	if err := uc.tick(context.Background()); err != nil {
@@ -317,5 +325,52 @@ func TestEventPage_DoneDoesNotFetch(t *testing.T) {
 	}
 	if audit.posHits != 0 {
 		t.Fatal("обработанное событие не должно ходить в МС")
+	}
+}
+
+func TestTick_DeepWindowNotLost(t *testing.T) {
+	// Регрессия прода 09.09.2026: лист audit сортируется DESC (свежие сверху),
+	// а курсор двигался после КАЖДОЙ страницы — тик обрабатывал только первые
+	// 25 строк окна, курсор «перепрыгивал» вперёд, и всё, что глубже первой
+	// страницы, терялось навсегда. Окно из 60 строк: целевое событие на 45-й
+	// позиции должно быть обработано, курсор — встать на край окна (момент
+	// последней строки), а не на «шапку».
+	repo := newStubRepo()
+	cursor := time.Date(2026, time.September, 9, 7, 0, 0, 0, time.UTC) // 10:00 МСК
+	repo.cursor = &cursor
+	env := newTestEnv(repo)
+	uc, audit, notify := env.uc, env.audit, env.notify
+
+	msk := time.FixedZone("MSK", 3*60*60)
+	base := time.Date(2026, time.September, 9, 10, 17, 0, 0, msk)
+	rows := make([]client.AuditRow, 0, 60)
+	for i := 0; i < 60; i++ {
+		rows = append(rows, client.AuditRow{
+			ID:         fmt.Sprintf("evt-%03d", i),
+			Moment:     base.Add(-time.Duration(i) * time.Second).Format("2006-01-02 15:04:05.000"),
+			EntityType: "product", // шум журнала: нецелевые сущности
+			EventType:  "update",
+			Source:     strptr("app"),
+		})
+	}
+	rows[45] = auditRowAt("app", "2026-09-09 10:16:15.000") // целевое: глубже первой страницы
+	audit.rows = rows
+	audit.pageSize = 25
+	audit.details[auditID] = []client.AuditEventRow{detailRow(removedDiffJSON(0.657), "19191")}
+
+	if err := uc.tick(context.Background()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+
+	if repo.events[auditID] == nil {
+		t.Fatal("событие за пределами первой страницы потеряно (регрессия DESC-курсора)")
+	}
+	if len(notify.sends) != 1 {
+		t.Fatalf("want 1 отправку, got %d", len(notify.sends))
+	}
+	// Край окна: последняя строка — 10:16:01 МСК = 07:16:01 UTC.
+	want := time.Date(2026, time.September, 9, 7, 16, 1, 0, time.UTC)
+	if repo.cursor == nil || !repo.cursor.Equal(want) {
+		t.Errorf("cursor = %v, want край окна %v", repo.cursor, want)
 	}
 }
