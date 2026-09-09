@@ -70,6 +70,7 @@
         var SUPPLIER_ID = {{if .Supplier}}'{{.Supplier.ID}}'{{else}}''{{end}};
         var items = [];           // карточки сканов: {type, scan, manual, children}
         var boxMode = false;      // идёт сбор содержимого коробки
+        var lastUnits = [];       // принятые куски из ответа Save — для этикеток
 
         var scanInput = document.getElementById('scan-input');
         var scansBox = document.getElementById('scans');
@@ -566,6 +567,7 @@
         }
 
         function showReport(resp) {
+            lastUnits = resp.units || [];
             var html = '<h1 style="margin-top:20px;">Принято</h1>';
             if (!resp.rows || !resp.rows.length) {
                 html += '<div class="error">Ничего не принято</div>';
@@ -595,15 +597,55 @@
                 html += '<div class="hint" style="margin-top:10px;color:#856404;background:#fff3cd;border:1px solid #ffeeba;padding:8px 10px;">Приёмка сохранена, но не удалось обновить средний вес:<br>- ' + resp.warnings.join('<br>- ') + '</div>';
             }
 
-            html += '<button onclick="printLater()">Распечатать штрих-коды</button>';
-            html += '<p class="hint">Модуль печати появится позже; данные о кусках и коробках уже переданы при сохранении.</p>';
+            var i, noPd = 0;
+            for (i = 0; i < lastUnits.length; i++) {
+                if (!lastUnits[i].produced_on) { noPd++; }
+            }
+            if (noPd > 0) {
+                html += '<div class="hint" style="margin-top:10px;color:#856404;background:#fff3cd;border:1px solid #ffeeba;padding:8px 10px;">Кусков без даты выработки: ' + noPd + ' — для них этикетка не сформируется (без выработки не собрать полный внутренний код).</div>';
+            }
+
+            html += '<button onclick="downloadLabels()">Скачать этикетки (xlsx)</button>';
+            html += '<p class="hint">Этикетка — на каждый принятый кусок (включая куски из коробок): штрих-код 29 цифр «код + вес + выработка + срок», скан пойдёт в заказы и расформирования.</p>';
             html += '<p><a href="/ms/receive?id={{.Supplier.ID}}">→ Новая приёмка у этого поставщика</a></p>';
             reportBox.innerHTML = html;
             document.getElementById('scanner').style.display = 'none';
         }
 
-        function printLater() {
-            alert('Печать штрих-кодов появится с модулем печати. Данные о принятых кусках и коробках сохранены.');
+        // Скачивание xlsx-этикеток: куски шлём из ответа Save (сервер их уже
+        // провалидировал), файл формируется на сервере и отдаётся как blob.
+        function downloadLabels() {
+            if (!lastUnits || !lastUnits.length) { return; }
+            var xhr = new XMLHttpRequest();
+            xhr.open('POST', '/ms/receive/labels', true);
+            xhr.setRequestHeader('Content-Type', 'application/json');
+            xhr.responseType = 'blob';
+            xhr.onreadystatechange = function () {
+                if (xhr.readyState !== 4) { return; }
+                if (xhr.status !== 200) {
+                    var msg = 'Ошибка формирования этикеток (HTTP ' + xhr.status + ')';
+                    var errBlob = xhr.response;
+                    if (errBlob) {
+                        var rd = new FileReader();
+                        rd.onloadend = function () {
+                            alert(rd.result ? msg + ':\n' + rd.result : msg);
+                        };
+                        rd.readAsText(errBlob);
+                    } else {
+                        alert(msg);
+                    }
+                    return;
+                }
+                var url = window.URL.createObjectURL(xhr.response);
+                var a = document.createElement('a');
+                a.href = url;
+                a.download = 'etiketki.xlsx';
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                window.URL.revokeObjectURL(url);
+            };
+            xhr.send(JSON.stringify({units: lastUnits}));
         }
 
         scanInput.addEventListener('keydown', function (e) {
