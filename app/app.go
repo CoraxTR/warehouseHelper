@@ -47,6 +47,7 @@ func (a *App) initDeps() {
 		a.initTableSizes,
 		a.initComplaints,
 		a.initReturns,
+		a.initReserveWatch,
 	}
 
 	for _, init := range inits {
@@ -153,6 +154,26 @@ func (a *App) initReturns() {
 	go func() {
 		if err := uc.Run(context.Background()); err != nil {
 			slog.Info(fmt.Sprintf("returns: наблюдатель завершился: %v", err))
+		}
+	}()
+}
+
+// initReserveWatch запускает наблюдатель резервов заказов (модуль
+// reservewatch: «Контроль резервов»): раз в минуту лист заказов в рабочих
+// статусах с плановой отгрузкой в окне, сверка reserve == quantity по
+// позициям, уведомления в чат склада с кнопкой «Подобрать». Run живёт до
+// завершения процесса: ошибки тиков логируются внутри и не роняют
+// приложение (следующий тик повторит). Без MSAPI_RESERVEWATCH_STATES модуль
+// не запускается (статусы окна не заданы).
+func (a *App) initReserveWatch() {
+	uc := a.di.ReserveWatchUC()
+	if len(a.di.Config().ReserveWatchStates) == 0 {
+		slog.Info("reservewatch: не запущен: MSAPI_RESERVEWATCH_STATES не задан")
+		return
+	}
+	go func() {
+		if err := uc.Run(context.Background()); err != nil {
+			slog.Info(fmt.Sprintf("reservewatch: наблюдатель завершился: %v", err))
 		}
 	}()
 }
