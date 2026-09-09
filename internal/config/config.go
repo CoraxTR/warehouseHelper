@@ -215,6 +215,10 @@ type MSConfig struct {
 	// SkipAuditSources — source-источники событий audit, которые поллер
 	// пропускает (наши API-изменения). По умолчанию remap-1.2.
 	SkipAuditSources []string
+	// ReserveWatchStates — id статусов заказов, которые раз в минуту
+	// проверяет модуль reservewatch (резерв позиций == quantity).
+	// Пусто — модуль не запускается.
+	ReserveWatchStates []string
 }
 
 func loadMSConfig() *MSConfig {
@@ -310,22 +314,33 @@ func loadMSConfig() *MSConfig {
 		skipAuditSources = append(skipAuditSources, "remap-1.2")
 	}
 
+	// Id статусов заказов модуля reservewatch («Вес подобран», «Обработан»,
+	// «РефГо», «Курьер», «Перепроверен» — значения из metadata/states).
+	// Пусто — модуль не запускается (аналог CancelledStateID).
+	reserveWatchStates := make([]string, 0, 5)
+	for v := range strings.SplitSeq(os.Getenv("MSAPI_RESERVEWATCH_STATES"), ",") {
+		if v = strings.Trim(strings.TrimSpace(v), `"`); v != "" {
+			reserveWatchStates = append(reserveWatchStates, v)
+		}
+	}
+
 	return &MSConfig{
 		Refs: msrefs,
 
-		WarehouseAPIKEYS: wrhworkers,
-		OthersAPIKEYS:    othrworkers,
-		TimeSpan:         tspn,
-		RequestCap:       rqcap,
-		SellTypeID:       selltypeID,
-		RefGoNumberID:    refgonumberid,
-		CourierID:        courierid,
-		TimeFormat:       timeFormat,
-		URLstart:         urlstart,
-		AuthHeader:       authheader,
-		EncodeHeader:     encodeheader,
-		CancelledStateID: cancelledStateID,
-		SkipAuditSources: skipAuditSources,
+		WarehouseAPIKEYS:   wrhworkers,
+		OthersAPIKEYS:      othrworkers,
+		TimeSpan:           tspn,
+		RequestCap:         rqcap,
+		SellTypeID:         selltypeID,
+		RefGoNumberID:      refgonumberid,
+		CourierID:          courierid,
+		TimeFormat:         timeFormat,
+		URLstart:           urlstart,
+		AuthHeader:         authheader,
+		EncodeHeader:       encodeheader,
+		CancelledStateID:   cancelledStateID,
+		SkipAuditSources:   skipAuditSources,
+		ReserveWatchStates: reserveWatchStates,
 	}
 }
 

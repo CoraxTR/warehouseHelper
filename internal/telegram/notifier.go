@@ -107,11 +107,21 @@ func (n *Notifier) NotifyCommonStatus(ctx context.Context, textHTML, callbackDat
 }
 
 // SendWarehouseReturn отправляет в чат склада сообщение с URL-кнопкой
-// «Расформировать» (модуль returns: возврат в продажу). Текст — обычный,
-// без HTML-разметки (имена товаров могут содержать спецсимволы). Возвращает
-// chat_id и message_id отправленного сообщения — по ним модуль удалит
-// сообщение после обработки возврата. Без токена или chat_id склада — no-op.
+// «Расформировать» (модуль returns: возврат в продажу) — обёртка над
+// SendWarehouseButton с фиксированным текстом кнопки. Возвращает chat_id и
+// message_id отправленного сообщения — по ним модуль удалит сообщение после
+// обработки возврата. Без токена или chat_id склада — no-op.
 func (n *Notifier) SendWarehouseReturn(ctx context.Context, text, buttonURL string) (chatID, messageID int64, err error) {
+	return n.SendWarehouseButton(ctx, text, "Расформировать", buttonURL)
+}
+
+// SendWarehouseButton отправляет в чат склада сообщение с URL-кнопкой
+// (buttonText — текст кнопки: «Расформировать», «Подобрать» и т.п.).
+// Текст — обычный, без HTML-разметки (имена товаров могут содержать
+// спецсимволы). Возвращает chat_id и message_id отправленного сообщения —
+// по ним модуль удалит сообщение после обработки. Без токена или chat_id
+// склада — no-op (0, 0, nil).
+func (n *Notifier) SendWarehouseButton(ctx context.Context, text, buttonText, buttonURL string) (chatID, messageID int64, err error) {
 	if n.botToken == "" || n.warehouseChatID == 0 {
 		return 0, 0, nil
 	}
@@ -121,13 +131,27 @@ func (n *Notifier) SendWarehouseReturn(ctx context.Context, text, buttonURL stri
 		"text":    text,
 		"reply_markup": map[string]any{
 			"inline_keyboard": [][]map[string]string{{
-				{"text": "Расформировать", "url": buttonURL},
+				{"text": buttonText, "url": buttonURL},
 			}},
 		},
 	}
 
 	messageID, err = n.postJSONResult(ctx, "sendMessage", payload)
 	return n.warehouseChatID, messageID, err
+}
+
+// DeleteWarehouseMessage удаляет сообщение из чата склада по message_id
+// (модуль reservewatch убирает уведомление, когда проблема резерва исчезла).
+// Telegram молча игнорирует удаление несуществующего сообщения. Без токена —
+// no-op.
+func (n *Notifier) DeleteWarehouseMessage(ctx context.Context, messageID int64) error {
+	if n.botToken == "" || n.warehouseChatID == 0 || messageID == 0 {
+		return nil
+	}
+	return n.postJSON(ctx, "deleteMessage", map[string]any{
+		"chat_id":    n.warehouseChatID,
+		"message_id": messageID,
+	})
 }
 
 // DeleteMessage удаляет сообщение из чата (модуль returns убирает из чата
