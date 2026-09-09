@@ -93,6 +93,29 @@ func ValidLengths() []int {
 	return []int{itemLen, boxLen}
 }
 
+// EncodeItem собирает внутренний штрих-код куска (29 цифр): internal_code(8) +
+// вес в граммах (5, ведущие нули) + выработка + срок (ДДММГГГГ). Используется
+// при печати этикеток: код проходит те же проверки, что Parse, — напечатанная
+// этикетка гарантированно распознается при последующем сканировании.
+// Нулевой вес и отсутствующая дата — ошибки (Parse такие коды отвергает).
+func EncodeItem(internalCode string, weightG int64, prodDate, expDate time.Time) (string, error) {
+	if _, err := parseInternalCode(internalCode); err != nil {
+		return "", err
+	}
+	if weightG <= 0 || weightG > 99999 {
+		return "", fmt.Errorf("%w: weight %d: out of range 1..99999", ErrInvalid, weightG)
+	}
+	if prodDate.IsZero() || expDate.IsZero() {
+		return "", fmt.Errorf("%w: dates: prod and exp dates are required", ErrInvalid)
+	}
+	raw := internalCode + fmt.Sprintf("%05d", weightG) +
+		prodDate.Format("02012006") + expDate.Format("02012006")
+	if _, err := parseItem(raw); err != nil {
+		return "", err
+	}
+	return raw, nil
+}
+
 func parseItem(raw string) (Code, error) {
 	c := Code{Kind: KindItem, Qty: 1}
 
