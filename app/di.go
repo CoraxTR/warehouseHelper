@@ -479,6 +479,7 @@ func (d *DIContainer) ReturnsUC() *retucase.UseCase {
 			d.OrdersRepository(),
 			d.StockUC(),
 			d.TelegramNotifier(),
+			d.MSClient(),
 		)
 	}
 

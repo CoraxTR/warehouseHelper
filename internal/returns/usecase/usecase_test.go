@@ -123,6 +123,19 @@ func (c stubCatalog) ProductsByMSIDs(_ context.Context, ids []string) (map[strin
 	return out, nil
 }
 
+func (c stubCatalog) ProductsByInternalCodes(_ context.Context, codes []string) (map[string]returns.CatalogProduct, error) {
+	out := make(map[string]returns.CatalogProduct, len(codes))
+	for _, code := range codes {
+		for _, p := range c {
+			if p.InternalCode == code {
+				out[code] = p
+				break
+			}
+		}
+	}
+	return out, nil
+}
+
 type stubStock struct {
 	accepted []stock.LotIn
 	err      error
@@ -145,6 +158,34 @@ type stubNotifier struct {
 	err       error
 }
 
+// stubOrders — живой заказ МС: по умолчанию статус = отменён (совпадает с
+// testCancelledID), тесты «вернули в работу» меняют stateID.
+type stubOrders struct {
+	stateID    string
+	stateErr   error
+	clearErr   error
+	stateHits  int
+	clearHits  int
+	clearedIDs []string
+}
+
+func (s *stubOrders) FetchOrderState(_ context.Context, orderID string) (string, error) {
+	s.stateHits++
+	if s.stateErr != nil {
+		return "", s.stateErr
+	}
+	if s.stateID == "" {
+		return testCancelledID, nil
+	}
+	return s.stateID, nil
+}
+
+func (s *stubOrders) ClearOrderReserves(_ context.Context, orderID string) error {
+	s.clearHits++
+	s.clearedIDs = append(s.clearedIDs, orderID)
+	return s.clearErr
+}
+
 func (s *stubNotifier) SendWarehouseReturn(_ context.Context, text, buttonURL string) (tgChatID, tgMessageID int64, err error) {
 	if s.err != nil {
 		return 0, 0, s.err
@@ -159,6 +200,9 @@ func (s *stubNotifier) DeleteMessage(_ context.Context, chatID, messageID int64)
 }
 
 // ── Фикстуры ───────────────────────────────────────────────────────────────
+
+// testCancelledID — id статуса «Отменён» в тестах (значение из .env-шаблона).
+const testCancelledID = "8737d8a5-c0b9-11e3-ac8e-002590a28eca"
 
 const (
 	codeA      = "00210003" // Чак ролл, весовой
@@ -219,18 +263,20 @@ type testEnv struct {
 	audit  *stubAudit
 	stock  *stubStock
 	notify *stubNotifier
+	orders *stubOrders
 }
 
 func newTestEnv(repo Repo) *testEnv {
 	audit := &stubAudit{details: map[string][]client.AuditEventRow{}, positions: map[string][]client.MSPosition{}}
 	stockS := &stubStock{}
 	notify := &stubNotifier{chatID: -100999, messageID: 42}
+	orders := &stubOrders{stateID: testCancelledID}
 	uc := NewUseCase(Config{
-		CancelledStateID: "8737d8a5-c0b9-11e3-ac8e-002590a28eca",
+		CancelledStateID: testCancelledID,
 		SkipSources:      []string{"remap-1.2"},
 		PublicURL:        "http://warehouse.local:8080",
-	}, audit, repo, testCatalog(), stockS, notify)
-	return &testEnv{uc: uc, audit: audit, stock: stockS, notify: notify}
+	}, audit, repo, testCatalog(), stockS, notify, orders)
+	return &testEnv{uc: uc, audit: audit, stock: stockS, notify: notify, orders: orders}
 }
 
 // ── buildExpected ───────────────────────────────────────────────────────────

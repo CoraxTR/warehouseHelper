@@ -36,9 +36,19 @@ type Repo interface {
 	ListActive(ctx context.Context) ([]returns.ReturnEvent, error)
 }
 
-// Catalog — каталог товаров (чтение): код склада и тип учёта по uuid МС.
+// Catalog — каталог товаров (чтение): код склада и тип учёта по uuid МС
+// (состав возврата события) или по internal_code (ручной возврат по сканам).
 type Catalog interface {
 	ProductsByMSIDs(ctx context.Context, ids []string) (map[string]returns.CatalogProduct, error)
+	ProductsByInternalCodes(ctx context.Context, codes []string) (map[string]returns.CatalogProduct, error)
+}
+
+// Orders — живой заказ МС: текущий статус (сверка «всё ещё отменён» при
+// открытии расформирования) и снятие резерва (reserve → 0) при приёме возврата.
+// Реализация — *client.MSAPIClient: чтение SubmitOther, правка SubmitWarehouse.
+type Orders interface {
+	FetchOrderState(ctx context.Context, orderID string) (string, error)
+	ClearOrderReserves(ctx context.Context, orderID string) error
 }
 
 // Stock — возврат в остатки (шов stock): подтверждение приёма = nil-ошибка.
@@ -71,13 +81,14 @@ type UseCase struct {
 	catalog Catalog
 	stock   Stock
 	notify  Notifier
+	orders  Orders
 }
 
-func NewUseCase(cfg Config, audit AuditAPI, repo Repo, catalog Catalog, stock Stock, notify Notifier) *UseCase {
+func NewUseCase(cfg Config, audit AuditAPI, repo Repo, catalog Catalog, stock Stock, notify Notifier, orders Orders) *UseCase {
 	if cfg.PollInterval <= 0 {
 		cfg.PollInterval = time.Minute
 	}
-	return &UseCase{cfg: cfg, audit: audit, repo: repo, catalog: catalog, stock: stock, notify: notify}
+	return &UseCase{cfg: cfg, audit: audit, repo: repo, catalog: catalog, stock: stock, notify: notify, orders: orders}
 }
 
 // Run — поллер аудита. Каждый тик: опрос журнала с курсора (return_cursor),

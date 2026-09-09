@@ -45,12 +45,14 @@ func NewRouter(h *Handler) *http.ServeMux {
 	mux.HandleFunc("POST /goods/stock-report/export", h.StockReportExport) // выгрузка отчёта xlsx
 	// «Возврат в продажу»: список событий (?e нет), карточка (?e=<id>),
 	// приём возврата и ручное закрытие (URL-кнопка «Расформировать» в чате склада).
-	mux.HandleFunc("GET /goods/return", h.ReturnsPage)         // список / карточка события
-	mux.HandleFunc("POST /goods/return/save", h.ReturnsSave)   // принять возврат (JSON-сканы)
-	mux.HandleFunc("POST /goods/return/close", h.ReturnsClose) // закрыть вручную
-	mux.HandleFunc("/qrcodes", h.QRPage)                       // GET — модуль «Честный знак»
-	mux.HandleFunc("/qrcodes/add", h.QRAdd)                    // GET — форма, POST — сохранение фото
-	mux.HandleFunc("/qrcodes/list", h.QRList)                  // GET — таблица заказов с фото
+	mux.HandleFunc("GET /goods/return", h.ReturnsPage)                    // список / карточка события
+	mux.HandleFunc("POST /goods/return/save", h.ReturnsSave)              // принять возврат (JSON-сканы)
+	mux.HandleFunc("POST /goods/return/close", h.ReturnsClose)            // закрыть вручную
+	mux.HandleFunc("GET /goods/return/manual", h.ReturnsManualPage)       // ручной возврат: страница
+	mux.HandleFunc("POST /goods/return/manual/save", h.ReturnsManualSave) // ручной возврат: принять сканы
+	mux.HandleFunc("/qrcodes", h.QRPage)                                  // GET — модуль «Честный знак»
+	mux.HandleFunc("/qrcodes/add", h.QRAdd)                               // GET — форма, POST — сохранение фото
+	mux.HandleFunc("/qrcodes/list", h.QRList)                             // GET — таблица заказов с фото
 	mux.Handle("/qrcodes/photos/", http.StripPrefix("/qrcodes/photos/", qrPhotosHandler(h.qrUC.PhotosDir())))
 
 	// Модуль «МойСклад»: хаб и справочник поставщиков.
