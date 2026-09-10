@@ -41,7 +41,7 @@ func PairCodeRows(codes, productIDs []string) []CodeRow {
 	seen := make(map[string]bool, n)
 	rows := make([]CodeRow, 0, n)
 
-	for i := 0; i < n; i++ {
+	for i := range n {
 		code := codeValueAt(codes, i)
 		product := codeValueAt(productIDs, i)
 		if code == "" && product == "" {
