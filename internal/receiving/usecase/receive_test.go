@@ -131,8 +131,10 @@ func newTestReceive() (*ReceivingUseCase, *stubStockAccepter) {
 	return NewReceivingUseCase(repo, stock, &stubWeightRecorder{}), stock
 }
 
-func d(y int, m time.Month, day int) time.Time {
-	return time.Date(y, m, day, 0, 0, 0, 0, time.UTC)
+// d — дата 2026 года: в фикстурах приёмки других лет нет, год не параметр
+// (unparam: параметр-константа — лишний).
+func d(m time.Month, day int) time.Time {
+	return time.Date(2026, m, day, 0, 0, 0, 0, time.UTC)
 }
 
 // --- тесты ---
@@ -203,7 +205,7 @@ func TestResolveInternalItem(t *testing.T) {
 	if s.WeightG == nil || *s.WeightG != 250 {
 		t.Fatalf("вес: %v", s.WeightG)
 	}
-	if s.BestBefore == nil || !s.BestBefore.Equal(d(2026, 9, 29)) {
+	if s.BestBefore == nil || !s.BestBefore.Equal(d(9, 29)) {
 		t.Fatalf("срок: %v", s.BestBefore)
 	}
 }
@@ -302,7 +304,7 @@ func TestSave(t *testing.T) {
 	if len(stock.lots) != 1 || stock.lots[0].Qty != 2 {
 		t.Fatalf("лоты: %+v", stock.lots)
 	}
-	if !stock.lots[0].BestBefore.Equal(d(2026, 9, 29)) {
+	if !stock.lots[0].BestBefore.Equal(d(9, 29)) {
 		t.Fatalf("срок лота: %v", stock.lots[0].BestBefore)
 	}
 	weights, ok := uc.weights.(*stubWeightRecorder)
@@ -463,7 +465,7 @@ func TestResolveManualWeightFromEntry(t *testing.T) {
 	if !s.Weighted || s.ProductID != "p1" {
 		t.Fatalf("скан: %+v", s)
 	}
-	if s.BestBefore == nil || !s.BestBefore.Equal(d(2026, 9, 29)) {
+	if s.BestBefore == nil || !s.BestBefore.Equal(d(9, 29)) {
 		t.Fatalf("срок из правила: %v", s.BestBefore)
 	}
 }
@@ -486,7 +488,7 @@ func TestResolveManualEntryWithoutRaw(t *testing.T) {
 	uc, _ := newTestReceive()
 	cache, _ := uc.GetCache(context.Background(), "sup-1")
 	w := int64(2500)
-	pd, bb := d(2026, 8, 28), d(2026, 9, 5)
+	pd, bb := d(8, 28), d(9, 5)
 
 	// Строка блока ручного ввода: код не распознан полностью, значения — из ячеек.
 	s, err := uc.Resolve(context.Background(), cache, receiving.ScanEntry{
@@ -522,7 +524,7 @@ func TestResolveManualEntryWithoutProduct(t *testing.T) {
 func TestSaveManualEntriesWithoutRaw(t *testing.T) {
 	uc, stock := newTestReceive()
 	w1, w2 := int64(2450), int64(2510)
-	pd, bb := d(2026, 8, 28), d(2026, 9, 5)
+	pd, bb := d(8, 28), d(9, 5)
 
 	res, err := uc.Save(context.Background(), receiving.SaveRequest{
 		SupplierID: "sup-1",
