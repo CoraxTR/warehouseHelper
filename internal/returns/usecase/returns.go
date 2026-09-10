@@ -60,6 +60,9 @@ type Stock interface {
 type Notifier interface {
 	SendWarehouseReturn(ctx context.Context, text, buttonURL string) (chatID, messageID int64, err error)
 	DeleteMessage(ctx context.Context, chatID, messageID int64) error
+	// NotifyWarehouse — обычный текст в чат склада (уведомление о пересчёте
+	// сроков при ручном закрытии возврата).
+	NotifyWarehouse(text string) error
 }
 
 // Config — параметры модуля (собираются в di.go из конфига приложения).

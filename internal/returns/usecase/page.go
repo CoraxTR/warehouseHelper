@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"warehouseHelper/internal/innercode"
@@ -26,7 +27,10 @@ func (e *ValidationError) Error() string { return e.Reason }
 type PageState struct {
 	Event    returns.ReturnEvent
 	Expected []returns.Expected // nil, если событие обработано
-	Done     bool               // возврат принят / закрыт вручную
+	// Remaining — остаток живого заказа (read-only ориентир оператору):
+	// только для kind=positions_removed.
+	Remaining []returns.RemainingPosition
+	Done      bool // возврат принят / закрыт вручную
 }
 
 // ListEvents — активные события (new/sent) для списка на хабе.
@@ -58,21 +62,26 @@ func (uc *UseCase) EventPage(ctx context.Context, eventID string) (*PageState, e
 		return &PageState{Event: *ev, Done: true}, nil
 	}
 
+	state := &PageState{Event: *ev}
+	state.Remaining = uc.remainingPositions(ctx, ev)
+
 	expected, err := uc.buildExpected(ctx, ev)
 	if err != nil {
 		if errors.Is(err, returns.ErrNothingToReturn) {
-			return &PageState{Event: *ev}, nil // событие опустело — страница покажет «нечего возвращать»
+			return state, nil // событие опустело — страница покажет «нечего возвращать»
 		}
 		return nil, err
 	}
-	return &PageState{Event: *ev, Expected: expected}, nil
+	state.Expected = expected
+	return state, nil
 }
 
-// scannedUnit — разобранный скан возвращаемого куска.
+// scannedUnit — разобранный скан куска: какую строку отчёта он закрыл и что из
+// этикетки идёт в остатки.
 type scannedUnit struct {
-	expected *returns.Expected
-	weightG  int64     // весовой: вес из этикетки (г); штучный: 0 (счётчик единиц)
-	expDate  time.Time // срок годности из этикетки
+	row     returns.Expected // строка отчёта, которую закрыл скан
+	weightG int64            // вес из этикетки, г (у штучного — вес-заглушка)
+	expDate time.Time        // срок годности из этикетки
 }
 
 // AcceptReturn — приём возврата: валидация сканов против ожиданий (строгое
@@ -135,11 +144,15 @@ func (uc *UseCase) AcceptReturn(ctx context.Context, eventID string, scans []str
 }
 
 // CloseManual — ручное закрытие возврата (куски не вернулись: потеряны,
-// списаны и т.п.). В остатки не пишется, в МС ничего не меняется (резерв
-// отменённого заказа остаётся как есть — закрытие вручную не снимает его:
-// событие могло устареть, PUT вслепую перетёр бы уже изменённый заказ),
-// сообщение удаляется.
-func (uc *UseCase) CloseManual(ctx context.Context, eventID string) error {
+// списаны, не нашлись; либо строку не гасит ни один скан — вес не совпал,
+// позиция «слита» при подборе). В остатки не пишется, в МС ничего не меняется
+// (резерв отменённого заказа остаётся как есть — закрытие вручную не снимает
+// его: событие могло устареть, PUT вслепую перетёр бы уже изменённый заказ),
+// сообщение удаляется, а в чат склада уходит список незакрытых позиций: склад
+// пересчитывает по ним сроки построчно (решение владельца 10.09 — уведомление
+// при КАЖДОМ ручном закрытии). scans — что оператор успел отсканировать
+// (нужны только для состава списка; авторитетной сверки здесь нет).
+func (uc *UseCase) CloseManual(ctx context.Context, eventID string, scans []string) error {
 	ev, err := uc.repo.GetEvent(ctx, eventID)
 	if err != nil {
 		return err
@@ -148,7 +161,143 @@ func (uc *UseCase) CloseManual(ctx context.Context, eventID string) error {
 		return returns.ErrAlreadyDone
 	}
 
-	return uc.closeEvent(ctx, ev, true)
+	unclosed := uc.unclosedRows(ctx, ev, scans)
+
+	if err := uc.closeEvent(ctx, ev, true); err != nil {
+		return err
+	}
+
+	if len(unclosed) > 0 {
+		if err := uc.notify.NotifyWarehouse(recountText(unclosed)); err != nil {
+			slog.Error("returns recount notify failed", "event", ev.ID, "err", err)
+		}
+	}
+	return nil
+}
+
+// unclosedRows — строки события, которые не закрыты присланными сканами (для
+// уведомления о пересчёте): мягкий разбор без отказов — чужие/лишние сканы
+// игнорируются, ошибка МС и пустые ожидания не блокируют закрытие (nil).
+func (uc *UseCase) unclosedRows(ctx context.Context, ev *returns.ReturnEvent, scans []string) []returns.Expected {
+	expected, err := uc.buildExpected(ctx, ev)
+	if err != nil {
+		if !errors.Is(err, returns.ErrNothingToReturn) {
+			slog.Warn("returns recount: ожидания недоступны", "event", ev.ID, "err", err)
+		}
+		return nil
+	}
+
+	progress := make([]int64, len(expected))
+	for _, raw := range scans {
+		code, err := innercode.Parse(raw)
+		if err != nil || code.Kind != innercode.KindItem {
+			continue
+		}
+		idx := pickRow(expected, progress, code.InternalCode, int64(code.WeightG))
+		if idx < 0 {
+			continue
+		}
+		if expected[idx].Weighted {
+			progress[idx] = expected[idx].ExpectedQty
+			continue
+		}
+		progress[idx]++
+	}
+
+	out := make([]returns.Expected, 0, len(expected))
+	for i := range expected {
+		if progress[i] != expected[i].ExpectedQty {
+			out = append(out, expected[i])
+		}
+	}
+	return out
+}
+
+// recountText — текст уведомления складу о пересчёте сроков: позиции в порядке
+// отчёта, дубли названий сводятся в «×N строк» (пересчитывать надо построчно).
+func recountText(rows []returns.Expected) string {
+	type group struct {
+		name string
+		code string
+		n    int
+	}
+	groups := make([]group, 0, len(rows))
+	byKey := make(map[string]int, len(rows))
+	for _, r := range rows {
+		key := r.Name + "\x00" + r.InternalCode
+		if i, ok := byKey[key]; ok {
+			groups[i].n++
+			continue
+		}
+		byKey[key] = len(groups)
+		groups = append(groups, group{name: r.Name, code: r.InternalCode, n: 1})
+	}
+
+	var sb strings.Builder
+	sb.WriteString("Необходимо пересчитать сроки по позициям:")
+	for _, g := range groups {
+		sb.WriteString("\n— ")
+		sb.WriteString(g.name)
+		if g.code != "" {
+			sb.WriteString(" (")
+			sb.WriteString(g.code)
+			sb.WriteByte(')')
+		}
+		if g.n > 1 {
+			fmt.Fprintf(&sb, " ×%d строк", g.n)
+		}
+	}
+	sb.WriteString("\nпострочно")
+	return sb.String()
+}
+
+// remainingPositions — что осталось в живом заказе: read-only ориентир
+// оператору, где физически искать товар. Только для события удаления позиций
+// (у отмены состав тот же, что в ожиданиях); ошибка МС не роняет страницу —
+// блок просто не показывается.
+func (uc *UseCase) remainingPositions(ctx context.Context, ev *returns.ReturnEvent) []returns.RemainingPosition {
+	if ev.Kind != returns.KindRemoved {
+		return nil
+	}
+
+	positions, err := uc.audit.FetchOrderPositions(ctx, ev.OrderID)
+	if err != nil {
+		slog.Warn("returns: остаток заказа недоступен", "event", ev.ID, "order", ev.OrderID, "err", err)
+		return nil
+	}
+
+	codes := make([]string, 0, len(positions))
+	seen := make(map[string]struct{}, len(positions))
+	for _, p := range positions {
+		if p.Assortment.Code == "" {
+			continue
+		}
+		if _, ok := seen[p.Assortment.Code]; ok {
+			continue
+		}
+		seen[p.Assortment.Code] = struct{}{}
+		codes = append(codes, p.Assortment.Code)
+	}
+
+	products, err := uc.catalog.ProductsByInternalCodes(ctx, codes)
+	if err != nil {
+		slog.Warn("returns: каталог для остатка заказа недоступен", "event", ev.ID, "err", err)
+		products = nil
+	}
+
+	out := make([]returns.RemainingPosition, 0, len(positions))
+	for _, p := range positions {
+		row := returns.RemainingPosition{
+			InternalCode: p.Assortment.Code,
+			Name:         p.Assortment.Name,
+			Quantity:     p.Quantity,
+		}
+		if prod, ok := products[p.Assortment.Code]; ok {
+			row.Weighted = prod.Weighted
+		}
+		out = append(out, row)
+	}
+	return out
 }
 
 // closeEvent — закрытие события: статус done с признаком manual и удаление
@@ -197,17 +346,14 @@ func (uc *UseCase) orderCancelledNow(ctx context.Context, ev *returns.ReturnEven
 	return false, nil
 }
 
-// matchScans — сверка сканов с ожиданиями: каждый скан — кусок 29 (коробки
-// 33 не участвуют); товар по internal_code, накопление в пределах товара,
-// строгое равенство сумм. Отклонения — ValidationError с расшифровкой.
+// matchScans — сверка сканов с ожиданиями ПОСТРОЧНО (решение владельца 10.09):
+// строку отчёта гасит свой скан — весовую закрывает ровно один скан с тем же
+// весом (строго, без допуска: «бип и отказ»), штучную — ExpectedQty сканов.
+// Каждый скан — кусок 29 (коробки 33 не участвуют). Любое несоответствие —
+// ValidationError: событие остаётся открытым, выход — ручное закрытие.
 func matchScans(scans []string, expected []returns.Expected) ([]scannedUnit, error) {
-	byCode := make(map[string]*returns.Expected, len(expected))
-	for i := range expected {
-		byCode[expected[i].InternalCode] = &expected[i]
-	}
-
-	// Прогресс по строкам ожиданий (копии: мутируем аккумулятор, не домен).
-	progress := make(map[string]int64, len(expected))
+	// Прогресс по строкам отчёта (индекс = порядок строки/Idx).
+	progress := make([]int64, len(expected))
 
 	units := make([]scannedUnit, 0, len(scans))
 	for _, raw := range scans {
@@ -219,32 +365,77 @@ func matchScans(scans []string, expected []returns.Expected) ([]scannedUnit, err
 			return nil, &ValidationError{Reason: fmt.Sprintf("штрих-код %q — коробка (33): возвращаются только куски", raw)}
 		}
 
-		exp, ok := byCode[code.InternalCode]
-		if !ok {
-			return nil, &ValidationError{Reason: fmt.Sprintf("товар с кодом %s не в списке возврата", code.InternalCode)}
+		weightG := int64(code.WeightG)
+		idx := pickRow(expected, progress, code.InternalCode, weightG)
+		if idx < 0 {
+			return nil, scanReject(expected, code.InternalCode, weightG)
 		}
 
-		var add int64
-		if exp.Weighted {
-			add = int64(code.WeightG) // вес куска в граммах — из этикетки
-		} else {
-			add = 1 // штучный: каждая этикетка = одна единица (вес-заглушка 00001 не участвует)
+		units = append(units, scannedUnit{row: expected[idx], weightG: weightG, expDate: code.ExpDate})
+		if expected[idx].Weighted {
+			progress[idx] = expected[idx].ExpectedQty // весовой: строка гасится целиком
+			continue
 		}
-		progress[exp.InternalCode] += add
-
-		units = append(units, scannedUnit{expected: exp, weightG: int64(code.WeightG), expDate: code.ExpDate})
+		progress[idx]++ // штучный: этикетка = одна единица (вес-заглушка не участвует)
 	}
 
 	for i := range expected {
-		e := &expected[i]
-		if progress[e.InternalCode] != e.ExpectedQty {
+		if progress[i] != expected[i].ExpectedQty {
 			return nil, &ValidationError{Reason: fmt.Sprintf(
 				"вес не сходится: %s — отсканировано %s, ожидается %s",
-				e.Name, formatQtyAmt(e, progress[e.InternalCode]), formatQtyAmt(e, e.ExpectedQty))}
+				expected[i].Name, formatQtyAmt(&expected[i], progress[i]), formatQtyAmt(&expected[i], expected[i].ExpectedQty))}
 		}
 	}
 
 	return units, nil
+}
+
+// pickRow — индекс свободной строки отчёта, которую гасит скан: тот же
+// internal_code; весовой — строго тот же вес, и строка ещё не закрыта;
+// штучный — первая незакрытая. -1 — подходящей строки нет.
+func pickRow(expected []returns.Expected, progress []int64, code string, weightG int64) int {
+	for i := range expected {
+		if expected[i].InternalCode != code {
+			continue
+		}
+		if expected[i].Weighted {
+			if weightG > 0 && expected[i].ExpectedQty == weightG && progress[i] == 0 {
+				return i
+			}
+			continue
+		}
+		if progress[i] < expected[i].ExpectedQty {
+			return i
+		}
+	}
+	return -1
+}
+
+// scanReject — расшифровка отказа скану, под который не нашлось строки: чужая
+// позиция, перебор по штучной либо вес, которого нет ни в одной строке (в т.ч.
+// «слитая» при подборе позиция). Выход один — ручное закрытие; склад получит
+// уведомление о пересчёте сроков.
+func scanReject(expected []returns.Expected, code string, weightG int64) *ValidationError {
+	rows := make([]*returns.Expected, 0, len(expected))
+	for i := range expected {
+		if expected[i].InternalCode == code {
+			rows = append(rows, &expected[i])
+		}
+	}
+	if len(rows) == 0 {
+		return &ValidationError{Reason: fmt.Sprintf("товар с кодом %s не в списке возврата", code)}
+	}
+	if !rows[0].Weighted {
+		return &ValidationError{Reason: fmt.Sprintf("перебор: все строки %s уже закрыты", rows[0].Name)}
+	}
+
+	weights := make([]string, 0, len(rows))
+	for _, r := range rows {
+		weights = append(weights, formatQtyAmt(r, r.ExpectedQty))
+	}
+	return &ValidationError{Reason: fmt.Sprintf(
+		"вес %.3f кг не подходит ни одной строке %s: ожидаются %s — закройте событие вручную, склад пересчитает сроки по этим позициям",
+		float64(weightG)/1000, rows[0].Name, strings.Join(weights, " / "))}
 }
 
 // formatQtyAmt — количество для текста ошибки/ожидания в единицах строки.
@@ -265,7 +456,7 @@ func aggregateLots(units []scannedUnit) []stock.LotIn {
 	}
 	counts := make(map[key]int64, len(units))
 	for _, u := range units {
-		k := key{productID: u.expected.ProductID, bestBefore: u.expDate}
+		k := key{productID: u.row.ProductID, bestBefore: u.expDate}
 		counts[k]++
 	}
 

@@ -39,7 +39,7 @@
             <button id="close-btn" class="btn btn-cancel" type="button">Закрыть возврат</button>
         </div>
         {{else}}
-        <div class="constraint hint">Сканируйте этикетки кусков (29 цифр). Вес должен сойтись строго: куски одного товара складываются, пока не наберётся нужный вес/количество. Невалидный или лишний штрих-код не принимается: бип и отказ.</div>
+        <div class="constraint hint">Сканируйте этикетки кусков (29 цифр). Каждая строка отчёта закрывается своим сканом: весовую — ровно один скан с тем же весом, штучную — столько сканов, сколько единиц. Невалидный, чужой или не тот по весу штрих-код не принимается: бип и отказ. Строку, которую не гасит ни один скан (например позиция, «слитая» при подборе), можно только закрыть вручную — складу уйдёт уведомление о пересчёте.</div>
         <input id="scan-input" type="text" autocomplete="off" placeholder="Отсканируйте этикетку куска…">
         <div id="scan-error" class="error" style="display:none;"></div>
         <div id="expect-list" class="section"></div>
@@ -51,6 +51,24 @@
         <div id="counter" class="counter"></div>
         {{end}}
     </div>
+
+    {{if .RemainderRows}}
+    <!-- Что осталось в заказе: нередактируемый ориентир оператору, где искать товар -->
+    <div class="section">
+        <h2>Осталось в заказе — ориентир, где искать</h2>
+        <table>
+            <thead>
+                <tr><th>Внутр. код</th><th>Товар</th><th>Количество</th></tr>
+            </thead>
+            <tbody>
+                {{range .RemainderRows}}
+                <tr><td class="code">{{.Code}}</td><td>{{.Name}}</td><td>{{.QtyText}}</td></tr>
+                {{end}}
+            </tbody>
+        </table>
+        <p class="muted small">Строки живого заказа: только для ориентира, в сверке не участвуют.</p>
+    </div>
+    {{end}}
     {{end}}
 
     {{else}}
@@ -142,36 +160,54 @@
             } catch (e) { /* тишина */ }
         }
 
-        // Строка ожидания по internal_code этикетки. null — нет в списке.
-        function expectByCode(code) {
-            for (var i = 0; i < RETURN.expect.length; i++) {
-                if (RETURN.expect[i].code === code) {
-                    return RETURN.expect[i];
-                }
-            }
-            return null;
+        // Строки отчёта (data-expect) — по строке на позицию, без склейки по
+        // товару: весовую строку гасит ровно один скан с тем же весом, штучную —
+        // target сканов. Разбор сканов детерминированный: в порядке отчёта.
+        function scanWeight(raw) {
+            return parseInt(raw.slice(8, 13), 10);
         }
 
-        // Накоплено по строке: граммы (весовой) или штуки.
-        function gotFor(exp) {
-            var sum = 0;
-            for (var i = 0; i < RETURN.scans.length; i++) {
-                var raw = RETURN.scans[i];
-                if (raw.slice(0, 8) !== exp.code) {
+        // Индекс строки, которую гасит скан; -1 — подходящей нет.
+        function pickRow(prog, raw) {
+            var code = raw.slice(0, 8);
+            var w = scanWeight(raw);
+            for (var i = 0; i < RETURN.expect.length; i++) {
+                var exp = RETURN.expect[i];
+                if (exp.code !== code) {
                     continue;
                 }
                 if (exp.weighted) {
-                    sum += parseInt(raw.slice(8, 13), 10);
-                } else {
-                    sum += 1;
+                    if (w > 0 && exp.target === w && prog[i] === 0) {
+                        return i;
+                    }
+                    continue;
+                }
+                if (prog[i] < exp.target) {
+                    return i;
                 }
             }
-            return sum;
+            return -1;
         }
 
-        function allMatched() {
+        // Прогресс по строкам отчёта: индекс строки -> граммы (весовой) или штуки.
+        function progressByRow() {
+            var prog = [];
             for (var i = 0; i < RETURN.expect.length; i++) {
-                if (gotFor(RETURN.expect[i]) !== RETURN.expect[i].target) {
+                prog.push(0);
+            }
+            for (var s = 0; s < RETURN.scans.length; s++) {
+                var idx = pickRow(prog, RETURN.scans[s]);
+                if (idx < 0) {
+                    continue;
+                }
+                prog[idx] = RETURN.expect[idx].weighted ? RETURN.expect[idx].target : prog[idx] + 1;
+            }
+            return prog;
+        }
+
+        function allMatched(prog) {
+            for (var i = 0; i < RETURN.expect.length; i++) {
+                if (prog[i] !== RETURN.expect[i].target) {
                     return false;
                 }
             }
@@ -183,27 +219,46 @@
             if (!btn) {
                 return;
             }
-            var done = allMatched();
+            var done = allMatched(progressByRow());
             btn.disabled = !done;
             if (done) {
                 btn.innerHTML = 'Сохранить возврат';
             }
         }
 
-        // Локальная проверка скана. null — принят, иначе текст отказа.
-        function checkScan(raw) {
+        // Строки товара по коду этикетки (для текста отказа).
+        function rowsByCode(code) {
+            var rows = [];
+            for (var i = 0; i < RETURN.expect.length; i++) {
+                if (RETURN.expect[i].code === code) {
+                    rows.push(RETURN.expect[i]);
+                }
+            }
+            return rows;
+        }
+
+        // Локальная проверка скана (prog — прогресс ДО него). null — принят,
+        // иначе текст отказа: бип и отказ, событие остаётся открытым.
+        function checkScan(raw, prog) {
             if (raw.length !== 29) {
                 return 'Не этикетка куска: ожидается 29 цифр (коробки 33 не участвуют)';
             }
-            var exp = expectByCode(raw.slice(0, 8));
-            if (!exp) {
+            var rows = rowsByCode(raw.slice(0, 8));
+            if (rows.length === 0) {
                 return 'Товар с кодом ' + raw.slice(0, 8) + ' не в списке возврата';
             }
-            var add = exp.weighted ? parseInt(raw.slice(8, 13), 10) : 1;
-            if (gotFor(exp) + add > exp.target) {
-                return 'Перебор: ' + exp.name + ' — осталось набрать ' + fmtAmt(exp.target - gotFor(exp), exp.weighted);
+            if (pickRow(prog, raw) >= 0) {
+                return null;
             }
-            return null;
+            if (!rows[0].weighted) {
+                return 'Перебор: все строки ' + rows[0].name + ' уже закрыты';
+            }
+            var weights = [];
+            for (var i = 0; i < rows.length; i++) {
+                weights.push(rows[i].qtyText);
+            }
+            return 'Вес ' + fmtAmt(scanWeight(raw), true) + ' не подходит ни одной строке ' + rows[0].name
+                + ': ожидаются ' + weights.join(' / ') + '. Закройте событие вручную — складу уйдёт уведомление о пересчёте';
         }
 
         function submitScan() {
@@ -212,7 +267,7 @@
             if (raw === '') {
                 return;
             }
-            var err = checkScan(raw);
+            var err = checkScan(raw, progressByRow());
             if (err) {
                 beep();
                 showError(err);
@@ -228,11 +283,13 @@
         }
 
         function renderAll() {
+            var prog = progressByRow();
+
             var list = el('expect-list');
             var html = '';
             for (var i = 0; i < RETURN.expect.length; i++) {
                 var exp = RETURN.expect[i];
-                var got = gotFor(exp);
+                var got = prog[i];
                 var done = got === exp.target;
                 html += '<div class="scan-row' + (done ? ' done' : '') + '"><span class="code">' + exp.name + '</span>'
                     + ' <span class="muted">' + fmtAmt(got, exp.weighted) + ' из ' + exp.qtyText + '</span>'
@@ -252,7 +309,7 @@
             if (c) {
                 var left = 0;
                 for (var k = 0; k < RETURN.expect.length; k++) {
-                    if (gotFor(RETURN.expect[k]) !== RETURN.expect[k].target) {
+                    if (prog[k] !== RETURN.expect[k].target) {
                         left++;
                     }
                 }
@@ -270,8 +327,8 @@
             if (RETURN.busy) {
                 return;
             }
-            if (!allMatched()) {
-                showError('Возврат неполный — сохранить нельзя, пока вес не сошёлся');
+            if (!allMatched(progressByRow())) {
+                showError('Возврат неполный — сохранить нельзя, пока вес не сойдётся');
                 return;
             }
             RETURN.busy = true;
@@ -304,7 +361,17 @@
             if (RETURN.busy) {
                 return;
             }
-            var ok = window.confirm('Закрыть возврат вручную? Куски НЕ вернутся в остатки (потеряны/списаны/не нашлись). Сообщение из чата будет удалено.');
+            var prog = progressByRow();
+            var left = 0;
+            for (var i = 0; i < RETURN.expect.length; i++) {
+                if (prog[i] !== RETURN.expect[i].target) {
+                    left++;
+                }
+            }
+            var note = left > 0
+                ? ' Складу уйдёт уведомление о пересчёте сроков по ' + left + ' незакрытой строке(ам).'
+                : '';
+            var ok = window.confirm('Закрыть возврат вручную? Куски НЕ вернутся в остатки (потеряны/списаны/не нашлись). Сообщение из чата будет удалено.' + note);
             if (!ok) {
                 return;
             }
@@ -325,7 +392,8 @@
                 }
             };
             xhr.send(JSON.stringify({
-                event_id: document.body.getAttribute('data-event-id')
+                event_id: document.body.getAttribute('data-event-id'),
+                scans: RETURN.scans
             }));
         }
 
@@ -364,6 +432,29 @@
             }
             renderAll();
         }
+
+        // Хук для автотестов (jsdom): строки отчёта по списку сканов и текст
+        // отказа — без DOM-событий и звука.
+        window.returnTest = {
+            rows: function (scans) {
+                RETURN.scans = scans || [];
+                var prog = progressByRow();
+                var out = [];
+                for (var i = 0; i < RETURN.expect.length; i++) {
+                    out.push({
+                        idx: RETURN.expect[i].idx,
+                        code: RETURN.expect[i].code,
+                        got: prog[i],
+                        target: RETURN.expect[i].target,
+                        done: prog[i] === RETURN.expect[i].target
+                    });
+                }
+                return out;
+            },
+            check: function (raw) {
+                return checkScan(raw, progressByRow());
+            }
+        };
 
         init();
     </script>

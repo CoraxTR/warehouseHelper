@@ -92,11 +92,12 @@ func (uc *UseCase) candidates(ctx context.Context, ev *returns.ReturnEvent) ([]c
 	}
 }
 
-// buildExpected — ожидания возврата: отложенные строки (quantity == reserved)
-// с internal_code в каталоге, агрегированные по товару. Строки без резерва
-// («товар не был физически отложен»), без internal_code и неизвестные
-// каталогу молча пропускаются. Пустой результат — ErrNothingToReturn
-// (уведомление не нужно: возвращать нечего).
+// buildExpected — ожидания возврата: по строке на КАЖДУЮ прошедшую фильтры
+// строку отчёта, без склейки по товару (решение владельца 10.09). Порядок
+// строк — порядок отчёта (позиций заказа / диффа аудита), он же Idx.
+// Пропускаются: строки без резерва (quantity != reserved — «товар не был
+// физически отложен»), без internal_code, неизвестные каталогу и с нулевым
+// количеством. Пустой результат — ErrNothingToReturn (возвращать нечего).
 func (uc *UseCase) buildExpected(ctx context.Context, ev *returns.ReturnEvent) ([]returns.Expected, error) {
 	cands, err := uc.candidates(ctx, ev)
 	if err != nil {
@@ -124,9 +125,7 @@ func (uc *UseCase) buildExpected(ctx context.Context, ev *returns.ReturnEvent) (
 		return nil, err
 	}
 
-	agg := make(map[string]*returns.Expected, len(cands))
-	var order []string
-
+	expected := make([]returns.Expected, 0, len(cands))
 	for _, c := range cands {
 		p, ok := products[c.ProductID]
 		if !ok || p.InternalCode == "" {
@@ -140,28 +139,23 @@ func (uc *UseCase) buildExpected(ctx context.Context, ev *returns.ReturnEvent) (
 		if !reservedEquals(c.Quantity, c.Reserve, unit) {
 			continue // не отложен физически — возвращать нечего
 		}
-
-		e, ok := agg[c.ProductID]
-		if !ok {
-			e = &returns.Expected{
-				ProductID:    c.ProductID,
-				InternalCode: p.InternalCode,
-				Name:         c.Name,
-				Weighted:     p.Weighted,
-			}
-			agg[c.ProductID] = e
-			order = append(order, c.ProductID)
+		qty := qtyInt(c.Quantity, unit)
+		if qty <= 0 {
+			continue // пустая строка: погасить её сканом нельзя
 		}
-		e.ExpectedQty += qtyInt(c.Quantity, unit)
+
+		expected = append(expected, returns.Expected{
+			Idx:          len(expected),
+			ProductID:    c.ProductID,
+			InternalCode: p.InternalCode,
+			Name:         c.Name,
+			Weighted:     p.Weighted,
+			ExpectedQty:  qty,
+		})
 	}
 
-	if len(order) == 0 {
+	if len(expected) == 0 {
 		return nil, returns.ErrNothingToReturn
-	}
-
-	expected := make([]returns.Expected, 0, len(order))
-	for _, id := range order {
-		expected = append(expected, *agg[id])
 	}
 	return expected, nil
 }
