@@ -20,7 +20,7 @@ import (
 // (POST /goods/return/close). Страница открывается без авторизации — по
 // URL-кнопке «Расформировать» из Telegram-сообщения склада.
 
-var returnTmpl = template.Must(template.ParseFiles("../internal/delivery/web/templates/return.html"))
+var returnTmpl = template.Must(template.ParseFiles("../internal/delivery/web/templates/return.html", "../internal/delivery/web/templates/_nav.html"))
 
 // mskLoc — момент события отображается в TZ склада (МСК; сервер в UTC).
 var mskLoc = time.FixedZone("MSK", 3*60*60)
@@ -257,7 +257,7 @@ func (h *Handler) ReturnsSave(w http.ResponseWriter, r *http.Request) {
 
 // ── Ручной возврат (без события аудита) ────────────────────────────────────
 
-var manualTmpl = template.Must(template.ParseFiles("../internal/delivery/web/templates/manual_return.html"))
+var manualTmpl = template.Must(template.ParseFiles("../internal/delivery/web/templates/manual_return.html", "../internal/delivery/web/templates/_nav.html"))
 
 // ReturnsManualPage — GET /goods/return/manual: пустая страница сканирования
 // кусков. Возврат не привязан к заказу: каждый принятый скан = один кусок

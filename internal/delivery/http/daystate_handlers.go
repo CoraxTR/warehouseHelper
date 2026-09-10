@@ -23,7 +23,7 @@ var (
 				"monthSlug": monthSlug,
 				"todayDay":  todayDay,
 			}).
-			ParseFiles("../internal/delivery/web/templates/availability.html"))
+			ParseFiles("../internal/delivery/web/templates/availability.html", "../internal/delivery/web/templates/_nav.html"))
 	stockReportTmpl = template.Must(
 		template.New("stock_report.html").
 			Funcs(template.FuncMap{
@@ -36,7 +36,7 @@ var (
 				"monthSlug": monthSlug,
 				"todayDay":  todayDay,
 			}).
-			ParseFiles("../internal/delivery/web/templates/stock_report.html"))
+			ParseFiles("../internal/delivery/web/templates/stock_report.html", "../internal/delivery/web/templates/_nav.html"))
 )
 
 var monthNames = [...]string{

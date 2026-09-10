@@ -13,7 +13,7 @@ import (
 	"warehouseHelper/internal/receiving"
 )
 
-var receiveTmpl = template.Must(template.ParseFiles("../internal/delivery/web/templates/receive.html"))
+var receiveTmpl = template.Must(template.ParseFiles("../internal/delivery/web/templates/receive.html", "../internal/delivery/web/templates/_nav.html"))
 
 // receivePageData — данные страницы приёмки.
 type receivePageData struct {

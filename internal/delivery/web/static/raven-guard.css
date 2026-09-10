@@ -718,3 +718,132 @@ tr[data-href] { cursor: pointer; }
 .scan-card.block .row-weight { width: 110px; font-size: 13px; padding: 3px 6px; margin-right: 8px; }
 #block-row { margin: 8px 0; }
 #block-row .hint { margin-left: 8px; }
+
+/* ---------------- Выдвижной сайдбар навигации ---------------- */
+/* Overlay поверх контента: не меняет ширину body → не ломает клиентский
+   пересчёт ширины таблиц. z-index 300 — НИЖЕ #lightbox (564) и
+   #loading-overlay (1000): панель не лезет поверх лайтбокса. */
+.navtoggle {
+    position: fixed;
+    left: 10px;
+    top: 10px;
+    z-index: 300;
+    width: 38px;
+    height: 32px;
+    padding: 0;
+    background: #101014;
+    color: #E9E6DD;
+    border: 1px solid #26262E;
+    border-radius: 4px;
+    font-family: inherit;
+    font-size: 16px;
+    line-height: 30px;
+    text-align: center;
+    cursor: pointer;
+}
+.navtoggle:hover { border-color: #C02832; color: #FFFFFF; }
+
+.sidebar {
+    position: fixed;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 288px;
+    max-width: 82%;
+    z-index: 300;
+    display: none;
+    overflow-y: auto;
+    padding: 0 0 24px;
+    background: #101014;
+    border-right: 1px solid #26262E;
+}
+.sidebar.open { display: block; }
+
+.sidebar__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 16px;
+    border-bottom: 1px solid #26262E;
+}
+.sidebar__title {
+    color: #A7A49A;
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.16em;
+}
+.sidebar__close {
+    padding: 0 2px;
+    background: none;
+    border: 0;
+    color: #66645C;
+    font-size: 15px;
+    cursor: pointer;
+}
+.sidebar__close:hover { color: #FFFFFF; }
+
+.sidebar__group { border-bottom: 1px solid #1B1B21; }
+.sidebar__group--plain { border-bottom: 1px solid #1B1B21; padding: 4px 0; }
+.sidebar__group--sub { border-bottom: 0; }
+.sidebar__head-btn {
+    display: block;
+    width: 100%;
+    padding: 11px 16px;
+    background: none;
+    border: 0;
+    color: #E9E6DD;
+    font-family: inherit;
+    font-size: 13px;
+    text-align: left;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    cursor: pointer;
+}
+.sidebar__head-btn:hover { color: #FFFFFF; }
+.sidebar__group--sub > .sidebar__head-btn {
+    padding-left: 26px;
+    color: #A7A49A;
+    font-size: 12px;
+}
+.sidebar__caret { float: right; color: #66645C; }
+.sidebar__group.expanded > .sidebar__head-btn { color: #F4F1E9; }
+.sidebar__group.expanded > .sidebar__head-btn .sidebar__caret { color: #C02832; }
+
+.sidebar__list { display: none; padding: 0 0 6px; }
+.sidebar__group.expanded > .sidebar__list { display: block; }
+
+.sidebar__link {
+    display: block;
+    padding: 8px 16px 8px 26px;
+    border-left: 2px solid transparent;
+    color: #C8C5BC;
+    font-size: 13px;
+}
+.sidebar__link--top { padding-left: 16px; }
+.sidebar__link:hover { background: #14141A; color: #FFFFFF; text-decoration: none; }
+.sidebar__link.active {
+    background: #14141A;
+    border-left-color: #C02832;
+    color: #FFFFFF;
+    font-weight: 600;
+}
+.sidebar__group--sub .sidebar__link { padding-left: 38px; }
+
+.sidebar__scrim {
+    position: fixed;
+    left: 0;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 290;
+    display: none;
+    background: rgba(0, 0, 0, 0.55);
+}
+.sidebar__scrim.open { display: block; }
+
+/* Узкие экраны (склад с телефона): панель почти на всю ширину */
+@media (max-width: 640px) {
+    .sidebar { width: 82%; }
+}
+

@@ -27,10 +27,10 @@ import (
 // старте (правило проекта: не парсить шаблон на каждый запрос).
 
 var (
-	complaintsListTmpl   = template.Must(template.ParseFiles("../internal/delivery/web/templates/complaints_list.html"))
-	complaintFormTmpl    = template.Must(template.ParseFiles("../internal/delivery/web/templates/complaint_form.html"))
-	complaintsSearchTmpl = template.Must(template.ParseFiles("../internal/delivery/web/templates/complaints_search.html"))
-	complaintsTagsTmpl   = template.Must(template.ParseFiles("../internal/delivery/web/templates/complaints_tags.html"))
+	complaintsListTmpl   = template.Must(template.ParseFiles("../internal/delivery/web/templates/complaints_list.html", "../internal/delivery/web/templates/_nav.html"))
+	complaintFormTmpl    = template.Must(template.ParseFiles("../internal/delivery/web/templates/complaint_form.html", "../internal/delivery/web/templates/_nav.html"))
+	complaintsSearchTmpl = template.Must(template.ParseFiles("../internal/delivery/web/templates/complaints_search.html", "../internal/delivery/web/templates/_nav.html"))
+	complaintsTagsTmpl   = template.Must(template.ParseFiles("../internal/delivery/web/templates/complaints_tags.html", "../internal/delivery/web/templates/_nav.html"))
 )
 
 const (
