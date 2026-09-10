@@ -237,6 +237,16 @@
                         if (!response.ok) {
                             return response.text().then(text => { throw new Error(text); });
                         }
+                        // Бланки, которые МС не отдал, в файл не попали: сервер
+                        // помечает их заголовком — оператор должен это знать.
+                        const skipped = response.headers.get('X-Skipped-Orders');
+                        if (skipped) {
+                            const numbers = skipped.split(',').map(id => {
+                                const found = orders.filter(o => o.id === id)[0];
+                                return found ? found.refGoNumber : id;
+                            });
+                            alert('Бланки не получены для заказов: ' + numbers.join(', '));
+                        }
                         return response.blob();
                     })
                     .then(blob => {

@@ -1,197 +1,96 @@
+// Тесты обёртки печати бланков РефГо: сам экспорт/слияние живёт в нижнем слое
+// pdfexport (там же его тесты), здесь — швы обёртки: остановка фоновой
+// предзагрузки, проброс пути и списка неполученных бланков, ошибки.
 package usecase
 
 import (
 	"context"
-	"fmt"
-	"os"
-	"path/filepath"
-	"strings"
+	"errors"
 	"testing"
-
-	"warehouseHelper/internal/tempdir"
 )
 
-// fakePDFFetcher — заглушка PDFFetcher: отдаёт фиксированные данные или ошибку.
-type fakePDFFetcher struct {
-	data  []byte
-	err   error
-	calls int
+// fakeForms — заглушка PDFForms.
+type fakeForms struct {
+	path      string
+	orderPath string
+	skipped   []string
+	err       error
+	calls     int
 }
 
-func (f *fakePDFFetcher) FetchOrderPDF(_ context.Context, _ string) ([]byte, error) {
+func (f *fakeForms) GetOrderPDF(_ context.Context, _ string) (string, error) {
 	f.calls++
-	return f.data, f.err
+
+	return f.orderPath, f.err
 }
 
-type fakePDFExporter struct{}
+func (f *fakeForms) GetMultipleOrdersPDF(_ context.Context, _ []string) (path string, skipped []string, err error) {
+	f.calls++
 
-func (e *fakePDFExporter) ExportOrderPDF(_ []byte) (string, error) {
-	return filepath.Join(tempdir.Dir, "exported.pdf"), nil
+	return f.path, f.skipped, f.err
 }
 
-// ExportMergedPDF имитирует поведение pdfcpu: пустой вход — ошибка merge.
-func (e *fakePDFExporter) ExportMergedPDF(data [][]byte) (string, error) {
-	for i, b := range data {
-		if len(b) == 0 {
-			return "", fmt.Errorf("file %d could not be opened because it is empty", i)
-		}
-	}
-	return filepath.Join(tempdir.Dir, "merged.pdf"), nil
+// fakePreloader считает остановки предзагрузки.
+type fakePreloader struct {
+	stops int
 }
 
-type fakePreloader struct{}
+func (p *fakePreloader) StopPreloading() { p.stops++ }
 
-func (p *fakePreloader) StopPreloading() {}
+func TestGetMultipleOrdersPDF_StopsPreloaderAndPassesSkipped(t *testing.T) {
+	forms := &fakeForms{path: "merged.pdf", skipped: []string{"a", "c"}}
+	pre := &fakePreloader{}
+	uc := NewExportOrderPDFUseCase(forms, pre)
 
-func TestMain(m *testing.M) {
-	if err := os.MkdirAll(tempdir.Dir, 0o750); err != nil {
-		panic(fmt.Sprintf("failed to create temp dir: %v", err))
-	}
-
-	m.Run()
-	_ = os.RemoveAll(tempdir.Dir)
-}
-
-// pdfCachePath повторяет логику построения пути кэша из юзкейса.
-func pdfCachePath() string {
-	return filepath.Join(tempdir.Dir, testID+".pdf")
-}
-
-const testID = "abc-123"
-
-func newTestPDFUseCase(fetcher *fakePDFFetcher) *ExportOrderPDFUseCase {
-	return NewExportOrderPDFUseCase(fetcher, &fakePDFExporter{}, &fakePreloader{})
-}
-
-func TestGetMultipleOrdersPDF_EmptyCachedFileRefetched(t *testing.T) {
-	// Пустой файл в кэше (след прерванной загрузки) не должен попасть в merge:
-	// его нужно удалить и перекачать заново.
-	emptyFile := pdfCachePath()
-	if err := os.WriteFile(emptyFile, nil, 0o600); err != nil {
-		t.Fatalf("failed to create empty cached file: %v", err)
-	}
-
-	pdfData := []byte("%PDF-1.4\nfake pdf content")
-	fetcher := &fakePDFFetcher{data: pdfData}
-	uc := newTestPDFUseCase(fetcher)
-
-	path, err := uc.GetMultipleOrdersPDF(context.Background(), []string{testID})
+	path, skipped, err := uc.GetMultipleOrdersPDF(context.Background(), []string{"a", "b", "c"})
 	if err != nil {
 		t.Fatalf("GetMultipleOrdersPDF() error = %v", err)
 	}
-	if !strings.Contains(path, "merged") {
-		t.Errorf("expected merged pdf path, got %q", path)
-	}
-	if fetcher.calls != 1 {
-		t.Errorf("expected refetch (1 call), got %d calls", fetcher.calls)
-	}
 
-	cached, err := os.ReadFile(emptyFile)
-	if err != nil {
-		t.Fatalf("cached file should be written after refetch: %v", err)
+	if path != "merged.pdf" {
+		t.Errorf("path = %q, want merged.pdf", path)
 	}
-	if len(cached) == 0 {
-		t.Error("cached file is still empty after refetch")
+	if len(skipped) != 2 || skipped[0] != "a" || skipped[1] != "c" {
+		t.Errorf("skipped = %v, want [a c]", skipped)
+	}
+	if pre.stops != 1 {
+		t.Errorf("остановок предзагрузки = %d, want 1", pre.stops)
 	}
 }
 
-func TestGetMultipleOrdersPDF_FetchErrorRemovesEmptyFile(t *testing.T) {
-	// Если загрузка прервана (отмена контекста), пустой файл должен быть удалён,
-	// а не остаться в кэше — иначе следующий merge упадёт на нём.
-	emptyFile := pdfCachePath()
-	if err := os.WriteFile(emptyFile, nil, 0o600); err != nil {
-		t.Fatalf("failed to create empty cached file: %v", err)
-	}
+func TestGetOrderPDF_StopsPreloader(t *testing.T) {
+	forms := &fakeForms{orderPath: "exported.pdf"}
+	pre := &fakePreloader{}
+	uc := NewExportOrderPDFUseCase(forms, pre)
 
-	fetcher := &fakePDFFetcher{err: context.Canceled}
-	uc := newTestPDFUseCase(fetcher)
-
-	_, err := uc.GetMultipleOrdersPDF(context.Background(), []string{testID})
-	if err == nil {
-		t.Fatal("expected error from merge with missing pdf data")
-	}
-
-	if _, statErr := os.Stat(emptyFile); !os.IsNotExist(statErr) {
-		t.Errorf("empty cached file should be removed after failed fetch, stat err = %v", statErr)
-	}
-}
-
-func TestGetMultipleOrdersPDF_NoEmptyFileOnCancel(t *testing.T) {
-	// Фетчер вернул ошибку (как делает FetchOrderPDF при отмене контекста) —
-	// файл не должен создаваться вовсе.
-	filePath := pdfCachePath()
-
-	fetcher := &fakePDFFetcher{err: context.Canceled}
-	uc := newTestPDFUseCase(fetcher)
-
-	if _, err := uc.GetMultipleOrdersPDF(context.Background(), []string{testID}); err == nil {
-		t.Fatal("expected error")
-	}
-
-	if _, statErr := os.Stat(filePath); !os.IsNotExist(statErr) {
-		t.Errorf("no file should be created on failed fetch, stat err = %v", statErr)
-	}
-}
-
-func TestGetOrderPDF_EmptyCachedFileRefetched(t *testing.T) {
-	emptyFile := pdfCachePath()
-	if err := os.WriteFile(emptyFile, nil, 0o600); err != nil {
-		t.Fatalf("failed to create empty cached file: %v", err)
-	}
-
-	pdfData := []byte("%PDF-1.4\nfake pdf content")
-	fetcher := &fakePDFFetcher{data: pdfData}
-	uc := newTestPDFUseCase(fetcher)
-
-	path, err := uc.GetOrderPDF(context.Background(), testID)
+	path, err := uc.GetOrderPDF(context.Background(), "abc")
 	if err != nil {
 		t.Fatalf("GetOrderPDF() error = %v", err)
 	}
-	if path != filepath.Join(tempdir.Dir, "exported.pdf") {
-		t.Errorf("expected exported pdf path %q, got %q", filepath.Join(tempdir.Dir, "exported.pdf"), path)
+	if path != "exported.pdf" {
+		t.Errorf("path = %q, want exported.pdf", path)
 	}
-	if fetcher.calls != 1 {
-		t.Errorf("expected refetch (1 call), got %d calls", fetcher.calls)
-	}
-
-	cached, err := os.ReadFile(emptyFile)
-	if err != nil {
-		t.Fatalf("cached file should be written after refetch: %v", err)
-	}
-	if len(cached) == 0 {
-		t.Error("cached file is still empty after refetch")
+	if pre.stops != 1 {
+		t.Errorf("остановок предзагрузки = %d, want 1", pre.stops)
 	}
 }
 
-func TestGetOrderPDF_FetchErrorRemovesEmptyFile(t *testing.T) {
-	emptyFile := pdfCachePath()
-	if err := os.WriteFile(emptyFile, nil, 0o600); err != nil {
-		t.Fatalf("failed to create empty cached file: %v", err)
-	}
+func TestGetMultipleOrdersPDF_PropagatesError(t *testing.T) {
+	wantErr := errors.New("МойСклад недоступен")
+	forms := &fakeForms{err: wantErr}
+	uc := NewExportOrderPDFUseCase(forms, &fakePreloader{})
 
-	fetcher := &fakePDFFetcher{err: context.Canceled}
-	uc := newTestPDFUseCase(fetcher)
-
-	if _, err := uc.GetOrderPDF(context.Background(), testID); err == nil {
-		t.Fatal("expected error on cancelled fetch")
-	}
-
-	if _, statErr := os.Stat(emptyFile); !os.IsNotExist(statErr) {
-		t.Errorf("empty cached file should be removed after failed fetch, stat err = %v", statErr)
+	if _, _, err := uc.GetMultipleOrdersPDF(context.Background(), []string{"a"}); !errors.Is(err, wantErr) {
+		t.Fatalf("error = %v, want %v", err, wantErr)
 	}
 }
 
-func TestGetOrderPDF_NoFileCreatedOnCancel(t *testing.T) {
-	filePath := pdfCachePath()
+func TestGetOrderPDF_PropagatesError(t *testing.T) {
+	wantErr := errors.New("МойСклад недоступен")
+	forms := &fakeForms{err: wantErr}
+	uc := NewExportOrderPDFUseCase(forms, &fakePreloader{})
 
-	fetcher := &fakePDFFetcher{err: context.Canceled}
-	uc := newTestPDFUseCase(fetcher)
-
-	if _, err := uc.GetOrderPDF(context.Background(), testID); err == nil {
-		t.Fatal("expected error on cancelled fetch")
-	}
-
-	if _, statErr := os.Stat(filePath); !os.IsNotExist(statErr) {
-		t.Errorf("no file should be created on failed fetch, stat err = %v", statErr)
+	if _, err := uc.GetOrderPDF(context.Background(), "abc"); !errors.Is(err, wantErr) {
+		t.Fatalf("error = %v, want %v", err, wantErr)
 	}
 }

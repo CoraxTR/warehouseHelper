@@ -36,7 +36,7 @@ func TestFetchReserveWatchOrders(t *testing.T) {
 		gotMethod = r.Method
 		gotFilters = append(gotFilters, r.URL.Query().Get("filter"))
 
-		if r.URL.Path != "/entity/customerorder" {
+		if r.URL.Path != customerOrderTestPath {
 			t.Errorf("path = %s, want /entity/customerorder", r.URL.Path)
 		}
 

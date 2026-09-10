@@ -49,10 +49,11 @@ type Handler struct {
 	receivingUC  *rucase.ReceivingUseCase
 	complaintsUC *cucase.UseCase
 	msOrdersUC   *msordersuc.UseCase
+	msFormsUC    *msordersuc.FormsUseCase
 	returnsUC    *retucase.UseCase
 }
 
-func NewHandler(syncUC *msucase.SyncUseCase, ordersUC *msucase.OrdersUseCase, exportUC *rgucase.ExportToExcelUseCase, pdfUC *rgucase.ExportOrderPDFUseCase, barcodeUC *rgucase.ExportBarcodesToExcelUseCase, refGoUC *rgucase.RefGoCheckAgainstUseCase, wikiUC *wucase.WikiUseCase, goodsUC *gucase.GoodsUseCase, dayStateUC *ducecase.UseCase, qrUC *qucase.QRUseCase, msUC *msu.MSSuppliersUseCase, stockUC *sucase.StockUseCase, stockHub *stockws.Hub, receiveUC *rucase.BarcodeEditor, receivingUC *rucase.ReceivingUseCase, complaintsUC *cucase.UseCase, msOrdersUC *msordersuc.UseCase, returnsUC *retucase.UseCase) *Handler {
+func NewHandler(syncUC *msucase.SyncUseCase, ordersUC *msucase.OrdersUseCase, exportUC *rgucase.ExportToExcelUseCase, pdfUC *rgucase.ExportOrderPDFUseCase, barcodeUC *rgucase.ExportBarcodesToExcelUseCase, refGoUC *rgucase.RefGoCheckAgainstUseCase, wikiUC *wucase.WikiUseCase, goodsUC *gucase.GoodsUseCase, dayStateUC *ducecase.UseCase, qrUC *qucase.QRUseCase, msUC *msu.MSSuppliersUseCase, stockUC *sucase.StockUseCase, stockHub *stockws.Hub, receiveUC *rucase.BarcodeEditor, receivingUC *rucase.ReceivingUseCase, complaintsUC *cucase.UseCase, msOrdersUC *msordersuc.UseCase, msFormsUC *msordersuc.FormsUseCase, returnsUC *retucase.UseCase) *Handler {
 	return &Handler{
 		syncUC:       syncUC,
 		ordersUC:     ordersUC,
@@ -71,6 +72,7 @@ func NewHandler(syncUC *msucase.SyncUseCase, ordersUC *msucase.OrdersUseCase, ex
 		receivingUC:  receivingUC,
 		complaintsUC: complaintsUC,
 		msOrdersUC:   msOrdersUC,
+		msFormsUC:    msFormsUC,
 		returnsUC:    returnsUC,
 	}
 }
@@ -495,7 +497,7 @@ func (h *Handler) PrintMultipleForms(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	filePath, err := h.pdfUC.GetMultipleOrdersPDF(r.Context(), req.IDs)
+	filePath, skipped, err := h.pdfUC.GetMultipleOrdersPDF(r.Context(), req.IDs)
 	if err != nil {
 		slog.Error(fmt.Sprintf("Error merging PDFs: %v", err))
 		http.Error(w, "Failed to merge PDFs: "+err.Error(), http.StatusInternalServerError)
@@ -505,7 +507,26 @@ func (h *Handler) PrintMultipleForms(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Disposition", "attachment; filename=merged_forms.pdf")
 	w.Header().Set("Content-Type", "application/pdf")
+
+	// Не молча: бланки, которые МС не отдал, в файл не попали — оператор
+	// узнаёт об этом из заголовка (страница показывает предупреждение).
+	setSkippedOrdersHeader(w, skipped)
+
 	http.ServeFile(w, r, filePath)
+}
+
+// skippedOrdersHeader — id заказов, бланки которых не удалось получить
+// (через запятую). Клиент показывает их оператору: печать «что осталось»
+// не должна выглядеть как полный комплект.
+const skippedOrdersHeader = "X-Skipped-Orders"
+
+// setSkippedOrdersHeader проставляет заголовок с пропущенными бланками.
+func setSkippedOrdersHeader(w http.ResponseWriter, skipped []string) {
+	if len(skipped) == 0 {
+		return
+	}
+
+	w.Header().Set(skippedOrdersHeader, strings.Join(skipped, ","))
 }
 
 func (h *Handler) DeleteOrder(w http.ResponseWriter, r *http.Request) {

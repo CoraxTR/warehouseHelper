@@ -717,7 +717,9 @@ func (msac *MSAPIClient) FetchOrderPDF(parentctx context.Context, id string) ([]
 		}()
 
 		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(body))
+			// Типизированная ошибка (а не текст): retry-цикл печати бланков
+			// отличает постоянные отказы МС (4xx) от временных.
+			return nil, msAPIError(resp.Status, body)
 		}
 
 		return body, nil
@@ -746,20 +748,44 @@ func (msac *MSAPIClient) FetchOrderPDF(parentctx context.Context, id string) ([]
 // MSAPIError — ошибка API МойСклад: HTTP-статус и тексты из errors[].error.
 type MSAPIError struct {
 	Status string
+	Code   int    // HTTP-код ответа (0 — не разобран)
+	Body   string // сырое тело ответа (обрезанное) — когда errors[] не разобрался
 	Errors []string
 }
 
 func (e *MSAPIError) Error() string {
-	if len(e.Errors) == 0 {
+	switch {
+	case len(e.Errors) > 0:
+		return fmt.Sprintf("API returned %s: %s", e.Status, strings.Join(e.Errors, "; "))
+	case e.Body != "":
+		return fmt.Sprintf("API returned %s: %s", e.Status, e.Body)
+	default:
 		return fmt.Sprintf("API returned %s", e.Status)
 	}
-
-	return fmt.Sprintf("API returned %s: %s", e.Status, strings.Join(e.Errors, "; "))
 }
+
+// Permanent — повтор запроса бессмысленен: МС отверг его сам (4xx, кроме 408 и
+// 429 — эти как раз временные). 5xx и сетевые сбои — временные.
+func (e *MSAPIError) Permanent() bool {
+	if e.Code < 400 || e.Code >= 500 {
+		return false
+	}
+
+	return e.Code != http.StatusRequestTimeout && e.Code != http.StatusTooManyRequests
+}
+
+// msErrorBodyLimit — сколько символов тела ответа оставлять в диагностике.
+const msErrorBodyLimit = 300
 
 // msAPIError формирует MSAPIError из тела ответа МС (errors[].error).
 func msAPIError(status string, body []byte) *MSAPIError {
-	e := &MSAPIError{Status: status}
+	var code int
+	if fields := strings.Fields(status); len(fields) > 0 {
+		code, _ = strconv.Atoi(fields[0])
+	}
+
+	e := &MSAPIError{Status: status, Code: code}
+	e.Body = truncate(string(body), msErrorBodyLimit)
 
 	var parsed struct {
 		Errors []struct {
@@ -775,6 +801,15 @@ func msAPIError(status string, body []byte) *MSAPIError {
 	}
 
 	return e
+}
+
+// truncate обрезает строку до limit символов (для логов и диагностики).
+func truncate(s string, limit int) string {
+	if len(s) <= limit {
+		return s
+	}
+
+	return s[:limit] + "…"
 }
 
 func (msac *MSAPIClient) httpRequest(ctx context.Context, method, url, apikey string, body io.Reader) ([]byte, *http.Response, error) {
