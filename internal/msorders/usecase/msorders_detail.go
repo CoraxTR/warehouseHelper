@@ -354,18 +354,20 @@ func assignGroupTotals(items []OrderItem) {
 			continue
 		}
 		items[i].GroupQty = qty[g]
-		items[i].GroupQtyText = qtyTotalText(qty[g], items[i].Weighted)
+		items[i].GroupQtyText = groupQtyText(items[i])
 		items[i].GroupLast = i == len(items)-1 || items[i+1].Group != g
 	}
 }
 
-// qtyTotalText форматирует суммарное количество группы для строки-подытога
-// («4,367 кг» — весовые, «5 шт» — штучные).
-func qtyTotalText(q float64, weighted bool) string {
-	if weighted {
-		return qtyWeightText(q)
+// groupQtyText форматирует суммарное количество группы для строки-подытога
+// («4,367 кг» — весовые, «5 шт» — штучные). Тип учёта берётся из самой строки:
+// флаг управления в параметрах — control coupling (revive flag-parameter).
+func groupQtyText(it OrderItem) string {
+	if it.Weighted {
+		return qtyWeightText(it.GroupQty)
 	}
-	return qtyPiecesText(q)
+
+	return qtyPiecesText(it.GroupQty)
 }
 
 // sortItems упорядочивает позиции: строки с внутренним кодом — группами по
