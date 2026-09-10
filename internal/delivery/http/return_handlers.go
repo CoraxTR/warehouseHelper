@@ -5,10 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"log/slog"
+	"math"
 	"net/http"
 	"time"
-
-	"log/slog"
 
 	"warehouseHelper/internal/returns"
 	retucase "warehouseHelper/internal/returns/usecase"
@@ -38,15 +38,27 @@ type returnPageData struct {
 	Rows       []returnRowData
 	ExpectJSON string // ожидания для клиентской сверки (data-expect)
 	ActiveRows []returnActiveRow
+	// RemainderRows — что осталось в живом заказе (read-only ориентир
+	// оператору, где искать товар); только для события удаления позиций.
+	RemainderRows []returnRemainderRow
 }
 
 // returnRowData — строка ожидания возврата для шаблона и JS (data-expect).
 type returnRowData struct {
+	Idx      int    `json:"idx"`     // порядок строки в отчёте — строки различаются по нему
 	Code     string `json:"code"`    // internal_code — по нему резолвится скан
 	Name     string `json:"name"`    // название товара (из диффа/заказа)
 	QtyText  string `json:"qtyText"` // «0.657 кг» / «2 шт» — ожидание для показа
 	Target   int64  `json:"target"`  // ожидание для сверки: граммы (весовой) или штуки
 	Weighted bool   `json:"weighted"`
+}
+
+// returnRemainderRow — строка остатка заказа для ориентира оператора
+// (не редактируется, в сверке не участвует).
+type returnRemainderRow struct {
+	Code    string
+	Name    string
+	QtyText string
 }
 
 type returnActiveRow struct {
@@ -74,6 +86,16 @@ func qtyTextFor(e returns.Expected) string {
 		return fmt.Sprintf("%.3f кг", float64(e.ExpectedQty)/1000)
 	}
 	return fmt.Sprintf("%d шт", e.ExpectedQty)
+}
+
+// remainderQtyText — количество остатка заказа для показа. Тип учёта берём из
+// каталога склада; товара нет в каталоге — по дробности количества (весовой
+// МС отдаёт кг с тремя знаками, штучный — целым числом).
+func remainderQtyText(r returns.RemainingPosition) string {
+	if r.Weighted || r.Quantity != math.Trunc(r.Quantity) {
+		return fmt.Sprintf("%.3f кг", r.Quantity)
+	}
+	return fmt.Sprintf("%d шт", int64(r.Quantity))
 }
 
 // ReturnsPage — GET /goods/return: список активных событий (без ?e=) или
@@ -152,6 +174,7 @@ func (h *Handler) returnsEventCard(w http.ResponseWriter, r *http.Request, event
 	expect := make([]returnRowData, 0, len(state.Expected))
 	for _, e := range state.Expected {
 		expect = append(expect, returnRowData{
+			Idx:      e.Idx,
 			Code:     e.InternalCode,
 			Name:     e.Name,
 			QtyText:  qtyTextFor(e),
@@ -169,6 +192,16 @@ func (h *Handler) returnsEventCard(w http.ResponseWriter, r *http.Request, event
 		return
 	}
 	data.ExpectJSON = string(expectJSON)
+
+	remainder := make([]returnRemainderRow, 0, len(state.Remaining))
+	for _, rp := range state.Remaining {
+		remainder = append(remainder, returnRemainderRow{
+			Code:    rp.InternalCode,
+			Name:    rp.Name,
+			QtyText: remainderQtyText(rp),
+		})
+	}
+	data.RemainderRows = remainder
 
 	if err := returnTmpl.Execute(w, data); err != nil {
 		slog.Error(fmt.Sprintf("return template: %v", err))
@@ -269,12 +302,15 @@ func (h *Handler) ReturnsManualSave(w http.ResponseWriter, r *http.Request) {
 }
 
 // ReturnsClose — POST /goods/return/close: ручное закрытие (куски не
-// вернулись: потеряны/списаны). В остатки не пишется, в МС ничего не
-// меняется, сообщение удаляется. body: {"event_id":"..."};
-// 204 — закрыто; 409 — уже обработано.
+// вернулись: потеряны/списаны; либо строку не гасит ни один скан — вес не
+// совпал, позиция «слита»). В остатки не пишется, в МС ничего не меняется,
+// сообщение удаляется, а в чат склада уходит список незакрытых позиций для
+// пересчёта сроков. body: {"event_id":"...","scans":["...","..."]} — scans
+// оператора нужны только для состава списка. 204 — закрыто; 409 — уже обработано.
 func (h *Handler) ReturnsClose(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		EventID string `json:"event_id"`
+		EventID string   `json:"event_id"`
+		Scans   []string `json:"scans"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.EventID == "" {
 		http.Error(w, "некорректный запрос", http.StatusBadRequest)
@@ -282,7 +318,7 @@ func (h *Handler) ReturnsClose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.returnsUC.CloseManual(r.Context(), req.EventID); err != nil {
+	if err := h.returnsUC.CloseManual(r.Context(), req.EventID, req.Scans); err != nil {
 		switch {
 		case errors.Is(err, returns.ErrAlreadyDone):
 			http.Error(w, returns.ErrAlreadyDone.Error(), http.StatusConflict)

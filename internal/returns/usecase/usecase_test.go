@@ -26,6 +26,7 @@ type stubAudit struct {
 	positions  map[string][]client.MSPosition
 	detailHits int
 	posHits    int
+	err        error // сбой МС: возвращается из фетчей (проверка мягких путей)
 }
 
 func (s *stubAudit) FetchAuditPage(_ context.Context, _ time.Time, offset int) ([]client.AuditRow, int, error) {
@@ -44,6 +45,9 @@ func (s *stubAudit) FetchAuditDetail(_ context.Context, id string) ([]client.Aud
 }
 func (s *stubAudit) FetchOrderPositions(_ context.Context, orderID string) ([]client.MSPosition, error) {
 	s.posHits++
+	if s.err != nil {
+		return nil, s.err
+	}
 	return s.positions[orderID], nil
 }
 
@@ -153,6 +157,7 @@ type stubNotifier struct {
 	sends     []string
 	urls      []string
 	deletes   [][2]int64
+	recounts  []string
 	chatID    int64
 	messageID int64
 	err       error
@@ -196,6 +201,13 @@ func (s *stubNotifier) SendWarehouseReturn(_ context.Context, text, buttonURL st
 }
 func (s *stubNotifier) DeleteMessage(_ context.Context, chatID, messageID int64) error {
 	s.deletes = append(s.deletes, [2]int64{chatID, messageID})
+	return nil
+}
+func (s *stubNotifier) NotifyWarehouse(text string) error {
+	if s.err != nil {
+		return s.err
+	}
+	s.recounts = append(s.recounts, text)
 	return nil
 }
 
@@ -305,7 +317,8 @@ func TestBuildExpected_CancelledOnlyPhysicallyReserved(t *testing.T) {
 	}
 }
 
-func TestBuildExpected_AggregatesSameProduct(t *testing.T) {
+// Per-line модель (решение владельца 10.09): строки одного товара НЕ склеиваются.
+func TestBuildExpected_KeepsLinePerPosition(t *testing.T) {
 	repo := newStubRepo()
 	env := newTestEnv(repo)
 	uc, audit := env.uc, env.audit
@@ -320,8 +333,32 @@ func TestBuildExpected_AggregatesSameProduct(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildExpected: %v", err)
 	}
-	if len(expected) != 1 || expected[0].ExpectedQty != 657 {
-		t.Fatalf("ожидалась одна строка «накопленного» Чак ролла 657 г, got %+v", expected)
+	if len(expected) != 2 {
+		t.Fatalf("want 2 строки (без склейки по товару), got %d: %+v", len(expected), expected)
+	}
+	if expected[0].ExpectedQty != 400 || expected[1].ExpectedQty != 257 {
+		t.Errorf("веса строк = %d/%d, want 400/257", expected[0].ExpectedQty, expected[1].ExpectedQty)
+	}
+	if expected[0].Idx != 0 || expected[1].Idx != 1 {
+		t.Errorf("Idx = %d/%d, want 0/1 (порядок отчёта)", expected[0].Idx, expected[1].Idx)
+	}
+}
+
+// Пустая строка (quantity == reserve == 0) в ожидания не попадает: погасить её
+// сканом нельзя.
+func TestBuildExpected_SkipsZeroQty(t *testing.T) {
+	repo := newStubRepo()
+	env := newTestEnv(repo)
+	uc, audit := env.uc, env.audit
+
+	audit.positions[orderID] = []client.MSPosition{
+		{Assortment: client.MSAssortment{Meta: client.MSMeta{HREF: "…/product/" + prodA}, Name: "Чак ролл"}, Quantity: 0, Reserve: 0},
+	}
+
+	ev := &returns.ReturnEvent{ID: auditID, Kind: returns.KindCancelled, OrderID: orderID}
+	_, err := uc.buildExpected(context.Background(), ev)
+	if !errors.Is(err, returns.ErrNothingToReturn) {
+		t.Fatalf("want ErrNothingToReturn, got %v", err)
 	}
 }
 
@@ -342,13 +379,14 @@ func TestBuildExpected_RemovedWithoutReserveIsNothing(t *testing.T) {
 
 // ── matchScans ──────────────────────────────────────────────────────────────
 
-func TestMatchScans_WeightedAccumulation(t *testing.T) {
-	expected := []returns.Expected{{ProductID: prodA, InternalCode: codeA, Name: "Чак ролл", Weighted: true, ExpectedQty: 657}}
+// Весовая строка гасится своим сканом: 5 строк с разными весами = 5 сканов.
+func TestMatchScans_WeightedLinePerScan(t *testing.T) {
+	expected := []returns.Expected{
+		{Idx: 0, ProductID: prodA, InternalCode: codeA, Name: "Чак ролл", Weighted: true, ExpectedQty: 400},
+		{Idx: 1, ProductID: prodA, InternalCode: codeA, Name: "Чак ролл", Weighted: true, ExpectedQty: 257},
+	}
 
-	units, err := matchScans([]string{
-		etiketa(codeA, 400),
-		etiketa(codeA, 257),
-	}, expected)
+	units, err := matchScans([]string{etiketa(codeA, 257), etiketa(codeA, 400)}, expected)
 	if err != nil {
 		t.Fatalf("matchScans: %v", err)
 	}
@@ -357,26 +395,65 @@ func TestMatchScans_WeightedAccumulation(t *testing.T) {
 	}
 }
 
+// Две строки одного кода с ОДИНАКОВЫМ весом различимы только порядком: два
+// скана закрывают обе, третий — отказ.
+func TestMatchScans_DuplicateWeightsCloseByOrder(t *testing.T) {
+	expected := []returns.Expected{
+		{Idx: 0, ProductID: prodA, InternalCode: codeA, Name: "Чак ролл", Weighted: true, ExpectedQty: 657},
+		{Idx: 1, ProductID: prodA, InternalCode: codeA, Name: "Чак ролл", Weighted: true, ExpectedQty: 657},
+	}
+
+	if _, err := matchScans([]string{etiketa(codeA, 657), etiketa(codeA, 657)}, expected); err != nil {
+		t.Fatalf("две строки 657 г должны закрываться двумя сканами: %v", err)
+	}
+
+	_, err := matchScans([]string{etiketa(codeA, 657), etiketa(codeA, 657), etiketa(codeA, 657)}, expected)
+	var ve *ValidationError
+	if !errors.As(err, &ve) || !strings.Contains(ve.Reason, "не подходит ни одной строке") {
+		t.Fatalf("want ValidationError «не подходит ни одной строке» на третий скан, got %v", err)
+	}
+}
+
+// Вес, которого нет ни в одной строке (в т.ч. «слитая» при подборе позиция),
+// отклоняется: бип и отказ, событие закрывается вручную.
+func TestMatchScans_WeightNotInRowsRejected(t *testing.T) {
+	expected := []returns.Expected{{ProductID: prodA, InternalCode: codeA, Name: "Чак ролл", Weighted: true, ExpectedQty: 657}}
+
+	_, err := matchScans([]string{etiketa(codeA, 400)}, expected)
+	var ve *ValidationError
+	if !errors.As(err, &ve) || !strings.Contains(ve.Reason, "не подходит ни одной строке") {
+		t.Fatalf("want ValidationError «не подходит ни одной строке», got %v", err)
+	}
+}
+
+// Строгая сверка без допуска: на 657 г скан 654 г не принимается.
 func TestMatchScans_StrictWeightNoTolerance(t *testing.T) {
 	expected := []returns.Expected{{ProductID: prodA, InternalCode: codeA, Name: "Чак ролл", Weighted: true, ExpectedQty: 657}}
 
 	_, err := matchScans([]string{etiketa(codeA, 654)}, expected)
 	var ve *ValidationError
-	if !errors.As(err, &ve) || !strings.Contains(ve.Reason, "вес не сходится") {
-		t.Fatalf("want ValidationError «вес не сходится», got %v", err)
+	if !errors.As(err, &ve) {
+		t.Fatalf("want ValidationError, got %v", err)
 	}
 }
 
-func TestMatchScans_OverflowRejected(t *testing.T) {
-	expected := []returns.Expected{{ProductID: prodA, InternalCode: codeA, Name: "Чак ролл", Weighted: true, ExpectedQty: 657}}
+// Штучная строка «5 шт» — 5 сканов в одну строку; недобор не сохраняется.
+func TestMatchScans_PieceFiveScansOneRow(t *testing.T) {
+	expected := []returns.Expected{{ProductID: prodD, InternalCode: codeD, Name: "Соус", Weighted: false, ExpectedQty: 5}}
 
-	_, err := matchScans([]string{
-		etiketa(codeA, 400),
-		etiketa(codeA, 300),
-	}, expected)
+	scans := []string{etiketa(codeD, 1), etiketa(codeD, 1), etiketa(codeD, 1), etiketa(codeD, 1), etiketa(codeD, 1)}
+	units, err := matchScans(scans, expected)
+	if err != nil {
+		t.Fatalf("matchScans: %v", err)
+	}
+	if len(units) != 5 {
+		t.Fatalf("want 5 единиц, got %d", len(units))
+	}
+
+	_, err = matchScans(scans[:4], expected)
 	var ve *ValidationError
-	if !errors.As(err, &ve) {
-		t.Fatalf("want ValidationError (перебор 700 > 657), got %v", err)
+	if !errors.As(err, &ve) || !strings.Contains(ve.Reason, "вес не сходится") {
+		t.Fatalf("want ValidationError «вес не сходится» на недобор, got %v", err)
 	}
 }
 
@@ -387,6 +464,17 @@ func TestMatchScans_UnknownProductRejected(t *testing.T) {
 	var ve *ValidationError
 	if !errors.As(err, &ve) || !strings.Contains(ve.Reason, "не в списке возврата") {
 		t.Fatalf("want ValidationError «не в списке», got %v", err)
+	}
+}
+
+// Перебор по штучной строке: все строки уже закрыты.
+func TestMatchScans_PieceOverflowRejected(t *testing.T) {
+	expected := []returns.Expected{{ProductID: prodD, InternalCode: codeD, Name: "Соус", Weighted: false, ExpectedQty: 2}}
+
+	_, err := matchScans([]string{etiketa(codeD, 1), etiketa(codeD, 1), etiketa(codeD, 1)}, expected)
+	var ve *ValidationError
+	if !errors.As(err, &ve) || !strings.Contains(ve.Reason, "перебор") {
+		t.Fatalf("want ValidationError «перебор», got %v", err)
 	}
 }
 
@@ -420,9 +508,9 @@ func TestMatchScans_PieceGoodsByCount(t *testing.T) {
 func TestAggregateLots_GroupsByProductAndDate(t *testing.T) {
 	expected := returns.Expected{ProductID: prodA, InternalCode: codeA, Weighted: true}
 	units := []scannedUnit{
-		{expected: &expected, expDate: time.Date(2026, time.September, 15, 0, 0, 0, 0, time.UTC)},
-		{expected: &expected, expDate: time.Date(2026, time.September, 15, 0, 0, 0, 0, time.UTC)},
-		{expected: &expected, expDate: time.Date(2026, time.September, 20, 0, 0, 0, 0, time.UTC)},
+		{row: expected, expDate: time.Date(2026, time.September, 15, 0, 0, 0, 0, time.UTC)},
+		{row: expected, expDate: time.Date(2026, time.September, 15, 0, 0, 0, 0, time.UTC)},
+		{row: expected, expDate: time.Date(2026, time.September, 20, 0, 0, 0, 0, time.UTC)},
 	}
 
 	lots := aggregateLots(units)
@@ -435,5 +523,157 @@ func TestAggregateLots_GroupsByProductAndDate(t *testing.T) {
 	}
 	if byDate["2026-09-15"] != 2 || byDate["2026-09-20"] != 1 {
 		t.Errorf("qty по срокам = %+v, want 15.09→2, 20.09→1", byDate)
+	}
+}
+
+// ── Ручное закрытие: уведомление о пересчёте сроков ─────────────────────────
+
+func TestRecountText_GroupsDuplicateNames(t *testing.T) {
+	rows := []returns.Expected{
+		{Name: "Чак ролл", InternalCode: codeA, Weighted: true, ExpectedQty: 400},
+		{Name: "Чак ролл", InternalCode: codeA, Weighted: true, ExpectedQty: 257},
+		{Name: "Соус", InternalCode: codeD, Weighted: false, ExpectedQty: 2},
+	}
+
+	want := "Необходимо пересчитать сроки по позициям:\n— Чак ролл (00210003) ×2 строк\n— Соус (10080001)\nпострочно"
+	if got := recountText(rows); got != want {
+		t.Errorf("recountText:\n got %q\nwant %q", got, want)
+	}
+}
+
+// Мягкий разбор для списка: чужие сканы игнорируются, закрытые строки в список
+// не попадают, порядок — как в отчёте.
+func TestUnclosedRows_LenientByReportOrder(t *testing.T) {
+	repo := newStubRepo()
+	env := newTestEnv(repo)
+	uc, audit := env.uc, env.audit
+	repo.events[auditID] = &returns.ReturnEvent{ID: auditID, Kind: returns.KindCancelled, OrderID: orderID, OrderName: "19379", Status: returns.StatusSent}
+	audit.positions[orderID] = []client.MSPosition{
+		pos(prodA, "Чак ролл", 0.4, 0.4),
+		pos(prodA, "Чак ролл", 0.257, 0.257),
+		pos(prodD, "Соус", 2, 2),
+	}
+
+	rows := uc.unclosedRows(context.Background(), repo.events[auditID], []string{
+		etiketa(codeA, 400),      // первая строка закрыта
+		etiketa(codeD, 1),        // одна единица соуса из двух
+		etiketa("00999000", 657), // чужой товар — игнор
+	})
+	if len(rows) != 2 {
+		t.Fatalf("want 2 незакрытые строки, got %d: %+v", len(rows), rows)
+	}
+	if rows[0].ExpectedQty != 257 || rows[1].InternalCode != codeD {
+		t.Errorf("незакрытые строки = %+v, want Чак ролл 257 г и Соус", rows)
+	}
+}
+
+func TestCloseManual_NotifiesRecountOfUnclosedRows(t *testing.T) {
+	repo := newStubRepo()
+	chat, msg := int64(-100999), int64(42)
+	repo.events[auditID] = &returns.ReturnEvent{
+		ID: auditID, Kind: returns.KindCancelled, OrderID: orderID, OrderName: "19379",
+		Status: returns.StatusSent, ChatID: &chat, MessageID: &msg,
+	}
+	env := newTestEnv(repo)
+	uc, audit, notify := env.uc, env.audit, env.notify
+	audit.positions[orderID] = []client.MSPosition{
+		pos(prodA, "Чак ролл", 0.4, 0.4),
+		pos(prodA, "Чак ролл", 0.257, 0.257),
+	}
+
+	if err := uc.CloseManual(context.Background(), auditID, []string{etiketa(codeA, 400)}); err != nil {
+		t.Fatalf("CloseManual: %v", err)
+	}
+
+	if len(notify.recounts) != 1 {
+		t.Fatalf("want 1 уведомление о пересчёте, got %d: %+v", len(notify.recounts), notify.recounts)
+	}
+	text := notify.recounts[0]
+	if !strings.Contains(text, "Необходимо пересчитать сроки по позициям:") || !strings.Contains(text, "построчно") {
+		t.Errorf("текст уведомления = %q", text)
+	}
+	if !strings.Contains(text, "Чак ролл") || !strings.Contains(text, "("+codeA+")") {
+		t.Errorf("в списке нет незакрытой позиции: %q", text)
+	}
+	if strings.Contains(text, "×2") {
+		t.Errorf("закрытая строка не должна попадать в список: %q", text)
+	}
+}
+
+// Ошибка отправки уведомления не блокирует ручное закрытие.
+func TestCloseManual_NotifyErrorDoesNotBlockClose(t *testing.T) {
+	repo := newStubRepo()
+	repo.events[auditID] = &returns.ReturnEvent{ID: auditID, Kind: returns.KindCancelled, OrderID: orderID, Status: returns.StatusSent}
+	env := newTestEnv(repo)
+	uc, audit, notify := env.uc, env.audit, env.notify
+	audit.positions[orderID] = []client.MSPosition{pos(prodA, "Чак ролл", 0.4, 0.4)}
+	notify.err = errors.New("telegram недоступен")
+
+	if err := uc.CloseManual(context.Background(), auditID, nil); err != nil {
+		t.Fatalf("CloseManual не должен падать из-за уведомления: %v", err)
+	}
+	if repo.events[auditID].Status != returns.StatusDone {
+		t.Errorf("status = %s, want done", repo.events[auditID].Status)
+	}
+}
+
+// Событие без ожиданий (возвращать нечего) закрывается молча.
+func TestCloseManual_NothingToReturnNoNotify(t *testing.T) {
+	repo := newStubRepo()
+	repo.events[auditID] = &returns.ReturnEvent{ID: auditID, Kind: returns.KindRemoved, OrderID: orderID, Status: returns.StatusSent}
+	env := newTestEnv(repo)
+	uc, audit, notify := env.uc, env.audit, env.notify
+	audit.details[auditID] = []client.AuditEventRow{detailRow(removedDiffJSON(0), "19191")}
+
+	if err := uc.CloseManual(context.Background(), auditID, nil); err != nil {
+		t.Fatalf("CloseManual: %v", err)
+	}
+	if len(notify.recounts) != 0 {
+		t.Errorf("пересчитывать нечего — уведомлений быть не должно: %+v", notify.recounts)
+	}
+}
+
+// ── Остаток заказа (ориентир оператору) ─────────────────────────────────────
+
+// Остаток живого заказа собирается только для события удаления; тип учёта —
+// из каталога склада (в позициях МС его нет), ошибка МС не роняет страницу.
+func TestRemainingPositions_RemovedEventOnly(t *testing.T) {
+	repo := newStubRepo()
+	env := newTestEnv(repo)
+	uc, audit := env.uc, env.audit
+	audit.positions[orderID] = []client.MSPosition{
+		{Assortment: client.MSAssortment{Code: codeA, Name: "Чак ролл"}, Quantity: 0.25, Reserve: 0},
+		{Assortment: client.MSAssortment{Code: codeD, Name: "Соус"}, Quantity: 3, Reserve: 0},
+		{Assortment: client.MSAssortment{Code: "", Name: "Без кода"}, Quantity: 1, Reserve: 0},
+	}
+
+	rows := uc.remainingPositions(context.Background(),
+		&returns.ReturnEvent{ID: auditID, Kind: returns.KindRemoved, OrderID: orderID})
+	if len(rows) != 3 {
+		t.Fatalf("want 3 строки остатка, got %d: %+v", len(rows), rows)
+	}
+	if !rows[0].Weighted || rows[0].Quantity != 0.25 || rows[0].InternalCode != codeA {
+		t.Errorf("строка остатка = %+v, want весовой Чак ролл 0.25 (код %s)", rows[0], codeA)
+	}
+	if rows[1].Weighted || rows[1].InternalCode != codeD {
+		t.Errorf("строка остатка = %+v, want штучный Соус", rows[1])
+	}
+
+	if rows := uc.remainingPositions(context.Background(),
+		&returns.ReturnEvent{ID: auditID, Kind: returns.KindCancelled, OrderID: orderID}); rows != nil {
+		t.Errorf("для отмены остаток не собирается, got %+v", rows)
+	}
+}
+
+func TestRemainingPositions_FetchErrorIsSoft(t *testing.T) {
+	repo := newStubRepo()
+	env := newTestEnv(repo)
+	uc, audit := env.uc, env.audit
+	audit.err = errors.New("МС недоступен")
+
+	rows := uc.remainingPositions(context.Background(),
+		&returns.ReturnEvent{ID: auditID, Kind: returns.KindRemoved, OrderID: orderID})
+	if rows != nil {
+		t.Errorf("ошибка МС — блок остатка просто не показывается, got %+v", rows)
 	}
 }

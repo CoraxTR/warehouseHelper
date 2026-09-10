@@ -217,7 +217,11 @@ func TestAcceptReturn_HappyPath(t *testing.T) {
 	}
 	env := newTestEnv(repo)
 	uc, audit, stockS, notify := env.uc, env.audit, env.stock, env.notify
-	audit.positions[orderID] = []client.MSPosition{pos(prodA, "Чак ролл", 0.657, 0.657)}
+	// Две строки отчёта одного товара — каждая гасится своим сканом.
+	audit.positions[orderID] = []client.MSPosition{
+		pos(prodA, "Чак ролл", 0.4, 0.4),
+		pos(prodA, "Чак ролл", 0.257, 0.257),
+	}
 
 	n, err := uc.AcceptReturn(context.Background(), auditID, []string{
 		etiketa(codeA, 400),
@@ -230,7 +234,7 @@ func TestAcceptReturn_HappyPath(t *testing.T) {
 		t.Errorf("принято единиц = %d, want 2", n)
 	}
 	if len(stockS.accepted) != 1 || stockS.accepted[0].ProductID != prodA || stockS.accepted[0].Qty != 2 {
-		t.Fatalf("lots = %+v, want 1 лот Чак ролл qty 2 (накопление 400+257)", stockS.accepted)
+		t.Fatalf("lots = %+v, want 1 лот Чак ролл qty 2 (две строки, по скану в каждую)", stockS.accepted)
 	}
 	if !stockS.accepted[0].BestBefore.Equal(time.Date(2026, time.September, 15, 0, 0, 0, 0, time.UTC)) {
 		t.Errorf("срок = %v, want 15.09.2026 из этикетки", stockS.accepted[0].BestBefore)
@@ -295,7 +299,7 @@ func TestCloseManual(t *testing.T) {
 	uc, audit, stockS, notify := env.uc, env.audit, env.stock, env.notify
 	audit.positions[orderID] = []client.MSPosition{pos(prodA, "Чак ролл", 0.657, 0.657)}
 
-	if err := uc.CloseManual(context.Background(), auditID); err != nil {
+	if err := uc.CloseManual(context.Background(), auditID, nil); err != nil {
 		t.Fatalf("CloseManual: %v", err)
 	}
 	ev := repo.events[auditID]
@@ -563,7 +567,7 @@ func TestCloseManual_SkipsOrderCallsAndStatusCheck(t *testing.T) {
 	env := newTestEnv(repo)
 	uc, stockS, notify, orders := env.uc, env.stock, env.notify, env.orders
 
-	if err := uc.CloseManual(context.Background(), auditID); err != nil {
+	if err := uc.CloseManual(context.Background(), auditID, nil); err != nil {
 		t.Fatalf("CloseManual: %v", err)
 	}
 	ev := repo.events[auditID]
