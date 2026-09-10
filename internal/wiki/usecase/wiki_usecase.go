@@ -177,6 +177,57 @@ func (uc *WikiUseCase) SyncSupplierPage(ctx context.Context, supplierID, name st
 	return nil
 }
 
+// EnsureSupplierPage гарантирует страницу вики поставщика: если привязки
+// supplier_id нет — занимает вручную созданную страницу с тем же названием
+// или создаёт новую (title=name, привязка supplier_id). В отличие от
+// SyncSupplierPage данные существующей страницы НЕ перезаписываются
+// (график доставки order_days/delivery_days сохраняется). Вызывается модулем
+// приёмки при добавлении кода поставщика — до постановки тега товару.
+func (uc *WikiUseCase) EnsureSupplierPage(ctx context.Context, supplierID, name string) error {
+	done := metrics.Track(trackPkg, "EnsureSupplierPage")
+	defer done()
+	supplierID = strings.TrimSpace(supplierID)
+	name = strings.TrimSpace(name)
+	if supplierID == "" {
+		return errors.New("не передан id поставщика")
+	}
+	if name == "" {
+		return errors.New("не передано имя поставщика")
+	}
+
+	page, err := uc.repo.GetPageBySupplierID(ctx, supplierID)
+	if err != nil {
+		return fmt.Errorf("получить страницу вики поставщика %s: %w", supplierID, err)
+	}
+	if page != nil {
+		return nil // привязка есть: страница и её данные не трогаются
+	}
+
+	// Привязки нет: занимаем вручную созданную страницу с тем же названием,
+	// передавая её собственные дни — график доставки не затирается.
+	unlinked, err := uc.repo.GetUnlinkedSupplierPageByTitle(ctx, name)
+	if err != nil {
+		return fmt.Errorf("найти непривязанную страницу %q: %w", name, err)
+	}
+	if unlinked != nil {
+		if err := uc.repo.UpdateSupplierPage(ctx, unlinked.ID, supplierID, name, unlinked.OrderDays, unlinked.DeliveryDays); err != nil {
+			return fmt.Errorf("привязать страницу вики %q к поставщику %s: %w", name, supplierID, err)
+		}
+
+		return nil
+	}
+
+	if err := uc.repo.CreateSupplierPage(ctx, &domain.WikiPage{
+		Type:       domain.PageTypeSupplier,
+		Title:      name,
+		SupplierID: supplierID,
+	}); err != nil {
+		return fmt.Errorf("создать страницу вики поставщика %s: %w", supplierID, err)
+	}
+
+	return nil
+}
+
 // EnsureProductPage гарантирует страницу вики товара: создаёт (title=name,
 // average_weight из каталога, привязка product_id) или обновляет заголовок
 // и вес (пользовательский контент не трогается). Вызывается при выгрузке

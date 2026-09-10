@@ -44,6 +44,7 @@ type CatalogReader interface {
 // receiving не трогает).
 type WikiBarcodeRef interface {
 	EnsureProductPage(ctx context.Context, productID, name, averageWeight string) error
+	EnsureSupplierPage(ctx context.Context, supplierID, name string) error
 	AddTagToPage(ctx context.Context, title, tag string) error
 	RemoveTagFromPage(ctx context.Context, title, tag string) error
 }
@@ -114,10 +115,13 @@ func (uc *BarcodeEditor) Add(ctx context.Context, supplierID, externalCode, prod
 		return fmt.Errorf("получить товар %s: %w", productID, err)
 	}
 
-	// Страница товара в вики (создаётся при отсутствии), затем связка,
-	// затем теги. Все операции идемпотентны — повтор после ошибки безопасен.
+	// Страницы товара и поставщика в вики (создаются при отсутствии), затем
+	// связка, затем теги. Все операции идемпотентны — повтор после ошибки безопасен.
 	if err := uc.wiki.EnsureProductPage(ctx, product.ID, product.Name, avgWeightString(product.AverageWeight)); err != nil {
 		return fmt.Errorf("гарантировать страницу вики товара %s: %w", product.ID, err)
+	}
+	if err := uc.wiki.EnsureSupplierPage(ctx, supplier.ID, supplier.Name); err != nil {
+		return fmt.Errorf("гарантировать страницу вики поставщика %s: %w", supplier.ID, err)
 	}
 	if err := uc.repo.SaveSupplierBarcode(ctx, supplierID, externalCode, productID); err != nil {
 		return fmt.Errorf("сохранить связку %q: %w", externalCode, err)
@@ -176,10 +180,14 @@ func (uc *BarcodeEditor) Remove(ctx context.Context, supplierID, externalCode st
 		return err
 	}
 
-	if err := uc.wiki.RemoveTagFromPage(ctx, product.Name, supplier.Name); err != nil {
+	// Страницу поставщика/товара могли удалить вручную — снимать нечего,
+	// отсутствие страницы при снятии тега считается no-op.
+	err = uc.wiki.RemoveTagFromPage(ctx, product.Name, supplier.Name)
+	if err != nil && !errors.Is(err, domain.ErrPageNotFound) {
 		return fmt.Errorf("снять тег поставщика с товара %q: %w", product.Name, err)
 	}
-	if err := uc.wiki.RemoveTagFromPage(ctx, supplier.Name, product.Name); err != nil {
+	err = uc.wiki.RemoveTagFromPage(ctx, supplier.Name, product.Name)
+	if err != nil && !errors.Is(err, domain.ErrPageNotFound) {
 		return fmt.Errorf("снять тег товара с поставщика %q: %w", supplier.Name, err)
 	}
 
