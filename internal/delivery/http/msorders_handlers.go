@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"log/slog"
 	"warehouseHelper/internal/msclient/client"
@@ -33,9 +34,10 @@ type OrderDetailData struct {
 
 // Шаблоны раздела «Заказы», парсятся один раз при старте.
 var (
-	msOrdersTmpl     = template.Must(template.ParseFiles("../internal/delivery/web/templates/ms_orders.html", "../internal/delivery/web/templates/_nav.html"))
-	msOrdersPickTmpl = template.Must(template.ParseFiles("../internal/delivery/web/templates/ms_orders_pick.html", "../internal/delivery/web/templates/_nav.html"))
-	msOrderTmpl      = template.Must(template.ParseFiles("../internal/delivery/web/templates/ms_order.html", "../internal/delivery/web/templates/_nav.html"))
+	msOrdersTmpl      = template.Must(template.ParseFiles("../internal/delivery/web/templates/ms_orders.html", "../internal/delivery/web/templates/_nav.html"))
+	msOrdersPickTmpl  = template.Must(template.ParseFiles("../internal/delivery/web/templates/ms_orders_pick.html", "../internal/delivery/web/templates/_nav.html"))
+	msOrdersFormsTmpl = template.Must(template.ParseFiles("../internal/delivery/web/templates/ms_orders_forms.html", "../internal/delivery/web/templates/_nav.html"))
+	msOrderTmpl       = template.Must(template.ParseFiles("../internal/delivery/web/templates/ms_order.html", "../internal/delivery/web/templates/_nav.html"))
 )
 
 // MSOrdersPage — GET /ms/orders: раздел «Заказы» (кнопка «Подобрать»;
@@ -176,5 +178,119 @@ func (h *Handler) MSOrderDetailPage(w http.ResponseWriter, r *http.Request) {
 
 	if err := msOrderTmpl.Execute(w, d); err != nil {
 		slog.Info(fmt.Sprintf("ms_order template: %v", err))
+	}
+}
+
+// OrderFormsData — данные страницы «Печать бланков»: фильтр по дате и список
+// заказов с плановой датой доставки на выбранный день.
+type OrderFormsData struct {
+	Date      string // выбранная дата (ГГГГ-ММ-ДД), возвращается в форму
+	DateHuman string // та же дата по-русски (ДД.ММ.ГГГГ) для сообщений
+	Rows      []msordersuc.FormRow
+	Error     string
+}
+
+// MSOrdersFormsForm — GET /ms/orders/forms: форма фильтра по дате и список
+// заказов МС за этот день (цель PRG-редиректа после POST). Без ?date — сегодня
+// по МСК (даты заказов МС живут в TZ учётки).
+func (h *Handler) MSOrdersFormsForm(w http.ResponseWriter, r *http.Request) {
+	date := strings.TrimSpace(r.URL.Query().Get("date"))
+	if date == "" {
+		date = formsToday()
+	}
+
+	d := &OrderFormsData{Date: date}
+
+	day, err := time.ParseInLocation(time.DateOnly, date, mskLoc)
+	if err != nil {
+		d.Error = "Дата указана неверно — выберите дату в календаре"
+		h.renderOrderForms(w, d)
+
+		return
+	}
+
+	d.DateHuman = day.Format("02.01.2006")
+
+	rows, err := h.msFormsUC.FormsByDate(r.Context(), day)
+	if err != nil {
+		slog.Info(fmt.Sprintf("ms orders forms %q: %v", date, err))
+		d.Error = "не удалось получить заказы из МойСклад"
+	} else {
+		d.Rows = rows
+	}
+
+	h.renderOrderForms(w, d)
+}
+
+// MSOrdersFormsSearch — POST /ms/orders/forms: смена даты фильтра. После
+// разбора формы — редирект на GET ?date= (PRG: F5 не повторяет отправку).
+func (h *Handler) MSOrdersFormsSearch(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "не удалось разобрать форму", http.StatusBadRequest)
+
+		return
+	}
+
+	date := strings.TrimSpace(r.FormValue("date"))
+	if date == "" {
+		date = formsToday()
+	}
+
+	http.Redirect(w, r, "/ms/orders/forms?date="+url.QueryEscape(date), http.StatusSeeOther)
+}
+
+// MSOrdersFormsPrint — POST /ms/orders/forms/print: бланки выделенных заказов
+// одним PDF. Тело — JSON {ids} (PrintMultipleRequest). Бланки, которые МС не
+// отдал, в файл не попадают, но и не пропадают молча: их id уезжают заголовком
+// X-Skipped-Orders — страница показывает их оператору. 400 — ничего не выбрано;
+// 502 — не удалось получить ни одного бланка; 500 — внутренняя ошибка.
+func (h *Handler) MSOrdersFormsPrint(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+
+		return
+	}
+
+	var req PrintMultipleRequest
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "не удалось разобрать запрос", http.StatusBadRequest)
+
+		return
+	}
+
+	filePath, skipped, err := h.msFormsUC.PrintForms(r.Context(), req.IDs)
+	if err != nil {
+		slog.Info(fmt.Sprintf("ms orders forms print: %v", err))
+
+		if errors.Is(err, msordersuc.ErrNoOrdersSelected) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+
+			return
+		}
+
+		http.Error(w, "не удалось напечатать бланки: МойСклад не отдал ни одного бланка", http.StatusBadGateway)
+
+		return
+	}
+
+	w.Header().Set("Content-Disposition", "attachment; filename=order_forms.pdf")
+	w.Header().Set("Content-Type", "application/pdf")
+
+	setSkippedOrdersHeader(w, skipped)
+
+	http.ServeFile(w, r, filePath)
+}
+
+// formsToday — сегодняшняя дата по МСК: плановые даты заказов МС трактуются в
+// TZ учётки, а не в TZ машины (на сервере UTC).
+func formsToday() string {
+	return time.Now().In(mskLoc).Format(time.DateOnly)
+}
+
+// renderOrderForms рендерит страницу «Печать бланков».
+func (h *Handler) renderOrderForms(w http.ResponseWriter, d *OrderFormsData) {
+	if err := msOrdersFormsTmpl.Execute(w, d); err != nil {
+		slog.Info(fmt.Sprintf("ms_orders_forms template: %v", err))
 	}
 }

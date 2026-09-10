@@ -19,11 +19,11 @@ import (
 	mordersuc "warehouseHelper/internal/msorders/usecase"
 	msu "warehouseHelper/internal/mssuppliers/usecase"
 	oucase "warehouseHelper/internal/ordercoeff/usecase"
+	"warehouseHelper/internal/pdfexport"
 	"warehouseHelper/internal/qrcodes/photostore"
 	qucase "warehouseHelper/internal/qrcodes/usecase"
 	rucase "warehouseHelper/internal/receiving/usecase"
 	"warehouseHelper/internal/refgo/export/excel"
-	"warehouseHelper/internal/refgo/export/pdf"
 	"warehouseHelper/internal/refgo/registry"
 	rgucase "warehouseHelper/internal/refgo/usecase"
 	"warehouseHelper/internal/repository/postgres"
@@ -46,7 +46,7 @@ type DIContainer struct {
 	orepo        *postgres.PGClient
 	msconv       *client.MSConverter
 	xlxsexporter *excel.ExcelExporter
-	pdfexporter  *pdf.PDFExporter
+	pdfservice   *pdfexport.Service
 	ordercache   *orderscache.OrderCache
 	pdfpreloader *pdfpreloader.PDFPreloader
 	tempcleaner  *tempcleaner.TempCleaner
@@ -71,6 +71,7 @@ type DIContainer struct {
 	qrUC            *qucase.QRUseCase
 	msUC            *msu.MSSuppliersUseCase
 	msOrdersUC      *mordersuc.UseCase
+	msFormsUC       *mordersuc.FormsUseCase
 	returnsUC       *retucase.UseCase
 	reserveWatchUC  *rwucase.UseCase
 	stockUC         *sucase.StockUseCase
@@ -235,17 +236,20 @@ func (d *DIContainer) ExcelExportUC() *rgucase.ExportToExcelUseCase {
 	return d.excelExportUC
 }
 
-func (d *DIContainer) PDFExporter() rgucase.PDFExporter {
-	if d.pdfexporter == nil {
-		d.pdfexporter = pdf.NewPDFExporter()
+// PDFService — печать бланков заказов (нижний слой pdfexport): бланки качает
+// MSClient (печатный шаблон МС), слияние пачки — экспортёр pdfcpu. Пакет общий
+// для модулей refgo и msorders, поэтому связка живёт здесь.
+func (d *DIContainer) PDFService() *pdfexport.Service {
+	if d.pdfservice == nil {
+		d.pdfservice = pdfexport.NewService(d.MSClient(), pdfexport.NewExporter())
 	}
 
-	return d.pdfexporter
+	return d.pdfservice
 }
 
 func (d *DIContainer) PdfExportUC() *rgucase.ExportOrderPDFUseCase {
 	if d.pdfExportUC == nil {
-		d.pdfExportUC = rgucase.NewExportOrderPDFUseCase(d.MSClient(), d.PDFExporter(), d.PdfPreloader())
+		d.pdfExportUC = rgucase.NewExportOrderPDFUseCase(d.PDFService(), d.PdfPreloader())
 	}
 
 	return d.pdfExportUC
@@ -425,8 +429,8 @@ func (d *DIContainer) ComplaintsUC() *cucase.UseCase {
 	return d.complaintsUC
 }
 
-// MSOrdersUC — сценарии раздела «Заказы» МойСклад: поиск заказа по номеру
-// и детальная страница заказа (подбор). Схемы БД у модуля нет — MSClient
+// MSOrdersUC — сценарии раздела «Заказы» МойСклад: поиск заказа по номеру и
+// детальная страница заказа (подбор). Схемы БД у модуля нет — MSClient
 // реализует mordersuc.OrderClient, каталог склада подключается адаптером
 // (PGClient отдаёт товары типом receiving.ProductRef, модулю нужен свой).
 // Шов списания сроков — StockUC (PickStock): интерфейс совпадает дословно.
@@ -436,6 +440,17 @@ func (d *DIContainer) MSOrdersUC() *mordersuc.UseCase {
 	}
 
 	return d.msOrdersUC
+}
+
+// MSFormsUC — сценарии печати бланков заказов (страница «Печать бланков»):
+// список заказов МС за день + слитый PDF по выделенным. Печать — нижний слой
+// pdfexport (PDFService), поэтому шов печати отдельный от подбора.
+func (d *DIContainer) MSFormsUC() *mordersuc.FormsUseCase {
+	if d.msFormsUC == nil {
+		d.msFormsUC = mordersuc.NewFormsUseCase(d.MSClient(), d.PDFService())
+	}
+
+	return d.msFormsUC
 }
 
 // orderCatalogAdapter — конвертация каталога на границе DI: PGClient
@@ -519,7 +534,7 @@ func (d *DIContainer) ReserveWatchUC() *rwucase.UseCase {
 
 func (d *DIContainer) Handler() *myhttp.Handler {
 	if d.handlers == nil {
-		d.handlers = myhttp.NewHandler(d.SyncUC(), d.OrdersUC(), d.ExcelExportUC(), d.PdfExportUC(), d.BarcodeExportUC(), d.RefGoCheckAgainstUC(), d.WikiUC(), d.GoodsUC(), d.DayStateUC(), d.QRUC(), d.SuppliersUC(), d.StockUC(), d.StockHub(), d.ReceiveBarcodes(), d.ReceivingUC(), d.ComplaintsUC(), d.MSOrdersUC(), d.ReturnsUC())
+		d.handlers = myhttp.NewHandler(d.SyncUC(), d.OrdersUC(), d.ExcelExportUC(), d.PdfExportUC(), d.BarcodeExportUC(), d.RefGoCheckAgainstUC(), d.WikiUC(), d.GoodsUC(), d.DayStateUC(), d.QRUC(), d.SuppliersUC(), d.StockUC(), d.StockHub(), d.ReceiveBarcodes(), d.ReceivingUC(), d.ComplaintsUC(), d.MSOrdersUC(), d.MSFormsUC(), d.ReturnsUC())
 	}
 
 	return d.handlers

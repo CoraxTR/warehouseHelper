@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Печать бланков — МойСклад</title>
+    <link rel="stylesheet" href="/static/raven-guard.css">
+</head>
+
+<body>
+    <header class="brandbar">
+        <a class="brandbar__brand" href="/"><svg class="brandbar__emblem" viewBox="0 0 64 64" aria-hidden="true"><circle cx="35" cy="25" r="14" fill="#F4F1E9"/><polygon points="6,26 30,17 28,27" fill="#F4F1E9"/><polygon points="13,35 28,27 26,36" fill="#F4F1E9"/><circle cx="34" cy="23" r="3.6" fill="#0A0A0D"/><circle cx="33" cy="22" r="1.1" fill="#C02832"/></svg><span class="brandbar__name">ВОРОН&nbsp;&middot;&nbsp;СКЛАД</span></a>
+        <span class="brandbar__motto">Приёмка или смерть</span>
+    </header>
+    {{template "nav"}}
+    <h1>Печать бланков</h1>
+
+    <form class="find-form" method="post" action="/ms/orders/forms">
+        <label>Дата доставки <input type="date" name="date" value="{{.Date}}"></label>
+        <button type="submit">Показать</button>
+    </form>
+
+    {{if .Error}}
+    <p class="error-msg">{{.Error}}</p>
+    {{end}}
+
+    {{if .Rows}}
+    <p>Заказов на {{.DateHuman}}: <strong>{{len .Rows}}</strong></p>
+    <table id="forms-table">
+        <thead>
+            <tr>
+                <th><input type="checkbox" id="select-all" title="Выделить все"></th>
+                <th>Номер заказа</th>
+                <th>Статус</th>
+                <th>Дата доставки</th>
+            </tr>
+        </thead>
+        <tbody>
+            {{range .Rows}}
+            <tr>
+                <td><input type="checkbox" class="order-checkbox" value="{{.ID}}" data-name="{{.Name}}"></td>
+                <td>{{.Name}}</td>
+                <td>{{.State}}</td>
+                <td>{{.Delivery}}</td>
+            </tr>
+            {{end}}
+        </tbody>
+    </table>
+
+    <div class="bottom-actions">
+        <button type="button" id="print-forms" disabled>Распечатать бланки</button>
+        <span class="muted small" id="selected-count">выделено: 0</span>
+    </div>
+    {{else}}
+        {{if not .Error}}
+        <p class="empty">Заказов с плановой датой доставки на {{.DateHuman}} не найдено</p>
+        {{end}}
+    {{end}}
+
+    <a class="back" href="/ms/orders">← Назад к «Заказам»</a>
+
+    <script>
+        // Печать бланков выделенных заказов: сервер отдаёт слитый PDF, а бланки,
+        // которые МС не отдал, помечает заголовком X-Skipped-Orders — их номера
+        // показываем оператору (молча отдать неполный комплект нельзя).
+        (function () {
+            var table = document.getElementById('forms-table');
+            if (!table) { return; }
+
+            var boxes = table.querySelectorAll('input.order-checkbox');
+            var selectAll = document.getElementById('select-all');
+            var button = document.getElementById('print-forms');
+            var counter = document.getElementById('selected-count');
+
+            function selectedCount() {
+                var n = 0;
+                for (var i = 0; i < boxes.length; i++) {
+                    if (boxes[i].checked) { n++; }
+                }
+                return n;
+            }
+
+            function refresh() {
+                var n = selectedCount();
+                if (counter) { counter.textContent = 'выделено: ' + n; }
+                if (button) { button.disabled = n === 0; }
+            }
+
+            function blobText(blob, cb) {
+                var reader = new FileReader();
+                reader.onload = function () { cb(String(reader.result || '')); };
+                reader.onerror = function () { cb(''); };
+                reader.readAsText(blob);
+            }
+
+            function download(blob, name) {
+                var url = window.URL.createObjectURL(blob);
+                var a = document.createElement('a');
+                a.href = url;
+                a.download = name;
+                document.body.appendChild(a);
+                a.click();
+                if (a.remove) { a.remove(); } else { document.body.removeChild(a); }
+                window.URL.revokeObjectURL(url);
+            }
+
+            // Имена пропущенных заказов: id → номер из таблицы (нет — сам id).
+            function skippedNames(header, names) {
+                var ids = header.split(',');
+                var out = [];
+                for (var i = 0; i < ids.length; i++) {
+                    if (!ids[i]) { continue; }
+                    out.push(names[ids[i]] || ids[i]);
+                }
+                return out.join(', ');
+            }
+
+            for (var i = 0; i < boxes.length; i++) {
+                boxes[i].addEventListener('change', refresh);
+            }
+
+            if (selectAll) {
+                selectAll.addEventListener('change', function () {
+                    for (var i = 0; i < boxes.length; i++) {
+                        boxes[i].checked = selectAll.checked;
+                    }
+                    refresh();
+                });
+            }
+
+            refresh();
+
+            if (!button) { return; }
+
+            button.addEventListener('click', function () {
+                var ids = [];
+                var names = {};
+                for (var i = 0; i < boxes.length; i++) {
+                    if (!boxes[i].checked) { continue; }
+                    ids.push(boxes[i].value);
+                    names[boxes[i].value] = boxes[i].getAttribute('data-name') || boxes[i].value;
+                }
+                if (ids.length === 0) { return; }
+
+                var original = button.textContent;
+                button.disabled = true;
+                button.textContent = 'Подготовка...';
+
+                var xhr = new XMLHttpRequest();
+                xhr.open('POST', '/ms/orders/forms/print', true);
+                xhr.responseType = 'blob';
+                xhr.setRequestHeader('Content-Type', 'application/json');
+                xhr.onload = function () {
+                    button.disabled = false;
+                    button.textContent = original;
+
+                    if (xhr.status !== 200) {
+                        blobText(xhr.response, function (text) {
+                            alert('Не удалось напечатать бланки: ' + (text || xhr.status));
+                        });
+                        return;
+                    }
+
+                    var skipped = xhr.getResponseHeader('X-Skipped-Orders');
+                    if (skipped) {
+                        alert('Бланки не получены для заказов: ' + skippedNames(skipped, names));
+                    }
+
+                    download(xhr.response, 'order_forms.pdf');
+                };
+                xhr.onerror = function () {
+                    button.disabled = false;
+                    button.textContent = original;
+                    alert('Не удалось напечатать бланки: нет связи с сервером');
+                };
+
+                xhr.send(JSON.stringify({ ids: ids }));
+            });
+        })();
+    </script>
+</body>
+
+</html>

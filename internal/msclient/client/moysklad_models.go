@@ -56,6 +56,14 @@ type MSAgent struct {
 	Name string `json:"name"`
 }
 
+// MSState — статус заказа (state). Имя приезжает только при expand=state;
+// без него это краткая meta-ссылка (id статуса — последний сегмент href).
+// Тот же тип — строки справочника customerorder/metadata/states.
+type MSState struct {
+	Meta MSMeta `json:"meta"`
+	Name string `json:"name"`
+}
+
 type MSAgentInfo struct {
 	Name  string `json:"name"`
 	Phone string `json:"phone"`
@@ -113,15 +121,19 @@ type MSOrder struct {
 	Attributes            []MSAttributes `json:"attributes"`
 	Description           string         `json:"description"`
 	MSPositions           MSPositions    `json:"positions"`
+	State                 MSState        `json:"state"`
 	DeliveryPlannedMoment string         `json:"deliveryPlannedMoment"`
 	ShipmentAddress       string         `json:"shipmentAddress"`
 	ShipmentAddressFull   MSAddressFull  `json:"shipmentAddressFull"`
 
-	AttributesMap  map[string]any `json:"-"`
-	AgentName      string         `json:"-"`
-	AgentPhone     string         `json:"-"`
-	RefGoZone      string         `json:"-"`
-	PositionsWInfo []MSPosition   `json:"-"`
+	AttributesMap map[string]any `json:"-"`
+	AgentName     string         `json:"-"`
+	AgentPhone    string         `json:"-"`
+	RefGoZone     string         `json:"-"`
+	// StateID — id статуса (последний сегмент state.meta.href), заполняет
+	// клиент при разборе списка: между слоями ходит id, не href.
+	StateID        string       `json:"-"`
+	PositionsWInfo []MSPosition `json:"-"`
 }
 
 // MSAddressFull — полный адрес доставки заказа (shipmentAddressFull),

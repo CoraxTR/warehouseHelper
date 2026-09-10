@@ -65,6 +65,11 @@ func NewRouter(h *Handler) *http.ServeMux {
 	mux.HandleFunc("GET /ms/orders", h.MSOrdersPage)             // раздел «Заказы»
 	mux.HandleFunc("GET /ms/orders/pick", h.MSOrdersPickForm)    // подбор: форма/результат (?name=)
 	mux.HandleFunc("POST /ms/orders/pick", h.MSOrdersPickSearch) // подбор: запуск поиска (PRG → GET ?name=)
+	// Печать бланков за день: список заказов по плановой дате доставки и
+	// слитый PDF по выделенным (литерал /ms/orders/forms специфичнее {id}).
+	mux.HandleFunc("GET /ms/orders/forms", h.MSOrdersFormsForm)         // форма/список (?date=)
+	mux.HandleFunc("POST /ms/orders/forms", h.MSOrdersFormsSearch)      // смена даты (PRG → GET ?date=)
+	mux.HandleFunc("POST /ms/orders/forms/print", h.MSOrdersFormsPrint) // PDF по выделенным заказам
 	// Детальная страница заказа (литерал /ms/orders/pick специфичнее {id} — конфликта нет).
 	mux.HandleFunc("GET /ms/orders/{id}", h.MSOrderDetailPage)
 	// Отправка подбора в МС (итерация 3): сервер пересобирает positions из кэша
