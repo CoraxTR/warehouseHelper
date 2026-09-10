@@ -41,6 +41,12 @@ const (
 // errNoLabels — нет ни одного куска, из которого можно собрать этикетку.
 var errNoLabels = errors.New("ни у одного куска нет полных данных для этикетки (нужна дата выработки)")
 
+// sentinelWeightG — вес штучного товара в этикетке: 1 г. У штучных веса нет
+// (в данные идёт 0), но поле веса 29-значного кода не может быть пустым —
+// EncodeItem отвергает 0, и кусок остался бы без этикетки. Печатается только
+// в штрих-код: в данные приёмки, отчёт и статистику весов 1 г не попадает.
+const sentinelWeightG int64 = 1
+
 // ExportLabels формирует xlsx-файл этикеток принятых кусков в tempdir и
 // возвращает путь к нему. В штрих-код этикетки кодируется полный внутренний
 // код куска (innercode.EncodeItem), чтобы этикетка сканировалась как обычный
@@ -88,7 +94,11 @@ func newLabelsWorkbook(units []receiving.Unit) (*excelize.File, int, error) {
 		if u.ProducedOn != nil {
 			produced = *u.ProducedOn
 		}
-		code, err := innercode.EncodeItem(u.InternalCode, u.WeightG, produced, u.BestBefore)
+		weight := u.WeightG
+		if !u.Weighted || weight <= 0 {
+			weight = sentinelWeightG
+		}
+		code, err := innercode.EncodeItem(u.InternalCode, weight, produced, u.BestBefore)
 		if err != nil {
 			continue // полного внутреннего кода нет — этикетку не собрать
 		}
@@ -147,8 +157,11 @@ func newLabelsWorkbook(units []receiving.Unit) (*excelize.File, int, error) {
 
 // labelCaption — подпись под штрих-кодом (как в прототипе печати наклеек).
 func labelCaption(u receiving.Unit) string {
-	return u.ProductName + " до " + u.BestBefore.Format("02.01.2006") +
-		" вес: " + strconv.FormatInt(u.WeightG, 10)
+	caption := u.ProductName + " до " + u.BestBefore.Format("02.01.2006")
+	if u.Weighted {
+		caption += " вес: " + strconv.FormatInt(u.WeightG, 10)
+	}
+	return caption
 }
 
 // generateBarcodePNG создаёт PNG-байты штрих-кода Code128.

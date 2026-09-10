@@ -700,3 +700,11 @@ details.multi-select .ms-empty { color: #66645C; font-size: 13px; margin-top: 6p
 .row-done .cell-action { color: #9ccc65; }
 .row-flash td { background: rgba(192, 40, 50, 0.25); }
 tr[data-href] { cursor: pointer; }
+
+/* Блоки ручного ввода на странице приёмки (receive.html) */
+.scan-card.block { border-left-color: #C8A65C; }
+.scan-card.block.active { border-left-color: #C9323C; }
+.scan-card.block .block-product { max-width: 340px; }
+.scan-card.block .row-weight { width: 110px; font-size: 13px; padding: 3px 6px; margin-right: 8px; }
+#block-row { margin: 8px 0; }
+#block-row .hint { margin-left: 8px; }

@@ -174,7 +174,9 @@ func (uc *ReceivingUseCase) Resolve(ctx context.Context, cache *receiving.Cache,
 	defer done()
 	raw := strings.TrimSpace(e.Raw)
 	if raw == "" {
-		return nil, errors.New("пустой штрих-код")
+		// Скан без кода: строка блока ручного ввода (код не распознан полностью)
+		// либо строка, добавленная оператором руками.
+		return resolveManual(cache, e)
 	}
 
 	// Внутренний формат склада: кусок 29 / коробка 33.
@@ -228,6 +230,7 @@ func (uc *ReceivingUseCase) resolveInternal(ctx context.Context, cache *receivin
 		ProductID:    ref.ProductID,
 		InternalCode: ref.InternalCode,
 		ProductName:  ref.Name,
+		Weighted:     ref.Weighted,
 	}
 	if code.WeightG > 0 {
 		w := int64(code.WeightG)
@@ -271,6 +274,7 @@ func (uc *ReceivingUseCase) resolveByRule(cache *receiving.Cache, rule receiving
 		return nil, err
 	}
 	scan.ProductID, scan.InternalCode, scan.ProductName = pr.productID, pr.internalCode, pr.name
+	scan.Weighted = pr.weighted
 	if w, ok := sliceRule(rule, raw, 1); ok {
 		g, err := strconv.ParseInt(w, 10, 64)
 		if err != nil || g <= 0 {
@@ -333,6 +337,42 @@ type productResolve struct {
 	productID    string
 	internalCode string
 	name         string
+	weighted     bool
+}
+
+// findProduct ищет позицию поставщика (кеш) по id товара.
+func findProduct(cache *receiving.Cache, productID string) (receiving.ProductRef, bool) {
+	for i := range cache.Products {
+		if cache.Products[i].ProductID == productID {
+			return cache.Products[i], true
+		}
+	}
+	return receiving.ProductRef{}, false
+}
+
+// resolveManual собирает скан из ручных полей, когда кода нет вовсе: строка
+// блока ручного ввода (код не распознан полностью) или строка, добавленная
+// оператором руками. Товар берётся из позиций поставщика, вес и даты — из
+// полей строки (полноту проверяет Save: срок обязателен всем, вес — весовым).
+func resolveManual(cache *receiving.Cache, e receiving.ScanEntry) (*receiving.DecodedScan, error) {
+	if e.ManualProductID == "" {
+		return nil, errors.New("пустой штрих-код без выбранного товара")
+	}
+	ref, ok := findProduct(cache, e.ManualProductID)
+	if !ok {
+		return nil, fmt.Errorf("товар %q не найден в позициях поставщика", e.ManualProductID)
+	}
+	return &receiving.DecodedScan{
+		Kind:         receiving.KindItem,
+		ProductID:    ref.ProductID,
+		InternalCode: ref.InternalCode,
+		ProductName:  ref.Name,
+		Weighted:     ref.Weighted,
+		Qty:          1,
+		WeightG:      e.ManualWeightG,
+		ProducedOn:   e.ManualProducedOn,
+		BestBefore:   e.ManualBestBefore,
+	}, nil
 }
 
 // resolveProductByRule определяет товар скана: внешний код из правила через
@@ -342,16 +382,13 @@ func resolveProductByRule(cache *receiving.Cache, rule receiving.DecodeRule, raw
 	code, ok := sliceRule(rule, raw, 0)
 	if ok {
 		if ref, refOK := cache.ByExternal[code]; refOK {
-			return productResolve{ref.ProductID, ref.InternalCode, ref.ProductName}, nil
+			return productResolve{ref.ProductID, ref.InternalCode, ref.ProductName, ref.Weighted}, nil
 		}
 		return productResolve{}, fmt.Errorf("внешний код %q не заведён у поставщика — добавьте его на карточке поставщика", code)
 	}
 	if e.ManualProductID != "" {
-		for i := range cache.Products {
-			if cache.Products[i].ProductID == e.ManualProductID {
-				p := cache.Products[i]
-				return productResolve{p.ProductID, p.InternalCode, p.Name}, nil
-			}
+		if p, found := findProduct(cache, e.ManualProductID); found {
+			return productResolve{p.ProductID, p.InternalCode, p.Name, p.Weighted}, nil
 		}
 		return productResolve{productID: e.ManualProductID}, nil
 	}

@@ -87,7 +87,27 @@ const (
 	extBarcode     = extCode + "000250" + "29082026" + "29092026" // 28
 	itemRule       = "28-1-6-7-6-13-8-21-8"
 	itemRuleNoCode = "28- -6-7-6-13-8-21-8" // код товара не вычитывается
+
+	// Правило без веса: код товара 6 + выработка 8 + срок 8 (вес не вычитывается).
+	itemRuleNoWeight   = "22-1-6- -0-7-8-15-8"
+	extBarcodeNoWeight = extCode + "29082026" + "29092026" // 22
+
+	// Штучный товар (вес при приёмке не спрашивают).
+	pieceCode    = "00210010"
+	pieceExtCode = "777777"
+	pieceBarcode = pieceExtCode + "29082026" + "29092026" // 22
 )
+
+// addPieceProduct заводит у поставщика штучный товар: uom «шт», вес не нужен.
+func addPieceProduct(repo *stubReceiveRepo) {
+	repo.barcodes = append(repo.barcodes, receiving.BarcodeRef{
+		ExternalCode: pieceExtCode, ProductID: "p2", ProductName: "Хлеб Бородинский",
+		InternalCode: pieceCode, Weighted: false,
+	})
+	repo.catalog[pieceCode] = receiving.ProductRef{
+		ProductID: "p2", InternalCode: pieceCode, Name: "Хлеб Бородинский", Weighted: false,
+	}
+}
 
 func testCacheRepo() *stubReceiveRepo {
 	return &stubReceiveRepo{
@@ -301,6 +321,9 @@ func TestSave(t *testing.T) {
 	if res.Rows[0].QtyKg != 0.5 { // 250 г + 250 г
 		t.Fatalf("кг в отчёте: %v", res.Rows[0].QtyKg)
 	}
+	if !res.Rows[0].Weighted {
+		t.Fatal("весовой товар в отчёте должен помечаться weighted (кг, не шт)")
+	}
 }
 
 func TestSaveWeightSyncWarnings(t *testing.T) {
@@ -417,5 +440,174 @@ func TestSaveMissingBestBefore(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("ожидалась ошибка о неуказанном сроке")
+	}
+}
+
+func TestResolveManualWeightFromEntry(t *testing.T) {
+	uc, _ := newTestReceive()
+	repo, ok := uc.repo.(*stubReceiveRepo)
+	if !ok {
+		t.Fatal("ожидался stubReceiveRepo")
+	}
+	repo.supplier.DecodeRules = []string{itemRuleNoWeight}
+	cache, _ := uc.GetCache(context.Background(), "sup-1")
+	w := int64(2450)
+
+	s, err := uc.Resolve(context.Background(), cache, receiving.ScanEntry{Raw: extBarcodeNoWeight, ManualWeightG: &w})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if s.WeightG == nil || *s.WeightG != 2450 {
+		t.Fatalf("вес: %v, want 2450", s.WeightG)
+	}
+	if !s.Weighted || s.ProductID != "p1" {
+		t.Fatalf("скан: %+v", s)
+	}
+	if s.BestBefore == nil || !s.BestBefore.Equal(d(2026, 9, 29)) {
+		t.Fatalf("срок из правила: %v", s.BestBefore)
+	}
+}
+
+func TestResolveManualWeightOverridesCode(t *testing.T) {
+	uc, _ := newTestReceive()
+	cache, _ := uc.GetCache(context.Background(), "sup-1")
+	w := int64(999) // в коде 250 г — ручное перекрывает
+
+	s, err := uc.Resolve(context.Background(), cache, receiving.ScanEntry{Raw: extBarcode, ManualWeightG: &w})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if s.WeightG == nil || *s.WeightG != 999 {
+		t.Fatalf("вес: %v, want 999 (ручной ввод перекрывает код)", s.WeightG)
+	}
+}
+
+func TestResolveManualEntryWithoutRaw(t *testing.T) {
+	uc, _ := newTestReceive()
+	cache, _ := uc.GetCache(context.Background(), "sup-1")
+	w := int64(2500)
+	pd, bb := d(2026, 8, 28), d(2026, 9, 5)
+
+	// Строка блока ручного ввода: код не распознан полностью, значения — из ячеек.
+	s, err := uc.Resolve(context.Background(), cache, receiving.ScanEntry{
+		ManualProductID:  "p1",
+		ManualWeightG:    &w,
+		ManualProducedOn: &pd,
+		ManualBestBefore: &bb,
+	})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if s.Raw != "" || s.Kind != receiving.KindItem || s.ProductID != "p1" || s.InternalCode != intCode {
+		t.Fatalf("скан: %+v", s)
+	}
+	if s.WeightG == nil || *s.WeightG != 2500 || !s.Weighted {
+		t.Fatalf("вес/весовость: %+v", s)
+	}
+	if s.BestBefore == nil || !s.BestBefore.Equal(bb) || s.ProducedOn == nil || !s.ProducedOn.Equal(pd) {
+		t.Fatalf("даты: %+v", s)
+	}
+}
+
+func TestResolveManualEntryWithoutProduct(t *testing.T) {
+	uc, _ := newTestReceive()
+	cache, _ := uc.GetCache(context.Background(), "sup-1")
+
+	// Скан без кода и без выбранного товара — принять нечего.
+	if _, err := uc.Resolve(context.Background(), cache, receiving.ScanEntry{}); err == nil {
+		t.Fatal("ожидалась ошибка о пустом штрих-коде без товара")
+	}
+}
+
+func TestSaveManualEntriesWithoutRaw(t *testing.T) {
+	uc, stock := newTestReceive()
+	w1, w2 := int64(2450), int64(2510)
+	pd, bb := d(2026, 8, 28), d(2026, 9, 5)
+
+	res, err := uc.Save(context.Background(), receiving.SaveRequest{
+		SupplierID: "sup-1",
+		Scans: []receiving.ScanEntry{
+			{ManualProductID: "p1", ManualWeightG: &w1, ManualProducedOn: &pd, ManualBestBefore: &bb},
+			{ManualProductID: "p1", ManualWeightG: &w2, ManualProducedOn: &pd, ManualBestBefore: &bb},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if len(res.Units) != 2 {
+		t.Fatalf("единиц: %d, want 2", len(res.Units))
+	}
+	if res.Units[0].WeightG != 2450 || res.Units[1].WeightG != 2510 {
+		t.Fatalf("веса: %d, %d", res.Units[0].WeightG, res.Units[1].WeightG)
+	}
+	if len(stock.lots) != 1 || stock.lots[0].Qty != 2 {
+		t.Fatalf("лоты: %+v", stock.lots)
+	}
+	if !stock.lots[0].BestBefore.Equal(bb) {
+		t.Fatalf("срок лота: %v, want %v", stock.lots[0].BestBefore, bb)
+	}
+	weights, ok := uc.weights.(*stubWeightRecorder)
+	if !ok {
+		t.Fatal("ожидался stubWeightRecorder")
+	}
+	if len(weights.recorded) != 2 {
+		t.Fatalf("весов передано: %d, want 2", len(weights.recorded))
+	}
+	if len(res.Rows) != 1 || !res.Rows[0].Weighted || res.Rows[0].QtyKg != 4.96 {
+		t.Fatalf("отчёт: %+v", res.Rows)
+	}
+}
+
+func TestSavePieceProductWithoutWeight(t *testing.T) {
+	uc, stock := newTestReceive()
+	repo, ok := uc.repo.(*stubReceiveRepo)
+	if !ok {
+		t.Fatal("ожидался stubReceiveRepo")
+	}
+	addPieceProduct(repo)
+	repo.supplier.DecodeRules = []string{itemRuleNoWeight}
+
+	// Штучный товар: вес не вычитывается и не вводится — приёмка проходит,
+	// веса в статистику не уходят, отчёт в штуках.
+	res, err := uc.Save(context.Background(), receiving.SaveRequest{
+		SupplierID: "sup-1",
+		Scans:      []receiving.ScanEntry{{Raw: pieceBarcode}},
+	})
+	if err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if len(res.Units) != 1 || res.Units[0].Weighted || res.Units[0].WeightG != 0 {
+		t.Fatalf("единица: %+v", res.Units)
+	}
+	weights, ok := uc.weights.(*stubWeightRecorder)
+	if !ok {
+		t.Fatal("ожидался stubWeightRecorder")
+	}
+	if len(weights.recorded) != 0 {
+		t.Fatalf("веса штучных писать не должны: %+v", weights.recorded)
+	}
+	if len(res.Rows) != 1 || res.Rows[0].Weighted || res.Rows[0].Qty != 1 || res.Rows[0].QtyKg != 0 {
+		t.Fatalf("отчёт: %+v", res.Rows)
+	}
+	if len(stock.lots) != 1 || stock.lots[0].Qty != 1 {
+		t.Fatalf("лоты: %+v", stock.lots)
+	}
+}
+
+func TestSaveWeightedRequiresWeight(t *testing.T) {
+	uc, _ := newTestReceive()
+	repo, ok := uc.repo.(*stubReceiveRepo)
+	if !ok {
+		t.Fatal("ожидался stubReceiveRepo")
+	}
+	repo.supplier.DecodeRules = []string{itemRuleNoWeight}
+
+	// Весовой товар, вес не вычитан кодом и не введён вручную → отказ.
+	_, err := uc.Save(context.Background(), receiving.SaveRequest{
+		SupplierID: "sup-1",
+		Scans:      []receiving.ScanEntry{{Raw: extBarcodeNoWeight}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "не указан вес") {
+		t.Fatalf("ожидалась ошибка о весе, получили %v", err)
 	}
 }
