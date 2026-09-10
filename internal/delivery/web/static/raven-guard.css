@@ -536,6 +536,16 @@ details.multi-select .ms-empty { color: #66645C; font-size: 13px; margin-top: 6p
 .barcodes-table { margin: 12px auto; border-collapse: collapse; font-size: 14px; }
 .barcodes-table th, .barcodes-table td { border: 1px solid #26262E; padding: 6px 10px; text-align: left; }
 .barcodes-add { margin-top: 12px; text-align: left; }
+/* Батчевые строки внешних кодов: код + поиск товара + «−», снизу подсказки. */
+.barcode-row { margin-bottom: 6px; }
+.barcode-row .barcode-code { width: 200px; margin-right: 8px; }
+.barcode-row .product-search { width: 100%; max-width: 420px; box-sizing: border-box; }
+.barcode-row .btn-remove { margin-left: 8px; vertical-align: middle; }
+.barcode-row .barcode-results { background: #0D0D11; border: 1px solid #26262E; max-width: 420px; margin: 2px 0 6px; }
+/* Непарная строка (заполнен только код или только товар) — красная рамка. */
+.barcode-row.bar-error .barcode-code, .barcode-row.bar-error .product-search { border-color: #C9323C; }
+.barcode-actions { margin-top: 8px; }
+.barcode-actions button { margin-right: 8px; }
 .product-hit { padding: 6px 8px; cursor: pointer; border-bottom: 1px solid #1B1B21; color: #E9E6DD; }
 .product-hit:hover { background: #16161C; }
 
