@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"warehouseHelper/internal/domain"
@@ -63,16 +64,25 @@ func (s *stubCatalogReader) GetProduct(context.Context, string) (*domain.Product
 }
 
 type stubWikiRef struct {
-	ensured     []string // productID:name:avgWeight
-	addedTags   []string // title:tag
-	removedTags []string // title:tag
-	err         error
+	ensured          []string // productID:name:avgWeight
+	ensuredSuppliers []string // supplierID:name
+	addedTags        []string // title:tag
+	removedTags      []string // title:tag
+	err              error    // ошибка всех методов
+	ensureSupErr     error    // ошибка именно EnsureSupplierPage
+	removeErr        error    // ошибка именно RemoveTagFromPage
 }
 
 func (s *stubWikiRef) EnsureProductPage(_ context.Context, productID, name, averageWeight string) error {
 	s.ensured = append(s.ensured, productID+":"+name+":"+averageWeight)
 
 	return s.err
+}
+
+func (s *stubWikiRef) EnsureSupplierPage(_ context.Context, supplierID, name string) error {
+	s.ensuredSuppliers = append(s.ensuredSuppliers, supplierID+":"+name)
+
+	return s.ensureSupErr
 }
 
 func (s *stubWikiRef) AddTagToPage(_ context.Context, title, tag string) error {
@@ -84,7 +94,7 @@ func (s *stubWikiRef) AddTagToPage(_ context.Context, title, tag string) error {
 func (s *stubWikiRef) RemoveTagFromPage(_ context.Context, title, tag string) error {
 	s.removedTags = append(s.removedTags, title+":"+tag)
 
-	return s.err
+	return s.removeErr
 }
 
 // --- фикстуры ---
@@ -127,9 +137,57 @@ func TestBarcodeEditor_AddSuccess(t *testing.T) {
 	if len(wiki.ensured) != 1 || wiki.ensured[0] != testProductID+":Грудной отруб:2.5" {
 		t.Fatalf("EnsureProductPage вызван неверно: %v", wiki.ensured)
 	}
+	wantEnsured := []string{testSupplierID + ":Мираторг"}
+	if !equalStrings(wiki.ensuredSuppliers, wantEnsured) {
+		t.Fatalf("EnsureSupplierPage вызван неверно: %v, want %v", wiki.ensuredSuppliers, wantEnsured)
+	}
 	wantTags := []string{"Грудной отруб:Мираторг", "Мираторг:Грудной отруб"}
 	if !equalStrings(wiki.addedTags, wantTags) {
 		t.Fatalf("теги добавлены неверно: %v, want %v", wiki.addedTags, wantTags)
+	}
+}
+
+// Отсутствие страницы поставщика больше не ломает добавление кода: ensure её
+// создаёт/занимает, код сохраняется и оба тега ставятся.
+func TestBarcodeEditor_AddCreatesMissingSupplierPage(t *testing.T) {
+	repo := &stubBarcodeRepo{}
+	wiki := &stubWikiRef{} // страницы поставщика в вики ещё нет
+	uc := newEditor(repo, nil, nil, wiki)
+
+	if err := uc.Add(context.Background(), testSupplierID, "4607000000001", testProductID); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if len(wiki.ensuredSuppliers) != 1 || wiki.ensuredSuppliers[0] != testSupplierID+":Мираторг" {
+		t.Fatalf("EnsureSupplierPage должен быть вызван до тега поставщику: %v", wiki.ensuredSuppliers)
+	}
+	if len(repo.saved) != 1 {
+		t.Fatalf("связка должна быть сохранена: %v", repo.saved)
+	}
+	wantTags := []string{"Грудной отруб:Мираторг", "Мираторг:Грудной отруб"}
+	if !equalStrings(wiki.addedTags, wantTags) {
+		t.Fatalf("оба тега должны быть поставлены: %v, want %v", wiki.addedTags, wantTags)
+	}
+}
+
+// Ошибка ensure не глотается: возвращается наружу обёрнутой (%w) и блокирует
+// сохранение связки и постановку тегов.
+func TestBarcodeEditor_AddEnsureSupplierPageError(t *testing.T) {
+	repo := &stubBarcodeRepo{}
+	wiki := &stubWikiRef{ensureSupErr: domain.ErrTitleTaken}
+	uc := newEditor(repo, nil, nil, wiki)
+
+	err := uc.Add(context.Background(), testSupplierID, "4607000000001", testProductID)
+	if !errors.Is(err, domain.ErrTitleTaken) {
+		t.Fatalf("ожидалась обёрнутая ErrTitleTaken, получил %v", err)
+	}
+	if !strings.Contains(err.Error(), "гарантировать страницу вики поставщика") {
+		t.Fatalf("ошибка должна быть обёрнута с контекстом: %v", err)
+	}
+	if len(repo.saved) != 0 {
+		t.Fatalf("при ошибке ensure связка не должна сохраняться: %v", repo.saved)
+	}
+	if len(wiki.addedTags) != 0 {
+		t.Fatalf("при ошибке ensure теги ставить нельзя: %v", wiki.addedTags)
 	}
 }
 
@@ -236,6 +294,38 @@ func TestBarcodeEditor_RemoveNotFound(t *testing.T) {
 	}
 	if len(repo.deleted) != 0 {
 		t.Fatal("несуществующая связка не должна удаляться")
+	}
+}
+
+// Страница вики удалена вручную: снятие тега — no-op, код всё равно удаляется.
+func TestBarcodeEditor_RemoveMissingPageIsNoop(t *testing.T) {
+	repo := &stubBarcodeRepo{
+		get:   &receiving.BarcodeRef{ExternalCode: "4607000000001", ProductID: testProductID, ProductName: "Грудной отруб"},
+		count: 0,
+	}
+	wiki := &stubWikiRef{removeErr: domain.ErrPageNotFound}
+	uc := newEditor(repo, nil, nil, wiki)
+
+	if err := uc.Remove(context.Background(), testSupplierID, "4607000000001"); err != nil {
+		t.Fatalf("ErrPageNotFound при снятии тега должен быть no-op, получил %v", err)
+	}
+	if len(repo.deleted) != 1 {
+		t.Fatalf("связка должна быть удалена: %v", repo.deleted)
+	}
+}
+
+// Прочие ошибки снятия тега по-прежнему возвращаются обёрнутыми.
+func TestBarcodeEditor_RemoveTagErrorPropagates(t *testing.T) {
+	boom := errors.New("сбой вики")
+	repo := &stubBarcodeRepo{
+		get:   &receiving.BarcodeRef{ExternalCode: "4607000000001", ProductID: testProductID, ProductName: "Грудной отруб"},
+		count: 0,
+	}
+	uc := newEditor(repo, nil, nil, &stubWikiRef{removeErr: boom})
+
+	err := uc.Remove(context.Background(), testSupplierID, "4607000000001")
+	if !errors.Is(err, boom) {
+		t.Fatalf("ожидалась обёрнутая ошибка вики, получил %v", err)
 	}
 }
 
