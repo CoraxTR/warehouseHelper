@@ -43,7 +43,8 @@
             <div id="party-row">
                 <button type="button" class="small" id="add-party-btn" onclick="addParty()">+ Партия</button>
                 <span class="hint">Партия — это даты (выработка + срок) и строки товара. Товар и вес берутся из кода,
-                    даты — из кода, если в партии не заполнены. Сканы идут в активную партию (по умолчанию — Партия 1).</span>
+                    даты — из кода, если в партии не заполнены. Сканы идут в активную партию (Партия 1 по умолчанию):
+                    чтобы сменить партию, нажмите на её название.</span>
             </div>
             <div id="party-hint" class="hint" style="display:none;"></div>
             <label>Скан (товары и коробки — вперемешку)</label>
@@ -60,7 +61,7 @@
 
             <div id="add-party-bottom">
                 <button type="button" class="small" onclick="addParty()">+ Партия</button>
-                <span class="hint">Новая партия — свои даты и свой список строк. Сканы идут в неё же.</span>
+                <span class="hint">Новая партия сразу становится активной: свои даты и свой список строк.</span>
             </div>
 
             <button id="save-btn" onclick="saveReceive()">Сохранить приёмку</button>
@@ -497,7 +498,9 @@
             var cls = 'scan-card block party' + (b === activeParty ? ' active' : '');
             var html = '<div class="' + cls + '">';
             html += '<button type="button" class="small danger remove" onclick="removeItem(this)">✕</button>';
-            html += '<div class="name">Партия ' + b.id + (b === activeParty ? ' — активна' : '') + '</div>';
+            html += '<div class="name" onclick="activatePartyByIndex(this)" style="cursor:pointer;">Партия ' + b.id +
+                (b === activeParty ? ' — активна (сканы идут сюда)' : ' — нажмите, чтобы сканировать в эту партию') +
+                '</div>';
             html += '<div class="fix">Выработка: <input type="date" class="party-pd" data-kind="pd" value="' +
                 esc(b.pd || '') + '" onchange="partyField(this)">' +
                 ' <span class="date-echo" style="color:#66645C;">' + fmtDateRu(b.pd) + '</span>' +
@@ -505,8 +508,9 @@
                 esc(b.bb || '') + '" onchange="partyField(this)">' +
                 ' <span class="date-echo" style="color:#66645C;">' + fmtDateRu(b.bb) + '</span></div>';
             html += '<div class="hint">Пусто — даты берутся из кода (заполняются обе даты или ни одной). ' +
-                'Введённые даты партии перекрывают код (расхождение подсветится). Товар и вес — из кода, ' +
-                'для строк без кода — из строки.</div>';
+                'Введённые даты партии перекрывают код (расхождение подсветится). В партию сканируются любые ' +
+                'товары поставщика: товар и вес — из кода, для строк без кода — товар выбирается в строке. ' +
+                'Если в партии товар задан руками (код не несёт ни товара, ни сроков), скан другого товара не принимается.</div>';
 
             var i, row, s, e, rpid, mp;
             for (i = 0; i < b.rows.length; i++) {
@@ -534,12 +538,7 @@
             }
             html += '<div class="fix">';
             html += '<button type="button" class="small" onclick="addRowToParty(this)">+ строка</button> ';
-            html += '<button type="button" class="small" onclick="addParty()">+ Партия</button> ';
-            if (b === activeParty) {
-                html += '<button type="button" class="small" onclick="deactivateParty()">Завершить партию</button>';
-            } else {
-                html += '<button type="button" class="small" onclick="activateParty(this)">Сканировать в эту партию</button>';
-            }
+            html += '<button type="button" class="small" onclick="addParty()">+ Партия</button>';
             html += '</div></div>';
             return html;
         }
@@ -572,8 +571,17 @@
             var idx = itemIndexFromDom(btn);
             if (idx < 0) { return; }
             var it = items[idx];
-            if (it === activeParty) { activeParty = null; }
+            var wasActive = it === activeParty;
             items.splice(idx, 1);
+            // Активная партия есть всегда: удалили активную — активной становится
+            // первая оставшаяся, партий не осталось — создаётся новая.
+            if (wasActive) {
+                activeParty = firstParty();
+                if (!activeParty) {
+                    addParty();
+                    return;
+                }
+            }
             if (boxMode && items.length === 0) { boxMode = false; }
             render();
         }
@@ -662,15 +670,42 @@
             render();
         }
 
-        function activateParty(btn) {
-            var idx = itemIndexFromDom(btn);
-            if (idx < 0) { return; }
-            activeParty = items[idx];
-            render();
+        // firstParty — первая партия списка (после удаления активной партии
+        // активной становится она; партий не осталось — создаётся новая).
+        function firstParty() {
+            var i;
+            for (i = 0; i < items.length; i++) {
+                if (items[i].kind === 'party') { return items[i]; }
+            }
+            return null;
         }
 
-        function deactivateParty() {
-            activeParty = null;
+        // partyManualProduct — товар, заданный в партии РУКАМИ (код поставщика не
+        // несёт ни товара, ни сроков): первая строка с выбранным товаром. Задан —
+        // партия принимает только его; пусто — в неё идут любые товары.
+        function partyManualProduct(b) {
+            var i, row;
+            if (!b || !b.rows) { return ''; }
+            for (i = 0; i < b.rows.length; i++) {
+                row = b.rows[i] || {};
+                if (row.manual && row.manual.product_id) { return row.manual.product_id; }
+            }
+            return '';
+        }
+
+        // productName — имя позиции каталога по id («—», если не найдена).
+        function productName(pid) {
+            var p = findProduct(pid);
+            return p ? p.name : '—';
+        }
+
+        // activatePartyByIndex — клик по названию партии делает её активной:
+        // кнопок «сканировать в эту партию» нет, активная держится до конца
+        // приёмки, пока оператор не выберет другую.
+        function activatePartyByIndex(node) {
+            var idx = itemIndexFromDom(node);
+            if (idx < 0) { return; }
+            activeParty = items[idx];
             render();
         }
 
@@ -751,36 +786,41 @@
             }
 
             // Код не распознан полностью — строка без raw в активной партии.
+            // Если в партии товар задан руками, строка берёт его сразу.
             if (resolved.error) {
-                var p = activeParty || addParty();
-                p.rows.push({scan: {kind: 'item', raw: '', unrecognized: true}, manual: {}});
+                var ep = activeParty || addParty();
+                var emp = partyManualProduct(ep);
+                var erow = {scan: {kind: 'item', raw: '', unrecognized: true}, manual: {}};
+                if (emp) { applyProductToScan(erow.scan, emp); }
+                ep.rows.push(erow);
                 statusLine.textContent = 'Код не распознан полностью — выберите товар строки и даты партии, введите вес';
                 beep();
                 render();
                 return;
             }
 
-            // Любой распознанный товар можно направить в активную партию — отказ
-            // «чужой товар → бип» снят: товар/вес/даты берутся из кода, даты —
-            // код, иначе партия (ручное перекрывает код).
-            if (activeParty) {
-                activeParty.rows.push({scan: resolved, manual: {}});
-                if (resolved.needs_product) {
-                    statusLine.textContent = 'Внешний код ' + (resolved._code_unknown || '') +
-                        ' не заведён у поставщика — выберите товар строки или добавьте код на карточке поставщика';
-                    beep();
-                }
+            // Активная партия есть всегда — сканы идут в неё. Любые товары
+            // поставщика разрешены; исключение — партия, где товар задан РУКАМИ
+            // (код не несёт ни товара, ни сроков): скан несовпадающего товара
+            // бипает и не принимается.
+            var party = activeParty || addParty();
+            var mp = partyManualProduct(party);
+            if (resolved.product_id && mp && resolved.product_id !== mp) {
+                beep();
+                statusLine.textContent = 'Не товар партии: ' + (resolved.name || '') +
+                    ' — в партии задан товар «' + productName(mp) + '», скан не принят';
                 render();
                 return;
             }
-
-            // Активной партии нет (завершена) — обычная карточка скана.
-            if (resolved.needs_product) {
-                beep();
-                statusLine.textContent = 'Позиция не определена — выберите товар коробки/строки ' +
-                    'или создайте партию («+ Партия»)';
+            if (resolved.needs_product && mp) {
+                applyProductToScan(resolved, mp); // товар партии уже известен — берём его
             }
-            items.push({scan: resolved, children: []});
+            party.rows.push({scan: resolved, manual: {}});
+            if (resolved.needs_product) {
+                statusLine.textContent = 'Внешний код ' + (resolved._code_unknown || '') +
+                    ' не заведён у поставщика — выберите товар строки или добавьте код на карточке поставщика';
+                beep();
+            }
             render();
         }
 
@@ -792,7 +832,7 @@
             var out = {};
             if (s.raw) { out.raw = s.raw; }
             if (!s._prod_code) {
-                var pid = m.product_id || (party && party.product_id) || '';
+                var pid = m.product_id || (party ? partyManualProduct(party) : '') || '';
                 if (pid) { out.manual_product_id = pid; }
             }
             if (isWeighted(it, party) && m.weight_g) { out.manual_weight_g = m.weight_g; }
