@@ -17,8 +17,8 @@ import (
 )
 
 var (
-	stockDatesTmpl  = template.Must(template.ParseFiles("../internal/delivery/web/templates/stock_dates.html"))
-	stockUpdateTmpl = template.Must(template.ParseFiles("../internal/delivery/web/templates/stock_update.html"))
+	stockDatesTmpl  = template.Must(template.ParseFiles("../internal/delivery/web/templates/stock_dates.html", "../internal/delivery/web/templates/_nav.html"))
+	stockUpdateTmpl = template.Must(template.ParseFiles("../internal/delivery/web/templates/stock_update.html", "../internal/delivery/web/templates/_nav.html"))
 )
 
 // stockPageData — флаг «Шорт-лист» для единого шаблона страниц «Сроки».

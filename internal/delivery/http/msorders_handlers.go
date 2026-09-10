@@ -33,9 +33,9 @@ type OrderDetailData struct {
 
 // Шаблоны раздела «Заказы», парсятся один раз при старте.
 var (
-	msOrdersTmpl     = template.Must(template.ParseFiles("../internal/delivery/web/templates/ms_orders.html"))
-	msOrdersPickTmpl = template.Must(template.ParseFiles("../internal/delivery/web/templates/ms_orders_pick.html"))
-	msOrderTmpl      = template.Must(template.ParseFiles("../internal/delivery/web/templates/ms_order.html"))
+	msOrdersTmpl     = template.Must(template.ParseFiles("../internal/delivery/web/templates/ms_orders.html", "../internal/delivery/web/templates/_nav.html"))
+	msOrdersPickTmpl = template.Must(template.ParseFiles("../internal/delivery/web/templates/ms_orders_pick.html", "../internal/delivery/web/templates/_nav.html"))
+	msOrderTmpl      = template.Must(template.ParseFiles("../internal/delivery/web/templates/ms_order.html", "../internal/delivery/web/templates/_nav.html"))
 )
 
 // MSOrdersPage — GET /ms/orders: раздел «Заказы» (кнопка «Подобрать»;

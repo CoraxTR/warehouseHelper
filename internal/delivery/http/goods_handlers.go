@@ -31,15 +31,15 @@ func folderCtx(node *gucase.FolderNode, selected map[string]bool) folderCtxData 
 	return folderCtxData{Node: node, Selected: selected}
 }
 
-var goodsHubTmpl = template.Must(template.ParseFiles("../internal/delivery/web/templates/goods.html"))
+var goodsHubTmpl = template.Must(template.ParseFiles("../internal/delivery/web/templates/goods.html", "../internal/delivery/web/templates/_nav.html"))
 
 var goodsTreeTmpl = template.Must(
 	template.New("goods_tree.html").
 		Funcs(template.FuncMap{"folderCtx": folderCtx}).
-		ParseFiles("../internal/delivery/web/templates/goods_tree.html"),
+		ParseFiles("../internal/delivery/web/templates/goods_tree.html", "../internal/delivery/web/templates/_nav.html"),
 )
 
-var goodsEditTmpl = template.Must(template.ParseFiles("../internal/delivery/web/templates/goods_edit.html"))
+var goodsEditTmpl = template.Must(template.ParseFiles("../internal/delivery/web/templates/goods_edit.html", "../internal/delivery/web/templates/_nav.html"))
 
 // GoodsHubData — данные хаба «Продукция».
 type GoodsHubData struct {

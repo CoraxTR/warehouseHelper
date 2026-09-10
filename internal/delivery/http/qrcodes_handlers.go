@@ -22,8 +22,8 @@ import (
 // Шаблоны модуля «Честный знак» парсятся один раз при старте (правило проекта:
 // не парсить шаблон на каждый запрос).
 var (
-	qrAddTmpl  = template.Must(template.ParseFiles("../internal/delivery/web/templates/qrcodes_add.html"))
-	qrListTmpl = template.Must(template.ParseFiles("../internal/delivery/web/templates/qrcodes_list.html"))
+	qrAddTmpl  = template.Must(template.ParseFiles("../internal/delivery/web/templates/qrcodes_add.html", "../internal/delivery/web/templates/_nav.html"))
+	qrListTmpl = template.Must(template.ParseFiles("../internal/delivery/web/templates/qrcodes_list.html", "../internal/delivery/web/templates/_nav.html"))
 )
 
 const (

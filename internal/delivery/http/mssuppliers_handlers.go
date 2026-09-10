@@ -64,9 +64,9 @@ type SupplierFormData struct {
 
 // Шаблоны модуля «МойСклад», парсятся один раз при старте.
 var (
-	msIndexTmpl         = template.Must(template.ParseFiles("../internal/delivery/web/templates/ms_index.html"))
-	msSuppliersListTmpl = template.Must(template.ParseFiles("../internal/delivery/web/templates/ms_suppliers_list.html"))
-	msSupplierFormTmpl  = template.Must(template.ParseFiles("../internal/delivery/web/templates/ms_suppliers_form.html"))
+	msIndexTmpl         = template.Must(template.ParseFiles("../internal/delivery/web/templates/ms_index.html", "../internal/delivery/web/templates/_nav.html"))
+	msSuppliersListTmpl = template.Must(template.ParseFiles("../internal/delivery/web/templates/ms_suppliers_list.html", "../internal/delivery/web/templates/_nav.html"))
+	msSupplierFormTmpl  = template.Must(template.ParseFiles("../internal/delivery/web/templates/ms_suppliers_form.html", "../internal/delivery/web/templates/_nav.html"))
 )
 
 // MsPage — GET /ms: хаб модуля «МойСклад» (кнопки подмодулей).

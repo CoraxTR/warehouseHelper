@@ -58,11 +58,11 @@ type WikiEditData struct {
 
 // Шаблоны вики, парсятся один раз при старте.
 var (
-	wikiIndexTmpl        = template.Must(template.ParseFiles("../internal/delivery/web/templates/wiki_index.html"))
-	wikiSupplierTmpl     = template.Must(template.ParseFiles("../internal/delivery/web/templates/wiki_supplier.html"))
-	wikiProductTmpl      = template.Must(template.ParseFiles("../internal/delivery/web/templates/wiki_product.html"))
-	wikiSupplierEditTmpl = template.Must(template.ParseFiles("../internal/delivery/web/templates/wiki_supplier_edit.html"))
-	wikiProductEditTmpl  = template.Must(template.ParseFiles("../internal/delivery/web/templates/wiki_product_edit.html"))
+	wikiIndexTmpl        = template.Must(template.ParseFiles("../internal/delivery/web/templates/wiki_index.html", "../internal/delivery/web/templates/_nav.html"))
+	wikiSupplierTmpl     = template.Must(template.ParseFiles("../internal/delivery/web/templates/wiki_supplier.html", "../internal/delivery/web/templates/_nav.html"))
+	wikiProductTmpl      = template.Must(template.ParseFiles("../internal/delivery/web/templates/wiki_product.html", "../internal/delivery/web/templates/_nav.html"))
+	wikiSupplierEditTmpl = template.Must(template.ParseFiles("../internal/delivery/web/templates/wiki_supplier_edit.html", "../internal/delivery/web/templates/_nav.html"))
+	wikiProductEditTmpl  = template.Must(template.ParseFiles("../internal/delivery/web/templates/wiki_product_edit.html", "../internal/delivery/web/templates/_nav.html"))
 )
 
 // WikiIndex — GET: список страниц с фильтрами по запросу, тегам и типу.

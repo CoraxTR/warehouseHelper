@@ -173,7 +173,7 @@ func (h *Handler) RefGoCheckAgainst(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tmpl := template.Must(template.ParseFiles("../internal/delivery/web/templates/refgo_result.html"))
+	tmpl := template.Must(template.ParseFiles("../internal/delivery/web/templates/refgo_result.html", "../internal/delivery/web/templates/_nav.html"))
 
 	err = tmpl.Execute(w, result)
 	if err != nil {
@@ -204,7 +204,7 @@ func (h *Handler) Orders(w http.ResponseWriter, r *http.Request) {
 		slog.Error(fmt.Sprintf("Order %s errors: %v", o.GetName(), o.GetErrors()))
 	}
 
-	tmpl := template.Must(template.ParseFiles("../internal/delivery/web/templates/orders.html"))
+	tmpl := template.Must(template.ParseFiles("../internal/delivery/web/templates/orders.html", "../internal/delivery/web/templates/_nav.html"))
 
 	err = tmpl.Execute(w, orders)
 	if err != nil {
@@ -223,7 +223,7 @@ type OrderFindPageData struct {
 }
 
 // orderFindTmpl — шаблон страницы поиска, парсится один раз при старте.
-var orderFindTmpl = template.Must(template.ParseFiles("../internal/delivery/web/templates/order_find.html"))
+var orderFindTmpl = template.Must(template.ParseFiles("../internal/delivery/web/templates/order_find.html", "../internal/delivery/web/templates/_nav.html"))
 
 // OrderFind — GET: страница поиска заказа (поддерживает ?msNumber= / ?refGoNumber=);
 // POST: поиск по одному из номеров.
@@ -340,7 +340,7 @@ func (h *Handler) ExportToExcel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tmpl := template.Must(template.ParseFiles("../internal/delivery/web/templates/summary.html"))
+	tmpl := template.Must(template.ParseFiles("../internal/delivery/web/templates/summary.html", "../internal/delivery/web/templates/_nav.html"))
 
 	err = tmpl.Execute(w, summary)
 	if err != nil {

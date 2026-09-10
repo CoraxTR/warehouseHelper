@@ -12,6 +12,97 @@
         <a class="brandbar__brand" href="/"><svg class="brandbar__emblem" viewBox="0 0 64 64" aria-hidden="true"><circle cx="35" cy="25" r="14" fill="#F4F1E9"/><polygon points="6,26 30,17 28,27" fill="#F4F1E9"/><polygon points="13,35 28,27 26,36" fill="#F4F1E9"/><circle cx="34" cy="23" r="3.6" fill="#0A0A0D"/><circle cx="33" cy="22" r="1.1" fill="#C02832"/></svg><span class="brandbar__name">ВОРОН&nbsp;&middot;&nbsp;СКЛАД</span></a>
         <span class="brandbar__motto">Приёмка или смерть</span>
     </header>
+<button id="nav-toggle" class="navtoggle" type="button" aria-label="Навигация" aria-expanded="false" aria-controls="sidebar">&#9776;</button>
+<div id="sidebar-scrim" class="sidebar__scrim"></div>
+<nav id="sidebar" class="sidebar" aria-label="Полная навигация">
+    <div class="sidebar__head">
+        <span class="sidebar__title">Навигация</span>
+        <button id="nav-close" class="sidebar__close" type="button" aria-label="Закрыть">&#10005;</button>
+    </div>
+
+    <div class="sidebar__group sidebar__group--plain">
+        <a class="sidebar__link sidebar__link--top" href="/" data-path="/">Главная</a>
+    </div>
+
+    <div class="sidebar__group" data-group="refgo">
+        <button class="sidebar__head-btn" type="button">РефГо <span class="sidebar__caret">&#9656;</span></button>
+        <div class="sidebar__list">
+            <a class="sidebar__link" href="/refgo" data-path="/refgo">Выгрузка заказов</a>
+            <a class="sidebar__link" href="/refgo-check" data-path="/refgo-check">Сверка</a>
+            <a class="sidebar__link" href="/order-find" data-path="/order-find">Найти заказ</a>
+            <a class="sidebar__link" href="/orders" data-path="/orders">Заказы</a>
+        </div>
+    </div>
+
+    <div class="sidebar__group" data-group="wiki">
+        <button class="sidebar__head-btn" type="button">База знаний <span class="sidebar__caret">&#9656;</span></button>
+        <div class="sidebar__list">
+            <a class="sidebar__link" href="/wiki" data-path="/wiki">Поиск и список</a>
+            <a class="sidebar__link" href="/wiki/edit?type=supplier" data-path="/wiki/edit?type=supplier">Создать поставщика</a>
+            <a class="sidebar__link" href="/wiki/edit?type=product" data-path="/wiki/edit?type=product">Создать продукт</a>
+        </div>
+    </div>
+
+    <div class="sidebar__group" data-group="qrcodes">
+        <button class="sidebar__head-btn" type="button">Честный знак <span class="sidebar__caret">&#9656;</span></button>
+        <div class="sidebar__list">
+            <a class="sidebar__link" href="/qrcodes" data-path="/qrcodes">Честный знак</a>
+            <a class="sidebar__link" href="/qrcodes/add" data-path="/qrcodes/add">Добавить коды</a>
+            <a class="sidebar__link" href="/qrcodes/list" data-path="/qrcodes/list">Получить коды</a>
+        </div>
+    </div>
+
+    <div class="sidebar__group" data-group="complaints">
+        <button class="sidebar__head-btn" type="button">Жалобы <span class="sidebar__caret">&#9656;</span></button>
+        <div class="sidebar__list">
+            <a class="sidebar__link" href="/complaints" data-path="/complaints">Активные</a>
+            <a class="sidebar__link" href="/complaints/all" data-path="/complaints/all">Все</a>
+            <a class="sidebar__link" href="/complaints/new" data-path="/complaints/new">Новая жалоба</a>
+            <a class="sidebar__link" href="/complaints/search" data-path="/complaints/search">Поиск по обращениям</a>
+            <a class="sidebar__link" href="/complaints/tags" data-path="/complaints/tags">Теги</a>
+        </div>
+    </div>
+
+    <div class="sidebar__group" data-group="ms">
+        <button class="sidebar__head-btn" type="button">МойСклад <span class="sidebar__caret">&#9656;</span></button>
+        <div class="sidebar__list">
+            <div class="sidebar__group sidebar__group--sub" data-group="ms-goods">
+                <button class="sidebar__head-btn" type="button">Продукция <span class="sidebar__caret">&#9656;</span></button>
+                <div class="sidebar__list">
+                    <a class="sidebar__link" href="/goods" data-path="/goods">Поиск</a>
+                    <a class="sidebar__link" href="/goods/tree" data-path="/goods/tree">Добавление</a>
+                    <a class="sidebar__link" href="/goods/availability" data-path="/goods/availability">Доступность товаров</a>
+                    <a class="sidebar__link" href="/goods/stock-report" data-path="/goods/stock-report">Отчёт по наличию</a>
+                    <a class="sidebar__link" href="/goods/return" data-path="/goods/return">Возврат в продажу</a>
+                </div>
+            </div>
+            <div class="sidebar__group sidebar__group--sub" data-group="ms-suppliers">
+                <button class="sidebar__head-btn" type="button">Поставщики <span class="sidebar__caret">&#9656;</span></button>
+                <div class="sidebar__list">
+                    <a class="sidebar__link" href="/ms/suppliers" data-path="/ms/suppliers">Поставщики</a>
+                    <a class="sidebar__link" href="/ms/suppliers/new" data-path="/ms/suppliers/new">Добавить поставщика</a>
+                </div>
+            </div>
+            <a class="sidebar__link sidebar__link--top" href="/ms/receive" data-path="/ms/receive">Приёмка</a>
+            <div class="sidebar__group sidebar__group--sub" data-group="ms-orders">
+                <button class="sidebar__head-btn" type="button">Заказы <span class="sidebar__caret">&#9656;</span></button>
+                <div class="sidebar__list">
+                    <a class="sidebar__link" href="/ms/orders" data-path="/ms/orders">Заказы</a>
+                    <a class="sidebar__link" href="/ms/orders/pick" data-path="/ms/orders/pick">Подобрать</a>
+                </div>
+            </div>
+            <div class="sidebar__group sidebar__group--sub" data-group="ms-dates">
+                <button class="sidebar__head-btn" type="button">Сроки <span class="sidebar__caret">&#9656;</span></button>
+                <div class="sidebar__list">
+                    <a class="sidebar__link" href="/ms/dates" data-path="/ms/dates">Сроки</a>
+                    <a class="sidebar__link" href="/ms/dates/short" data-path="/ms/dates/short">Шорт-лист</a>
+                    <a class="sidebar__link" href="/ms/dates/update" data-path="/ms/dates/update">Обновить сроки</a>
+                </div>
+            </div>
+        </div>
+    </div>
+</nav>
+<script src="/static/nav.js"></script>
     <h1>Сверка с перевозчиком</h1>
     <p>Загрузите реестр перевозчика (xlsx) и выберите период, за который выполнялась доставка. Кнопка
         «Провести сверку» появится после выбора файла и периода.</p>
