@@ -40,20 +40,12 @@
         {{if .Error}}<div class="error">{{.Error}}</div>{{end}}
 
         <div id="scanner" style="{{if .Error}}display:none;{{end}}">
-            <div id="batch-bb-row" style="display:none;">
-                <label>Дата выработки партии</label>
-                <input type="date" id="batch-pd">
-                <label>Срок годности партии</label>
-                <input type="date" id="batch-bb">
-                <div class="hint">Заполняются обе даты или ни одной. Введённые даты партии перекрывают даты из кода
-                    (расхождение подсветится); пусто — даты берутся из кода.</div>
+            <div id="party-row">
+                <button type="button" class="small" id="add-party-btn" onclick="addParty()">+ Партия</button>
+                <span class="hint">Партия — это даты (выработка + срок) и строки товара. Товар и вес берутся из кода,
+                    даты — из кода, если в партии не заполнены. Сканы идут в активную партию (по умолчанию — Партия 1).</span>
             </div>
-            <div id="block-row">
-                <button type="button" class="small" onclick="addBlock()">+ блок ручного ввода</button>
-                <span class="hint">Блок — для товара, который не читается кодом: выбираете позицию и обе даты,
-                    веса вводите построчно. Сканы идут в активный блок.</span>
-            </div>
-            <div id="block-hint" class="hint" style="display:none;"></div>
+            <div id="party-hint" class="hint" style="display:none;"></div>
             <label>Скан (товары и коробки — вперемешку)</label>
             <input type="text" id="scan-input" class="scan-input" autocomplete="off" autofocus
                    placeholder="штрих-код товара или коробки...">
@@ -66,6 +58,11 @@
 
             <div id="scans"></div>
 
+            <div id="add-party-bottom">
+                <button type="button" class="small" onclick="addParty()">+ Партия</button>
+                <span class="hint">Новая партия — свои даты и свой список строк. Сканы идут в неё же.</span>
+            </div>
+
             <button id="save-btn" onclick="saveReceive()">Сохранить приёмку</button>
         </div>
 
@@ -75,21 +72,19 @@
     <script>
         var CACHE = null;         // кеш приёмки: грузится JSON-запросом ниже
         var SUPPLIER_ID = {{if .Supplier}}'{{.Supplier.ID}}'{{else}}''{{end}};
-        var items = [];           // элементы страницы по порядку: карточки, коробки, блоки
-        var activeBlock = null;   // блок ручного ввода, в который идут сканы (null — обычные карточки)
+        var items = [];           // элементы страницы по порядку: карточки, коробки, партии
+        var activeParty = null;   // партия, в которую идут сканы (Партия 1 создаётся при инициализации)
         var boxMode = false;      // идёт сбор содержимого коробки
         var lastUnits = [];       // принятые куски из ответа Save — для этикеток
-        var blockSeq = 0;         // нумерация блоков ручного ввода
+        var partySeq = 0;         // нумерация партий
 
         var scanInput = document.getElementById('scan-input');
         var scansBox = document.getElementById('scans');
         var boxHint = document.getElementById('box-hint');
-        var blockHint = document.getElementById('block-hint');
+        var partyHint = document.getElementById('party-hint');
         var reportBox = document.getElementById('report');
         var statusLine = document.getElementById('status-line');
-        var batchBBRow = document.getElementById('batch-bb-row');
-        var batchBB = document.getElementById('batch-bb');
-        var batchPD = document.getElementById('batch-pd');
+        var scannerEl = document.getElementById('scanner');
 
         // Громкий бип: Web Audio (если есть), иначе скрытый <audio> с wav.
         var beepCtx = null;
@@ -127,6 +122,136 @@
             return s.substr(4, 4) + '-' + s.substr(2, 2) + '-' + s.substr(0, 2);
         }
 
+        // fmtDateRu — эхо даты из ISO: '2026-09-10' → '10.09.2026' (пусто → пусто).
+        function fmtDateRu(iso) {
+            if (!iso || iso.length !== 10) { return ''; }
+            return iso.substr(8, 2) + '.' + iso.substr(5, 2) + '.' + iso.substr(0, 4);
+        }
+
+        // ==== Ручной ввод даты цифрами (ддммгггг) ===========================
+        // Нативный <input type=date> трактует сегменты по ЛОКАЛИ браузера
+        // (en → mm/dd/yyyy) — «10092026» даёт 09.10 вместо 10.09. Поэтому
+        // перехватываем цифры на ЛЮБОМ поле даты приёмки и пишем ISO сами.
+        var dateBuf = '';
+        var dateBufEl = null;
+
+        function isDateInput(el) {
+            return !!el && el.tagName === 'INPUT' && el.type === 'date';
+        }
+
+        // parseDMY: 8 цифр (или '10.09.2026') → 'YYYY-MM-DD'; null — дата не
+        // существует или вне допуска (год <2000 / >2100).
+        function parseDMY(s) {
+            if (!s) { return null; }
+            var dg = String(s).replace(/\D/g, '');
+            if (dg.length !== 8) { return null; }
+            var d = parseInt(dg.substr(0, 2), 10);
+            var mo = parseInt(dg.substr(2, 2), 10);
+            var y = parseInt(dg.substr(4, 4), 10);
+            if (y < 2000 || y > 2100 || mo < 1 || mo > 12 || d < 1) { return null; }
+            var leap = (y % 4 === 0 && y % 100 !== 0) || (y % 400 === 0);
+            var mdays = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+            if (d > mdays[mo - 1]) { return null; }
+            var p = function (n) { return (n < 10 ? '0' : '') + n; };
+            return y + '-' + p(mo) + '-' + p(d);
+        }
+
+        // applyIsoDate — присвоить значение и эмулировать change (createEvent).
+        function applyIsoDate(el, iso) {
+            el.value = iso;
+            var ev = null;
+            try {
+                ev = document.createEvent('HTMLEvents');
+                ev.initEvent('change', true, false);
+            } catch (e1) {
+                try {
+                    ev = new window.Event('change', {bubbles: true, cancelable: false});
+                } catch (e2) { ev = null; }
+            }
+            if (ev) { el.dispatchEvent(ev); }
+        }
+
+        function dateDigit(kc, key) {
+            if (key && key.length === 1 && key >= '0' && key <= '9') { return key; }
+            if (kc >= 48 && kc <= 57) { return String(kc - 48); }
+            if (kc >= 96 && kc <= 105) { return String(kc - 96); }
+            return '';
+        }
+
+        function commitDateDigits(el) {
+            var iso = parseDMY(dateBuf);
+            var shown = dateBuf.substr(0, 2) + '.' + dateBuf.substr(2, 2) + '.' + dateBuf.substr(4, 4);
+            dateBuf = '';
+            dateBufEl = null;
+            if (iso) {
+                applyIsoDate(el, iso);
+            } else {
+                el.value = '';
+                applyIsoDate(el, '');
+                statusLine.textContent = 'Дата ' + shown + ' не существует — вводите ддммгггг, например 10092026';
+            }
+        }
+
+        // Делегированный keydown: цифры копим в буфере (preventDefault), на 8-й
+        // цифре пишем ISO + change. Backspace/Escape — сбрасывают буфер и поле.
+        // Tab/стрелки/Enter не трогаем — нативный календарь работает как раньше.
+        function onDateKeydown(e) {
+            var el = e.target || e.srcElement;
+            if (!isDateInput(el)) { return; }
+            if (dateBufEl !== el) { dateBuf = ''; dateBufEl = el; }
+            var kc = e.keyCode || e.which || 0;
+            var key = e.key || '';
+            var dg = dateDigit(kc, key);
+            if (dg) {
+                dateBuf += dg;
+                if (e.preventDefault) { e.preventDefault(); }
+                if (dateBuf.length >= 8) { commitDateDigits(el); }
+                return;
+            }
+            if (key === 'Backspace' || key === 'Delete' || key === 'Escape' || kc === 8 || kc === 46 || kc === 27) {
+                dateBuf = '';
+                dateBufEl = el;
+                el.value = '';
+                if (e.preventDefault) { e.preventDefault(); }
+                applyIsoDate(el, '');
+                return;
+            }
+            dateBuf = '';
+        }
+
+        // Вставка текста: 'ддммгггг' или 'дд.мм.гггг' → ISO.
+        function onDatePaste(e) {
+            var el = e.target || e.srcElement;
+            if (!isDateInput(el)) { return; }
+            var txt = '';
+            if (e.clipboardData && e.clipboardData.getData) {
+                txt = e.clipboardData.getData('text') || '';
+            } else if (window.clipboardData && window.clipboardData.getData) {
+                txt = window.clipboardData.getData('Text') || '';
+            }
+            if (!txt) { return; }
+            var iso = parseDMY(txt);
+            if (iso) {
+                dateBuf = '';
+                dateBufEl = null;
+                if (e.preventDefault) { e.preventDefault(); }
+                applyIsoDate(el, iso);
+                return;
+            }
+            if (String(txt).replace(/\D/g, '').length === 8) {
+                if (e.preventDefault) { e.preventDefault(); }
+                dateBuf = '';
+                dateBufEl = null;
+                el.value = '';
+                applyIsoDate(el, '');
+                statusLine.textContent = 'Вставленная дата не распознана — нужен формат ддммгггг или дд.мм.гггг';
+            }
+        }
+
+        scannerEl.addEventListener('keydown', onDateKeydown, false);
+        scannerEl.addEventListener('paste', onDatePaste, false);
+        // ===================================================================
+
         function sliceRule(rule, raw, i) {
             var f = rule.fields[i];
             if (!f || f.pos <= 0) { return null; }
@@ -137,7 +262,7 @@
 
         // resolveByRule вычитывает скан по правилу поставщика. Флаги _prod_code,
         // _w_code, _pd_code, _bb_code говорят, какие поля дал КОД (остальные —
-        // ручные: блок, строка, партия).
+        // ручные: партия, строка).
         function resolveByRule(rule, raw, kind) {
             var scan = {kind: kind, raw: raw, qty: 1};
             var code = sliceRule(rule, raw, 0);
@@ -220,9 +345,22 @@
             return (g / 1000).toFixed(3).replace(/\.?0+$/, '') + ' кг';
         }
 
-        function productSelect(selectedId, cls, handler) {
+        // findProduct — позиция каталога поставщика по id (для весовости/имени).
+        function findProduct(pid) {
+            if (!pid || !CACHE || !CACHE.products) { return null; }
+            var i;
+            for (i = 0; i < CACHE.products.length; i++) {
+                if (CACHE.products[i].product_id === pid) { return CACHE.products[i]; }
+            }
+            return null;
+        }
+
+        // productSelect: data-kind="product" обязателен — иначе диспетчер полей
+        // (cardField/partyField) молча ничего не делает. dataR — индекс строки.
+        function productSelect(selectedId, cls, handler, dataR) {
             var html = '<select class="' + (cls || 'fix-product') + '"' +
-                (handler ? ' data-kind="product" onchange="' + handler + '"' : '') + '>';
+                (handler ? ' data-kind="product" onchange="' + handler + '"' : '') +
+                (dataR === 0 || dataR ? ' data-r="' + dataR + '"' : '') + '>';
             html += '<option value="">— выберите позицию —</option>';
             var i, p;
             for (i = 0; i < CACHE.products.length; i++) {
@@ -234,22 +372,24 @@
             return html;
         }
 
-        // isWeighted: весовой ли товар. У строк блока товар берётся из шапки блока.
-        function isWeighted(it, block) {
+        // isWeighted: весовость из кода, иначе из товара, выбранного в строке.
+        function isWeighted(it, party) {
             var s = it.scan;
             if (s.weighted === true || s.weighted === false) { return s.weighted; }
-            return !!(block && block.weighted);
+            var pid = (it.manual && it.manual.product_id) || (party && party.product_id) || '';
+            var p = findProduct(pid);
+            return !!(p && p.weighted);
         }
 
         // effDates — действующие даты: у внутренних кодов всегда из кода; у
-        // внешних ручное (блок/строка) перекрывает код, иначе берём код.
-        function effDates(it, block) {
+        // внешних ручное (строка/партия) перекрывает код, иначе берём код.
+        function effDates(it, party) {
             var s = it.scan;
             var m = it.manual || {};
             var out = {pd: s.produced_on || null, bb: s.best_before || null, manual: false, conflict: false};
             if (s.internal) { return out; }
-            var pd = m.produced_on || (block && block.pd) || batchPD.value || '';
-            var bb = m.best_before || (block && block.bb) || batchBB.value || '';
+            var pd = m.produced_on || (party && party.pd) || '';
+            var bb = m.best_before || (party && party.bb) || '';
             if (pd) {
                 out.manual = true;
                 out.conflict = !!(s.produced_on && s.produced_on !== pd);
@@ -291,7 +431,9 @@
                         fixes += '<div class="fix">Товар коробки не определён: ' +
                             productSelect(m.product_id || '', 'fix-product', 'cardField(this)') + '</div>';
                     } else {
-                        fixes += '<div class="hint">Внешний код ' + esc(s._code_unknown || '') +
+                        fixes += '<div class="fix">Код не заведён — выберите позицию: ' +
+                            productSelect(m.product_id || '', 'fix-product', 'cardField(this)') + '</div>' +
+                            '<div class="hint">Внешний код ' + esc(s._code_unknown || '') +
                             ' не заведён у поставщика: добавьте его на карточке поставщика и нажмите «Обновить данные поставщика».</div>';
                     }
                 }
@@ -303,12 +445,19 @@
                 }
                 if (!e.bb) {
                     cls += ' missing';
-                    fixes += '<div class="fix">Срок не в коде: <input type="date" class="fix-bb" value="' +
-                        esc(m.best_before || '') + '" data-kind="bb" onchange="cardField(this)"></div>';
                 }
-                if (!e.pd && s.kind === 'item') {
+                // Поля дат показываем всегда, когда код их не дал, — чтобы эхо
+                // «дд.мм.гггг» оставалось видимым и перестановку день/месяц было
+                // видно сразу, а не только в момент ввода.
+                if (!s._bb_code) {
+                    fixes += '<div class="fix">Срок не в коде: <input type="date" class="fix-bb" value="' +
+                        esc(m.best_before || '') + '" data-kind="bb" onchange="cardField(this)">' +
+                        ' <span class="date-echo" style="color:#66645C;">' + fmtDateRu(m.best_before) + '</span></div>';
+                }
+                if (!s._pd_code && s.kind === 'item') {
                     fixes += '<div class="fix">Выработка (необязательно): <input type="date" class="fix-pd" value="' +
-                        esc(m.produced_on || '') + '" data-kind="pd" onchange="cardField(this)"></div>';
+                        esc(m.produced_on || '') + '" data-kind="pd" onchange="cardField(this)">' +
+                        ' <span class="date-echo" style="color:#66645C;">' + fmtDateRu(m.produced_on) + '</span></div>';
                 }
             }
 
@@ -320,7 +469,7 @@
                 html += '<div class="name">' + esc(s.name || '???') + (s.kind === 'box' ? ' — коробка' : '') + '</div>';
                 html += '<div class="meta">' + (meta || 'данные не вычитываются') +
                     ' <span class="mismatch" style="display:' + (it.mismatch || e.conflict ? 'inline' : 'none') + '">' +
-                    (e.conflict ? 'даты ≠ партии/блока' : 'расхождение!') + '</span></div>';
+                    (e.conflict ? 'даты ≠ партии' : 'расхождение!') + '</span></div>';
             }
             html += fixes;
 
@@ -342,43 +491,54 @@
             return html;
         }
 
-        // blockCard — блок ручного ввода: шапка (товар + обе даты) и строки кусков.
-        function blockCard(b) {
-            var cls = 'scan-card block' + (b === activeBlock ? ' active' : '');
+        // partyCard — партия: только даты (выработка + срок) и строки. Товар и
+        // вес берутся из кода, для строк без кода — из select ПО СТРОКЕ.
+        function partyCard(b) {
+            var cls = 'scan-card block party' + (b === activeParty ? ' active' : '');
             var html = '<div class="' + cls + '">';
             html += '<button type="button" class="small danger remove" onclick="removeItem(this)">✕</button>';
-            html += '<div class="name">Блок ' + b.id + ': ' + esc(b.name || 'товар не выбран') +
-                (b === activeBlock ? ' — активен' : '') + '</div>';
-            html += '<div class="fix">Товар: ' + productSelect(b.product_id, 'block-product', 'blockField(this)') + '</div>';
-            html += '<div class="fix">Выработка: <input type="date" class="block-pd" value="' + esc(b.pd || '') +
-                '" data-kind="pd" onchange="blockField(this)"> Срок годности: <input type="date" class="block-bb" value="' +
-                esc(b.bb || '') + '" data-kind="bb" onchange="blockField(this)"></div>';
-            html += '<div class="hint">Введённые даты блока перекрывают код (расхождение подсветится); заполняются оба поля или ни одного. Веса — построчно, в граммах.</div>';
+            html += '<div class="name">Партия ' + b.id + (b === activeParty ? ' — активна' : '') + '</div>';
+            html += '<div class="fix">Выработка: <input type="date" class="party-pd" data-kind="pd" value="' +
+                esc(b.pd || '') + '" onchange="partyField(this)">' +
+                ' <span class="date-echo" style="color:#66645C;">' + fmtDateRu(b.pd) + '</span>' +
+                ' &nbsp;Срок годности: <input type="date" class="party-bb" data-kind="bb" value="' +
+                esc(b.bb || '') + '" onchange="partyField(this)">' +
+                ' <span class="date-echo" style="color:#66645C;">' + fmtDateRu(b.bb) + '</span></div>';
+            html += '<div class="hint">Пусто — даты берутся из кода (заполняются обе даты или ни одной). ' +
+                'Введённые даты партии перекрывают код (расхождение подсветится). Товар и вес — из кода, ' +
+                'для строк без кода — из строки.</div>';
 
-            var i, row, s, e;
+            var i, row, s, e, rpid, mp;
             for (i = 0; i < b.rows.length; i++) {
                 row = b.rows[i];
-                s = row.scan;
+                s = row.scan || {};
                 e = effDates(row, b);
+                rpid = (row.manual && row.manual.product_id) || s.product_id || '';
+                mp = findProduct(rpid);
                 html += '<div class="child-row">' +
-                    '<span class="cname">#' + (i + 1) + ' ' + (s.unrecognized ? 'код не распознан' : esc(s.name || '—')) + '</span>' +
+                    '<span class="cname">#' + (i + 1) + ' ' +
+                    (s.unrecognized ? 'код не распознан' : esc(s.name || (mp ? mp.name : '—'))) + '</span>' +
                     '<span class="cmeta">' + (s.weight_g ? fmtWeight(s.weight_g) + ' · ' : '') + esc(e.bb || '—') +
-                    (e.conflict ? ' <span class="mismatch">даты ≠ ' + (b.bb ? 'блока' : 'партии') + '</span>' : '') +
+                    (e.conflict ? ' <span class="mismatch">даты ≠ кода</span>' : '') +
                     (s._code_unknown ? ' <span class="mismatch">код ' + esc(s._code_unknown) + ' не заведён</span>' : '') +
                     '</span>';
+                if (!s._prod_code) {
+                    html += productSelect(rpid, 'row-product', 'partyField(this)', i);
+                }
                 if (isWeighted(row, b) && !s.weight_g) {
                     html += '<input type="number" class="row-weight" min="1" placeholder="граммы" value="' +
                         esc(row.manual && row.manual.weight_g || '') +
-                        '" data-kind="weight" data-r="' + i + '" onchange="blockField(this)">';
+                        '" data-kind="weight" data-r="' + i + '" onchange="partyField(this)">';
                 }
                 html += '<button type="button" class="small danger" data-r="' + i + '" onclick="removeRow(this)">✕</button></div>';
             }
             html += '<div class="fix">';
-            html += '<button type="button" class="small" onclick="blockAddRow(this)">+ строка</button> ';
-            if (b === activeBlock) {
-                html += '<button type="button" class="small" onclick="deactivateBlock()">Завершить блок</button>';
+            html += '<button type="button" class="small" onclick="addRowToParty(this)">+ строка</button> ';
+            html += '<button type="button" class="small" onclick="addParty()">+ Партия</button> ';
+            if (b === activeParty) {
+                html += '<button type="button" class="small" onclick="deactivateParty()">Завершить партию</button>';
             } else {
-                html += '<button type="button" class="small" onclick="activateBlock(this)">Сканировать в этот блок</button>';
+                html += '<button type="button" class="small" onclick="activateParty(this)">Сканировать в эту партию</button>';
             }
             html += '</div></div>';
             return html;
@@ -388,16 +548,15 @@
             var html = '';
             var i;
             for (i = 0; i < items.length; i++) {
-                html += items[i].kind === 'block' ? blockCard(items[i]) : scanCard(items[i]);
+                html += items[i].kind === 'party' ? partyCard(items[i]) : scanCard(items[i]);
             }
             scansBox.innerHTML = html;
             boxHint.style.display = boxMode ? 'block' : 'none';
-            if (activeBlock) {
-                blockHint.style.display = 'block';
-                blockHint.innerHTML = 'Активен блок ' + activeBlock.id + ' (' +
-                    esc(activeBlock.name || 'товар не выбран') + '): сканы идут в него.';
+            if (activeParty) {
+                partyHint.style.display = 'block';
+                partyHint.innerHTML = 'Активна Партия ' + activeParty.id + ': сканы идут в неё.';
             } else {
-                blockHint.style.display = 'none';
+                partyHint.style.display = 'none';
             }
             scanInput.focus();
         }
@@ -413,7 +572,7 @@
             var idx = itemIndexFromDom(btn);
             if (idx < 0) { return; }
             var it = items[idx];
-            if (it === activeBlock) { activeBlock = null; }
+            if (it === activeParty) { activeParty = null; }
             items.splice(idx, 1);
             if (boxMode && items.length === 0) { boxMode = false; }
             render();
@@ -453,8 +612,8 @@
             render();
         }
 
-        // blockField — поля шапки блока и веса строк.
-        function blockField(el) {
+        // partyField — поля шапки партии (даты) и строк (товар, вес строки).
+        function partyField(el) {
             var idx = itemIndexFromDom(el);
             if (idx < 0) { return; }
             var b = items[idx];
@@ -464,18 +623,19 @@
             if (!isNaN(r) && kind === 'weight') {
                 b.rows[r].manual = b.rows[r].manual || {};
                 b.rows[r].manual.weight_g = v ? parseInt(v, 10) : null;
+            } else if (!isNaN(r) && kind === 'product') {
+                b.rows[r].manual = b.rows[r].manual || {};
+                b.rows[r].manual.product_id = v || null;
             } else if (kind === 'pd') {
                 b.pd = v || '';
             } else if (kind === 'bb') {
                 b.bb = v || '';
-            } else if (kind === 'product') {
-                applyBlockProduct(b, v || '');
             }
             render();
         }
 
         // applyProductToScan подставляет выбранный товар прямо в скан: нужно
-        // коробке (и строке без кода товара), у которой товар не вычитается.
+        // коробке (и строке), у которой товар не вычитывается кодом.
         function applyProductToScan(scan, productId) {
             var i, p;
             scan.product_id = '';
@@ -495,58 +655,33 @@
             }
         }
 
-        function applyBlockProduct(b, productId) {
-            b.product_id = productId;
-            b.internal_code = '';
-            b.name = '';
-            b.weighted = false;
-            var i, p;
-            for (i = 0; i < CACHE.products.length; i++) {
-                p = CACHE.products[i];
-                if (p.product_id === productId) {
-                    b.internal_code = p.internal_code;
-                    b.name = p.name;
-                    b.weighted = p.weighted;
-                    break;
-                }
-            }
-        }
-
-        function blockAddRow(btn) {
+        function addRowToParty(btn) {
             var idx = itemIndexFromDom(btn);
             if (idx < 0) { return; }
             items[idx].rows.push({scan: {kind: 'item', raw: '', unrecognized: true}, manual: {}});
             render();
         }
 
-        function activateBlock(btn) {
+        function activateParty(btn) {
             var idx = itemIndexFromDom(btn);
             if (idx < 0) { return; }
-            activeBlock = items[idx];
+            activeParty = items[idx];
             render();
         }
 
-        function deactivateBlock() {
-            activeBlock = null;
+        function deactivateParty() {
+            activeParty = null;
             render();
         }
 
-        function addBlock() {
-            var b = {
-                kind: 'block', id: ++blockSeq,
-                product_id: '', internal_code: '', name: '', weighted: false,
-                pd: '', bb: '', rows: []
-            };
+        // Партия — только даты и строки; товар берётся из кода или из строки.
+        function addParty() {
+            var b = {kind: 'party', id: ++partySeq, pd: '', bb: '', rows: []};
             items.push(b);
-            activeBlock = b;
+            activeParty = b;
             render();
             return b;
         }
-
-        // Даты партии: перекрывают код у внешних сканов, поэтому просто перерисовываем
-        // (действующие даты и расхождения считаются в effDates).
-        batchBB.addEventListener('change', function () { render(); });
-        batchPD.addEventListener('change', function () { render(); });
 
         function boxTotalWeight(it) {
             var total = 0;
@@ -568,10 +703,10 @@
             if (raw === '666') {
                 if (boxMode && items.length) {
                     var last = items[items.length - 1];
-                    if (last.scan.kind === 'box' && last.children.length === 0) {
+                    if (last.scan && last.scan.kind === 'box' && last.children.length === 0) {
                         last.error = 'В коробке нет отсканированных товаров';
                         boxMode = false;
-                    } else if (last.scan.kind === 'box') {
+                    } else if (last.scan && last.scan.kind === 'box') {
                         finishBox(last);
                         return;
                     }
@@ -602,22 +737,8 @@
                 return;
             }
 
-            // Код не распознан полностью — строка ручного ввода в блоке.
-            if (resolved.error) {
-                var b = activeBlock || addBlock();
-                b.rows.push({scan: {kind: 'item', raw: '', unrecognized: true}, manual: {}});
-                statusLine.textContent = 'Код не распознан полностью — выберите товар и даты в блоке, введите вес';
-                beep();
-                render();
-                return;
-            }
-
-            if (resolved.kind === 'box') {
-                if (activeBlock) {
-                    statusLine.textContent = 'Коробка не идёт в блок ручного ввода — завершите блок и сканируйте снова';
-                    beep();
-                    return;
-                }
+            // Коробка — обычная карточка (в партию коробку не кладём, отказ снят).
+            if (!resolved.error && resolved.kind === 'box') {
                 if (resolved.needs_product) {
                     beep();
                     statusLine.textContent = 'Код коробки не заведён у поставщика — выберите товар на карточке коробки ' +
@@ -629,58 +750,57 @@
                 return;
             }
 
-            if (activeBlock) {
-                if (resolved.product_id && activeBlock.product_id && resolved.product_id !== activeBlock.product_id) {
-                    statusLine.textContent = 'Не товар блока (' + (activeBlock.name || '—') + '): ' +
-                        (resolved.name || '?') + ' — ввод не принят';
-                    beep();
-                    return;
-                }
-                if (!activeBlock.product_id && resolved.product_id) {
-                    applyBlockProduct(activeBlock, resolved.product_id);
-                }
-                activeBlock.rows.push({scan: resolved, manual: {}});
-                if (resolved.needs_product) {
-                    statusLine.textContent = 'Внешний код ' + (resolved._code_unknown || '') +
-                        ' не заведён у поставщика — выберите товар блока или добавьте код на карточке поставщика';
-                    beep();
-                }
-                render();
-                return;
-            }
-
-            // Товар не вычитывается правилом — открываем новый блок под него.
-            if (resolved.needs_product) {
-                var nb = addBlock();
-                nb.rows.push({scan: resolved, manual: {}});
-                statusLine.textContent = 'Позиция не определена — выберите товар блока (сканы ниже пойдут в него)';
+            // Код не распознан полностью — строка без raw в активной партии.
+            if (resolved.error) {
+                var p = activeParty || addParty();
+                p.rows.push({scan: {kind: 'item', raw: '', unrecognized: true}, manual: {}});
+                statusLine.textContent = 'Код не распознан полностью — выберите товар строки и даты партии, введите вес';
                 beep();
                 render();
                 return;
             }
 
+            // Любой распознанный товар можно направить в активную партию — отказ
+            // «чужой товар → бип» снят: товар/вес/даты берутся из кода, даты —
+            // код, иначе партия (ручное перекрывает код).
+            if (activeParty) {
+                activeParty.rows.push({scan: resolved, manual: {}});
+                if (resolved.needs_product) {
+                    statusLine.textContent = 'Внешний код ' + (resolved._code_unknown || '') +
+                        ' не заведён у поставщика — выберите товар строки или добавьте код на карточке поставщика';
+                    beep();
+                }
+                render();
+                return;
+            }
+
+            // Активной партии нет (завершена) — обычная карточка скана.
+            if (resolved.needs_product) {
+                beep();
+                statusLine.textContent = 'Позиция не определена — выберите товар коробки/строки ' +
+                    'или создайте партию («+ Партия»)';
+            }
             items.push({scan: resolved, children: []});
             render();
         }
 
         // collectItem собирает запись для Save: код + ручные значения. Ручное
         // всегда перекрывает вычитанное; у внутренних кодов ручное не отправляем.
-        function collectItem(it, block) {
+        function collectItem(it, party) {
             var s = it.scan;
             var m = it.manual || {};
             var out = {};
             if (s.raw) { out.raw = s.raw; }
             if (!s._prod_code) {
-                var pid = m.product_id || (block && block.product_id) || '';
+                var pid = m.product_id || (party && party.product_id) || '';
                 if (pid) { out.manual_product_id = pid; }
             }
-            if (isWeighted(it, block) && m.weight_g) { out.manual_weight_g = m.weight_g; }
+            if (isWeighted(it, party) && m.weight_g) { out.manual_weight_g = m.weight_g; }
             if (s.internal) { return out; }
-            // Даты: на сервер уходят только ручные значения (карточка, блок,
-            // партия) — они перекрывают код. Если ручных нет, даты берутся из
-            // кода и второй раз не передаются.
-            var pd = m.produced_on || (block && block.pd) || batchPD.value || '';
-            var bb = m.best_before || (block && block.bb) || batchBB.value || '';
+            // Даты: на сервер уходят только ручные значения (строка, партия) —
+            // они перекрывают код. Если ручных нет, даты берутся из кода.
+            var pd = m.produced_on || (party && party.pd) || '';
+            var bb = m.best_before || (party && party.bb) || '';
             if (pd) { out.manual_produced_on = pd; }
             if (bb) { out.manual_best_before = bb; }
             return out;
@@ -692,29 +812,30 @@
             var i, j;
             var problems = [];
 
-            if ((batchPD.value && !batchBB.value) || (!batchPD.value && batchBB.value)) {
-                problems.push('Даты партии: заполните обе — выработку и срок годности');
-            }
-
             for (i = 0; i < items.length; i++) {
                 var it = items[i];
 
-                if (it.kind === 'block') {
-                    if (!it.product_id) { problems.push('Блок ' + it.id + ': не выбран товар'); continue; }
+                if (it.kind === 'party') {
                     if ((it.pd && !it.bb) || (!it.pd && it.bb)) {
-                        problems.push('Блок ' + it.id + ': заполните обе даты — выработку и срок годности'); continue;
+                        problems.push('Партия ' + it.id + ': заполните обе даты — выработку и срок годности'); continue;
                     }
-                    if (!it.rows.length) { problems.push('Блок ' + it.id + ': нет строк'); continue; }
+                    if (!it.rows.length) { problems.push('Партия ' + it.id + ': нет строк'); continue; }
                     var ok = true;
                     for (j = 0; j < it.rows.length && ok; j++) {
                         var row = it.rows[j];
-                        var e = effDates(row, it);
-                        if (!e.bb) {
-                            problems.push('Блок ' + it.id + ', строка ' + (j + 1) + ': не указан срок годности');
+                        var rm = row.manual || {};
+                        if (!row.scan.product_id && !rm.product_id) {
+                            problems.push('Партия ' + it.id + ', строка ' + (j + 1) +
+                                ': не выбран товар — выберите позицию в строке');
                             ok = false; break;
                         }
-                        if (isWeighted(row, it) && !(row.manual && row.manual.weight_g) && !row.scan.weight_g) {
-                            problems.push('Блок ' + it.id + ', строка ' + (j + 1) + ': не указан вес в граммах');
+                        var re = effDates(row, it);
+                        if (!re.bb) {
+                            problems.push('Партия ' + it.id + ', строка ' + (j + 1) + ': не указан срок годности');
+                            ok = false; break;
+                        }
+                        if (isWeighted(row, it) && !rm.weight_g && !row.scan.weight_g) {
+                            problems.push('Партия ' + it.id + ', строка ' + (j + 1) + ': не указан вес в граммах');
                             ok = false; break;
                         }
                         scans.push(collectItem(row, it));
@@ -892,13 +1013,13 @@
                     return;
                 }
                 CACHE = fresh;
-                batchBBRow.style.display = CACHE.bb_batch ? 'block' : 'none';
                 var i, j, it;
                 for (i = 0; i < items.length; i++) {
                     it = items[i];
-                    if (it.kind === 'block') {
-                        if (it.product_id) { continue; } // товар выбран руками — блок не пересобираем
+                    if (it.kind === 'party') {
                         for (j = 0; j < it.rows.length; j++) {
+                            // ручной товар строки не перерезолвливаем
+                            if (it.rows[j].manual && it.rows[j].manual.product_id) { continue; }
                             if (it.rows[j].scan.needs_product) { reResolveRow(it.rows[j], it); }
                         }
                         continue;
@@ -927,13 +1048,11 @@
             it.manual = null;
         }
 
-        // Пересчитывает строку блока: товар мог появиться у поставщика. Товар блока
-        // не выбран — подставим его из кода (ручной выбор оператора не трогаем).
-        function reResolveRow(row, block) {
+        // Пересчитывает строку партии: товар мог появиться у поставщика.
+        function reResolveRow(row) {
             var r = resolveScan(row.scan.raw);
             if (r.error) { return; }
             row.scan = r;
-            if (!block.product_id && r.product_id) { applyBlockProduct(block, r.product_id); }
         }
 
         // Кеш приёмки грузится отдельным запросом (страница без него работает:
@@ -952,9 +1071,6 @@
                         return;
                     }
                     scanInput.disabled = false;
-                    if (CACHE.bb_batch) {
-                        batchBBRow.style.display = 'block';
-                    }
                     statusLine.textContent = 'Кеш готов: ' + (CACHE.by_external ? Object.keys(CACHE.by_external).length : 0) + ' внешних кодов, ' +
                         (CACHE.by_code ? Object.keys(CACHE.by_code).length : 0) + ' товаров каталога';
                     render();
@@ -965,6 +1081,10 @@
             xhr.send();
         }
 
+        // Партия №1 существует ВСЕГДА и активна: пустые даты = «даты из кода».
+        // Прежняя статичная пара дат на всю приёмку удалена — её значения
+        // переезжают сюда (при инициализации поля были пусты, переносить нечего).
+        addParty();
         if (SUPPLIER_ID) {
             scanInput.disabled = true;
             statusLine.textContent = 'Загружаю кеш приёмки…';
