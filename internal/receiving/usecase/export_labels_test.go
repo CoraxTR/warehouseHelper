@@ -18,6 +18,7 @@ func TestNewLabelsWorkbook(t *testing.T) {
 		{
 			InternalCode: "00210003",
 			ProductName:  "Стейк Рибай",
+			Weighted:     true,
 			WeightG:      1250,
 			ProducedOn:   &prod,
 			BestBefore:   exp,
@@ -28,6 +29,7 @@ func TestNewLabelsWorkbook(t *testing.T) {
 			// пропускаем, не ломая блоки соседних.
 			InternalCode: "00210003",
 			ProductName:  "Стейк Рибай",
+			Weighted:     true,
 			WeightG:      980,
 			ProducedOn:   nil,
 			BestBefore:   exp,
@@ -35,6 +37,7 @@ func TestNewLabelsWorkbook(t *testing.T) {
 		{
 			InternalCode: "10210003",
 			ProductName:  "Фарш",
+			Weighted:     true,
 			WeightG:      1,
 			ProducedOn:   &prod,
 			BestBefore:   exp,
@@ -122,5 +125,49 @@ func TestNewLabelsWorkbook_AllSkipped(t *testing.T) {
 	defer func() { _ = f.Close() }()
 	if labels != 0 {
 		t.Errorf("labels = %d, want 0", labels)
+	}
+}
+
+func TestNewLabelsWorkbook_PieceGoodsWeightSentinel(t *testing.T) {
+	prod := time.Date(2026, time.August, 29, 0, 0, 0, 0, time.UTC)
+	exp := time.Date(2026, time.September, 29, 0, 0, 0, 0, time.UTC)
+
+	// Штучный товар принимается без веса (WeightG 0): в штрих-код этикетки
+	// уходит sentinelWeightG (1 г) — иначе EncodeItem отвергнет код и кусок
+	// остался бы без этикетки. В подписи веса у штучного нет.
+	f, labels, err := newLabelsWorkbook([]receiving.Unit{
+		{
+			InternalCode: "00210010",
+			ProductName:  "Хлеб Бородинский",
+			Weighted:     false,
+			WeightG:      0,
+			ProducedOn:   &prod,
+			BestBefore:   exp,
+		},
+	})
+	if err != nil {
+		t.Fatalf("newLabelsWorkbook error: %v", err)
+	}
+	defer func() { _ = f.Close() }()
+	if labels != 1 {
+		t.Fatalf("labels = %d, want 1", labels)
+	}
+
+	buf, err := f.WriteToBuffer()
+	if err != nil {
+		t.Fatalf("WriteToBuffer error: %v", err)
+	}
+	got, err := excelize.OpenReader(bytes.NewReader(buf.Bytes()))
+	if err != nil {
+		t.Fatalf("OpenReader error: %v", err)
+	}
+	defer func() { _ = got.Close() }()
+	sheet := got.GetSheetName(0)
+
+	if v, _ := got.GetCellValue(sheet, "B1"); v != "00210010000012908202629092026" {
+		t.Errorf("B1 = %q, want код с sentinel-весом 1 г", v)
+	}
+	if v, _ := got.GetCellValue(sheet, "B3"); v != "Хлеб Бородинский до 29.09.2026" {
+		t.Errorf("B3 = %q, want подпись без веса", v)
 	}
 }

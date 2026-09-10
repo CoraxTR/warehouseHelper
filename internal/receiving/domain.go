@@ -80,6 +80,7 @@ type DecodedScan struct {
 	ProductID       string
 	InternalCode    string
 	ProductName     string
+	Weighted        bool   // весовой товар (uom кг/г/т): только ему обязателен вес
 	WeightG         *int64 // граммы; nil — не резолвнуто (для весового — обязательно)
 	Qty             int64  // кусок = 1, коробка = кол-во вложений (из кода; 0 — не резолвнуто)
 	ProducedOn      *time.Time
@@ -130,6 +131,7 @@ type Unit struct {
 	ProductID    string     `json:"product_id"`
 	InternalCode string     `json:"internal_code"`
 	ProductName  string     `json:"name"`
+	Weighted     bool       `json:"weighted"` // весовой товар: отчёт в кг, вес идёт в статистику
 	WeightG      int64      `json:"weight_g"`
 	ProducedOn   *time.Time `json:"produced_on"`
 	BestBefore   time.Time  `json:"best_before"`

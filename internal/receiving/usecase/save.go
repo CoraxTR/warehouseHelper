@@ -64,7 +64,9 @@ func (uc *ReceivingUseCase) Save(ctx context.Context, req receiving.SaveRequest)
 	// веса; предупреждения его синков уходят в отчёт приёмки.
 	var rows []avgweight.WeightRow
 	for _, u := range units {
-		if u.WeightG > 0 {
+		// Веса — только весовых товаров: у штучных вес не спрашивают и в
+		// статистику среднего веса не пишут.
+		if u.Weighted && u.WeightG > 0 {
 			rows = append(rows, avgweight.WeightRow{ProductID: u.ProductID, WeightG: u.WeightG})
 		}
 	}
@@ -149,7 +151,10 @@ func (uc *ReceivingUseCase) resolveBox(ctx context.Context, cache *receiving.Cac
 	if box.DeclaredQty != nil && *box.DeclaredQty != actualQty {
 		box.Mismatch = true
 	}
-	if box.DeclaredWeightG != nil && *box.DeclaredWeightG != totalWeight {
+	// Вес сверяем только у весовых товаров: у штучных веса нет (в коде
+	// коробки он может быть заявлен, но сверить его нечем).
+	weightedChildren := len(units) > 0 && units[0].Weighted
+	if weightedChildren && box.DeclaredWeightG != nil && *box.DeclaredWeightG != totalWeight {
 		box.Mismatch = true
 	}
 	for i := range units {
@@ -171,13 +176,16 @@ func (uc *ReceivingUseCase) resolveBox(ctx context.Context, cache *receiving.Cac
 }
 
 // validateUnitScan проверяет обязательные поля куска: товар, срок годности
-// (правило/ручной ввод), для весового — вес.
+// (правило/ручной ввод); вес — только весовому товару (штучным не нужен).
 func validateUnitScan(s *receiving.DecodedScan) error {
 	if s.ProductID == "" || s.InternalCode == "" {
 		return errors.New("не определён товар")
 	}
 	if s.BestBefore == nil {
 		return errors.New("не указан срок годности — задайте вручную")
+	}
+	if !s.Weighted {
+		return nil
 	}
 	if s.WeightG == nil {
 		return errors.New("не указан вес — задайте вручную")
@@ -194,6 +202,7 @@ func unitOf(s *receiving.DecodedScan, inBox, boxMismatch bool) receiving.Unit {
 		ProductID:    s.ProductID,
 		InternalCode: s.InternalCode,
 		ProductName:  s.ProductName,
+		Weighted:     s.Weighted,
 		WeightG:      deref(s.WeightG),
 		ProducedOn:   s.ProducedOn,
 		BestBefore:   *s.BestBefore,
@@ -247,17 +256,17 @@ func buildReport(units []receiving.Unit) []receiving.ReportRow {
 		k := key{u.ProductName, u.BestBefore.Format(time.DateOnly)}
 		row, ok := agg[k]
 		if !ok {
-			row = &receiving.ReportRow{ProductName: u.ProductName, BestBefore: k.date}
+			row = &receiving.ReportRow{ProductName: u.ProductName, BestBefore: k.date, Weighted: u.Weighted}
 			agg[k] = row
 			order = append(order, k)
 		}
 		row.Qty++
-		row.QtyKg += float64(u.WeightG) / 1000.0
+		if u.Weighted {
+			row.QtyKg += float64(u.WeightG) / 1000.0
+		}
 	}
 
-	// Штучные товары: вес = 1 единица → qty в штуках, кг не показываем.
-	// (Отличие штучных от весовых — WeightG 0 в единицах штучных товаров,
-	// приёмка штучных идёт без весов.)
+	// Штучные товары идут без весов: в отчёте — штуки, у весовых — килограммы.
 	rows := make([]receiving.ReportRow, 0, len(agg))
 	for _, k := range order {
 		rows = append(rows, *agg[k])
