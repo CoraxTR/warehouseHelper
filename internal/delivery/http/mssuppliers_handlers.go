@@ -53,6 +53,12 @@ type SupplierFormData struct {
 
 	Barcodes []receiving.BarcodeRef // виджет «Внешние коды» (приёмка)
 
+	// ExpandBarcodes — раскрыть виджет кодов сразу при загрузке (?barcodes=1):
+	// после батчевого добавления оператор возвращается ВНУТРЬ виджета, а не
+	// наверх страницы. Кнопка-тоггл при этом продолжает работать.
+	ExpandBarcodes bool
+	Message        string // инфо-сообщение (например, результат батча кодов)
+
 	Error string
 }
 
@@ -109,8 +115,12 @@ func (h *Handler) SupplierEdit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	d := buildSupplierFormData(s, true, "", "")
+	// err/msg приходят из PRG-редиректов (батч кодов, удаление кода);
+	// barcodes=1 раскрывает виджет кодов сразу при заходе.
+	d := buildSupplierFormData(s, true, "", r.URL.Query().Get("err"))
 	d.Barcodes = h.loadSupplierBarcodes(r, s.ID)
+	d.Message = r.URL.Query().Get("msg")
+	d.ExpandBarcodes = r.URL.Query().Get("barcodes") == "1"
 
 	h.renderSupplierForm(w, d)
 }
