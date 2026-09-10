@@ -5,6 +5,11 @@
     <meta charset="UTF-8">
     <title>Заказ — МойСклад</title>
     <link rel="stylesheet" href="/static/raven-guard.css">
+    <style>
+        /* Подытог группы и итог заказа — мелким шрифтом; вне строк подбора. */
+        tr.group-total td { font-size: 12px; color: #666; padding-top: 0; }
+        tr.order-total td { font-size: 12px; font-weight: bold; border-top: 2px solid #999; }
+    </style>
 </head>
 
 <body>
@@ -34,6 +39,7 @@
                 <th>Внутр. артикул</th>
                 <th>Кол-во (вес)</th>
                 <th>Цена</th>
+                <th>Сумма</th>
                 <th>Резерв</th>
                 <th>Подбор</th>
             </tr>
@@ -43,6 +49,7 @@
             <tr class="order-row{{if and .HasCode (gt .GroupSize 1)}} merge-row{{end}}"
                 data-id="{{.ID}}" data-code="{{.Code}}" data-hascode="{{if .HasCode}}1{{else}}0{{end}}"
                 data-weighted="{{if .Weighted}}1{{else}}0{{end}}" data-qty="{{.Qty}}"
+                data-price="{{printf "%.0f" .Price}}"
                 data-group="{{.Group}}" data-gsize="{{.GroupSize}}"
                 data-reserve="{{.Reserve}}"
                 data-active="{{if .Active}}1{{else}}0{{end}}" data-canrepick="{{if .CanRepick}}1{{else}}0{{end}}">
@@ -50,6 +57,7 @@
                 <td class="mono">{{if .HasCode}}{{.Code}}{{else}}—{{end}}</td>
                 <td class="cell-qty">{{.QtyText}}</td>
                 <td class="cell-price">{{.PriceText}}</td>
+                <td class="cell-sum">{{.SumText}}</td>
                 <td class="cell-reserve">{{.ReserveText}}</td>
                 <td class="cell-action">
                     {{if .Active}}
@@ -62,7 +70,15 @@
                     {{end}}
                 </td>
             </tr>
+            {{if .GroupLast}}
+            <tr class="group-total" data-group="{{.Group}}">
+                <td colspan="7">итого: {{.GroupQtyText}}</td>
+            </tr>
             {{end}}
+            {{end}}
+            <tr class="order-total">
+                <td colspan="7">Общий вес заказа: {{.Order.TotalWeightText}} · Общая сумма: {{.Order.TotalSumText}}{{if gt .Order.WeightMissingPositions 0}} · без {{.Order.WeightMissingPositions}} поз. — нет среднего веса{{end}}</td>
+            </tr>
         </tbody>
     </table>
     <p id="order-status" class="hint"></p>
@@ -95,6 +111,7 @@
                     hascode: tr.getAttribute('data-hascode') === '1',
                     weighted: tr.getAttribute('data-weighted') === '1',
                     qty: parseFloat(tr.getAttribute('data-qty')) || 0,
+                    price: parseFloat(tr.getAttribute('data-price')) || 0,
                     group: parseInt(tr.getAttribute('data-group'), 10) || 0,
                     gsize: parseInt(tr.getAttribute('data-gsize'), 10) || 0,
                     reserve: parseFloat(tr.getAttribute('data-reserve')) || 0,
@@ -170,6 +187,11 @@
 
             // ---- форматирование чисел (запятая) ----
             function num(s) { return String(s).replace('.', ','); }
+
+            // Копейки → «2790,00» (тот же формат, что серверный moneyText).
+            function fmtMoneyText(copeck) {
+                return num((copeck / 100).toFixed(2));
+            }
 
             function fmtKgText(grams) {
                 var kg = (grams / 1000).toFixed(3);
@@ -363,6 +385,22 @@
 
                 var qtyCell = first.tr.querySelector('.cell-qty');
                 if (qtyCell) { qtyCell.textContent = fmtQtyText(totalQty, first.weighted); }
+
+                // Сумма смёрженной строки = цена × Σ qty (округление как у
+                // серверного moneyInt: int64(x+0.5)).
+                var sumCell = first.tr.querySelector('.cell-sum');
+                if (sumCell) {
+                    sumCell.textContent = fmtMoneyText(Math.floor(first.price * totalQty + 0.5));
+                }
+
+                // Подытог группы больше не нужен — смёрженная строка несёт Σ сама.
+                var groupTotals = document.querySelectorAll('tr.group-total');
+                for (var m = 0; m < groupTotals.length; m++) {
+                    if (groupTotals[m].getAttribute('data-group') === String(g)) {
+                        groupTotals[m].style.display = 'none';
+                    }
+                }
+
                 var picked = first.tr.querySelector('.picked');
                 if (picked) { picked.textContent = rowPickedText(first); }
 

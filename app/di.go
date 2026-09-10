@@ -462,6 +462,12 @@ func (a orderCatalogAdapter) LoadCatalogProductsByCodes(ctx context.Context, cod
 	return out, nil
 }
 
+// LoadProductAverageWeights — средние веса штучных товаров (кг) по products.id;
+// PGClient отдаёт примитивы, msorders использует их как есть.
+func (a orderCatalogAdapter) LoadProductAverageWeights(ctx context.Context, productIDs []string) (map[string]float64, error) {
+	return a.pg.LoadProductAverageWeights(ctx, productIDs)
+}
+
 // ReturnsUC — «Возврат в продажу»: наблюдатель журнала действий МС (audit)
 // и страница расформирования отменённых/урезанных заказов. PGClient
 // реализует Repo (return_events/return_cursor) и Catalog (чтение products),

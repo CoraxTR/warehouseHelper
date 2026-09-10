@@ -187,3 +187,41 @@ func (pg *PGClient) UpdateProductAverageWeight(ctx context.Context, productID st
 
 	return nil
 }
+
+// LoadProductAverageWeights возвращает средние веса штучных товаров (кг) по
+// списку products.id (average_weight — NUMERIC(12,4) КГ). Товары без заданного
+// или неположительного веса в карту не попадают — вызывающий считает их
+// пропусками (общий вес заказа). Только примитивы: модульные типы usecase здесь
+// не импортируются (конвертацию делает DI-адаптер в app/di.go).
+func (pg *PGClient) LoadProductAverageWeights(ctx context.Context, productIDs []string) (map[string]float64, error) {
+	out := make(map[string]float64, len(productIDs))
+	if len(productIDs) == 0 {
+		return out, nil
+	}
+
+	rows, err := pg.Pool.Query(ctx, `
+        SELECT id, average_weight
+        FROM products
+        WHERE id = ANY($1) AND average_weight IS NOT NULL AND average_weight > 0
+    `, productIDs)
+	if err != nil {
+		return nil, fmt.Errorf("load product average weights: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			id     string
+			weight float64
+		)
+		if err := rows.Scan(&id, &weight); err != nil {
+			return nil, fmt.Errorf("load product average weights: %w", err)
+		}
+		out[id] = weight
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("load product average weights: %w", err)
+	}
+
+	return out, nil
+}

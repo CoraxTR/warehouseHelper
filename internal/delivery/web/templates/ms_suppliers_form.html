@@ -15,6 +15,7 @@
     <h1>{{if .IsEdit}}Поставщик: {{.Supplier.Name}}{{else}}Новый поставщик{{end}}</h1>
 
     {{if .Error}}<p class="error">{{.Error}}</p>{{end}}
+    {{if .Message}}<p class="ok">{{.Message}}</p>{{end}}
 
     <form method="POST" action="/ms/suppliers/save">
         <input type="hidden" name="mode" value="{{if .IsEdit}}edit{{else}}create{{end}}">
@@ -118,7 +119,7 @@
         <button type="button" class="barcodes-toggle" onclick="toggleBarcodes()">
             Внешние коды поставщика ({{len .Barcodes}})
         </button>
-        <div id="barcodes-section" style="display:none;">
+        <div id="barcodes-section" style="display:{{if .ExpandBarcodes}}block{{else}}none{{end}};">
             {{if .Barcodes}}
             <table class="barcodes-table">
                 <tr><th>Внешний код</th><th>Товар</th><th></th></tr>
@@ -141,15 +142,23 @@
             <p class="readonly-hint">Связок нет. Добавьте внешний код товара поставщика — по нему приёмка распознает штрихкоды.</p>
             {{end}}
 
-            <form method="POST" action="/ms/receive/barcodes/add" class="barcodes-add">
+            <form method="POST" action="/ms/receive/barcodes/add" class="barcodes-add" id="barcodes-add-form">
                 <input type="hidden" name="supplier_id" value="{{.Supplier.ID}}">
-                <label>Внешний код (базовая часть штрихкода, вручную)</label>
-                <input type="text" name="external_code" required placeholder="например 123456">
-                <label>Товар (поиск по названию или внутреннему коду)</label>
-                <input type="text" id="product-search" autocomplete="off" placeholder="введите 3+ символа">
-                <input type="hidden" name="product_id" id="product-id">
-                <div id="product-results"></div>
-                <button type="submit">Добавить</button>
+                <label>Новые внешние коды <span class="readonly-hint">(внешний код — базовая часть штрихкода, вручную; товар — поиск по названию или внутреннему коду, 3+ символа)</span></label>
+                <div id="barcode-rows">
+                    <div class="barcode-row">
+                        <input type="text" name="external_code" class="barcode-code" autocomplete="off" placeholder="например 123456">
+                        <input type="text" class="product-search" autocomplete="off" placeholder="товар: введите 3+ символа">
+                        <input type="hidden" name="product_id" class="barcode-product-id" value="">
+                        <button type="button" class="btn-remove barcode-remove" title="Удалить строку">−</button>
+                        <div class="product-results barcode-results"></div>
+                    </div>
+                </div>
+                <div class="barcode-actions">
+                    <button type="button" id="barcode-add-row" class="secondary">+ строка</button>
+                    <button type="submit">Добавить коды</button>
+                </div>
+                <p class="readonly-hint">Можно добавить несколько кодов за раз: «+ строка» добавляет пустую строку, «−» убирает. Все строки уходят одним сохранением.</p>
             </form>
         </div>
     </div>
@@ -159,19 +168,108 @@
 
     {{if .IsEdit}}
     <script>
+        // Виджет «Внешние коды»: батчевый ввод. Строки #barcode-rows уходят
+        // ОДНИМ POST на /ms/receive/barcodes/add параллельными массивами
+        // external_code[] / product_id[] (парная сборка — на сервере,
+        // receiving.PairCodeRows). Атрибут required на динамических строках
+        // не работает — валидация своя, здесь и на сервере.
         function toggleBarcodes() {
             var section = document.getElementById('barcodes-section');
             section.style.display = section.style.display === 'none' ? 'block' : 'none';
         }
 
         (function () {
-            var search = document.getElementById('product-search');
-            var results = document.getElementById('product-results');
-            var productID = document.getElementById('product-id');
+            var rowsBox = document.getElementById('barcode-rows');
+            if (!rowsBox) {
+                return;
+            }
+
+            var form = document.getElementById('barcodes-add-form');
             var xhr = null;
 
-            function doSearch() {
-                var q = search.value.trim();
+            function trim(s) {
+                return String(s).replace(/^\s+|\s+$/g, '');
+            }
+
+            function rowElements() {
+                return rowsBox.getElementsByClassName('barcode-row');
+            }
+
+            // createRow — заготовка строки (статичная разметка, без данных
+            // пользователя). Поля: external_code, поиск товара, hidden product_id.
+            function createRow() {
+                var row = document.createElement('div');
+                row.className = 'barcode-row';
+                row.innerHTML = '' +
+                    '<input type="text" name="external_code" class="barcode-code" autocomplete="off" placeholder="например 123456">' +
+                    '<input type="text" class="product-search" autocomplete="off" placeholder="товар: введите 3+ символа">' +
+                    '<input type="hidden" name="product_id" class="barcode-product-id" value="">' +
+                    '<button type="button" class="btn-remove barcode-remove" title="Удалить строку">−</button>' +
+                    '<div class="product-results barcode-results"></div>';
+                return row;
+            }
+
+            // Подсветка «непарной» строки (класс — строкой, ES5 без classList).
+            function setRowError(row, on) {
+                row.className = row.className.replace(/\s*bar-error/g, '');
+                if (on) {
+                    row.className += ' bar-error';
+                }
+            }
+
+            function bindRow(row) {
+                var codeInput = row.getElementsByClassName('barcode-code')[0];
+                var search = row.getElementsByClassName('product-search')[0];
+                var idInput = row.getElementsByClassName('barcode-product-id')[0];
+                var results = row.getElementsByClassName('barcode-results')[0];
+                var removeBtn = row.getElementsByClassName('barcode-remove')[0];
+
+                removeBtn.onclick = function () {
+                    if (rowElements().length > 1) {
+                        rowsBox.removeChild(row);
+                    } else {
+                        // Последнюю строку не убираем — чистим поля.
+                        codeInput.value = '';
+                        search.value = '';
+                        idInput.value = '';
+                        results.innerHTML = '';
+                        setRowError(row, false);
+                    }
+                };
+
+                var timer = null;
+                search.addEventListener('input', function () {
+                    // Ручная правка текста сбрасывает выбранный товар.
+                    idInput.value = '';
+                    setRowError(row, false);
+                    if (timer) {
+                        clearTimeout(timer);
+                    }
+                    timer = setTimeout(function () { doSearch(search, results); }, 300);
+                });
+
+                codeInput.addEventListener('input', function () {
+                    setRowError(row, false);
+                });
+
+                results.addEventListener('click', function (e) {
+                    var hit = e.target;
+                    while (hit && hit !== results && !hit.getAttribute('data-id')) {
+                        hit = hit.parentNode;
+                    }
+                    if (!hit || hit === results) {
+                        return;
+                    }
+                    // Заполняем hidden ТОЛЬКО своей строки.
+                    idInput.value = hit.getAttribute('data-id');
+                    search.value = hit.getAttribute('data-name');
+                    results.innerHTML = '';
+                    setRowError(row, false);
+                });
+            }
+
+            function doSearch(search, results) {
+                var q = trim(search.value);
                 if (q.length < 3) {
                     results.innerHTML = '';
                     return;
@@ -191,36 +289,126 @@
                     } catch (e) {
                         return;
                     }
-                    var html = '';
-                    for (var i = 0; i < items.length; i++) {
-                        html += '<div class="product-hit" data-id="' + items[i].id + '">' +
-                            items[i].name + ' <span class="readonly-hint">[' + items[i].internal_code + ']</span></div>';
-                    }
-                    results.innerHTML = html || '<div class="readonly-hint">Ничего не найдено</div>';
+                    renderHits(results, items);
                 };
                 xhr.send();
             }
 
-            var timer = null;
-            search.addEventListener('input', function () {
-                if (timer) {
-                    clearTimeout(timer);
-                }
-                timer = setTimeout(doSearch, 300);
-            });
-
-            results.addEventListener('click', function (e) {
-                var hit = e.target;
-                while (hit && hit !== results && !hit.getAttribute('data-id')) {
-                    hit = hit.parentNode;
-                }
-                if (!hit || hit === results) {
+            // renderHits рисует подсказки каталога. Имя товара — пользовательский
+            // текст: только createElement/textContent/setAttribute, никакого
+            // innerHTML (старый рендер подсказок в этом шаблоне был DOM-XSS).
+            function renderHits(results, items) {
+                results.innerHTML = '';
+                if (!items.length) {
+                    var empty = document.createElement('div');
+                    empty.className = 'readonly-hint';
+                    empty.textContent = 'Ничего не найдено';
+                    results.appendChild(empty);
                     return;
                 }
-                productID.value = hit.getAttribute('data-id');
-                search.value = hit.textContent.replace(/\[[^\]]*\]/, '').trim();
-                results.innerHTML = '';
-            });
+                for (var i = 0; i < items.length; i++) {
+                    var div = document.createElement('div');
+                    div.className = 'product-hit';
+                    div.setAttribute('data-id', items[i].id);
+                    div.setAttribute('data-name', items[i].name);
+                    div.textContent = items[i].name;
+                    var code = document.createElement('span');
+                    code.className = 'readonly-hint';
+                    code.textContent = '[' + items[i].internal_code + ']';
+                    div.appendChild(code);
+                    results.appendChild(div);
+                }
+            }
+
+            function addRow() {
+                var row = createRow();
+                rowsBox.appendChild(row);
+                bindRow(row);
+                return row;
+            }
+
+            // collectPayload — параллельные массивы только по НЕПУСТЫМ строкам:
+            // полностью пустые строки пропускаются, длины массивов совпадают.
+            function collectPayload() {
+                var rows = rowElements();
+                var codes = [];
+                var products = [];
+                for (var i = 0; i < rows.length; i++) {
+                    var code = trim(rows[i].getElementsByClassName('barcode-code')[0].value);
+                    var pid = trim(rows[i].getElementsByClassName('barcode-product-id')[0].value);
+                    if (code === '' && pid === '') {
+                        continue;
+                    }
+                    codes.push(code);
+                    products.push(pid);
+                }
+                return { codes: codes, products: products };
+            }
+
+            // validateRows подсвечивает строки, где заполнено не всё.
+            function validateRows() {
+                var rows = rowElements();
+                var bad = 0;
+                var filled = 0;
+                for (var i = 0; i < rows.length; i++) {
+                    var code = trim(rows[i].getElementsByClassName('barcode-code')[0].value);
+                    var pid = trim(rows[i].getElementsByClassName('barcode-product-id')[0].value);
+                    if (code === '' && pid === '') {
+                        setRowError(rows[i], false);
+                        continue;
+                    }
+                    filled++;
+                    if (code === '' || pid === '') {
+                        setRowError(rows[i], true);
+                        bad++;
+                    }
+                }
+                return { bad: bad, filled: filled };
+            }
+
+            // dropEmptyRows: пустые строки не должны попасть в POST.
+            function dropEmptyRows() {
+                var rows = rowElements();
+                for (var i = rows.length - 1; i >= 0; i--) {
+                    var row = rows[i];
+                    var code = trim(row.getElementsByClassName('barcode-code')[0].value);
+                    var pid = trim(row.getElementsByClassName('barcode-product-id')[0].value);
+                    if (code === '' && pid === '') {
+                        rowsBox.removeChild(row);
+                    }
+                }
+            }
+
+            document.getElementById('barcode-add-row').onclick = function () {
+                addRow();
+            };
+
+            form.onsubmit = function () {
+                var v = validateRows();
+                if (v.filled === 0) {
+                    alert('Добавьте хотя бы одну строку: внешний код и товар из подсказок.');
+                    return false;
+                }
+                if (v.bad > 0) {
+                    alert('В подсвеченных строках заполнено не всё: нужны и внешний код, и товар.');
+                    return false;
+                }
+                dropEmptyRows();
+                return true;
+            };
+
+            // Тестовые хуки jsdom (окно браузера их не использует).
+            window.barcodeRowsForTest = {
+                addRow: addRow,
+                collectPayload: collectPayload,
+                validateRows: validateRows,
+                rows: rowElements
+            };
+
+            var initial = rowElements();
+            for (var i = 0; i < initial.length; i++) {
+                bindRow(initial[i]);
+            }
         })();
     </script>
     {{end}}

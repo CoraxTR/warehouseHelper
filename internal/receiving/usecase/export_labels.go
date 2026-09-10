@@ -27,7 +27,7 @@ import (
 // каждого блока.
 const (
 	labelsFontSize = 9
-	labelsColWidth = 30.0
+	labelsColWidth = 30.71
 	labelsImgRowH  = 35.0
 	// Ширина штрих-кода: barcode.Scale не ужимает Code128 ниже естественной
 	// ширины. Для 29-значного кода (Code128C) она 211 px — в прототипе было

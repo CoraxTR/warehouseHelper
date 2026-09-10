@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
 	"strings"
 	"testing"
 
@@ -94,6 +95,12 @@ func (f *fakeOrderDetail) rawRows() ([]json.RawMessage, error) {
 type fakeCatalog struct {
 	byCode map[string]CatalogProduct
 	err    error
+	// avgWeights — средние веса (кг) по products.id для LoadProductAverageWeights.
+	avgWeights map[string]float64
+	avgErr     error
+	// avgIDs — id, переданные в последний вызов LoadProductAverageWeights
+	// (проверка, что весовые позиции не запрашиваются).
+	avgIDs []string
 }
 
 func (f *fakeCatalog) LoadCatalogProductsByCodes(_ context.Context, _ []string) (map[string]CatalogProduct, error) {
@@ -101,6 +108,17 @@ func (f *fakeCatalog) LoadCatalogProductsByCodes(_ context.Context, _ []string) 
 		return nil, f.err
 	}
 	return f.byCode, nil
+}
+
+func (f *fakeCatalog) LoadProductAverageWeights(_ context.Context, productIDs []string) (map[string]float64, error) {
+	f.avgIDs = productIDs
+	if f.avgErr != nil {
+		return nil, f.avgErr
+	}
+	if f.avgWeights == nil {
+		return map[string]float64{}, nil
+	}
+	return f.avgWeights, nil
 }
 
 func detailOrder() *client.MSOrder {
@@ -379,6 +397,191 @@ func TestDetailRowTopupStates(t *testing.T) {
 		}
 		if r.Reserve != w.reserve {
 			t.Errorf("%s: Reserve = %v, want %v (data-reserve для клиента)", w.id, r.Reserve, w.reserve)
+		}
+	}
+}
+
+// sumCatalog — каталог тестов сумм: штучный p1 (код 21110001) и весовой p2
+// (код 00220002).
+func sumCatalog() *fakeCatalog {
+	return &fakeCatalog{byCode: map[string]CatalogProduct{
+		"21110001": {ProductID: "p1", InternalCode: "21110001"},
+		"00220002": {ProductID: "p2", InternalCode: "00220002", Weighted: true},
+	}}
+}
+
+// TestDetailSumsWeightsAndTotals — сумма строки (Price×Qty, копейки через
+// moneyInt), общий вес (Σ кг весовых + Σ шт×средний вес) и общая сумма.
+func TestDetailSumsWeightsAndTotals(t *testing.T) {
+	pieceAndWeighted := []client.MSPosition{
+		position("piece", "21110001", "Хлеб", 3, 1116000, 0),   // 3 шт × 11160,00 = 33480,00
+		position("wgh", "00220002", "Стейк", 0.367, 279000, 0), // 0,367 кг × 2790,00 = 1023,93
+	}
+
+	tests := []struct {
+		name            string
+		positions       []client.MSPosition
+		avgWeights      map[string]float64
+		avgErr          error
+		wantSums        map[string]string // id строки → SumText
+		wantTotalSum    string
+		wantTotalWeight string
+		wantMissing     int
+	}{
+		{
+			name:            "штучная и весовая: средний вес есть",
+			positions:       pieceAndWeighted,
+			avgWeights:      map[string]float64{"p1": 0.15},
+			wantSums:        map[string]string{"piece": "33480,00", "wgh": "1023,93"},
+			wantTotalSum:    "34503,93",
+			wantTotalWeight: "0,817 кг", // 3×0,15 + 0,367
+			wantMissing:     0,
+		},
+		{
+			name:            "штучная без среднего веса в вес не входит",
+			positions:       pieceAndWeighted,
+			avgWeights:      map[string]float64{},
+			wantSums:        map[string]string{"piece": "33480,00", "wgh": "1023,93"},
+			wantTotalSum:    "34503,93",
+			wantTotalWeight: "0,367 кг",
+			wantMissing:     1,
+		},
+		{
+			name:            "ошибка чтения веса не роняет страницу",
+			positions:       pieceAndWeighted,
+			avgErr:          errors.New("db down"),
+			wantSums:        map[string]string{"piece": "33480,00", "wgh": "1023,93"},
+			wantTotalSum:    "34503,93",
+			wantTotalWeight: "0,367 кг",
+			wantMissing:     1,
+		},
+		{
+			name: "нормализация копеек (float-хвосты)",
+			positions: []client.MSPosition{
+				position("w1", "00220002", "Стейк", 0.2, 279000, 0), // 55800.00000000001 → 558,00
+				position("w2", "00220002", "Стейк", 0.2, 279000, 0),
+			},
+			avgWeights:      map[string]float64{},
+			wantSums:        map[string]string{"w1": "558,00", "w2": "558,00"},
+			wantTotalSum:    "1116,00",
+			wantTotalWeight: "0,4 кг",
+			wantMissing:     0,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			catalog := sumCatalog()
+			catalog.avgWeights = tc.avgWeights
+			catalog.avgErr = tc.avgErr
+			uc := NewUseCase(&fakeOrderDetail{order: detailOrder(), positions: tc.positions}, catalog, &fakePicker{})
+
+			order, err := uc.Detail(context.Background(), "id")
+			if err != nil {
+				t.Fatalf("Detail() error: %v", err)
+			}
+
+			byID := make(map[string]OrderItem, len(order.Rows))
+			for i := range order.Rows {
+				byID[order.Rows[i].ID] = order.Rows[i]
+			}
+			for id, want := range tc.wantSums {
+				if got := byID[id].SumText; got != want {
+					t.Errorf("SumText[%s] = %q, want %q", id, got, want)
+				}
+			}
+			if order.TotalSumText != tc.wantTotalSum {
+				t.Errorf("TotalSumText = %q, want %q", order.TotalSumText, tc.wantTotalSum)
+			}
+			if order.TotalWeightText != tc.wantTotalWeight {
+				t.Errorf("TotalWeightText = %q, want %q", order.TotalWeightText, tc.wantTotalWeight)
+			}
+			if order.WeightMissingPositions != tc.wantMissing {
+				t.Errorf("WeightMissingPositions = %d, want %d", order.WeightMissingPositions, tc.wantMissing)
+			}
+		})
+	}
+}
+
+// TestDetailAverageWeightOnlyForPieces — AverageWeightKg проставляется только
+// по штучным строкам; весовые id в чтение веса не уходят.
+func TestDetailAverageWeightOnlyForPieces(t *testing.T) {
+	catalog := sumCatalog()
+	catalog.avgWeights = map[string]float64{"p1": 0.15}
+	positions := []client.MSPosition{
+		position("piece", "21110001", "Хлеб", 3, 1116000, 0),
+		position("wgh", "00220002", "Стейк", 0.367, 279000, 0),
+	}
+	uc := NewUseCase(&fakeOrderDetail{order: detailOrder(), positions: positions}, catalog, &fakePicker{})
+
+	order, err := uc.Detail(context.Background(), "id")
+	if err != nil {
+		t.Fatalf("Detail() error: %v", err)
+	}
+	if len(catalog.avgIDs) != 1 || catalog.avgIDs[0] != "p1" {
+		t.Errorf("LoadProductAverageWeights ids = %v, want [p1] (весовые не запрашиваются)", catalog.avgIDs)
+	}
+
+	byID := make(map[string]OrderItem, len(order.Rows))
+	for i := range order.Rows {
+		byID[order.Rows[i].ID] = order.Rows[i]
+	}
+	if aw := byID["piece"].AverageWeightKg; aw == nil || *aw != 0.15 {
+		t.Errorf("piece.AverageWeightKg = %v, want 0.15", aw)
+	}
+	if aw := byID["wgh"].AverageWeightKg; aw != nil {
+		t.Errorf("wgh.AverageWeightKg = %v, want nil (весовой вес уже в Qty)", *aw)
+	}
+}
+
+// TestDetailGroupSubtotals — подытог группы: Σ Qty по всем строкам группы,
+// GroupLast только у последней строки группы (под ней рендерится «итого»).
+func TestDetailGroupSubtotals(t *testing.T) {
+	positions := []client.MSPosition{
+		position("g1", "00220002", "Стейк", 0.367, 279000, 0),
+		position("g2", "00220002", "Стейк", 0.4, 279000, 0),
+		position("s1", "21110001", "Хлеб", 2, 30000, 0),
+		position("s2", "21110001", "Хлеб", 3, 30000, 0),
+	}
+	uc := NewUseCase(&fakeOrderDetail{order: detailOrder(), positions: positions}, sumCatalog(), &fakePicker{})
+
+	order, err := uc.Detail(context.Background(), "id")
+	if err != nil {
+		t.Fatalf("Detail() error: %v", err)
+	}
+	byID := make(map[string]OrderItem, len(order.Rows))
+	for i := range order.Rows {
+		byID[order.Rows[i].ID] = order.Rows[i]
+	}
+
+	want := []struct {
+		id        string
+		qtyText   string
+		qty       float64
+		groupLast bool
+		groupSize int
+	}{
+		{"g1", "0,767 кг", 0.767, false, 2},
+		{"g2", "0,767 кг", 0.767, true, 2},
+		{"s1", "5 шт", 5, false, 2},
+		{"s2", "5 шт", 5, true, 2},
+	}
+	for _, w := range want {
+		row, ok := byID[w.id]
+		if !ok {
+			t.Fatalf("строка %s не найдена", w.id)
+		}
+		if row.GroupQtyText != w.qtyText {
+			t.Errorf("%s: GroupQtyText = %q, want %q", w.id, row.GroupQtyText, w.qtyText)
+		}
+		if math.Abs(row.GroupQty-w.qty) > 1e-9 {
+			t.Errorf("%s: GroupQty = %v, want %v", w.id, row.GroupQty, w.qty)
+		}
+		if row.GroupLast != w.groupLast {
+			t.Errorf("%s: GroupLast = %v, want %v", w.id, row.GroupLast, w.groupLast)
+		}
+		if row.GroupSize != w.groupSize {
+			t.Errorf("%s: GroupSize = %d, want %d", w.id, row.GroupSize, w.groupSize)
 		}
 	}
 }

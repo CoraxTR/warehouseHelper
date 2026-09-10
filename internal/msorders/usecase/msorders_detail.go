@@ -57,6 +57,10 @@ type CatalogProduct struct {
 // адаптер типов в app/di.go.
 type CatalogReader interface {
 	LoadCatalogProductsByCodes(ctx context.Context, codes []string) (map[string]CatalogProduct, error)
+	// LoadProductAverageWeights — средние веса штучных товаров (кг) по их
+	// products.id: нужны для общего веса заказа (весовые уже в кг). Чтение
+	// вторичное: ошибка не должна ронять страницу подбора.
+	LoadProductAverageWeights(ctx context.Context, productIDs []string) (map[string]float64, error)
 }
 
 // Order — данные страницы заказа: шапка + позиции.
@@ -70,6 +74,14 @@ type Order struct {
 	DeliveryDate   string // плановая дата отгрузки, ДД.ММ.ГГГГ
 	Comment        string // описание заказа
 	Rows           []OrderItem
+	// TotalSumText — общая сумма заказа (Σ сумм строк), «33480,00».
+	TotalSumText string
+	// TotalWeightText — общий вес заказа (Σ кг весовых + Σ шт×средний вес),
+	// «12,345 кг». Позиции без среднего веса в вес не входят.
+	TotalWeightText string
+	// WeightMissingPositions — сколько штучных позиций не дали вклад в вес
+	// (нет среднего веса в каталоге или товар вне каталога).
+	WeightMissingPositions int
 }
 
 // OrderItem — позиция заказа, готовая к показу: количество и резерв уже
@@ -98,6 +110,20 @@ type OrderItem struct {
 	// находящаяся в резерве (reserve >= qty).
 	Active    bool
 	CanRepick bool
+	// Sum — сумма строки, копейки: Price × Qty (весовые — кг), округлено
+	// до целых копеек moneyInt. SumText — «1023,93».
+	Sum     float64
+	SumText string
+	// AverageWeightKg — средний вес штуки из каталога (кг); nil — не задан
+	// (позиция в общий вес не входит, счётчик WeightMissingPositions).
+	AverageWeightKg *float64
+	// GroupQty/GroupQtyText — подытог группы склейки (Σ Qty), показывается
+	// мелким шрифтом под последней строкой группы (GroupLast).
+	GroupQty     float64
+	GroupQtyText string
+	GroupLast    bool
+	// productID — products.id (для чтения среднего веса); в шаблон не выводится.
+	productID string
 }
 
 // Detail собирает страницу заказа: шапка, позиции с резолвом каталога,
@@ -123,6 +149,11 @@ func (uc *UseCase) Detail(ctx context.Context, id string) (*Order, error) {
 
 	rows := buildItems(entry.positions, entry.catalog)
 
+	// Средний вес штучных — отдельное вторичное чтение; сумма и общий вес
+	// считаются поверх строк (копейки — moneyInt, см. applyTotals).
+	weights := uc.loadAverageWeights(ctx, rows)
+	totalSum, totalWeight, missing := applyTotals(rows, weights)
+
 	agentName, agentPhone, _ := uc.ms.FetchOrderAgentByHREF(ctx, order)
 
 	return &Order{
@@ -135,6 +166,10 @@ func (uc *UseCase) Detail(ctx context.Context, id string) (*Order, error) {
 		DeliveryDate:   shortDate(order.DeliveryPlannedMoment),
 		Comment:        orDash(strings.TrimSpace(order.Description)),
 		Rows:           rows,
+
+		TotalSumText:           moneyText(totalSum),
+		TotalWeightText:        qtyWeightText(totalWeight),
+		WeightMissingPositions: missing,
 	}, nil
 }
 
@@ -198,11 +233,13 @@ func buildItems(positions []client.MSPosition, catalog map[string]CatalogProduct
 			ReserveText: reserveText,
 			Active:      inCatalog && (p.Reserve == 0 || (!weighted && p.Reserve < p.Quantity)),
 			CanRepick:   inCatalog && p.Reserve > 0 && (weighted || p.Reserve >= p.Quantity),
+			productID:   product.ProductID,
 		})
 	}
 
 	sortItems(items)
 	assignGroups(items)
+	assignGroupTotals(items)
 
 	return items
 }
@@ -234,6 +271,103 @@ func (uc *UseCase) loadCatalog(ctx context.Context, positions []client.MSPositio
 	}
 
 	return catalog, nil
+}
+
+// loadAverageWeights читает средние веса штучных товаров каталога (кг) по их
+// products.id. Весовые позиции вес уже несут в Qty — их id не запрашиваются.
+// Чтение вторичное: ошибка/пропуски НЕ роняют страницу — пустая карта, вес
+// позиции не считается (applyTotals учтёт её в WeightMissingPositions).
+func (uc *UseCase) loadAverageWeights(ctx context.Context, items []OrderItem) map[string]float64 {
+	ids := make([]string, 0, len(items))
+	seen := make(map[string]struct{}, len(items))
+	for i := range items {
+		id := items[i].productID
+		if items[i].Weighted || id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+
+	if len(ids) == 0 {
+		return map[string]float64{}
+	}
+
+	weights, err := uc.catalog.LoadProductAverageWeights(ctx, ids)
+	if err != nil {
+		return map[string]float64{}
+	}
+	if weights == nil {
+		return map[string]float64{}
+	}
+
+	return weights
+}
+
+// applyTotals считает суммы строк (копейки, округление moneyInt), общий вес
+// заказа и число штучных позиций без среднего веса. Весовые дают Qty кг,
+// штучные — Qty×AverageWeightKg; позиция без среднего веса в вес не входит.
+func applyTotals(items []OrderItem, weights map[string]float64) (totalSum, totalWeight float64, missing int) {
+	for i := range items {
+		it := &items[i]
+
+		sum := float64(moneyInt(it.Price * it.Qty))
+		it.Sum = sum
+		it.SumText = moneyText(sum)
+		totalSum += sum
+
+		if it.Weighted {
+			totalWeight += it.Qty
+			continue
+		}
+
+		avg, ok := weights[it.productID]
+		if it.productID == "" || !ok || avg <= 0 {
+			missing++
+			continue
+		}
+		weight := avg
+		it.AverageWeightKg = &weight
+		totalWeight += it.Qty * avg
+	}
+
+	return totalSum, totalWeight, missing
+}
+
+// assignGroupTotals проставляет подытоги групп склейки: суммарное количество
+// (текст по типу учёта группы) и признак последней строки группы — под ней
+// рендерится строка «итого». Строки вне групп — без подытога.
+func assignGroupTotals(items []OrderItem) {
+	qty := make(map[int]float64, len(items))
+	for i := range items {
+		if items[i].Group != 0 {
+			qty[items[i].Group] += items[i].Qty
+		}
+	}
+
+	for i := range items {
+		g := items[i].Group
+		if g == 0 {
+			continue
+		}
+		items[i].GroupQty = qty[g]
+		items[i].GroupQtyText = groupQtyText(items[i])
+		items[i].GroupLast = i == len(items)-1 || items[i+1].Group != g
+	}
+}
+
+// groupQtyText форматирует суммарное количество группы для строки-подытога
+// («4,367 кг» — весовые, «5 шт» — штучные). Тип учёта берётся из самой строки:
+// флаг управления в параметрах — control coupling (revive flag-parameter).
+func groupQtyText(it OrderItem) string {
+	if it.Weighted {
+		return qtyWeightText(it.GroupQty)
+	}
+
+	return qtyPiecesText(it.GroupQty)
 }
 
 // sortItems упорядочивает позиции: строки с внутренним кодом — группами по
