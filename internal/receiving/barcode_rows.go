@@ -33,10 +33,7 @@ func (r CodeRow) Valid() bool { return len(r.Errors) == 0 }
 //
 // Функция чистая — без обращений к БД/сети.
 func PairCodeRows(codes, productIDs []string) []CodeRow {
-	n := len(codes)
-	if len(productIDs) > n {
-		n = len(productIDs)
-	}
+	n := max(len(codes), len(productIDs))
 	if n == 0 {
 		return nil
 	}
@@ -53,10 +50,9 @@ func PairCodeRows(codes, productIDs []string) []CodeRow {
 
 		row := CodeRow{Row: i + 1, ExternalCode: code, ProductID: product}
 
-		switch {
-		case code == "":
+		if code == "" {
 			row.Errors = append(row.Errors, "товар без внешнего кода")
-		case product == "":
+		} else if product == "" {
 			row.Errors = append(row.Errors, "внешний код без товара")
 		}
 
