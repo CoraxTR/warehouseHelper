@@ -33,7 +33,7 @@ type FormsClient interface {
 // заказов, чьи бланки получить не удалось: они не роняют пачку, но и не
 // пропадают молча — вызывающий обязан сказать оператору.
 type FormPrinter interface {
-	GetMultipleOrdersPDF(ctx context.Context, ids []string) (string, []string, error)
+	GetMultipleOrdersPDF(ctx context.Context, ids []string) (path string, failed []string, err error)
 }
 
 // FormsUseCase — сценарии страницы «Печать бланков».
@@ -89,7 +89,7 @@ func (uc *FormsUseCase) FormsByDate(ctx context.Context, day time.Time) ([]FormR
 // PrintForms собирает бланки выделенных заказов в один PDF. Порядок печати —
 // порядок выделения (как в списке). id заказов, бланки которых получить не
 // удалось, возвращаются вызывающему, чтобы тот показал их оператору.
-func (uc *FormsUseCase) PrintForms(ctx context.Context, ids []string) (string, []string, error) {
+func (uc *FormsUseCase) PrintForms(ctx context.Context, ids []string) (path string, failed []string, err error) {
 	done := metrics.Track(trackPkg, "PrintForms")
 	defer done()
 
@@ -98,7 +98,7 @@ func (uc *FormsUseCase) PrintForms(ctx context.Context, ids []string) (string, [
 		return "", nil, ErrNoOrdersSelected
 	}
 
-	path, failed, err := uc.printer.GetMultipleOrdersPDF(ctx, ids)
+	path, failed, err = uc.printer.GetMultipleOrdersPDF(ctx, ids)
 	if err != nil {
 		return "", nil, fmt.Errorf("print forms: %w", err)
 	}

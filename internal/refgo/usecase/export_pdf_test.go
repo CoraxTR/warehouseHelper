@@ -24,7 +24,7 @@ func (f *fakeForms) GetOrderPDF(_ context.Context, _ string) (string, error) {
 	return f.orderPath, f.err
 }
 
-func (f *fakeForms) GetMultipleOrdersPDF(_ context.Context, _ []string) (string, []string, error) {
+func (f *fakeForms) GetMultipleOrdersPDF(_ context.Context, _ []string) (path string, skipped []string, err error) {
 	f.calls++
 
 	return f.path, f.skipped, f.err

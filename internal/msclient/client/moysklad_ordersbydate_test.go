@@ -10,7 +10,16 @@ import (
 	"time"
 )
 
+// customerOrderTestPath — путь списка заказов; тесты пакета используют
+// константу вместо литерала (goconst).
+const (
+	customerOrderTestPath = "/entity/customerorder"
+	// stateNameCancelled — имя статуса «Отменён» в ответах МС.
+	stateNameCancelled = "Отменен"
+)
+
 // stateHref собирает href статуса заказа — как его отдаёт МС.
+
 func stateHref(id string) string {
 	return "https://api.moysklad.ru/api/remap/1.2/entity/customerorder/metadata/states/" + id
 }
@@ -37,7 +46,7 @@ func TestFetchOrdersByDeliveryDate(t *testing.T) {
 			return
 		}
 
-		if r.URL.Path != "/entity/customerorder" {
+		if r.URL.Path != customerOrderTestPath {
 			t.Errorf("path = %s, want /entity/customerorder", r.URL.Path)
 		}
 
@@ -60,7 +69,7 @@ func TestFetchOrdersByDeliveryDate(t *testing.T) {
 				"deliveryPlannedMoment": "2026-09-10 10:00:00.000",
 				"state": map[string]any{
 					"meta": map[string]any{"href": stateHref("st-1")},
-					"name": "Отменен",
+					"name": stateNameCancelled,
 				},
 				"attributes": []map[string]any{
 					{"name": "Кол-во мест", "type": "double", "value": 1.5},
@@ -106,7 +115,7 @@ func TestFetchOrdersByDeliveryDate(t *testing.T) {
 	if first.DeliveryPlannedMoment != "2026-09-10 10:00:00.000" {
 		t.Errorf("deliveryPlannedMoment = %q", first.DeliveryPlannedMoment)
 	}
-	if first.State.Name != "Отменен" {
+	if first.State.Name != stateNameCancelled {
 		t.Errorf("state.name = %q, want Отменен", first.State.Name)
 	}
 	if first.StateID != "st-1" {
@@ -164,7 +173,7 @@ func TestFetchOrderStates(t *testing.T) {
 
 		if err := json.NewEncoder(w).Encode(map[string]any{
 			"rows": []map[string]any{
-				{"name": "Отменен", "meta": map[string]any{"href": stateHref("st-1")}},
+				{"name": stateNameCancelled, "meta": map[string]any{"href": stateHref("st-1")}},
 				{"name": "Подготовка", "meta": map[string]any{"href": stateHref("st-2") + "?expand=x"}},
 				{"name": "Без ссылки", "meta": map[string]any{"href": ""}},
 			},
@@ -181,7 +190,7 @@ func TestFetchOrderStates(t *testing.T) {
 	if len(states) != 2 {
 		t.Fatalf("states = %v, want 2 записи", states)
 	}
-	if states["st-1"] != "Отменен" {
+	if states["st-1"] != stateNameCancelled {
 		t.Errorf("st-1 = %q, want Отменен", states["st-1"])
 	}
 	// href с query-хвостом (МС иногда отдаёт expand-суффикс) — id берётся верно.

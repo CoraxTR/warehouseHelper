@@ -19,7 +19,7 @@ type PDFPreloader interface {
 // вторым значением отдаёт id бланков, которые получить не удалось.
 type PDFForms interface {
 	GetOrderPDF(ctx context.Context, id string) (string, error)
-	GetMultipleOrdersPDF(ctx context.Context, ids []string) (string, []string, error)
+	GetMultipleOrdersPDF(ctx context.Context, ids []string) (path string, skipped []string, err error)
 }
 
 // ExportOrderPDFUseCase — печать бланков заказов РефГо. Сам экспорт/слияние
@@ -51,7 +51,7 @@ func (uc *ExportOrderPDFUseCase) GetOrderPDF(ctx context.Context, id string) (st
 // страниц). Второе значение — id бланков, которые скачать не удалось: они
 // пропущены в файле (провалы в логе), хендлер отдаёт их клиенту заголовком,
 // чтобы оператор не остался в неведении.
-func (uc *ExportOrderPDFUseCase) GetMultipleOrdersPDF(ctx context.Context, ids []string) (string, []string, error) {
+func (uc *ExportOrderPDFUseCase) GetMultipleOrdersPDF(ctx context.Context, ids []string) (path string, skipped []string, err error) {
 	done := metrics.Track(trackPkg, "GetMultipleOrdersPDF")
 	defer done()
 

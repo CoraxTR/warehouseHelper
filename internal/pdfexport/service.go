@@ -83,10 +83,10 @@ func (s *Service) GetOrderPDF(ctx context.Context, id string) (string, error) {
 // порядок страниц). Возвращает путь к файлу и id бланков, которые скачать не
 // удалось (они пропущены в файле, провалы в логе). Ошибка — только если не
 // скачалось НИЧЕГО (сливать нечего) либо упало слияние/запись.
-func (s *Service) GetMultipleOrdersPDF(ctx context.Context, ids []string) (string, []string, error) {
+func (s *Service) GetMultipleOrdersPDF(ctx context.Context, ids []string) (path string, skipped []string, err error) {
 	data := make([][]byte, len(ids))
 	failed := make([]bool, len(ids))
-	skipped := make([]string, 0)
+	skipped = make([]string, 0)
 	var wg sync.WaitGroup
 
 	for i, id := range ids {
@@ -121,14 +121,14 @@ func (s *Service) GetMultipleOrdersPDF(ctx context.Context, ids []string) (strin
 		return "", skipped, fmt.Errorf("не удалось получить ни одного бланка (запрошено %d)", len(ids))
 	}
 
-	savePath, err := s.merger.ExportMergedPDF(merged)
-	if err != nil {
-		return "", skipped, fmt.Errorf("слияние бланков: %w", err)
+	path, mergeErr := s.merger.ExportMergedPDF(merged)
+	if mergeErr != nil {
+		return "", skipped, fmt.Errorf("слияние бланков: %w", mergeErr)
 	}
 
-	slog.Info("бланки слиты", "получено", len(merged), "пропущено", len(skipped), "файл", savePath)
+	slog.Info("бланки слиты", "получено", len(merged), "пропущено", len(skipped), "файл", path)
 
-	return savePath, skipped, nil
+	return path, skipped, nil
 }
 
 // orderPDF отдаёт данные бланка: сперва кэш temp/<id>.pdf, при промахе —
@@ -137,10 +137,11 @@ func (s *Service) orderPDF(ctx context.Context, id string) ([]byte, error) {
 	path := filepath.Join(s.dir, id+".pdf")
 
 	data, err := os.ReadFile(path)
-	switch {
-	case err == nil && len(data) > 0:
+	if err == nil && len(data) > 0 {
 		return data, nil
-	case err == nil:
+	}
+
+	if err == nil {
 		// Пустой файл — след прерванной загрузки: удаляем и качаем заново,
 		// иначе он уедет пустым в слияние и уронит его.
 		s.removeCached(path, id)

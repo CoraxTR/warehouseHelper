@@ -52,22 +52,15 @@ func (f *fakeFetcher) FetchOrderPDF(_ context.Context, id string) ([]byte, error
 	return f.data[id], nil
 }
 
-func (f *fakeFetcher) callCount(id string) int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	return f.calls[id]
-}
-
 // errTransient — временный сбой (сеть, 5xx): повтор осмыслен.
 var errTransient = errors.New("временный сбой источника")
 
 // errPermanent — постоянный отказ источника (4xx МС): повтор бессмыслен.
-type errPermanent struct{}
+type fakePermanentError struct{}
 
-func (errPermanent) Error() string { return "источник отверг запрос" }
+func (fakePermanentError) Error() string { return "источник отверг запрос" }
 
-func (errPermanent) Permanent() bool { return true }
+func (fakePermanentError) Permanent() bool { return true }
 
 // fakeMerger — заглушка записи/слияния: запоминает вход слияния.
 type fakeMerger struct {
@@ -137,7 +130,7 @@ func TestGetMultipleOrdersPDF_SkipsFailedAndReportsThem(t *testing.T) {
 	// пропадает молча: id уезжает вызывающему.
 	fetcher := &fakeFetcher{
 		data: map[string][]byte{testIDFirst: []byte("pdf-1"), testIDThird: []byte("pdf-3")},
-		errs: map[string]error{testIDSecond: errPermanent{}},
+		errs: map[string]error{testIDSecond: fakePermanentError{}},
 	}
 	merger := &fakeMerger{}
 	svc := newTestService(t, fetcher, merger)
@@ -160,8 +153,8 @@ func TestGetMultipleOrdersPDF_SkipsFailedAndReportsThem(t *testing.T) {
 
 func TestGetMultipleOrdersPDF_AllFailedIsError(t *testing.T) {
 	fetcher := &fakeFetcher{errs: map[string]error{
-		testIDFirst:  errPermanent{},
-		testIDSecond: errPermanent{},
+		testIDFirst:  fakePermanentError{},
+		testIDSecond: fakePermanentError{},
 	}}
 	merger := &fakeMerger{}
 	svc := newTestService(t, fetcher, merger)
@@ -197,19 +190,19 @@ func TestGetMultipleOrdersPDF_RetriesTransientFailure(t *testing.T) {
 	if len(skipped) != 0 {
 		t.Errorf("skipped = %v, want пусто (повтор удался)", skipped)
 	}
-	if got := fetcher.callCount(testIDFirst); got != 3 {
+	if got := fetcher.calls[testIDFirst]; got != 3 {
 		t.Errorf("попыток скачивания = %d, want 3 (2 провала + успех)", got)
 	}
 }
 
 func TestGetMultipleOrdersPDF_DoesNotRetryPermanentFailure(t *testing.T) {
-	fetcher := &fakeFetcher{errs: map[string]error{testIDFirst: errPermanent{}}}
+	fetcher := &fakeFetcher{errs: map[string]error{testIDFirst: fakePermanentError{}}}
 	svc := newTestService(t, fetcher, &fakeMerger{})
 
 	if _, _, err := svc.GetMultipleOrdersPDF(context.Background(), []string{testIDFirst}); err == nil {
 		t.Fatal("ожидалась ошибка")
 	}
-	if got := fetcher.callCount(testIDFirst); got != 1 {
+	if got := fetcher.calls[testIDFirst]; got != 1 {
 		t.Errorf("попыток скачивания = %d, want 1 (постоянный отказ не повторяем)", got)
 	}
 }
@@ -221,7 +214,7 @@ func TestGetMultipleOrdersPDF_DoesNotRetryCancelledFetch(t *testing.T) {
 	if _, _, err := svc.GetMultipleOrdersPDF(context.Background(), []string{testIDFirst}); err == nil {
 		t.Fatal("ожидалась ошибка")
 	}
-	if got := fetcher.callCount(testIDFirst); got != 1 {
+	if got := fetcher.calls[testIDFirst]; got != 1 {
 		t.Errorf("попыток скачивания = %d, want 1 (отмену не повторяем)", got)
 	}
 }
@@ -265,13 +258,13 @@ func TestGetOrderPDF_UsesCacheWithoutFetch(t *testing.T) {
 	if path != filepath.Join("temp", exportedName) {
 		t.Errorf("path = %q, want %q", path, filepath.Join("temp", exportedName))
 	}
-	if got := fetcher.callCount(testIDFirst); got != 0 {
+	if got := fetcher.calls[testIDFirst]; got != 0 {
 		t.Errorf("обращений к источнику = %d, want 0 (данные из кэша)", got)
 	}
 }
 
 func TestGetOrderPDF_NoCacheFileOnFailedFetch(t *testing.T) {
-	fetcher := &fakeFetcher{errs: map[string]error{testIDFirst: errPermanent{}}}
+	fetcher := &fakeFetcher{errs: map[string]error{testIDFirst: fakePermanentError{}}}
 	svc := newTestService(t, fetcher, &fakeMerger{})
 
 	if _, err := svc.GetOrderPDF(context.Background(), testIDFirst); err == nil {

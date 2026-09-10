@@ -12,6 +12,8 @@ import (
 const (
 	stateIDCancelled = "st-cancelled"
 	stateIDPreparing = "st-preparing"
+	// stateNameCancelled — имя статуса «Отменён» в ответах МС (стенд-заглушки).
+	stateNameCancelled = "Отменен"
 
 	orderIDFirst  = "order-1"
 	orderIDSecond = "order-2"
@@ -49,7 +51,7 @@ type fakePrinter struct {
 	calls   int
 }
 
-func (p *fakePrinter) GetMultipleOrdersPDF(_ context.Context, ids []string) (string, []string, error) {
+func (p *fakePrinter) GetMultipleOrdersPDF(_ context.Context, ids []string) (path string, skipped []string, err error) {
 	p.calls++
 	p.gotIDs = ids
 
@@ -65,7 +67,7 @@ func formsOrders() []client.MSOrder {
 			ID:                    orderIDFirst,
 			Name:                  "10",
 			DeliveryPlannedMoment: "2026-09-10 12:00:00.000",
-			State:                 client.MSState{Name: "Отменен"},
+			State:                 client.MSState{Name: stateNameCancelled},
 		},
 		{
 			ID:                    orderIDSecond,
@@ -117,7 +119,7 @@ func TestFormsByDate_RowsFilledSortedAndStatesResolved(t *testing.T) {
 	}
 
 	// Статус: из строки, из справочника по id, и «—» — когда нет вовсе.
-	wantStates := []string{"Подготовка", "Отменен", dash}
+	wantStates := []string{"Подготовка", stateNameCancelled, dash}
 	for i, want := range wantStates {
 		if rows[i].State != want {
 			t.Errorf("строка %d (%s): статус %q, want %q", i, rows[i].Name, rows[i].State, want)
@@ -138,7 +140,7 @@ func TestFormsByDate_RowsFilledSortedAndStatesResolved(t *testing.T) {
 func TestFormsByDate_NoStatesRequestWhenNamesInRows(t *testing.T) {
 	orders := formsOrders()
 	orders[1].State = client.MSState{Name: "Подготовка"}
-	orders[2].State = client.MSState{Name: "Отменен"}
+	orders[2].State = client.MSState{Name: stateNameCancelled}
 
 	ms := &fakeFormsClient{orders: orders}
 	uc := NewFormsUseCase(ms, &fakePrinter{})

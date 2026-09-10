@@ -21,7 +21,7 @@ func TestSearchCustomerOrdersByName(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Запрос валидации ключа воркерпулом (entity/organization) не считаем.
-		if r.URL.Path != "/entity/customerorder" {
+		if r.URL.Path != customerOrderTestPath {
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{}`))
 			return
