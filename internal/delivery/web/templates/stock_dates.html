@@ -496,7 +496,7 @@
             var tg = parseDiscountInput(document.getElementById('d-tg').value);
             var body = JSON.stringify({
                 product_id: MODAL.productID,
-                best_before: MODAL.bb,
+                best_before: String(MODAL.bb).slice(0, 10),
                 discount_general_manual: gen,
                 discount_telegram_manual: tg
             });
