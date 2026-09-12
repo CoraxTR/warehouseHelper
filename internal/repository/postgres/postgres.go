@@ -50,6 +50,15 @@ func NewPGClient(cfg *config.PGConfig) *PGClient {
 	return &PGClient{Pool: pool}
 }
 
+// Close закрывает пул соединений (остановка приложения). Вызывать последним:
+// после Close любые запросы вернут ошибку «pool closed», поэтому к этому
+// моменту фоновые задачи должны быть уже остановлены.
+func (pg *PGClient) Close() {
+	if pg.Pool != nil {
+		pg.Pool.Close()
+	}
+}
+
 func (pg *PGClient) InsertOrders(ctx context.Context, orders []*domain.InternalOrder) error {
 	if len(orders) == 0 {
 		return nil

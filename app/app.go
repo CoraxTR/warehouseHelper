@@ -2,9 +2,14 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
+	"os/signal"
+	"sync"
+	"syscall"
 	"time"
 
 	cucase "warehouseHelper/internal/complaints/usecase"
@@ -17,14 +22,29 @@ type App struct {
 	di         *DIContainer
 	httpServer *http.Server
 
+	// ctx — корневой контекст приложения: живёт дольше initDeps, отменяется
+	// только в Shutdown, чтобы фон (тикеры, поллеры, наблюдатели) завершился
+	// одним сигналом, а не каждый по своему.
+	//nolint:containedctx // корень жизненного цикла: прокидывать ctx через все инициализаторы смысла нет, его отменяет именно Shutdown
+	ctx    context.Context
+	cancel context.CancelFunc
+
+	// wg считает фоновые горутины приложения: Shutdown ждёт их завершения,
+	// иначе процесс выйдет посреди записи в БД.
+	wg sync.WaitGroup
+
 	// RefGoCheckAgainstModule включает модуль сверки с перевозчиком.
 	// Выставляется в false, если в .env не заданы параметры модуля.
 	RefGoCheckAgainstModule bool
 }
 
 func New() *App {
+	ctx, cancel := context.WithCancel(context.Background())
+
 	a := &App{
-		di: NewDIContainer(),
+		di:     NewDIContainer(),
+		ctx:    ctx,
+		cancel: cancel,
 	}
 
 	a.initDeps()
@@ -34,8 +54,95 @@ func New() *App {
 	return a
 }
 
+// Run поднимает http-сервер и ждёт либо сигнала остановки (Ctrl+C/SIGTERM),
+// либо падения сервера. Любой из исходов завершается Shutdown: закрыть
+// ресурсы нужно и при ошибке запуска (например, занятый порт).
 func (a *App) Run() error {
-	return a.httpServer.ListenAndServe()
+	errCh := make(chan error, 1)
+
+	go func() {
+		if err := a.httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			errCh <- err
+		}
+	}()
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	select {
+	case err := <-errCh:
+		// Сервер упал сам — всё равно гасим ресурсы: разделять «упал» и
+		// «остановили» незачем, набор действий один.
+		// stop() до Shutdown — симметрично signal-ветке: возвращаем обработку
+		// сигналов по умолчанию, чтобы второй Ctrl+C убил процесс сразу, а не
+		// ждал таймаутов остановки (порт занят — ждать особенно незачем).
+		stop()
+
+		shutdownErr := a.Shutdown()
+
+		return errors.Join(err, shutdownErr)
+
+	case <-ctx.Done():
+		// Вернуть обработку сигналов по умолчанию: второй Ctrl+C убьёт
+		// процесс сразу, не дожидаясь таймаутов остановки.
+		stop()
+	}
+
+	slog.Info("получен сигнал остановки: новые запросы не принимаем, ждём активные и фоновые задачи")
+
+	return a.Shutdown()
+}
+
+// Shutdown останавливает приложение снаружи внутрь: сначала сервер (новые
+// запросы не принимаются, активные дорабатывают), затем живые ws-соединения,
+// затем фон, и только потом ресурсы БД. Порядок важен: закрой пул раньше —
+// активные запросы упадут с ошибкой БД вместо того, чтобы доработать.
+func (a *App) Shutdown() error {
+	var errs []error
+
+	// 1. HTTP: перестаём принимать новое. Долгие запросы (выгрузка, печать
+	// бланков пачкой, экспорт Excel) успевают доработать и отдать файл.
+	if err := shutdownHTTPServer(a.httpServer, httpShutdownTimeout); err != nil {
+		errs = append(errs, err)
+	}
+
+	// 2. Веб-сокеты «Сроков» hijack'нуты: http.Server их не закрывает и не
+	// ждёт, поэтому закрываем хаб сами. Только если он создан: ленивый геттер
+	// построил бы хаб (и полстраницы роутера) прямо на остановке.
+	if a.di.stockHub != nil {
+		a.di.stockHub.Close()
+	} else {
+		slog.Debug("ws: хаб не создавался — закрывать нечего")
+	}
+
+	// 3. Фон: отменяем корневой ctx (один сигнал всем тикерам и поллерам) и
+	// ждём их. Не дождались — не блокируем процесс, но помечаем остановку как
+	// неполную: main по этой ошибке отличит «штатно» от «бросили работу».
+	a.cancel()
+	if !waitBackground(&a.wg, backgroundShutdownTimeout) {
+		errs = append(errs, ErrStopIncomplete)
+	}
+
+	// 4. Ресурсы модулей (предзагрузка PDF, воркерпул МС, бэкфилл, пул БД) —
+	// после того, как все, кто ими пользовался, остановлены.
+	if err := a.di.Close(); err != nil {
+		errs = append(errs, err)
+	}
+
+	slog.Info("приложение остановлено")
+
+	return errors.Join(errs...)
+}
+
+// background запускает фоновую задачу от корневого контекста приложения и
+// учитывает её в wg — Shutdown дождётся всех. name нужен только для debug-лога:
+// при отмене ctx задачи выходят штатно, имя помогает понять, кто это был.
+func (a *App) background(name string, fn func()) {
+	a.wg.Go(func() {
+		fn()
+
+		slog.Debug("фон: задача завершилась", "задача", name)
+	})
 }
 
 func (a *App) initDeps() {
@@ -60,10 +167,10 @@ func (a *App) initDeps() {
 // обновится при следующем тике (раз в минуту).
 func (a *App) initTableSizes() {
 	pg := a.di.OrdersRepository() // пул создаётся один раз, вне ctx-функции
-	go func() {
-		ctx := context.Background()
+
+	a.background("опрос размеров таблиц", func() {
 		refresh := func() {
-			sizes, err := pg.TableSizes(ctx)
+			sizes, err := pg.TableSizes(a.ctx)
 			if err != nil {
 				slog.Info(fmt.Sprintf("опрос размеров таблиц: %v", err))
 				return
@@ -71,12 +178,19 @@ func (a *App) initTableSizes() {
 			metrics.SetTableSizes(sizes)
 		}
 		refresh()
+
 		ticker := time.NewTicker(time.Minute)
 		defer ticker.Stop()
-		for range ticker.C {
-			refresh()
+
+		for {
+			select {
+			case <-a.ctx.Done():
+				return
+			case <-ticker.C:
+				refresh()
+			}
 		}
-	}()
+	})
 }
 
 // initAverageSales запускает стартовую дозаливку средних продаж: товары без
@@ -106,9 +220,14 @@ func (a *App) initStockCache() {
 // initDayState запускает фоновую задачу утреннего снапшота состояний по дням
 // (модуль daystate): время — APP_DAYSTATE_SNAPSHOT_TIME (локальное, default
 // 09:00). Ошибки не роняют приложение — ретрай на следующем тике (спящий ПК,
-// недоступная БД).
+// недоступная БД). Start блокируется до отмены ctx, поэтому идёт в фон под
+// учётом wg: Shutdown дождётся снапшота, а не закроет пул под ним.
 func (a *App) initDayState() {
-	a.di.DayStateUC().Start(context.Background(), a.di.Config().DayStateSnapshotTime)
+	snapshotTime := a.di.Config().DayStateSnapshotTime
+
+	a.background("daystate: утренний снапшот", func() {
+		a.di.DayStateUC().Start(a.ctx, snapshotTime)
+	})
 }
 
 // initComplaints запускает фоновые задачи модуля «Жалобы»:
@@ -122,7 +241,11 @@ func (a *App) initDayState() {
 // ошибки и продолжает. Без токена бота поллер не запускается.
 func (a *App) initComplaints() {
 	uc := a.di.ComplaintsUC()
-	uc.Start(context.Background())
+
+	// Start блокируется до отмены ctx — как и поллер, идёт в фон под учётом wg.
+	a.background("complaints: тикер напоминаний", func() {
+		uc.Start(a.ctx)
+	})
 
 	token := a.di.Config().BotToken
 	if token == "" {
@@ -136,11 +259,11 @@ func (a *App) initComplaints() {
 		}
 		return uc.HandleDetailsButton(ctx, cb.ID, cb.ChatID, id)
 	})
-	go func() {
-		if err := poller.Run(context.Background()); err != nil {
+	a.background("complaints: поллер кнопок", func() {
+		if err := poller.Run(a.ctx); err != nil {
 			slog.Info(fmt.Sprintf("complaints: поллер завершился: %v", err))
 		}
-	}()
+	})
 }
 
 // initReturns запускает наблюдатель журнала действий МС (модуль returns:
@@ -151,11 +274,11 @@ func (a *App) initComplaints() {
 // (предупреждение в логе модуля) — удаления позиций работают.
 func (a *App) initReturns() {
 	uc := a.di.ReturnsUC()
-	go func() {
-		if err := uc.Run(context.Background()); err != nil {
+	a.background("returns: наблюдатель журнала", func() {
+		if err := uc.Run(a.ctx); err != nil {
 			slog.Info(fmt.Sprintf("returns: наблюдатель завершился: %v", err))
 		}
-	}()
+	})
 }
 
 // initReserveWatch запускает наблюдатель резервов заказов (модуль
@@ -171,11 +294,11 @@ func (a *App) initReserveWatch() {
 		slog.Info("reservewatch: не запущен: MSAPI_RESERVEWATCH_STATES не задан")
 		return
 	}
-	go func() {
-		if err := uc.Run(context.Background()); err != nil {
+	a.background("reservewatch: наблюдатель резервов", func() {
+		if err := uc.Run(a.ctx); err != nil {
 			slog.Info(fmt.Sprintf("reservewatch: наблюдатель завершился: %v", err))
 		}
-	}()
+	})
 }
 
 func (a *App) initHTTPServer() {

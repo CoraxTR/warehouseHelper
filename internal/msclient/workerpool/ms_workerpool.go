@@ -2,12 +2,21 @@ package workerpool
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"sync"
 	"warehouseHelper/internal/config"
 )
+
+// ErrPoolStopped — пул остановлен и задачу не принял.
+//
+// Ошибка, а НЕ пустой результат: закрытый канал без значения вызывающий читает
+// как zero-value result{} с Err == nil, то есть считает задачу выполненной.
+// Для вызовов вроде SetOrderAsShippedToRefGo это значит «заказ помечен в МС»,
+// хотя в МС не ушло ничего — и в логе чисто. Нет задачи — должна быть ошибка.
+var ErrPoolStopped = errors.New("воркерпул МС остановлен")
 
 type JobFunc func(apikey string) (any, error)
 
@@ -30,6 +39,13 @@ type MSWorkerPool struct {
 	ctx              context.Context //nolint:containedctx //we need to cancel all workers when stopping the pool
 	cancel           context.CancelFunc
 	once             sync.Once
+
+	// mu защищает stopped и сериализует отправку задачи с закрытием каналов в
+	// Stop. Без него горутина проходит проверку остановки и доезжает до
+	// отправки уже после close: panic "send on closed channel" в незатреканной
+	// горутине роняет процесс при ШТАТНОЙ остановке.
+	mu      sync.RWMutex
+	stopped bool
 }
 
 type MSWarehouseWorker struct {
@@ -129,42 +145,106 @@ func NewMSWorkerPool(config *config.MSConfig) *MSWorkerPool {
 	return pool
 }
 
+// SubmitWarehouse ставит задачу в очередь складских воркеров.
+//
+// RLock держится до конца отправки: Stop берёт Lock и потому не может закрыть
+// канал под работающей отправкой — именно эта гонка давала panic при остановке.
+// Дедлока нет: на момент отправки воркеры ещё живы (cancel в Stop идёт позже),
+// канал разгружается.
+//
+// Проверки ctx.Done больше нет: ctx отменяет только Stop, а он выставляет
+// stopped под тем же мутексом — состояние остановки читается через stopped.
 func (p *MSWorkerPool) SubmitWarehouse(job JobFunc) <-chan result {
-	select {
-	case <-p.ctx.Done():
-		ch := make(chan result)
-		close(ch)
+	p.mu.RLock()
+	defer p.mu.RUnlock()
 
-		return ch
-	default:
-		resCh := make(chan result, 1)
-		p.warehouseTasks <- task{job: job, resCh: resCh}
-
-		return resCh
+	if p.stopped {
+		return errResult(ErrPoolStopped)
 	}
+
+	// Воркеров нет (все ключи не прошли проверку в NewMSWorkerPool) — очередь
+	// никто не разберёт: см. ErrNoWorkers.
+	if len(p.WarehouseWorkers) == 0 {
+		return errResult(ErrNoWorkers)
+	}
+
+	resCh := make(chan result, 1)
+	p.warehouseTasks <- task{job: job, resCh: resCh}
+
+	return resCh
 }
 
+// SubmitOther — то же для прочих воркеров (см. SubmitWarehouse).
 func (p *MSWorkerPool) SubmitOther(job JobFunc) <-chan result {
-	select {
-	case <-p.ctx.Done():
-		ch := make(chan result)
-		close(ch)
+	p.mu.RLock()
+	defer p.mu.RUnlock()
 
-		return ch
-	default:
-		resCh := make(chan result, 1)
-		p.otherTasks <- task{job: job, resCh: resCh}
-
-		return resCh
+	if p.stopped {
+		return errResult(ErrPoolStopped)
 	}
+
+	if len(p.OtherWorkers) == 0 {
+		return errResult(ErrNoWorkers)
+	}
+
+	resCh := make(chan result, 1)
+	p.otherTasks <- task{job: job, resCh: resCh}
+
+	return resCh
 }
 
+// ErrNoWorkers — задачи ставить некуда: ни один API-ключ МС не прошёл
+// проверку, живых воркеров нет. Именно ошибка, а не ожидание: очередь без
+// потребителя держит отправителя в блокирующей отправке под RLock, из-за чего
+// Stop не может взять Lock и остановка приложения виснет — а «Ctrl+C всегда
+// выходит» и есть смысл graceful shutdown.
+var ErrNoWorkers = errors.New("нет воркеров МС: ни один ключ не прошёл проверку")
+
+// errResult — ответ на задачу, которую пул не принял: одно значение и
+// закрытие, как у любой выполненной задачи. Иначе вызывающий либо прочитал бы
+// остановку как успех, либо ждал бы resCh вечно.
+func errResult(err error) <-chan result {
+	ch := make(chan result, 1)
+	ch <- result{Err: err}
+	close(ch)
+
+	return ch
+}
+
+// Stop останавливает пул: новые задачи не принимаются, очередь разбирается,
+// воркеры дожидаются. Идемпотентен (once) — двойной Shutdown не паникует.
 func (p *MSWorkerPool) Stop() {
 	p.once.Do(func() {
-		p.cancel()
+		// Закрытие каналов и stopped=true — одной критической секцией под Lock:
+		// Lock дождётся отправок, уже держащих RLock, поэтому close не может
+		// пересечься с «отправкой после проверки stopped» (та самая гонка).
+		// Каналы закрываем, а не только отменяем ctx: закрытие выводит воркеров
+		// из select/range даже если задача больше не придёт.
+		p.mu.Lock()
+		p.stopped = true
 		close(p.warehouseTasks)
 		close(p.otherTasks)
+		p.mu.Unlock()
+
+		// Отмена после закрытия: воркеры, сидящие в уже взятой задаче, выходят
+		// по ctx, а wg.Wait не даёт процессу уйти посреди запроса к МС.
+		p.cancel()
 		p.wg.Wait()
+
+		// Drain: задача, проскочившая до закрытия, но не взятая воркером
+		// (воркеры вышли по ctx.Done), иначе оставила бы вызывающего ждать resCh
+		// вечно. Каналы закрыты выше — range завершится сам, как только очередь
+		// опустеет. Отвечаем ошибкой, а не пустым результатом: в МС не ушло
+		// ничего.
+		for t := range p.warehouseTasks {
+			t.resCh <- result{Err: ErrPoolStopped}
+			close(t.resCh)
+		}
+
+		for t := range p.otherTasks {
+			t.resCh <- result{Err: ErrPoolStopped}
+			close(t.resCh)
+		}
 	})
 }
 

@@ -27,11 +27,26 @@ const (
 type backfillRunner struct {
 	uc *UseCase
 
-	mu      sync.Mutex
-	queue   []string
-	cancel  context.CancelFunc
-	started bool
-	missing bool // идёт ли стартовая дозаливка
+	mu    sync.Mutex
+	queue []string
+	// Отмены двух независимых горутин (воркер очереди и стартовая дозаливка):
+	// один общий cancel не годится — отменив его, мы погасили бы только ту
+	// задачу, которая поставила его последней, а вторая осталась бы живой.
+	workerCancel  context.CancelFunc
+	missingCancel context.CancelFunc
+	started       bool
+	missing       bool // идёт ли стартовая дозаливка
+
+	// stopped — приложение останавливается: новые задачи не ставим и воркеров
+	// не поднимаем. Без него enqueue (приходит из HTTP-хендлера, а не только из
+	// фона) успевал сделать wg.Add(1) в момент, когда счётчик уже 0 и stop ждёт
+	// в wg.Wait: раннер «воскресал» с новым никем не отменяемым ctx и писал
+	// в БД после закрытия пула.
+	stopped bool
+
+	// wg считает горутины бэкфилла: stop ждёт их завершения, иначе процесс
+	// выйдет и оборвёт запись батча на середине.
+	wg sync.WaitGroup
 }
 
 func newBackfillRunner(uc *UseCase) *backfillRunner {
@@ -47,28 +62,38 @@ func (b *backfillRunner) enqueue(ids []string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
+	if b.stopped {
+		return
+	}
+
 	b.queue = append(b.queue, ids...)
 	b.ensureWorkerLocked()
 }
 
 // ensureWorkerLocked запускает воркер очереди, если он ещё не бежит.
 func (b *backfillRunner) ensureWorkerLocked() {
-	if b.started {
+	if b.stopped || b.started {
 		return
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	b.cancel = cancel
+	b.workerCancel = cancel
 	b.started = true
 
-	go b.worker(ctx)
+	b.wg.Go(func() {
+		b.worker(ctx)
+	})
 }
 
 // worker последовательно обрабатывает очередь товаров.
 func (b *backfillRunner) worker(ctx context.Context) {
 	for {
 		b.mu.Lock()
-		if len(b.queue) == 0 {
+		// stopped — выходим сразу, не разбирая очередь: stop уже ждёт этот
+		// выход (wg.Wait), а ctx отменён — работа всё равно оборвалась бы на
+		// первом же запросе. Остаток очереди не теряется: бэкфилл идемпотентен
+		// и повторится при следующем старте приложения.
+		if b.stopped || len(b.queue) == 0 {
 			b.started = false
 			b.mu.Unlock()
 			return
@@ -91,35 +116,50 @@ func (b *backfillRunner) runMissing() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	if b.missing {
+	if b.stopped || b.missing {
 		return
 	}
 	b.missing = true
 
 	ctx, cancel := context.WithCancel(context.Background())
-	b.cancel = cancel
+	b.missingCancel = cancel
 
-	go func() {
+	b.wg.Go(func() {
 		defer func() {
 			b.mu.Lock()
 			b.missing = false
-			b.cancel = nil
+			b.missingCancel = nil
 			b.mu.Unlock()
 		}()
 
 		if err := b.uc.backfillMissing(ctx); err != nil {
 			slog.Info(fmt.Sprintf("averagesales: стартовая дозаливка: %v", err))
 		}
-	}()
+	})
 }
 
-// stop отменяет фоновые задачи (при завершении приложения).
+// stop отменяет фоновые задачи и ждёт их завершения (при остановке приложения).
+// Бэкфилл — это только read-запросы отчётов МС и идемпотентные upsert'ы
+// (повторный запуск ничего не портит), но ждать всё равно надо: иначе процесс
+// выйдет и оборвёт запись батча. Горутины бросают работу на следующей проверке
+// ctx (запросы к МС и БД отменяются вместе с контекстом).
 func (b *backfillRunner) stop() {
 	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.cancel != nil {
-		b.cancel()
+	// stopped под тем же мутексом, что enqueue/ensureWorkerLocked: после этой
+	// секции ни один wg.Add не может случиться, поэтому wg.Wait ниже видит
+	// финальный счётчик, а не гонку с «воскресшим» воркером.
+	b.stopped = true
+	if b.workerCancel != nil {
+		b.workerCancel()
 	}
+	if b.missingCancel != nil {
+		b.missingCancel()
+	}
+	b.mu.Unlock()
+
+	// Ждём вне мутекса: воркер берёт его на каждой итерации — ожидание под
+	// мутексом превратилось бы во взаимную блокировку.
+	b.wg.Wait()
 }
 
 // backfillProduct — первичное заполнение истории одного товара: месячной
