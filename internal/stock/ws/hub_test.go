@@ -118,7 +118,7 @@ func TestHubClose(t *testing.T) {
 	url := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws"
 	conns := make([]*websocket.Conn, 0, 2)
 
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		conn, resp, err := websocket.DefaultDialer.Dial(url, nil)
 		if err != nil {
 			t.Fatalf("dial %d: %v", i, err)

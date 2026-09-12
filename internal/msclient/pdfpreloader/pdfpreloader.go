@@ -111,13 +111,21 @@ func (p *PDFPreloader) StartPreloading(orders []*domain.InternalOrder) {
 
 func (p *PDFPreloader) StopPreloading() {
 	p.mu.Lock()
-	defer p.mu.Unlock()
 
-	if p.cancel != nil {
+	started := p.cancel != nil
+	if started {
 		select {
 		case p.stopchan <- struct{}{}:
 		default:
 		}
+	}
+	p.mu.Unlock()
+
+	// Ждём воркеров ВНЕ мутекса: иначе докачка бланков продолжилась бы уже
+	// после закрытия воркерпула МС и пула БД — запросы падали бы с «клиент
+	// остановлен», а файлы оставались битыми. Не стартовал — ждать нечего.
+	if started {
+		p.wg.Wait()
 	}
 }
 

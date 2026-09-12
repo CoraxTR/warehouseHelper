@@ -73,6 +73,11 @@ func (a *App) Run() error {
 	case err := <-errCh:
 		// Сервер упал сам — всё равно гасим ресурсы: разделять «упал» и
 		// «остановили» незачем, набор действий один.
+		// stop() до Shutdown — симметрично signal-ветке: возвращаем обработку
+		// сигналов по умолчанию, чтобы второй Ctrl+C убил процесс сразу, а не
+		// ждал таймаутов остановки (порт занят — ждать особенно незачем).
+		stop()
+
 		shutdownErr := a.Shutdown()
 
 		return errors.Join(err, shutdownErr)
@@ -111,9 +116,12 @@ func (a *App) Shutdown() error {
 	}
 
 	// 3. Фон: отменяем корневой ctx (один сигнал всем тикерам и поллерам) и
-	// ждём их. Не дождались — не блокируем процесс: см. waitBackground.
+	// ждём их. Не дождались — не блокируем процесс, но помечаем остановку как
+	// неполную: main по этой ошибке отличит «штатно» от «бросили работу».
 	a.cancel()
-	waitBackground(&a.wg, backgroundShutdownTimeout)
+	if !waitBackground(&a.wg, backgroundShutdownTimeout) {
+		errs = append(errs, ErrStopIncomplete)
+	}
 
 	// 4. Ресурсы модулей (предзагрузка PDF, воркерпул МС, бэкфилл, пул БД) —
 	// после того, как все, кто ими пользовался, остановлены.
@@ -130,15 +138,11 @@ func (a *App) Shutdown() error {
 // учитывает её в wg — Shutdown дождётся всех. name нужен только для debug-лога:
 // при отмене ctx задачи выходят штатно, имя помогает понять, кто это был.
 func (a *App) background(name string, fn func()) {
-	a.wg.Add(1)
-
-	go func() {
-		defer a.wg.Done()
-
+	a.wg.Go(func() {
 		fn()
 
 		slog.Debug("фон: задача завершилась", "задача", name)
-	}()
+	})
 }
 
 func (a *App) initDeps() {

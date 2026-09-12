@@ -36,12 +36,16 @@ func startTestServer(t *testing.T, handler http.Handler) (*http.Server, string) 
 
 // TestShutdownHTTPServer_WaitsForActiveRequest — главное свойство остановки:
 // запрос, который уже выполняется, дорабатывает и получает ответ.
+//
+// Запас между сном хендлера и таймаутом — намеренно ×10: при близких
+// значениях на загруженной машине тест флакал (таймаут срабатывал раньше
+// ответа, и он «падал» на исправном коде).
 func TestShutdownHTTPServer_WaitsForActiveRequest(t *testing.T) {
 	started := make(chan struct{})
 
 	srv, url := startTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		close(started) // запрос один: тест шлёт ровно один
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(300 * time.Millisecond)
 		w.WriteHeader(http.StatusOK)
 	}))
 	t.Cleanup(func() { _ = srv.Close() })
@@ -67,7 +71,7 @@ func TestShutdownHTTPServer_WaitsForActiveRequest(t *testing.T) {
 
 	<-started
 
-	if err := shutdownHTTPServer(srv, 500*time.Millisecond); err != nil {
+	if err := shutdownHTTPServer(srv, 5*time.Second); err != nil {
 		t.Fatalf("остановка сервера: %v", err)
 	}
 
@@ -90,6 +94,10 @@ func TestShutdownHTTPServer_WaitsForActiveRequest(t *testing.T) {
 
 // TestShutdownHTTPServer_Timeout — если запрос не укладывается в таймаут,
 // функция возвращает ошибку и НЕ висит: процесс должен уметь завершиться.
+//
+// Таймаут здесь маленький (100 мс) осознанно: хендлер держим открытым до конца
+// теста, поэтому «не уложились» гарантировано, и проверяем мы не ожидание, а
+// что функция возвращает ErrStopIncomplete/DeadlineExceeded, а не висит.
 func TestShutdownHTTPServer_Timeout(t *testing.T) {
 	release := make(chan struct{})
 	var releaseOnce sync.Once
@@ -129,6 +137,11 @@ func TestShutdownHTTPServer_Timeout(t *testing.T) {
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("ошибка = %v, ожидали context.DeadlineExceeded", err)
 	}
+	// И признак «остановка неполная»: по нему main отличает брошенную работу от
+	// отказа запуска и не роняет службу в глазах NSSM.
+	if !errors.Is(err, ErrStopIncomplete) {
+		t.Errorf("ошибка = %v, ожидали ErrStopIncomplete в цепочке", err)
+	}
 	// Функция не должна ждать вечно: таймаут + небольшой запас на закрытие.
 	if elapsed := time.Since(start); elapsed > 2*time.Second {
 		t.Errorf("остановка заняла %s — функция зависла на таймауте", elapsed)
@@ -150,12 +163,9 @@ func TestWaitBackground(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var wg sync.WaitGroup
-			wg.Add(1)
-
-			go func() {
-				defer wg.Done()
+			wg.Go(func() {
 				time.Sleep(tt.hold)
-			}()
+			})
 
 			if got := waitBackground(&wg, tt.timeout); got != tt.wantDone {
 				t.Errorf("waitBackground = %v, ожидали %v", got, tt.wantDone)

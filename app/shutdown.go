@@ -29,12 +29,20 @@ const (
 	backgroundShutdownTimeout = 15 * time.Second
 )
 
+// ErrStopIncomplete — остановка выполнена не полностью: что-то не доработало до
+// таймаута. Это НЕ отказ запуска: процесс всё равно завершается, ресурсы
+// закрываются, но вызывающий (main) должен уметь отличить «остановились
+// штатно» от «остановились, бросив работу» — по логу и коду выхода.
+var ErrStopIncomplete = errors.New("остановка выполнена не полностью")
+
 // shutdownHTTPServer останавливает http-сервер: новые соединения больше не
 // принимаются, активные запросы дорабатывают (до timeout).
 //
 // context.DeadlineExceeded — ожидаемый исход «дождались не всё»: какой-то
 // запрос не успел за таймаут, сервер закрывает соединения. Это WARN, но
 // ошибку отдаём наверх — вызывающий решает, считать ли остановку штатной.
+// Ответ — ErrStopIncomplete вместе с DeadlineExceeded: первому (main) нужен
+// признак «не доработало», второму — причина, почему ждать перестали.
 func shutdownHTTPServer(srv *http.Server, timeout time.Duration) error {
 	if srv == nil {
 		return nil
@@ -53,7 +61,7 @@ func shutdownHTTPServer(srv *http.Server, timeout time.Duration) error {
 		return nil
 	case errors.Is(err, context.DeadlineExceeded):
 		slog.Warn(fmt.Sprintf("http: дождались не всё — активные запросы не уложились в %s, соединения закрыты", timeout))
-		return err
+		return errors.Join(ErrStopIncomplete, err)
 	default:
 		slog.Error(fmt.Sprintf("http: остановка сервера: %v", err))
 		return err
@@ -62,7 +70,9 @@ func shutdownHTTPServer(srv *http.Server, timeout time.Duration) error {
 
 // waitBackground ждёт завершения фоновых горутин; false — не дождались за
 // timeout (горутина висит в запросе к БД/МС). Возвращаем bool, а не ошибку:
-// это не сбой остановки, а решение «идём дальше и не держим процесс».
+// сам факт ожидания не сбой, а решение «идём дальше и не держим процесс».
+// Решение превратить false в ErrStopIncomplete принимает Shutdown (единая точка,
+// где собираются все «не доработало»).
 //
 // Горутина-наблюдатель утечёт, если wg.Wait() так и не вернётся, — но процесс
 // в этот момент уже завершается, а держать ожидание дольше таймаута нельзя.
