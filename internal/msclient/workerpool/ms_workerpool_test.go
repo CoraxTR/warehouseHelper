@@ -101,7 +101,9 @@ func assertClosed(t *testing.T, ch <-chan result) {
 	}
 }
 
-func noopJob(string) (any, error) { return nil, nil }
+// noopJob — заглушка JobFunc. Значение непустое намеренно: линтер (nilnil)
+// запрещает пару «(nil, nil)», а тесту важно только отсутствие ошибки.
+func noopJob(string) (any, error) { return "ok", nil }
 
 // TestSubmitAfterStop — после Stop задача не принимается, и это ОШИБКА, а не
 // пустой результат: закрытый канал с zero-value result{} вызывающий читает как

@@ -14,20 +14,21 @@ import (
 // startTestServer поднимает реальный http.Server на свободном порту.
 // Serve (а не ListenAndServe) — чтобы порт выдала ОС и тест не зависел от
 // занятых портов: тот же путь, что у сервера приложения.
-func startTestServer(t *testing.T, handler http.Handler) (*http.Server, string) {
+func startTestServer(t *testing.T, handler http.Handler) (srv *http.Server, url string) {
 	t.Helper()
 
-	srv := &http.Server{
+	srv = &http.Server{
 		Handler:           handler,
 		ReadHeaderTimeout: time.Second,
 	}
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("слушающий сокет: %v", err)
 	}
 
 	go func() {
-		_ = srv.Serve(ln) //nolint:errcheck // Serve всегда возвращает ошибку при закрытии — не наш случай
+		// Serve всегда возвращает ошибку при закрытии — это ожидаемо.
+		_ = srv.Serve(ln)
 	}()
 
 	// Адрес даёт ОС: тесты не зависят от занятости конкретного порта.
@@ -54,12 +55,13 @@ func TestShutdownHTTPServer_WaitsForActiveRequest(t *testing.T) {
 	errCh := make(chan error, 1)
 
 	go func() {
-		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, http.NoBody)
 		if err != nil {
 			errCh <- err
 
 			return
 		}
+		//nolint:bodyclose // тело читает и закрывает сам тест после остановки сервера
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			errCh <- err
@@ -79,7 +81,7 @@ func TestShutdownHTTPServer_WaitsForActiveRequest(t *testing.T) {
 	case err := <-errCh:
 		t.Fatalf("запрос не доработал: %v", err)
 	case resp := <-respCh:
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 
 		if _, err := io.Copy(io.Discard, resp.Body); err != nil {
 			t.Errorf("чтение ответа: %v", err)
@@ -115,7 +117,7 @@ func TestShutdownHTTPServer_Timeout(t *testing.T) {
 	})
 
 	go func() {
-		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, http.NoBody)
 		if err != nil {
 			return
 		}
@@ -123,7 +125,7 @@ func TestShutdownHTTPServer_Timeout(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 	}()
 
 	<-inHandler // запрос точно выполняется — иначе таймаут ничего не проверил бы

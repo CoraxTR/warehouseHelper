@@ -164,7 +164,7 @@ func (uc *ExportToExcelUseCase) startShipmentsProcessing(orders []*domain.Intern
 	// Регистрация горутины — под тем же мутексом, что и стоп-флаг: иначе Stop
 	// успел бы вернуться (счётчик wg нулевой), а фон стартовал бы после него.
 	uc.wg.Go(func() {
-		//nolint:contextcheck // фоновый запуск после ответа — контекст запроса уже отменён
+		// Контекст запроса тут не годится: он отменён вместе с ответом.
 		uc.processOrdersShipments(context.Background(), orders)
 	})
 }
