@@ -26,9 +26,13 @@ func startTestServer(t *testing.T, handler http.Handler) (srv *http.Server, url 
 		t.Fatalf("слушающий сокет: %v", err)
 	}
 
+	// Локальная копия: захват именованного результата srv в горутине revive
+	// считает потенциальной гонкой (datarace) — копия снимает замечание.
+	serve := srv
+
 	go func() {
 		// Serve всегда возвращает ошибку при закрытии — это ожидаемо.
-		_ = srv.Serve(ln)
+		_ = serve.Serve(ln)
 	}()
 
 	// Адрес даёт ОС: тесты не зависят от занятости конкретного порта.
