@@ -18,10 +18,51 @@ func newTestPool(warehouseCap, otherCap int) *MSWorkerPool {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &MSWorkerPool{
-		warehouseTasks: make(chan task, warehouseCap),
-		otherTasks:     make(chan task, otherCap),
-		ctx:            ctx,
-		cancel:         cancel,
+		// Заглушки воркеров: в живом пуле воркер есть ровно тогда, когда его
+		// ключ прошёл проверку, а без хотя бы одного воркера Submit отвечает
+		// ErrNoWorkers (см. TestSubmitWithoutWorkers) — здесь проверяется
+		// протокол Submit/Stop, а не отсутствие ключей.
+		WarehouseWorkers: []*MSWarehouseWorker{{}},
+		OtherWorkers:     []*MSOtherWorker{{}},
+		warehouseTasks:   make(chan task, warehouseCap),
+		otherTasks:       make(chan task, otherCap),
+		ctx:              ctx,
+		cancel:           cancel,
+	}
+}
+
+// TestSubmitWithoutWorkers — если ни один ключ МС не прошёл проверку, воркеров
+// нет и очередь разбирать некому. Submit обязан ответить ошибкой немедленно:
+// блокирующая отправка в очередь без потребителя держит RLock, Stop не может
+// взять Lock — остановка приложения виснет навсегда, вместо того чтобы выйти.
+func TestSubmitWithoutWorkers(t *testing.T) {
+	p := newTestPool(0, 0) // ёмкость 0: без guard'а отправка заблокировалась бы
+	p.WarehouseWorkers = nil
+	p.OtherWorkers = nil
+
+	for name, ch := range map[string]<-chan result{
+		"SubmitWarehouse": p.SubmitWarehouse(noopJob),
+		"SubmitOther":     p.SubmitOther(noopJob),
+	} {
+		t.Run(name, func(t *testing.T) {
+			v := recvOne(t, ch) // таймаут внутри recvOne = тест на зависание
+			if !errors.Is(v.Err, ErrNoWorkers) {
+				t.Errorf("Err = %v, ожидали ErrNoWorkers", v.Err)
+			}
+			assertClosed(t, ch)
+		})
+	}
+
+	done := make(chan struct{})
+	go func() {
+		p.Stop()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Stop завис: отправка держала RLock")
 	}
 }
 
@@ -161,7 +202,8 @@ func TestSubmitRaceWithStop(t *testing.T) {
 
 		for ch := range chans {
 			v := recvOne(t, ch)
-			// Воркеров нет: любая задача либо отвергнута, либо разобрана drain'ом.
+			// Воркеры-заглушки задачи не разбирают: любая задача либо
+			// отвергнута, либо разобрана drain'ом.
 			if !errors.Is(v.Err, ErrPoolStopped) {
 				t.Errorf("Err = %v, ожидали ErrPoolStopped", v.Err)
 			}

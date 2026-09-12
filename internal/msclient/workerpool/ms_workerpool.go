@@ -159,7 +159,13 @@ func (p *MSWorkerPool) SubmitWarehouse(job JobFunc) <-chan result {
 	defer p.mu.RUnlock()
 
 	if p.stopped {
-		return stoppedResult()
+		return errResult(ErrPoolStopped)
+	}
+
+	// Воркеров нет (все ключи не прошли проверку в NewMSWorkerPool) — очередь
+	// никто не разберёт: см. ErrNoWorkers.
+	if len(p.WarehouseWorkers) == 0 {
+		return errResult(ErrNoWorkers)
 	}
 
 	resCh := make(chan result, 1)
@@ -174,7 +180,11 @@ func (p *MSWorkerPool) SubmitOther(job JobFunc) <-chan result {
 	defer p.mu.RUnlock()
 
 	if p.stopped {
-		return stoppedResult()
+		return errResult(ErrPoolStopped)
+	}
+
+	if len(p.OtherWorkers) == 0 {
+		return errResult(ErrNoWorkers)
 	}
 
 	resCh := make(chan result, 1)
@@ -183,12 +193,19 @@ func (p *MSWorkerPool) SubmitOther(job JobFunc) <-chan result {
 	return resCh
 }
 
-// stoppedResult — ответ на задачу, которую пул не принял: одно значение и
+// ErrNoWorkers — задачи ставить некуда: ни один API-ключ МС не прошёл
+// проверку, живых воркеров нет. Именно ошибка, а не ожидание: очередь без
+// потребителя держит отправителя в блокирующей отправке под RLock, из-за чего
+// Stop не может взять Lock и остановка приложения виснет — а «Ctrl+C всегда
+// выходит» и есть смысл graceful shutdown.
+var ErrNoWorkers = errors.New("нет воркеров МС: ни один ключ не прошёл проверку")
+
+// errResult — ответ на задачу, которую пул не принял: одно значение и
 // закрытие, как у любой выполненной задачи. Иначе вызывающий либо прочитал бы
 // остановку как успех, либо ждал бы resCh вечно.
-func stoppedResult() <-chan result {
+func errResult(err error) <-chan result {
 	ch := make(chan result, 1)
-	ch <- result{Err: ErrPoolStopped}
+	ch <- result{Err: err}
 	close(ch)
 
 	return ch
