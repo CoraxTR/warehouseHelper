@@ -37,7 +37,9 @@ jobs:
         run: go vet ./...
 
       - name: Тесты
-        run: go test ./...
+        # -race: детектор работает только на исполнении — гонки ловятся теми
+        # тестами, что сталкивают горутины (остановка, ws-хаб, воркерпул МС).
+        run: go test -race ./...
 
       - name: Линт (golangci-lint, конфиг .golangci.yml)
         uses: golangci/golangci-lint-action@v7
