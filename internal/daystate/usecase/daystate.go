@@ -131,24 +131,28 @@ func (uc *UseCase) EnsureSnapshot(ctx context.Context, today time.Time) error {
 	return nil
 }
 
-// Start запускает фоновую задачу утреннего снапшота (образец tempcleaner):
-// раз в минуту проверяет, наступило ли время снапшота (время дня от полуночи,
-// локальное время процесса) и не сделан ли он уже за сегодня. Ошибка БД —
-// ретрай на следующем тике; ПК проспал 09:00 — снапшот делается первым же
-// тиком после пробуждения.
+// Start выполняет фоновую задачу утреннего снапшота до отмены ctx (образец
+// tempcleaner): раз в минуту проверяет, наступило ли время снапшота (время дня
+// от полуночи, локальное время процесса) и не сделан ли он уже за сегодня.
+// Ошибка БД — ретрай на следующем тике; ПК проспал 09:00 — снапшот делается
+// первым же тиком после пробуждения.
+//
+// Блокируется до отмены ctx, то есть вызывать только из горутины: иначе здесь
+// встанет старт приложения. Блокирующий вид — ради остановки: app.Shutdown
+// ждёт фон целиком, а не «отменил ctx и надеюсь».
 func (uc *UseCase) Start(ctx context.Context, snapshotTime time.Duration) {
-	go func() {
-		ticker := time.NewTicker(time.Minute)
-		defer ticker.Stop()
-		for {
-			uc.trySnapshot(ctx, snapshotTime)
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-			}
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+
+	for {
+		uc.trySnapshot(ctx, snapshotTime)
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
 		}
-	}()
+	}
 }
 
 // trySnapshot — один тик фоновой задачи; ошибка только логируется.

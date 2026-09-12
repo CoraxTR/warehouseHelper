@@ -104,3 +104,71 @@ func TestHubUnregister(t *testing.T) {
 	hub.PublishStockChange(stock.Event{Kind: stock.EventLotUpsert, ProductID: "p1"})
 	// Не паникует — уже хорошо; broadcast идёт в пустой список клиентов.
 }
+
+// TestHubClose — закрытие хаба (остановка приложения) рвёт все соединения и
+// не встаёт намертво: закрывать под мутексом нельзя, Unregister из readPump
+// берёт тот же мутекс (была бы взаимная блокировка).
+func TestHubClose(t *testing.T) {
+	hub := NewHub()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hub.ServeConn(w, r, []byte(`{"type":"snapshot","rows":[]}`))
+	}))
+	defer srv.Close()
+
+	url := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws"
+	conns := make([]*websocket.Conn, 0, 2)
+
+	for i := 0; i < 2; i++ {
+		conn, resp, err := websocket.DefaultDialer.Dial(url, nil)
+		if err != nil {
+			t.Fatalf("dial %d: %v", i, err)
+		}
+		if resp != nil {
+			_ = resp.Body.Close()
+		}
+		_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+		if _, _, err := conn.ReadMessage(); err != nil {
+			t.Fatalf("read snapshot %d: %v", i, err)
+		}
+		conns = append(conns, conn)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		hub.Close()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("hub.Close завис — похоже на взаимную блокировку с Unregister")
+	}
+
+	// Все соединения закрыты: читаем — ждём ошибку, а не данные.
+	for i, conn := range conns {
+		_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+		if _, _, err := conn.ReadMessage(); err == nil {
+			t.Errorf("соединение %d живо после Close", i)
+		}
+		_ = conn.Close()
+	}
+
+	// Клиенты сняты с учёта (readPump получил ошибку и вызвал Unregister) —
+	// значит, закрытие вне мутекса сработало как задумано.
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		hub.mu.Lock()
+		left := len(hub.clients)
+		hub.mu.Unlock()
+
+		if left == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("в хабе осталось %d клиентов", left)
+		}
+
+		time.Sleep(10 * time.Millisecond)
+	}
+}

@@ -294,3 +294,55 @@ func TestBackfillMissing_NoProducts(t *testing.T) {
 		t.Errorf("запросов = %d, want 0", sales.calls)
 	}
 }
+
+// blockingSales — клиент отчётов, висящий до отмены контекста: нужен, чтобы
+// проверить, что Stop() действительно отменяет фон и ДОЖИДАЕТСЯ выхода.
+type blockingSales struct {
+	started chan struct{}
+	done    chan struct{}
+}
+
+func (b *blockingSales) FetchProfitTurnover(ctx context.Context, _, _ time.Time, _ string, _ client.ProfitFilter) ([]client.ProfitRow, error) {
+	close(b.started)
+	<-ctx.Done()
+	close(b.done)
+
+	return nil, ctx.Err()
+}
+
+// TestBackfill_StopWaitsForGoroutines — после Stop() горутин бэкфилла не
+// остаётся: контекст отменён, запрос к МС завершился, Stop вернулся.
+func TestBackfill_StopWaitsForGoroutines(t *testing.T) {
+	sales := &blockingSales{started: make(chan struct{}), done: make(chan struct{})}
+	repo := &stubRepo{}
+	products := &stubProducts{byID: map[string]averagesales.TurnoverProduct{
+		"p1": {ID: "p1", UOM: "шт"},
+	}}
+	uc := NewUseCase(repo, sales, products)
+
+	uc.BackfillProducts([]string{"p1"}) // запускает воркер очереди
+	<-sales.started                     // запрос к МС уже висит
+
+	stopped := make(chan struct{})
+
+	go func() {
+		uc.Stop()
+		close(stopped)
+	}()
+
+	select {
+	case <-stopped:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Stop завис: горутины бэкфилла не завершились после отмены ctx")
+	}
+
+	// Запрос отчёта получил отмену и вернулся — значит, Stop дождался выхода,
+	// а не просто вернул управление.
+	select {
+	case <-sales.done:
+	default:
+		t.Error("Stop вернулся, но запрос отчёта МС не завершился")
+	}
+
+	uc.Stop() // повторный вызов безопасен (идемпотентность для di.Close)
+}

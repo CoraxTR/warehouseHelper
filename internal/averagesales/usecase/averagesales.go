@@ -187,7 +187,8 @@ func (uc *UseCase) BackfillMissing() {
 	uc.backfill.runMissing()
 }
 
-// Stop останавливает фоновые задачи бэкфилла (при завершении приложения).
+// Stop останавливает фоновые задачи бэкфилла (при завершении приложения):
+// отменяет их контексты и ждёт выхода горутин, чтобы не оборвать запись.
 func (uc *UseCase) Stop() {
 	done := metrics.Track(trackPkg, "Stop")
 	defer done()

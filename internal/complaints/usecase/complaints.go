@@ -612,23 +612,28 @@ func (uc *UseCase) sendPhotos(ctx context.Context, chatID, complaintID int64) er
 	return uc.notify.SendPhotos(ctx, chatID, files)
 }
 
-// Start запускает тикер напоминаний: раз в минуту ищет обращения, у которых
-// наступил дедлайн и статус не «Завершено», шлёт уведомление по правилу
-// текущего статуса и сдвигает дедлайн на сутки. Ошибки не роняют тикер:
-// дедлайн не сдвигается, пока уведомление не ушло (ретрай на следующем тике).
+// Start выполняет тикер напоминаний до отмены ctx: раз в минуту ищет
+// обращения, у которых наступил дедлайн и статус не «Завершено», шлёт
+// уведомление по правилу текущего статуса и сдвигает дедлайн на сутки. Ошибки
+// не роняют тикер: дедлайн не сдвигается, пока уведомление не ушло (ретрай на
+// следующем тике).
+//
+// Блокируется до отмены ctx, то есть вызывать только из горутины: иначе здесь
+// встанет старт приложения. Блокирующий вид — ради остановки: app.Shutdown
+// ждёт фон целиком, а не «отменил ctx и надеюсь».
 func (uc *UseCase) Start(ctx context.Context) {
-	go func() {
-		ticker := time.NewTicker(time.Minute)
-		defer ticker.Stop()
-		for {
-			uc.tickReminders(ctx)
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-			}
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+
+	for {
+		uc.tickReminders(ctx)
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
 		}
-	}()
+	}
 }
 
 // tickReminders — один тик напоминаний; ошибки только логируются.

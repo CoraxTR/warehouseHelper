@@ -27,11 +27,19 @@ const (
 type backfillRunner struct {
 	uc *UseCase
 
-	mu      sync.Mutex
-	queue   []string
-	cancel  context.CancelFunc
-	started bool
-	missing bool // идёт ли стартовая дозаливка
+	mu    sync.Mutex
+	queue []string
+	// Отмены двух независимых горутин (воркер очереди и стартовая дозаливка):
+	// один общий cancel не годится — отменив его, мы погасили бы только ту
+	// задачу, которая поставила его последней, а вторая осталась бы живой.
+	workerCancel  context.CancelFunc
+	missingCancel context.CancelFunc
+	started       bool
+	missing       bool // идёт ли стартовая дозаливка
+
+	// wg считает горутины бэкфилла: stop ждёт их завершения, иначе процесс
+	// выйдет и оборвёт запись батча на середине.
+	wg sync.WaitGroup
 }
 
 func newBackfillRunner(uc *UseCase) *backfillRunner {
@@ -58,10 +66,16 @@ func (b *backfillRunner) ensureWorkerLocked() {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
-	b.cancel = cancel
+	b.workerCancel = cancel
 	b.started = true
 
-	go b.worker(ctx)
+	b.wg.Add(1)
+
+	go func() {
+		defer b.wg.Done()
+
+		b.worker(ctx)
+	}()
 }
 
 // worker последовательно обрабатывает очередь товаров.
@@ -97,13 +111,17 @@ func (b *backfillRunner) runMissing() {
 	b.missing = true
 
 	ctx, cancel := context.WithCancel(context.Background())
-	b.cancel = cancel
+	b.missingCancel = cancel
+
+	b.wg.Add(1)
 
 	go func() {
+		defer b.wg.Done()
+
 		defer func() {
 			b.mu.Lock()
 			b.missing = false
-			b.cancel = nil
+			b.missingCancel = nil
 			b.mu.Unlock()
 		}()
 
@@ -113,13 +131,24 @@ func (b *backfillRunner) runMissing() {
 	}()
 }
 
-// stop отменяет фоновые задачи (при завершении приложения).
+// stop отменяет фоновые задачи и ждёт их завершения (при остановке приложения).
+// Бэкфилл — это только read-запросы отчётов МС и идемпотентные upsert'ы
+// (повторный запуск ничего не портит), но ждать всё равно надо: иначе процесс
+// выйдет и оборвёт запись батча. Горутины бросают работу на следующей проверке
+// ctx (запросы к МС и БД отменяются вместе с контекстом).
 func (b *backfillRunner) stop() {
 	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.cancel != nil {
-		b.cancel()
+	if b.workerCancel != nil {
+		b.workerCancel()
 	}
+	if b.missingCancel != nil {
+		b.missingCancel()
+	}
+	b.mu.Unlock()
+
+	// Ждём вне мутекса: воркер берёт его на каждой итерации — ожидание под
+	// мутексом превратилось бы во взаимную блокировку.
+	b.wg.Wait()
 }
 
 // backfillProduct — первичное заполнение истории одного товара: месячной
