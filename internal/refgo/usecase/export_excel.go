@@ -51,6 +51,13 @@ type ExportToExcelUseCase struct {
 	shipmentEnsurer   OrdersShipmentEnsurer
 	tempCleaner       TempCleaner
 	tempCleanupMaxAge time.Duration
+
+	// Жизненный цикл фоновой обработки отгрузок (см. startShipmentsProcessing и
+	// Stop): mu защищает stopped и разводит старт фона с ожиданием в Stop —
+	// без этого wg.Wait мог бы гоняться с wg.Add из нового экспорта.
+	mu      sync.Mutex
+	wg      sync.WaitGroup
+	stopped bool
 }
 
 func NewExportToExcelUseCase(exporter ExcelExporter, orders OrdersProvider, shipper OrdersShipper,
@@ -107,10 +114,9 @@ func (uc *ExportToExcelUseCase) ExportOrders(ctx context.Context) (summary *Expo
 	}
 
 	// Отметка «отгружен в Реф» и создание отгрузок — в фоне: страница с итогами
-	// не должна ждать обработки всех заказов. Контекст запроса тут не годится
-	// (отменяется после ответа), поэтому берём context.Background().
-	//nolint:contextcheck // фоновый запуск после ответа — контекст запроса уже отменён
-	go uc.processOrdersShipments(context.Background(), orders)
+	// не должна ждать обхода всех заказов в МС. Фон учитывается в wg и
+	// закрывается Stop: иначе процесс уйдёт посреди пометок, и часть
+	// заказов останется помеченной в базе, но не в МС.
 
 	return summary, nil
 }
@@ -141,6 +147,42 @@ func (uc *ExportToExcelUseCase) processOrdersShipments(ctx context.Context, orde
 	}
 
 	wg.Wait()
+}
+
+// startShipmentsProcessing запускает обработку отгрузок в фоне: страница с
+// итогами не должна ждать обхода заказов в МС. Контекст запроса тут не годится
+// (отменяется вместе с ответом), поэтому фон идёт от context.Background() — а
+// закрывается он не таймаутом, а Stop.
+func (uc *ExportToExcelUseCase) startShipmentsProcessing(orders []*domain.InternalOrder) {
+	uc.mu.Lock()
+	defer uc.mu.Unlock()
+
+	if uc.stopped {
+		return
+	}
+
+	// Регистрация горутины — под тем же мутексом, что и стоп-флаг: иначе Stop
+	// успел бы вернуться (счётчик wg нулевой), а фон стартовал бы после него.
+	uc.wg.Go(func() {
+		//nolint:contextcheck // фоновый запуск после ответа — контекст запроса уже отменён
+		uc.processOrdersShipments(context.Background(), orders)
+	})
+}
+
+// Stop останавливает фоновую обработку отгрузок и ЖДЁТ её: заказ, помеченный в
+// базе, но не помеченный в МС (или без созданной отгрузки), — расхождение с МС,
+// которое всплывает уже на складе. Ждём ровно столько, сколько идёт текущий
+// запрос в МС: свои таймауты ставит клиент МС.
+//
+// Новый фон после остановки не стартует (stopped под мутексом), поэтому
+// wg.Wait не гоняется с wg.Add: экспорт, начавшийся после Stop, просто не
+// запускает пометки. Повторный вызов безопасен.
+func (uc *ExportToExcelUseCase) Stop() {
+	uc.mu.Lock()
+	uc.stopped = true
+	uc.mu.Unlock()
+
+	uc.wg.Wait()
 }
 
 type ExportBarcodesToExcelUseCase struct {
