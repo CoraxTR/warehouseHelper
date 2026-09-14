@@ -30,19 +30,20 @@ type Digest struct {
 	Surplus   []Row // все строки с источником «избыток»
 }
 
-// sortRank — группа строки в порядке отчёта: ручные → сроковые → избыточные.
-// Строки без источника (SourceNone) в отчёт не попадают и уходят в конец.
+// sourceRanks — группа строки в порядке отчёта: ручные → сроковые → избыточные.
+var sourceRanks = map[Source]int{
+	SourceManual:  0,
+	SourceExpiry:  1,
+	SourceSurplus: 2,
+}
+
+// sortRank — группа строки в порядке отчёта. Строки без источника (SourceNone)
+// и любые будущие источники уезжают в конец: в отчёт они не попадают.
 func sortRank(s Source) int {
-	switch {
-	case s == SourceManual:
-		return 0
-	case s == SourceExpiry:
-		return 1
-	case s == SourceSurplus:
-		return 2
-	default:
-		return 3 // SourceNone и любые будущие источники — в конец списка
+	if rank, ok := sourceRanks[s]; ok {
+		return rank
 	}
+	return 3
 }
 
 // Sort — порядок строк для экрана и дайджеста:

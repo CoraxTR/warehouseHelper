@@ -414,7 +414,7 @@ func TestDiscountInputColumnsIncludeDiscounts(t *testing.T) {
 	}
 	// Оборота в снапшоте нет и не должно быть: его читает шов модуля средних продаж.
 	if strings.Contains(discountInputColumns, "turnover") {
-		t.Errorf("в discountInputColumns осталась колонка оборота")
+		t.Error("в discountInputColumns осталась колонка оборота")
 	}
 }
 

@@ -68,19 +68,20 @@ func discountDate(t time.Time) string {
 	return t.Format("02.01.2006")
 }
 
-// discountSourceLabel — источник скидки по-русски (для колонки «Источник»).
+// sourceLabels — русские названия источников скидки для колонки «Источник».
+var sourceLabels = map[discounts.Source]string{
+	discounts.SourceManual:  "ручная",
+	discounts.SourceExpiry:  "по сроку",
+	discounts.SourceSurplus: "избыток",
+}
+
+// discountSourceLabel — источник скидки по-русски. SourceNone и неизвестные
+// источники — прочерк.
 func discountSourceLabel(s discounts.Source) string {
-	switch {
-	case s == discounts.SourceManual:
-		return "ручная"
-	case s == discounts.SourceExpiry:
-		return "по сроку"
-	case s == discounts.SourceSurplus:
-		return "избыток"
-	default:
-		// SourceNone и неизвестные источники — прочерк
-		return dash
+	if label, ok := sourceLabels[s]; ok {
+		return label
 	}
+	return dash
 }
 
 // discountCoeff — коэффициент избытка тем же форматом, что в дайджесте
