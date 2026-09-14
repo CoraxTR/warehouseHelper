@@ -18,6 +18,7 @@
         <h1>{{if .ShortList}}Шорт-лист{{else}}Сроки{{end}}</h1>
         <div class="top-actions">
             {{if .ShortList}}<a class="btn" href="/ms/dates">← Сроки</a>{{else}}<a class="btn" href="/ms/dates/short">Шорт-лист</a>{{end}}
+            <a class="btn" href="/ms/discounts">Скидки</a>
             <a class="btn btn-green" href="/ms/dates/update">Обновить сроки</a>
             <span id="ws-status">подключение…</span>
         </div>
@@ -335,10 +336,10 @@
             for (var k = 0; k < n; k++) {
                 if (k < lots.length) {
                     var lot = lots[k];
-                    var yellow = hasDiscount(lot) ? ' has-discount' : '';
+                    var tone = onlySurplus(lot) ? ' only-surplus' : (hasDiscount(lot) ? ' has-discount' : '');
                     var blue = expiresToday(lot.best_before) ? ' expires-today' : '';
-                    html += '<td class="cell-pair' + yellow + blue + '" data-lot="1" data-product="' + esc(p.id) + '" data-bb="' + lot.best_before + '" data-field="qty">' + lot.qty + '</td>';
-                    html += '<td class="cell-pair' + yellow + blue + '" data-lot="1" data-product="' + esc(p.id) + '" data-bb="' + lot.best_before + '" data-field="date">' + fmtDate(lot.best_before) + '</td>';
+                    html += '<td class="cell-pair' + tone + blue + '" data-lot="1" data-product="' + esc(p.id) + '" data-bb="' + lot.best_before + '" data-field="qty">' + lot.qty + '</td>';
+                    html += '<td class="cell-pair' + tone + blue + '" data-lot="1" data-product="' + esc(p.id) + '" data-bb="' + lot.best_before + '" data-field="date">' + fmtDate(lot.best_before) + '</td>';
                 } else {
                     html += '<td class="cell-empty"></td><td class="cell-empty"></td>';
                 }
@@ -361,22 +362,57 @@
             return d.getFullYear() + '-' + (m < 10 ? '0' + m : m) + '-' + (day < 10 ? '0' + day : day);
         }
 
-        // Жёлтая подсветка: у пары задана любая скидка (ручная или «просто»).
-        function hasDiscount(lot) {
-            return lot.discount_general != null ||
-                lot.discount_telegram != null ||
-                lot.discount_general_manual != null ||
-                lot.discount_telegram_manual != null;
+        // Значение скидки: 0 = «скидки нет» (правило «0 = NULL», владелец 14.09.2026),
+        // поэтому ноль и отсутствие поля равнозначны — оба дают null.
+        function discountValue(v) {
+            return (v == null || v === 0) ? null : v;
         }
 
-        // Ручная скидка всегда важнее «просто».
+        // Жёлтая подсветка: у пары есть активная скидка — ручная или сроковая.
+        // Метка источника (discount_source: expiry | surplus | manual) приходит
+        // с лотом; избыток — младшая ступень, у него своя, розовая подсветка.
+        // 10 % и 20 % не различаем: подсветка говорит «скидка есть», не «сколько».
+        function hasDiscount(lot) {
+            if (hasManualDiscount(lot)) {
+                return true;
+            }
+            var src = lot.discount_source || '';
+            if (src === 'surplus') {
+                return false;
+            }
+            if (src === 'expiry' || src === 'manual') {
+                return true;
+            }
+            // Лот без метки (данные старого кода): значение движка считаем скидкой.
+            return discountValue(lot.discount_general) != null ||
+                discountValue(lot.discount_telegram) != null;
+        }
+
+        // Нежно-розовая подсветка: у пары ТОЛЬКО избыток — метка «surplus» и
+        // ручных скидок нет. Лот «и срок, и избыток» жёлтый (метка одна, её
+        // ставит движок по тому, что записал).
+        function onlySurplus(lot) {
+            return (lot.discount_source || '') === 'surplus' && !hasManualDiscount(lot);
+        }
+
+        // Ручная скидка UI: заданное значение в manual-колонке (0 = скидки нет).
+        function hasManualDiscount(lot) {
+            return discountValue(lot.discount_general_manual) != null ||
+                discountValue(lot.discount_telegram_manual) != null;
+        }
+
+        // Effective канала = COALESCE(NULLIF(manual,0), NULLIF(plain,0)): ручная
+        // скидка важнее «просто», но ноль не перекрывает вторую колонку.
         function effectiveDiscount(lot, channel) {
             var manual = (channel === 'general') ? lot.discount_general_manual : lot.discount_telegram_manual;
             var plain = (channel === 'general') ? lot.discount_general : lot.discount_telegram;
-            return (manual != null) ? manual : plain;
+            var m = discountValue(manual);
+            return (m != null) ? m : discountValue(plain);
         }
 
-        // Правая колонка канала: значение самой левой пары, у которой оно заполнено.
+        // Правая колонка канала («Активные скидки»): значение самой левой пары,
+        // у которой оно заполнено. Всегда пересчёт из лотов — в базе отдельного
+        // поля «активная скидка» нет.
         function rightDiscount(lots, channel) {
             for (var i = 0; i < lots.length; i++) {
                 var v = effectiveDiscount(lots[i], channel);
@@ -473,8 +509,11 @@
 
             var genFact = fmtDiscount(effectiveDiscount(lot, 'general'));
             var tgFact = fmtDiscount(effectiveDiscount(lot, 'telegram'));
-            var genVal = (lot.discount_general_manual != null) ? lot.discount_general_manual : '';
-            var tgVal = (lot.discount_telegram_manual != null) ? lot.discount_telegram_manual : '';
+            // 0 = NULL: сохранённый ноль (старые данные) показываем как пустое поле.
+            var genManual = discountValue(lot.discount_general_manual);
+            var tgManual = discountValue(lot.discount_telegram_manual);
+            var genVal = (genManual != null) ? genManual : '';
+            var tgVal = (tgManual != null) ? tgManual : '';
 
             var html = '<div class="modal-title">' + esc(p.name) + ' — годен до ' + fmtDate(bb) + '</div>';
             html += '<table class="discount-table">';

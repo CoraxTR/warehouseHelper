@@ -34,6 +34,9 @@ type Repository interface {
 	LoadAllStock(ctx context.Context) ([]stock.Product, error)
 	// SetManualDiscount обновляет ручные скидки лота по PK; строки нет — stock.ErrLotNotFound.
 	SetManualDiscount(ctx context.Context, productID string, bestBefore time.Time, generalManual, telegramManual *int16) error
+	// SetDiscounts обновляет «просто»-скидки лотов в одной транзакции (только
+	// plain-колонки, ручные не трогаются); строки нет — stock.ErrLotNotFound.
+	SetDiscounts(ctx context.Context, writes []stock.DiscountWrite) error
 	// LoadProductsByCodes возвращает товары каталога по internal_code
 	// (включая товары без остатков) — карта code → товар.
 	LoadProductsByCodes(ctx context.Context, codes []string) (map[string]stock.Product, error)
@@ -78,6 +81,17 @@ type WarehouseNotifier interface {
 	NotifyWarehouse(text string) error
 }
 
+// LotChangeListener — наблюдатель «лоты товара изменились»: домен остатков не
+// знает, кому это нужно (модуль расчёта скидок, страницы), поэтому потребителя
+// подключает di.go сеттером после создания юзкейса (образец
+// SetCatalogChangeListener у goods). Вызывается после КАЖДОЙ успешной записи
+// лотов, по одному разу на товар. nil — шов отключён (тесты). Ошибка слушателя
+// операцию стока не роняет — только лог (как у DayStateRecorder): в БД и кэше
+// изменения уже приняты, откатывать их из-за наблюдателя нельзя.
+type LotChangeListener interface {
+	OnLotsChanged(ctx context.Context, productID string) error
+}
+
 // maxDiscount — верхняя граница скидки в процентах (CHECK в БД дублирует).
 const maxDiscount = 100
 
@@ -88,6 +102,11 @@ type StockUseCase struct {
 	pub      Publisher
 	dayState DayStateRecorder
 	notifier WarehouseNotifier
+
+	// lotListener — шов «лоты товара изменились» (модуль расчёта скидок).
+	// Ставится сеттером при сборке (di.go) до первой записи, дальше только
+	// читается — как dayState/notifier, без мутекса.
+	lotListener LotChangeListener
 
 	mu     sync.RWMutex
 	cache  map[string]*stock.Product // product_id → товар каталога (Lots — по возрастанию best_before, может быть пустым)
@@ -119,6 +138,37 @@ func (uc *StockUseCase) notifyDayState(ctx context.Context, productIDs ...string
 		seen[pid] = struct{}{}
 		if err := uc.dayState.OnStockChanged(ctx, pid); err != nil {
 			slog.Info(fmt.Sprintf("stock: daystate %s: %v", pid, err))
+		}
+	}
+}
+
+// SetLotChangeListener подключает шов «лоты товара изменились» (di.go после
+// создания юзкейса; nil — отключён, тесты). Вызывается после успешной записи
+// лотов, поэтому ставить его нужно на сборке, а не на ходу.
+func (uc *StockUseCase) SetLotChangeListener(l LotChangeListener) {
+	uc.lotListener = l
+}
+
+// notifyLotChange сообщает слушателю об изменении лотов товара — по разу на
+// уникальный productID (порядок первого появления). Ошибка слушателя только
+// логируется: БД и кэш уже записаны, ронять из-за наблюдателя операцию нельзя
+// (как у notifyDayState).
+func (uc *StockUseCase) notifyLotChange(ctx context.Context, productIDs ...string) {
+	l := uc.lotListener
+	if l == nil {
+		return
+	}
+	seen := make(map[string]struct{}, len(productIDs))
+	for _, pid := range productIDs {
+		if pid == "" {
+			continue
+		}
+		if _, ok := seen[pid]; ok {
+			continue
+		}
+		seen[pid] = struct{}{}
+		if err := l.OnLotsChanged(ctx, pid); err != nil {
+			slog.Info(fmt.Sprintf("stock: lot listener %s: %v", pid, err))
 		}
 	}
 }
@@ -257,6 +307,7 @@ func (uc *StockUseCase) SetManualDiscount(ctx context.Context, productID string,
 		uc.pub.PublishStockChange(stock.Event{Kind: stock.EventLotUpsert, ProductID: productID, Lot: lot})
 	}
 	uc.notifyDayState(ctx, productID)
+	uc.notifyLotChange(ctx, productID)
 
 	return nil
 }
@@ -487,15 +538,17 @@ func (uc *StockUseCase) buildReplacePlans(batches map[string]map[time.Time]*agg,
 // qty из сканов, produced_on — COALESCE(существующего, нового), ручные
 // скидки сохраняются только у лотов со сроком не раньше сегодня.
 // ex == nil — лота ещё нет (создаётся с нуля).
+//
+// Скидки движка (General/Telegram и метка источника) в план НЕ тащим: план
+// собирается заранее, а расчёт скидок мог записать значение в промежутке.
+// Их берёт mergeLots из ТЕКУЩЕГО кэша при применении (решение владельца
+// 14.09: «не тащим, пересчёт на новый час»). В БД ReplaceStockLots эти колонки
+// тоже не трогает, так что кэш и БД сходятся.
 func targetLot(ex *stock.Lot, a *agg, bb, today time.Time) (lot stock.Lot, write stock.LotWrite) {
-	var genMan, tgMan, general, telegram *int16
-	if ex != nil {
-		if !bb.Before(today) {
-			genMan = cloneInt16(ex.GeneralManual)
-			tgMan = cloneInt16(ex.TelegramManual)
-		}
-		general = cloneInt16(ex.General)
-		telegram = cloneInt16(ex.Telegram)
+	var genMan, tgMan *int16
+	if ex != nil && !bb.Before(today) {
+		genMan = cloneInt16(ex.GeneralManual)
+		tgMan = cloneInt16(ex.TelegramManual)
 	}
 	produced := a.producedOn
 	if ex != nil && ex.ProducedOn != nil {
@@ -505,8 +558,6 @@ func targetLot(ex *stock.Lot, a *agg, bb, today time.Time) (lot stock.Lot, write
 		BestBefore:     bb,
 		Qty:            a.qty,
 		ProducedOn:     &produced,
-		General:        general,
-		Telegram:       telegram,
 		GeneralManual:  genMan,
 		TelegramManual: tgMan,
 	}
@@ -558,6 +609,7 @@ func (uc *StockUseCase) applyReplacePlans(ctx context.Context, order []string, p
 	uc.mu.Unlock()
 	uc.publishReplaceEvents(order, plans)
 	uc.notifyDayState(ctx, order...)
+	uc.notifyLotChange(ctx, order...)
 
 	return nil
 }
@@ -616,6 +668,12 @@ func mergeLots(lots []stock.Lot, pl *replacePlan) []stock.Lot {
 			}
 		}
 		if idx >= 0 {
+			// Скидки движка и метку источника берём из ТЕКУЩЕГО кэша: замена
+			// остатков их не меняет, а план мог быть собран до записи расчёта
+			// (иначе кэш вернул бы устаревшее значение).
+			lot.General = out[idx].General
+			lot.Telegram = out[idx].Telegram
+			lot.DiscountSource = out[idx].DiscountSource
 			out[idx] = lot
 		} else {
 			out = append(out, lot)
@@ -676,7 +734,9 @@ func findLot(p *stock.Product, bestBefore time.Time) *stock.Lot {
 	return nil
 }
 
-// validateManualDiscount проверяет ручную скидку: nil — сброс, иначе 0..100.
+// validateManualDiscount проверяет значение скидки: nil — сброс (в БД NULL),
+// иначе 0..100. Годится и для ручных скидок UI, и для «просто»-скидок модуля
+// расчёта — ограничения колонок одинаковые.
 func validateManualDiscount(label string, v *int16) error {
 	if v == nil {
 		return nil
@@ -736,6 +796,7 @@ func (uc *StockUseCase) AcceptStock(ctx context.Context, lots []stock.LotIn) err
 		ids = append(ids, l.ProductID)
 	}
 	uc.notifyDayState(ctx, ids...)
+	uc.notifyLotChange(ctx, ids...)
 
 	return nil
 }
@@ -867,6 +928,7 @@ func (uc *StockUseCase) PickStock(ctx context.Context, lots []stock.PickLotIn) e
 		ids = append(ids, l.ProductID)
 	}
 	uc.notifyDayState(ctx, ids...)
+	uc.notifyLotChange(ctx, ids...)
 
 	if len(deficitGroups) > 0 && uc.notifier != nil {
 		for _, g := range deficitGroups {
@@ -983,4 +1045,177 @@ func addDeficitGroup(cur *stock.Product, groups *[]string, seen map[string]struc
 	}
 	seen[cur.GroupName] = struct{}{}
 	*groups = append(*groups, cur.GroupName)
+}
+
+// SetDiscounts записывает «просто»-скидки лотов (шов модуля расчёта скидок):
+// General/Telegram идут в discount_general/discount_telegram, метка источника
+// (Source) — в discount_source (пустая строка = NULL), ручные скидки UI
+// не трогаются. nil — скидка не задана (в БД NULL). Пустой список — нет работы
+// (без обращения к БД). Запись синхронна: БД → кэш → события ws; затем
+// DayStateRecorder (строки дня) и слушатель лотов (LotChangeListener) — их
+// ошибки операцию не роняют.
+func (uc *StockUseCase) SetDiscounts(ctx context.Context, writes []stock.DiscountWrite) error {
+	done := metrics.Track(trackPkg, "SetDiscounts")
+	defer done()
+
+	// Пустой батч — штатная ситуация (пересчёт ничего не меняет): в БД не идём.
+	if len(writes) == 0 {
+		return nil
+	}
+
+	items, err := normalizeDiscountWrites(writes)
+	if err != nil {
+		return err
+	}
+
+	if err := uc.repo.SetDiscounts(ctx, items); err != nil {
+		return fmt.Errorf("set discounts: %w", err)
+	}
+
+	// Товары вне кэша (не было остатков) — подгружаем из каталога до
+	// блокировки кэша; ошибка не откатывает запись в БД (как в loadAcceptCatalog).
+	byID, err := uc.loadDiscountCatalog(ctx, items)
+	if err != nil {
+		return err
+	}
+
+	// Запись кэша и события — под одним мутексом: порядок дельт в хабе
+	// совпадает с порядком записей кэша (иначе два писателя одного лота
+	// доставили бы клиенту устаревшее состояние последним).
+	uc.mu.Lock()
+	events := uc.applyDiscountsCacheLocked(items, byID)
+	if uc.pub != nil {
+		for _, e := range events {
+			uc.pub.PublishStockChange(e)
+		}
+	}
+	uc.mu.Unlock()
+
+	ids := make([]string, 0, len(items))
+	for _, w := range items {
+		ids = append(ids, w.ProductID)
+	}
+	uc.notifyDayState(ctx, ids...)
+	uc.notifyLotChange(ctx, ids...)
+
+	return nil
+}
+
+// normalizeDiscountWrites валидирует батч скидок и копирует значения: даты —
+// к UTC-полуночи (ключ кэша, питфолл зон), указатели — свои копии (кэш и
+// репозиторий не держат указатели вызывающего).
+func normalizeDiscountWrites(writes []stock.DiscountWrite) ([]stock.DiscountWrite, error) {
+	items := make([]stock.DiscountWrite, 0, len(writes))
+	for _, w := range writes {
+		if strings.TrimSpace(w.ProductID) == "" {
+			return nil, errors.New("скидки: не указан товар")
+		}
+		if w.BestBefore.IsZero() {
+			return nil, fmt.Errorf("скидки: товар %s без срока годности", w.ProductID)
+		}
+		if err := validateManualDiscount("скидка сайта (просто)", w.General); err != nil {
+			return nil, err
+		}
+		if err := validateManualDiscount("скидка ТГ (просто)", w.Telegram); err != nil {
+			return nil, err
+		}
+		source := strings.TrimSpace(w.Source)
+		if err := validateDiscountSource(source); err != nil {
+			return nil, err
+		}
+		items = append(items, stock.DiscountWrite{
+			ProductID:  w.ProductID,
+			BestBefore: normalizeDate(w.BestBefore),
+			General:    cloneInt16(w.General),
+			Telegram:   cloneInt16(w.Telegram),
+			Source:     source,
+		})
+	}
+
+	return items, nil
+}
+
+// validateDiscountSource — метка источника: пустая («метки нет») или одна из
+// значений, разрешённых CHECK-ом колонки product_stock.discount_source.
+// Опечатка движка не должна тихо лечь в БД как чужой источник.
+func validateDiscountSource(source string) error {
+	switch source {
+	case "", stock.DiscountSourceManual, stock.DiscountSourceExpiry, stock.DiscountSourceSurplus:
+		return nil
+	}
+
+	return fmt.Errorf("скидки: неизвестный источник %q", source)
+}
+
+// loadDiscountCatalog подгружает из каталога товары, которых нет в кэше
+// (не было остатков). Вызывается до блокировки кэша (образец loadAcceptCatalog).
+func (uc *StockUseCase) loadDiscountCatalog(ctx context.Context, writes []stock.DiscountWrite) (map[string]stock.Product, error) {
+	uc.mu.RLock()
+	var missing []string
+	seen := make(map[string]struct{}, len(writes))
+	for _, w := range writes {
+		if _, ok := seen[w.ProductID]; ok {
+			continue
+		}
+		seen[w.ProductID] = struct{}{}
+		if _, ok := uc.cache[w.ProductID]; !ok {
+			missing = append(missing, w.ProductID)
+		}
+	}
+	uc.mu.RUnlock()
+
+	byID := make(map[string]stock.Product, len(missing))
+	for _, pid := range missing {
+		p, err := uc.repo.LoadProductByID(ctx, pid)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %s", stock.ErrProductNotFound, pid)
+		}
+		byID[pid] = p
+	}
+	return byID, nil
+}
+
+// applyDiscountsCacheLocked применяет «просто»-скидки к кэшу и собирает события
+// lot_upsert (nil — скидка снята). Лота в кэше нет — кэш разошёлся с БД: лог,
+// событие не публикуем (операцию не роняем — БД уже записана).
+// Вызывается только под mu.Lock.
+func (uc *StockUseCase) applyDiscountsCacheLocked(writes []stock.DiscountWrite, byID map[string]stock.Product) []stock.Event {
+	events := make([]stock.Event, 0, len(writes))
+	for _, w := range writes {
+		cur, ok := uc.cache[w.ProductID]
+		if !ok {
+			cat, ok := byID[w.ProductID]
+			if !ok {
+				slog.Info(fmt.Sprintf("stock: set discounts: товар %s вне кэша и каталога", w.ProductID))
+				continue
+			}
+			cp := cat
+			cur = &cp
+			uc.cache[w.ProductID] = cur
+			if cur.InternalCode != "" {
+				uc.byCode[cur.InternalCode] = w.ProductID
+			}
+		}
+
+		lot := findLot(cur, w.BestBefore)
+		if lot == nil {
+			slog.Info(fmt.Sprintf("stock: set discounts: лот (%s, %s) вне кэша", w.ProductID, w.BestBefore.Format(time.DateOnly)))
+			continue
+		}
+		lot.General = cloneInt16(w.General)
+		lot.Telegram = cloneInt16(w.Telegram)
+		// Метка идёт вместе со скидками: пустая строка правки = метки нет
+		// (движок снял свою скидку) — кэш обязан совпасть с БД.
+		lot.DiscountSource = w.Source
+
+		updated := *lot
+		events = append(events, stock.Event{
+			Kind:       stock.EventLotUpsert,
+			ProductID:  w.ProductID,
+			BestBefore: updated.BestBefore,
+			Lot:        &updated,
+		})
+	}
+
+	return events
 }

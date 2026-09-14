@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"net/http"
+	"time"
 	asucase "warehouseHelper/internal/averagesales/usecase"
 	aucase "warehouseHelper/internal/avgweight/usecase"
 	cphotos "warehouseHelper/internal/complaints/photostore"
@@ -10,6 +11,8 @@ import (
 	"warehouseHelper/internal/config"
 	ducecase "warehouseHelper/internal/daystate/usecase"
 	myhttp "warehouseHelper/internal/delivery/http"
+	"warehouseHelper/internal/discounts"
+	ducase "warehouseHelper/internal/discounts/usecase"
 	gucase "warehouseHelper/internal/goods/usecase"
 	"warehouseHelper/internal/msclient/client"
 	orderscache "warehouseHelper/internal/msclient/ordercache"
@@ -29,6 +32,7 @@ import (
 	"warehouseHelper/internal/repository/postgres"
 	rwucase "warehouseHelper/internal/reservewatch/usecase"
 	retucase "warehouseHelper/internal/returns/usecase"
+	"warehouseHelper/internal/stock"
 	sucase "warehouseHelper/internal/stock/usecase"
 	stockws "warehouseHelper/internal/stock/ws"
 	"warehouseHelper/internal/telegram"
@@ -75,6 +79,7 @@ type DIContainer struct {
 	returnsUC       *retucase.UseCase
 	reserveWatchUC  *rwucase.UseCase
 	stockUC         *sucase.StockUseCase
+	discountsUC     *ducase.UseCase
 	stockHub        *stockws.Hub
 	receiveBarcodes *rucase.BarcodeEditor
 	receivingUC     *rucase.ReceivingUseCase
@@ -410,6 +415,70 @@ func (d *DIContainer) StockUC() *sucase.StockUseCase {
 	return d.stockUC
 }
 
+// DiscountsUC — сценарии модуля «Скидки»: расчёт по сроку и избытку, реестр
+// пар, ТГ-слот и дайджест. Швы: PGClient — Repository (вход расчёта, история
+// слотов, маркеры дня), AverageSalesUC — Turnover (пакетные обороты),
+// TelegramNotifier — каналы склада и общего чата, discountsWriter — запись
+// скидок через модуль «Сроки».
+//
+// Здесь же замыкается событие стока: лот изменился (приёмка, подбор, ручная
+// скидка) → товар отмечен для свежего оборота в ближайшем тике избытка.
+func (d *DIContainer) DiscountsUC() *ducase.UseCase {
+	if d.discountsUC == nil {
+		d.discountsUC = ducase.NewUseCase(
+			d.OrdersRepository(),
+			d.AverageSalesUC(),
+			discountsWriter{stock: d.StockUC()},
+			d.TelegramNotifier(),
+			d.TelegramNotifier(),
+			time.Now,
+		)
+		// StockUC() создан выше (скидки пишутся через него), рекурсии нет:
+		// stock не тянет DiscountsUC. Вызов до первого запроса — слушатель стоит.
+		d.StockUC().SetLotChangeListener(d.discountsUC)
+	}
+
+	return d.discountsUC
+}
+
+// DiscountSchedule — расписание фоновых шагов модуля скидок из env-настроек
+// (утро — как у снапшота состояний, ТГ-слот и подъём — свои времена).
+func (d *DIContainer) DiscountSchedule() ducase.Schedule {
+	cfg := d.Config()
+
+	return ducase.Schedule{
+		Morning:     cfg.DayStateSnapshotTime,
+		Plan:        cfg.DiscountTGPlanTime,
+		Raise:       cfg.DiscountTGRaiseTime,
+		TelegramCap: cfg.DiscountTelegramCap,
+	}
+}
+
+// discountsWriter — адаптер шва записи: правки модуля скидок (discounts.DiscountWrite)
+// в шов модуля «Сроки» (stock.DiscountWrite). Скидками лота владеет stock
+// (БД → кэш → событие), поэтому пишем его сценарием, а не своей таблицей.
+type discountsWriter struct {
+	stock *sucase.StockUseCase
+}
+
+func (w discountsWriter) SetDiscounts(ctx context.Context, writes []discounts.DiscountWrite) error {
+	if len(writes) == 0 {
+		return nil
+	}
+	out := make([]stock.DiscountWrite, 0, len(writes))
+	for _, wr := range writes {
+		out = append(out, stock.DiscountWrite{
+			ProductID:  wr.ProductID,
+			BestBefore: wr.BestBefore,
+			General:    wr.General,
+			Telegram:   wr.Telegram,
+			Source:     wr.Source,
+		})
+	}
+
+	return w.stock.SetDiscounts(ctx, out)
+}
+
 // ComplaintsUC — сценарии модуля «Жалобы»: обращения клиентов с фото
 // (zip-архивы), статусы, уведомления в common_chat. PGClient реализует
 // ComplaintRepository и CatalogReader (GetProductsByIDs), photostore.Store —
@@ -542,7 +611,7 @@ func (d *DIContainer) ReserveWatchUC() *rwucase.UseCase {
 
 func (d *DIContainer) Handler() *myhttp.Handler {
 	if d.handlers == nil {
-		d.handlers = myhttp.NewHandler(d.SyncUC(), d.OrdersUC(), d.ExcelExportUC(), d.PdfExportUC(), d.BarcodeExportUC(), d.RefGoCheckAgainstUC(), d.WikiUC(), d.GoodsUC(), d.DayStateUC(), d.QRUC(), d.SuppliersUC(), d.StockUC(), d.StockHub(), d.ReceiveBarcodes(), d.ReceivingUC(), d.ComplaintsUC(), d.MSOrdersUC(), d.MSFormsUC(), d.ReturnsUC())
+		d.handlers = myhttp.NewHandler(d.SyncUC(), d.OrdersUC(), d.ExcelExportUC(), d.PdfExportUC(), d.BarcodeExportUC(), d.RefGoCheckAgainstUC(), d.WikiUC(), d.GoodsUC(), d.DayStateUC(), d.QRUC(), d.SuppliersUC(), d.StockUC(), d.StockHub(), d.ReceiveBarcodes(), d.ReceivingUC(), d.ComplaintsUC(), d.MSOrdersUC(), d.MSFormsUC(), d.ReturnsUC(), d.DiscountsUC(), d.Config().DiscountWindowCap)
 	}
 
 	return d.handlers

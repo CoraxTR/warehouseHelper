@@ -73,6 +73,7 @@ jobs:
             product_weekly_turnover_schema.sql \
             product_monthly_turnover_schema.sql \
             qrcodes_schema.sql \
+            discounts_schema.sql \
             wiki_schema.sql \
             complaints_schema.sql \
             returns_schema.sql \

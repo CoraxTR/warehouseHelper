@@ -15,13 +15,21 @@ type Lot struct {
 	Qty        int64      `json:"qty"`         // остаток, штук (весовые — по среднему весу)
 	ProducedOn *time.Time `json:"produced_on"` // дата выработки; null — не известна
 
-	// General/Telegram — «просто» скидки, пишет будущий модуль расчёта скидок.
+	// General/Telegram — «просто» скидки, пишет модуль расчёта скидок
+	// (internal/discounts через шов DiscountWriter).
 	// GeneralManual/TelegramManual — ручные, пишет UI сроков.
-	// null = не задана; 0 = заданная скидка ноль.
+	// null и 0 = скидка не задана: ноль означает «скидки нет», а не «запрет
+	// скидки» (правило «0 = NULL», internal/stock/AGENTS.md).
 	General        *int16 `json:"discount_general"`
 	Telegram       *int16 `json:"discount_telegram"`
 	GeneralManual  *int16 `json:"discount_general_manual"`
 	TelegramManual *int16 `json:"discount_telegram_manual"`
+
+	// DiscountSource — метка источника действующей «простой» скидки сайта
+	// (product_stock.discount_source): "expiry" | "surplus" | "manual";
+	// пустая строка — метки нет (в БД NULL). Нужна клиенту для подсветки
+	// ячеек: сроковая/ручная скидка — жёлтая, только избыток — розовая.
+	DiscountSource string `json:"discount_source"`
 }
 
 // Product — товар каталога с лотами остатков (кэш модуля «Сроки»).
@@ -74,6 +82,22 @@ type PickLotIn struct {
 	Qty        int64 // единиц к списанию (>0)
 }
 
+// DiscountWrite — «просто»-скидки одного лота (шов записи модуля расчёта
+// скидок): General/Telegram пишутся в plain-колонки discount_general/
+// discount_telegram; nil = скидка не задана → в БД NULL (движок пишет NULL
+// вместо 0). Ручные скидки UI (discount_*_manual) движок не трогает.
+// Source — метка источника plain-значения (product_stock.discount_source):
+// "expiry" (ступень по сроку), "surplus" (избыток), "manual"; пустая строка —
+// метки нет (в БД NULL). Движок скидок пишет expiry/surplus; ручная скидка
+// важнее — приоритет разбирает клиент (подсветка ячеек), не БД.
+type DiscountWrite struct {
+	ProductID  string
+	BestBefore time.Time
+	General    *int16
+	Telegram   *int16
+	Source     string
+}
+
 // Event — факт изменения остатков, публикуется владельцем данных (usecase)
 // в вебсокет-хаб. Клиенты пересчитывают таблицу по своему состоянию.
 type Event struct {
@@ -87,6 +111,14 @@ type Event struct {
 const (
 	EventLotUpsert = "lot_upsert"
 	EventLotDelete = "lot_delete"
+)
+
+// Метки источника действующей «простой» скидки сайта — значения колонки
+// product_stock.discount_source (CHECK в схеме). Пустая строка = метки нет.
+const (
+	DiscountSourceManual  = "manual"  // скидка поставлена вручную (не движком)
+	DiscountSourceExpiry  = "expiry"  // ступень лестницы по сроку годности
+	DiscountSourceSurplus = "surplus" // скидка на избыток остатка
 )
 
 // Ошибки домена.

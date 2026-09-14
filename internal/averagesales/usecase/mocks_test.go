@@ -33,7 +33,7 @@ func (s *stubSales) FetchProfitTurnover(_ context.Context, from, to time.Time, i
 
 // stubRepo — заглушка хранилища оборотов.
 type stubRepo struct {
-	monthly  []averagesales.TurnoverRow // возвращается из LastMonthlyTurnover
+	monthly  []averagesales.TurnoverRow // фикстуры месячного окна (Last* и батч-чтение)
 	weekly   []averagesales.TurnoverRow
 	upsM     []averagesales.TurnoverRow
 	upsW     []averagesales.TurnoverRow
@@ -42,6 +42,10 @@ type stubRepo struct {
 	missingM []string // дыры в месячном окне (селекция дозаливки)
 	missingW []string // дыры в недельном окне
 	err      error
+
+	lastCalls  int        // чтения окна «по товару» — батч-путь их не делает
+	windowMIDs [][]string // id-пачки батч-чтений месячного окна
+	windowWIDs [][]string // id-пачки батч-чтений недельного окна
 }
 
 func (r *stubRepo) UpsertMonthlyTurnover(_ context.Context, rows []averagesales.TurnoverRow) error {
@@ -61,11 +65,50 @@ func (r *stubRepo) UpsertWeeklyTurnover(_ context.Context, rows []averagesales.T
 }
 
 func (r *stubRepo) LastMonthlyTurnover(_ context.Context, _ string, _ int) ([]averagesales.TurnoverRow, error) {
+	r.lastCalls++
 	return r.monthly, nil
 }
 
 func (r *stubRepo) LastWeeklyTurnover(_ context.Context, _ string, _ int) ([]averagesales.TurnoverRow, error) {
+	r.lastCalls++
 	return r.weekly, nil
+}
+
+func (r *stubRepo) MonthlyTurnoverWindowByProducts(_ context.Context, productIDs []string, since time.Time) ([]averagesales.TurnoverRow, error) {
+	if r.err != nil {
+		return nil, r.err
+	}
+	r.windowMIDs = append(r.windowMIDs, productIDs)
+
+	return windowRows(r.monthly, productIDs, since), nil
+}
+
+func (r *stubRepo) WeeklyTurnoverWindowByProducts(_ context.Context, productIDs []string, since time.Time) ([]averagesales.TurnoverRow, error) {
+	if r.err != nil {
+		return nil, r.err
+	}
+	r.windowWIDs = append(r.windowWIDs, productIDs)
+
+	return windowRows(r.weekly, productIDs, since), nil
+}
+
+// windowRows — подмножество фикстур окна, как его отдал бы репозиторий: строки
+// перечисленных товаров не раньше since, порядок фикстуры (период по убыванию).
+func windowRows(all []averagesales.TurnoverRow, productIDs []string, since time.Time) []averagesales.TurnoverRow {
+	ids := make(map[string]struct{}, len(productIDs))
+	for _, id := range productIDs {
+		ids[id] = struct{}{}
+	}
+
+	out := make([]averagesales.TurnoverRow, 0, len(all))
+	for _, r := range all {
+		if _, ok := ids[r.ProductID]; !ok || r.PeriodStart.Before(since) {
+			continue
+		}
+		out = append(out, r)
+	}
+
+	return out
 }
 
 func (r *stubRepo) HasMonthlyTurnover(_ context.Context, _ string) (bool, error) {

@@ -26,6 +26,13 @@ type Repository interface {
 	LastMonthlyTurnover(ctx context.Context, productID string, n int) ([]averagesales.TurnoverRow, error)
 	// LastWeeklyTurnover — последние n строк недельного оборота товара.
 	LastWeeklyTurnover(ctx context.Context, productID string, n int) ([]averagesales.TurnoverRow, error)
+	// MonthlyTurnoverWindowByProducts — строки месячного оборота СПИСКА товаров
+	// за периоды не раньше since (всё окно целиком); внутри — пачки по id, то
+	// есть один запрос на пачку товаров, а не на товар. Порядок — период по
+	// убыванию.
+	MonthlyTurnoverWindowByProducts(ctx context.Context, productIDs []string, since time.Time) ([]averagesales.TurnoverRow, error)
+	// WeeklyTurnoverWindowByProducts — то же для недельного ряда.
+	WeeklyTurnoverWindowByProducts(ctx context.Context, productIDs []string, since time.Time) ([]averagesales.TurnoverRow, error)
 	// ProductsMissingMonthlyTurnover — id товаров, у которых в окне последних
 	// завершённых месяцев (starts, YYYY-MM-DD) есть дыры: нет строки хотя бы
 	// за один период окна (стартовая дозаливка; порядок не важен).
@@ -130,27 +137,14 @@ func (uc *UseCase) AverageSales(ctx context.Context, productID string) (*float64
 		}
 	}
 
-	// Перечитать окно и разделить на завершённые/текущий.
+	// Перечитать окно и разделить на завершённые/текущий (общее правило —
+	// splitWindow, им же пользуются пакетные обновления refresh.go).
 	rows, err = last(ctx, productID, n+1)
 	if err != nil {
 		return nil, fmt.Errorf("перечитать обороты товара %s: %w", productID, err)
 	}
 
-	var finished []averagesales.TurnoverRow
-	var current *averagesales.TurnoverRow
-	for _, r := range rows {
-		switch {
-		case r.PeriodStart.Before(periodStart):
-			if len(finished) < n {
-				finished = append(finished, r)
-			}
-		case r.PeriodStart.Equal(periodStart):
-			c := r
-			current = &c
-		default:
-			// Строки за пределами окна (будущие/дубли) — пропуск.
-		}
-	}
+	finished, current := splitWindow(rows, n, periodStart)
 
 	avg, err := windowAvg(finished, current, n)
 	if errors.Is(err, ErrNoData) {

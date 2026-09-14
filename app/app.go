@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -151,8 +152,10 @@ func (a *App) initDeps() {
 		a.initStockCache,
 		a.initDayState,
 		a.initAverageSales,
+		a.initDiscounts,
 		a.initTableSizes,
 		a.initComplaints,
+		a.initBotPoller,
 		a.initReturns,
 		a.initReserveWatch,
 	}
@@ -160,6 +163,17 @@ func (a *App) initDeps() {
 	for _, init := range inits {
 		init()
 	}
+}
+
+// initDiscounts запускает расписание модуля скидок: утренний шаг (окно
+// оборотов, пересчёт по сроку, дайджест в общий чат), часовой пересчёт избытка
+// и ТГ-день — план слота (14:00) и подъём general (16:00) в дни вт/чт. Шаги
+// идемпотентны и проверяют маркеры дня в БД, поэтому после сна или рестарта
+// добираются сами (см. usecase/schedule.go).
+func (a *App) initDiscounts() {
+	uc := a.di.DiscountsUC()
+	schedule := a.di.DiscountSchedule()
+	a.background("скидки: расписание (утро, час, ТГ-день)", func() { uc.Run(a.ctx, schedule) })
 }
 
 // initTableSizes запускает фоновый опрос размеров таблиц БД для метрик
@@ -246,24 +260,69 @@ func (a *App) initComplaints() {
 	a.background("complaints: тикер напоминаний", func() {
 		uc.Start(a.ctx)
 	})
+}
 
+// initBotPoller запускает поллер бота: нажатия кнопок карточек жалоб и
+// текстовые команды (сейчас /скидки — отчёт модуля скидок в чат отправителя).
+//
+// Поллер живёт здесь, а не внутри модуля жалоб: он ОДИН на токен (второй
+// getUpdates получит 409 Conflict), а команды принадлежат разным модулям —
+// иначе без жалоб не работала бы и команда скидок.
+func (a *App) initBotPoller() {
 	token := a.di.Config().BotToken
 	if token == "" {
-		slog.Info("complaints: поллер не запущен: токен бота не настроен")
+		slog.Info("бот: поллер не запущен: токен бота не настроен")
 		return
 	}
+
+	complaintsUC := a.di.ComplaintsUC()
 	poller := telegram.NewPoller(token, func(ctx context.Context, cb telegram.CallbackQuery) error {
 		id, ok := cucase.ParseCallbackData(cb.Data)
 		if !ok {
 			return nil // кнопка не нашего модуля — не наше нажатие
 		}
-		return uc.HandleDetailsButton(ctx, cb.ID, cb.ChatID, id)
+		return complaintsUC.HandleDetailsButton(ctx, cb.ID, cb.ChatID, id)
 	})
-	a.background("complaints: поллер кнопок", func() {
+	poller.SetMessageHandler(a.botMessageHandler())
+	a.background("бот: поллер апдейтов", func() {
 		if err := poller.Run(a.ctx); err != nil {
-			slog.Info(fmt.Sprintf("complaints: поллер завершился: %v", err))
+			slog.Info(fmt.Sprintf("бот: поллер завершился: %v", err))
 		}
 	})
+}
+
+// botMessageHandler — обработчик текстовых команд бота. Сейчас одна: /скидки —
+// отчёт по скидкам (тот же текст, что в дайджест 09:00) в чат отправителя.
+// Чужие сообщения игнорируются: отвечать на них — дело других модулей.
+//
+// Юзкейс собирается ЗДЕСЬ, до подписки обработчика: за ленивым геттером стоит
+// создание пула БД (context.Background() внутри NewPGClient), а такая цепочка
+// из ctx-функции не проходит линт (contextcheck). Контекст команды уходит в
+// ReplyDigest на каждом вызове.
+func (a *App) botMessageHandler() func(context.Context, telegram.Message) error {
+	uc := a.di.DiscountsUC()
+
+	return func(ctx context.Context, msg telegram.Message) error {
+		if !isDiscountsCommand(msg.Text) {
+			return nil
+		}
+
+		return uc.ReplyDigest(ctx, msg.ChatID)
+	}
+}
+
+// isDiscountsCommand — «/скидки» с необязательным адресом бота и хвостом
+// («/скидки@warehouse_bot», «/скидки ?»): сравнение по первому слову, регистр
+// не важен.
+func isDiscountsCommand(text string) bool {
+	cmd := strings.ToLower(strings.TrimSpace(text))
+	if i := strings.IndexAny(cmd, " \n\t"); i >= 0 {
+		cmd = cmd[:i]
+	}
+	if i := strings.Index(cmd, "@"); i >= 0 {
+		cmd = cmd[:i]
+	}
+	return cmd == "/скидки"
 }
 
 // initReturns запускает наблюдатель журнала действий МС (модуль returns:

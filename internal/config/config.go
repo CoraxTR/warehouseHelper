@@ -88,6 +88,18 @@ type AppConfig struct {
 	// DayStateSnapshotTime — время утреннего снапшота состояний по дням
 	// (модуль daystate), от полуночи, локальное время процесса.
 	DayStateSnapshotTime time.Duration
+	// DiscountWindowCap — ёмкость окна сайта (модуль скидок): сколько позиций
+	// показываем менеджеру в окне распродажи.
+	DiscountWindowCap int
+	// DiscountTelegramCap — ёмкость слота ТГ (модуль скидок): сколько позиций
+	// уходит в рассылку чата склада.
+	DiscountTelegramCap int
+	// DiscountTGPlanTime — время сборки плана ТГ-слота (14:00 по умолчанию),
+	// от полуночи, локальное время процесса.
+	DiscountTGPlanTime time.Duration
+	// DiscountTGRaiseTime — время подъёма general до telegram (16:00 по
+	// умолчанию), от полуночи, локальное время процесса.
+	DiscountTGRaiseTime time.Duration
 }
 
 // QRConfig — модуль «Честный знак»: фото кодов маркировки по заказам.
@@ -182,11 +194,47 @@ func loadAppconfig() *AppConfig {
 		}
 	}
 
+	// Модуль скидок: ёмкости окна сайта и слота ТГ (APP_DISCOUNT_WINDOW_CAP=12,
+	// APP_DISCOUNT_TELEGRAM_CAP=10) — неположительное значение сбрасывается на
+	// дефолт, как у остальных счётчиков приложения.
+	discountWindowCap := 12
+	if nStr := os.Getenv("APP_DISCOUNT_WINDOW_CAP"); nStr != "" {
+		if n, err := strconv.Atoi(nStr); err == nil && n > 0 {
+			discountWindowCap = n
+		}
+	}
+	discountTelegramCap := 10
+	if nStr := os.Getenv("APP_DISCOUNT_TELEGRAM_CAP"); nStr != "" {
+		if n, err := strconv.Atoi(nStr); err == nil && n > 0 {
+			discountTelegramCap = n
+		}
+	}
+
+	// Время шагов ТГ-дня (модуль скидок): APP_DISCOUNT_TG_PLAN_TIME=14:00 —
+	// план слота, APP_DISCOUNT_TG_RAISE_TIME=16:00 — подъём general до telegram.
+	// Формат "HH:MM", локальное время процесса; невалидное значение — дефолт.
+	discountTGPlanTime := 14 * time.Hour
+	if tStr := os.Getenv("APP_DISCOUNT_TG_PLAN_TIME"); tStr != "" {
+		if t, err := time.Parse("15:04", tStr); err == nil {
+			discountTGPlanTime = time.Duration(t.Hour())*time.Hour + time.Duration(t.Minute())*time.Minute
+		}
+	}
+	discountTGRaiseTime := 16 * time.Hour
+	if tStr := os.Getenv("APP_DISCOUNT_TG_RAISE_TIME"); tStr != "" {
+		if t, err := time.Parse("15:04", tStr); err == nil {
+			discountTGRaiseTime = time.Duration(t.Hour())*time.Hour + time.Duration(t.Minute())*time.Minute
+		}
+	}
+
 	return &AppConfig{
 		HTTPAddress:          httpAddress,
 		TempCleanupMaxAge:    tempCleanupMaxAge,
 		WeightsHistoryLimit:  weightsHistoryLimit,
 		DayStateSnapshotTime: dayStateSnapshotTime,
+		DiscountWindowCap:    discountWindowCap,
+		DiscountTelegramCap:  discountTelegramCap,
+		DiscountTGPlanTime:   discountTGPlanTime,
+		DiscountTGRaiseTime:  discountTGRaiseTime,
 	}
 }
 

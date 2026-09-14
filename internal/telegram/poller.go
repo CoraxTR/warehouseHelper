@@ -26,16 +26,28 @@ type CallbackQuery struct {
 // CallbackHandler обрабатывает одно нажатие кнопки (диспетчеризует по Data).
 type CallbackHandler func(ctx context.Context, cb CallbackQuery) error
 
+// Message — текстовое сообщение, пришедшее боту (бот-команда, например
+// /скидки). ChatID — чат отправителя: ответ на команду идёт в него же.
+type Message struct {
+	ChatID int64
+	Text   string
+}
+
+// MessageHandler обрабатывает одно текстовое сообщение (бот-команду).
+type MessageHandler func(ctx context.Context, msg Message) error
+
 // Poller принимает апдейты бота через long polling getUpdates. Поллер
-// обрабатывает только callback_query (остальные типы апдейтов пропускает),
-// чтобы не мешать остальным частям приложения. Работать должен ровно один
-// поллер на токен (второй getUpdates тем же токеном получит 409 Conflict),
-// и нельзя одновременно использовать webhook.
+// обрабатывает нажатия кнопок (callback_query) и текстовые сообщения
+// (message, бот-команды); остальные типы апдейтов пропускает, чтобы не мешать
+// остальным частям приложения. Работать должен ровно один поллер на токен
+// (второй getUpdates тем же токеном получит 409 Conflict), и нельзя
+// одновременно использовать webhook.
 type Poller struct {
-	httpClient *http.Client
-	apiBaseURL string
-	botToken   string
-	handler    CallbackHandler
+	httpClient     *http.Client
+	apiBaseURL     string
+	botToken       string
+	handler        CallbackHandler
+	messageHandler MessageHandler
 
 	offset int64 // последний обработанный update_id + 1 (курсор апдейтов)
 }
@@ -55,6 +67,7 @@ func NewPoller(botToken string, handler CallbackHandler) *Poller {
 type tgUpdate struct {
 	UpdateID      int64            `json:"update_id"`
 	CallbackQuery *tgCallbackQuery `json:"callback_query"`
+	Message       *tgMessage       `json:"message"`
 }
 
 type tgCallbackQuery struct {
@@ -74,6 +87,14 @@ type tgMsg struct {
 
 type tgChat struct {
 	ID int64 `json:"id"`
+}
+
+// tgMessage — текстовое сообщение боту: chat (куда отвечать) и text (текст
+// команды). У сообщений без текста (фото, стикер, файл) поля text нет —
+// такие апдейты доходят без текста и обработчику не отдаются.
+type tgMessage struct {
+	Chat *tgChat `json:"chat"`
+	Text string  `json:"text"`
 }
 
 // tgUpdatesResponse — ответ Bot API на getUpdates.
@@ -113,12 +134,34 @@ func (p *Poller) Run(ctx context.Context) error {
 		}
 
 		for _, u := range updates {
-			if u.CallbackQuery == nil {
-				continue // поллер интересуют только нажатия кнопок
-			}
-			p.handle(ctx, u)
+			p.dispatch(ctx, u)
+			// Курсор двигается по КАЖДОМУ апдейту, включая пропущенные (не наше
+			// событие): иначе Telegram будет отдавать пропущенный апдейт в каждом
+			// следующем getUpdates, и поллер застрянет на нём навсегда.
 			p.offset = u.UpdateID + 1
 		}
+	}
+}
+
+// SetMessageHandler подключает шов «текстовое сообщение боту» (бот-команды,
+// например /скидки): связка — в di.go, как у остальных швов. Ни один шов не
+// выставляется на ходу, поэтому поле пишется на сборке, а не в работающем
+// цикле поллера. nil — команды не подключены, сообщения игнорируются.
+func (p *Poller) SetMessageHandler(h MessageHandler) {
+	p.messageHandler = h
+}
+
+// dispatch направляет один апдейт своему обработчику: нажатие кнопки —
+// CallbackHandler, текстовое сообщение — MessageHandler; прочие типы апдейтов
+// (правки, реакции, участники) пропускаются.
+func (p *Poller) dispatch(ctx context.Context, u tgUpdate) {
+	switch {
+	case u.CallbackQuery != nil:
+		p.handle(ctx, u)
+	case u.Message != nil:
+		p.handleMessage(ctx, u)
+	default:
+		// прочие типы апдейтов (правки, реакции, участники) пропускаем
 	}
 }
 
@@ -138,6 +181,24 @@ func (p *Poller) handle(ctx context.Context, u tgUpdate) {
 	}
 	if err := p.handler(ctx, query); err != nil {
 		slog.Info(fmt.Sprintf("telegram: обработка callback %q: %v", cb.Data, err))
+	}
+}
+
+// handleMessage отдаёт текстовое сообщение обработчику бот-команд. Сообщение
+// без чата или без текста (фото, стикер, служебные апдейты) пропускается:
+// отвечать некуда или команды нет. Обработчика нет — сообщение игнорируется
+// (штатно: команды не подключены). Ошибка обработчика логируется: курсор
+// апдейтов уже сдвинут вызывающим, повторной доставки не будет.
+func (p *Poller) handleMessage(ctx context.Context, u tgUpdate) {
+	msg := u.Message
+	if msg.Chat == nil || msg.Text == "" {
+		return
+	}
+	if p.messageHandler == nil {
+		return
+	}
+	if err := p.messageHandler(ctx, Message{ChatID: msg.Chat.ID, Text: msg.Text}); err != nil {
+		slog.Info(fmt.Sprintf("telegram: обработка сообщения чата %d: %v", msg.Chat.ID, err))
 	}
 }
 

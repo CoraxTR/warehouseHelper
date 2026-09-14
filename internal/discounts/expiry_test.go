@@ -1,0 +1,64 @@
+package discounts
+
+import (
+	"math"
+	"testing"
+)
+
+// Ступени §4: 14-дневная партия (W 7,0 / N 3 / шаг 2,33 / старт 30),
+// 7-дневная (W 4,7 / N 2 / старт 40) и короткий срок — одна ступень 50 %.
+func TestExpiryPercent(t *testing.T) {
+	tests := []struct {
+		name      string
+		shelfLife int16
+		daysLeft  int
+		want      int16
+	}{
+		{"14 дн, D=7 — старт лестницы", 14, 7, 30},
+		{"14 дн, D=6 — ещё старт", 14, 6, 30},
+		{"14 дн, D=4 — вторая ступень", 14, 4, 40},
+		{"14 дн, D=3 — вторая ступень", 14, 3, 40},
+		{"14 дн, D=2 — потолок автомата", 14, 2, 50},
+		{"14 дн, D=1 — потолок автомата", 14, 1, 50},
+		{"14 дн, D=8 — вне окна", 14, 8, 0},
+		{"7 дн, D=5 — вне окна", 7, 5, 0},
+		{"7 дн, D=3 — вторая ступень", 7, 3, 40},
+		{"7 дн, D=1 — потолок", 7, 1, 50},
+		{"3 дн — одна ступень 50 %", 3, 1, 50},
+		{"5 дн — одна ступень 50 %", 5, 2, 50},
+		{"45 дн, D=13 — нижняя ступень", 45, 13, 10},
+		{"45 дн, D=14 — ровно за границей окна", 45, 14, 0},
+		{"срок не задан", 0, 3, 0},
+		{"просрочено (D=0)", 14, 0, 0},
+		{"просрочено (D<0)", 14, -2, 0},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ExpiryPercent(tc.shelfLife, tc.daysLeft); got != tc.want {
+				t.Errorf("ExpiryPercent(%d, %d) = %d, want %d", tc.shelfLife, tc.daysLeft, got, tc.want)
+			}
+		})
+	}
+}
+
+// Скидка не падает при сокращении остатка: D2 < D1 → Expiry(D2) >= Expiry(D1).
+// Цикл по D без time.Sleep — свойство проверяется на всей шкале окна.
+func TestExpiryPercentMonotone(t *testing.T) {
+	for _, shelfLife := range []int16{1, 3, 5, 7, 10, 14, 21, 23, 30, 33, 34, 45, 90, 180, 365, 730, 1095, 3000} {
+		limit := int(math.Ceil(Window(shelfLife))) + 3
+		if got := ExpiryPercent(shelfLife, limit); got != 0 {
+			t.Errorf("Г=%d: за границей окна (D=%d) скидка %d, want 0", shelfLife, limit, got)
+		}
+		prev := int16(-1)
+		for d := limit; d >= 1; d-- {
+			got := ExpiryPercent(shelfLife, d)
+			if got < 0 || got > autoCap {
+				t.Fatalf("Г=%d D=%d: %d вне диапазона 0..%d", shelfLife, d, got, autoCap)
+			}
+			if prev >= 0 && got < prev {
+				t.Fatalf("Г=%d: D=%d → %d%% меньше, чем D=%d → %d%%", shelfLife, d, got, d+1, prev)
+			}
+			prev = got
+		}
+	}
+}

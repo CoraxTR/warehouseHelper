@@ -430,7 +430,9 @@ td.col-name { white-space: nowrap; min-width: 180px; cursor: pointer; }
 td.col-name:hover { background: #1B1B21; }
 td.cell-pair { text-align: center; cursor: pointer; white-space: nowrap; min-width: 56px; padding: 4px 6px; }
 td.cell-pair.has-discount { background: #241F12; color: #E0C47E; }
-/* срок годности заканчивается сегодня — пора замораживать (перебивает янтарную скидочную) */
+/* только избыток (discount_source = surplus): нежно-розовая — младшая ступень, тише янтарной */
+td.cell-pair.only-surplus { background: #241A1F; color: #D9A7B6; }
+/* срок годности заканчивается сегодня — пора замораживать (перебивает янтарную скидочную и розовую) */
 td.cell-pair.expires-today { background: #141B22; color: #93A7BC; }
 td.cell-pair:hover { outline: 1px solid #6E6E7A; outline-offset: -1px; }
 td.cell-empty { background: #121216; color: #66645C; }
