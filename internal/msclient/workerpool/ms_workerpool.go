@@ -7,7 +7,19 @@ import (
 	"log/slog"
 	"net/http"
 	"sync"
+	"time"
 	"warehouseHelper/internal/config"
+)
+
+const (
+	// defaultAttempts — сколько всего попыток выполнить задачу (1 + повторы).
+	// Ряд повторяется один в один из internal/pdfexport (там ретрай скачивания
+	// бланка): политика у МойСклад одна на все запросы, второй ряд пауз
+	// заводить нельзя. Общий хелпер — кандидат на вынос в отдельный пакет.
+	defaultAttempts = 3
+	// defaultBackoff — пауза перед первой повторной попыткой (далее удваивается):
+	// 500мс → 1с → 2с.
+	defaultBackoff = 500 * time.Millisecond
 )
 
 // ErrPoolStopped — пул остановлен и задачу не принял.
@@ -28,6 +40,10 @@ type result struct {
 type task struct {
 	job   JobFunc
 	resCh chan<- result
+	// noRetry — задачу НЕ повторять даже при временном сбое МС. Нужно для
+	// неидемпотентных POST: повтор после ответа сервера (или после таймаута,
+	// когда ответ мог прийти и потеряться) создаёт второй объект в учёте МС.
+	noRetry bool
 }
 
 type MSWorkerPool struct {
@@ -39,6 +55,13 @@ type MSWorkerPool struct {
 	ctx              context.Context //nolint:containedctx //we need to cancel all workers when stopping the pool
 	cancel           context.CancelFunc
 	once             sync.Once
+
+	// attempts — сколько попыток делать (0 = defaultAttempts), backoff — база
+	// пауз (0 = defaultBackoff). Поля, а не константы: тесты подменяют backoff
+	// миллисекундой, чтобы не спать секундами. Ноль = прод-политика, поэтому
+	// пул, собранный в тестах литералом (newTestPool), тоже работает по ней.
+	attempts int
+	backoff  time.Duration
 
 	// mu защищает stopped и сериализует отправку задачи с закрытием каналов в
 	// Stop. Без него горутина проходит проверку остановки и доезжает до
@@ -104,6 +127,8 @@ func NewMSWorkerPool(config *config.MSConfig) *MSWorkerPool {
 		ctx:              ctx,
 		cancel:           cancel,
 		once:             sync.Once{},
+		attempts:         defaultAttempts,
+		backoff:          defaultBackoff,
 	}
 
 	for _, v := range config.WarehouseAPIKEYS {
@@ -155,6 +180,31 @@ func NewMSWorkerPool(config *config.MSConfig) *MSWorkerPool {
 // Проверки ctx.Done больше нет: ctx отменяет только Stop, а он выставляет
 // stopped под тем же мутексом — состояние остановки читается через stopped.
 func (p *MSWorkerPool) SubmitWarehouse(job JobFunc) <-chan result {
+	return p.submit(p.warehouseTasks, len(p.WarehouseWorkers), job, false)
+}
+
+// SubmitOther — то же для прочих воркеров (см. SubmitWarehouse).
+func (p *MSWorkerPool) SubmitOther(job JobFunc) <-chan result {
+	return p.submit(p.otherTasks, len(p.OtherWorkers), job, false)
+}
+
+// SubmitWarehouseNoRetry — складская задача БЕЗ повторов при временных сбоях.
+//
+// Для неидемпотентных запросов: если МС ответил 5xx или не ответил вовсе
+// (таймаут), запрос мог выполниться на стороне сервера — повтор создаст
+// дубль в учёте, а разбирать его оператору вручную.
+func (p *MSWorkerPool) SubmitWarehouseNoRetry(job JobFunc) <-chan result {
+	return p.submit(p.warehouseTasks, len(p.WarehouseWorkers), job, true)
+}
+
+// SubmitOtherNoRetry — то же для прочих воркеров (см. SubmitWarehouseNoRetry).
+func (p *MSWorkerPool) SubmitOtherNoRetry(job JobFunc) <-chan result {
+	return p.submit(p.otherTasks, len(p.OtherWorkers), job, true)
+}
+
+// submit — общий путь постановки задачи: проверка остановки, проверка наличия
+// воркеров и отправка в очередь нужного пула.
+func (p *MSWorkerPool) submit(tasks chan task, workers int, job JobFunc, noRetry bool) <-chan result {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 
@@ -164,31 +214,12 @@ func (p *MSWorkerPool) SubmitWarehouse(job JobFunc) <-chan result {
 
 	// Воркеров нет (все ключи не прошли проверку в NewMSWorkerPool) — очередь
 	// никто не разберёт: см. ErrNoWorkers.
-	if len(p.WarehouseWorkers) == 0 {
+	if workers == 0 {
 		return errResult(ErrNoWorkers)
 	}
 
 	resCh := make(chan result, 1)
-	p.warehouseTasks <- task{job: job, resCh: resCh}
-
-	return resCh
-}
-
-// SubmitOther — то же для прочих воркеров (см. SubmitWarehouse).
-func (p *MSWorkerPool) SubmitOther(job JobFunc) <-chan result {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-
-	if p.stopped {
-		return errResult(ErrPoolStopped)
-	}
-
-	if len(p.OtherWorkers) == 0 {
-		return errResult(ErrNoWorkers)
-	}
-
-	resCh := make(chan result, 1)
-	p.otherTasks <- task{job: job, resCh: resCh}
+	tasks <- task{job: job, resCh: resCh, noRetry: noRetry}
 
 	return resCh
 }
@@ -260,9 +291,7 @@ func (p *MSWorkerPool) warehouseWorkerLoop(worker *MSWarehouseWorker) {
 				return
 			}
 
-			worker.rateLimiter.Wait()
-
-			res, err := task.job(worker.APIKey)
+			res, err := p.runJob(worker.rateLimiter, worker.APIKey, task)
 			task.resCh <- result{Value: res, Err: err}
 
 			close(task.resCh)
@@ -271,9 +300,7 @@ func (p *MSWorkerPool) warehouseWorkerLoop(worker *MSWarehouseWorker) {
 				return
 			}
 
-			worker.rateLimiter.Wait()
-
-			res, err := task.job(worker.APIKey)
+			res, err := p.runJob(worker.rateLimiter, worker.APIKey, task)
 			task.resCh <- result{Value: res, Err: err}
 
 			close(task.resCh)
@@ -293,12 +320,98 @@ func (p *MSWorkerPool) otherWorkerLoop(worker *MSOtherWorker) {
 				return
 			}
 
-			worker.rateLimiter.Wait()
-
-			res, err := task.job(worker.APIKey)
+			res, err := p.runJob(worker.rateLimiter, worker.APIKey, task)
 			task.resCh <- result{Value: res, Err: err}
 
 			close(task.resCh)
 		}
 	}
+}
+
+// runJob выполняет задачу с повторами временных сбоев МойСклад.
+//
+// Политика — как в internal/pdfexport (ретрай скачивания бланка): не более
+// attemptLimit() попыток с паузами 500мс → 1с → 2с. Пытаемся только то, что
+// имеет смысл: 5xx, сетевые сбои, таймауты (в т.ч. context.DeadlineExceeded
+// внутреннего таймаута задачи — его job'ы ставят сами).
+//
+// НЕ повторяем:
+//   - постоянные отказы МС (Permanent(): 4xx, кроме 408 и 429) — ответ не
+//     изменится;
+//   - отменённый родительский контекст (context.Canceled) — вызывающий ушёл,
+//     повторять за него нечего;
+//   - остановку пула (p.ctx) — приложение выключается, ждать паузы нельзя.
+//
+// Рейт-лимит соблюдается на каждой попытке: повтор — тоже запрос к МС, и
+// он проходит через тот же воркер с его лимитером (5 req/s — не обойти).
+func (p *MSWorkerPool) runJob(limiter *MSOutRateLimiter, apiKey string, task task) (any, error) {
+	attempts := p.attemptLimit()
+	if task.noRetry {
+		attempts = 1
+	}
+
+	var lastErr error
+
+	for attempt := 1; attempt <= attempts; attempt++ {
+		limiter.Wait()
+
+		res, err := task.job(apiKey)
+		if err == nil {
+			return res, nil
+		}
+
+		lastErr = err
+
+		if p.ctx.Err() != nil || errors.Is(err, context.Canceled) || isPermanent(err) || attempt == attempts {
+			break
+		}
+
+		// Токены и тела запросов в лог не попадают: только номер попытки и
+		// текст ошибки (правило проекта — секреты не логируем).
+		slog.Warn("запрос к МС не удался, повторяю", "попытка", attempt, "следующая", attempt+1, "err", err)
+
+		select {
+		case <-time.After(p.backoffFor(attempt)):
+		case <-p.ctx.Done():
+			// Пул остановлен: паузу не дожидаемся, наверх отдаём последнюю
+			// ошибку МС — она информативнее отмены контекста.
+			return nil, lastErr
+		}
+	}
+
+	return nil, lastErr
+}
+
+// attemptLimit — сколько всего попыток делать (0 в поле = defaultAttempts).
+func (p *MSWorkerPool) attemptLimit() int {
+	if p.attempts <= 0 {
+		return defaultAttempts
+	}
+
+	return p.attempts
+}
+
+// backoffFor — пауза перед повтором: backoff, затем удвоение (500мс, 1с, ...).
+// Ряд один в один с pdfexport.Service.backoffFor.
+func (p *MSWorkerPool) backoffFor(attempt int) time.Duration {
+	base := p.backoff
+	if base <= 0 {
+		base = defaultBackoff
+	}
+
+	return base * time.Duration(1<<(attempt-1))
+}
+
+// permanentError — ошибка МС, повтор которой бессмысленен (4xx, кроме 408/429).
+// Реализуется *client.MSAPIError.
+type permanentError interface {
+	Permanent() bool
+}
+
+// isPermanent сообщает, помечена ли ошибка как постоянная. Аналог
+// pdfexport.isPermanent: тот же контракт, проверяемый на client.MSAPIError.
+func isPermanent(err error) bool {
+	var perm permanentError
+
+	return errors.As(err, &perm) && perm.Permanent()
 }
