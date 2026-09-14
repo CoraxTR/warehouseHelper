@@ -346,3 +346,61 @@ func TestTickWeightedStubMissing(t *testing.T) {
 		t.Errorf("текст: %q", notify.sent[0].text)
 	}
 }
+
+// TestTickIgnoresStubRows — строки-заглушки подбора («ожидание единицы»,
+// quantity 0,0001, reserve 0/0,0001) проблемой резерва не считаются:
+// требовать «отложить» несуществующий кусок смотритель не должен.
+func TestTickIgnoresStubRows(t *testing.T) {
+	orders := &stubOrders{orders: []client.MSOrder{{ID: "order-1", Name: "19191"}}}
+	orders.positions = map[string][]client.MSPosition{
+		"order-1": {
+			position(productWeightedHREF, "Рибай охл.", 0.0001, 0), // заглушка: весовой
+			position(productPieceHREF, "Соус BBQ", 0.0001, 0),      // заглушка: штучная
+			position(productPieceHREF, "Соус BBQ", 0.0001, 0.0001), // заглушка «отложена»
+			position(productPieceHREF, "Соус BBQ", 3, 3),           // отложена верно
+		},
+	}
+	catalog := stubCatalog{
+		"w-prod": {ProductID: "w-prod", InternalCode: "10390021", Weighted: true},
+		"p-prod": {ProductID: "p-prod", InternalCode: "10080001", Weighted: false},
+	}
+	repo := newStubRepo()
+	notify := &stubNotifier{}
+	uc := newUC(orders, repo, catalog, notify)
+
+	if err := uc.tick(context.Background()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if len(notify.sent) != 0 {
+		t.Errorf("сообщений: %d, want 0 (заглушки не проблемы): %+v", len(notify.sent), notify.sent)
+	}
+	if len(repo.notices) != 0 {
+		t.Errorf("записей в репо: %d, want 0", len(repo.notices))
+	}
+}
+
+// TestTickSmallPieceStillChecked — кусок легче 0,5 кг (0,15 кг) — реальная
+// строка заказа: порог заглушек 0,0002 её не глотает, «нужно отложить» уходит.
+func TestTickSmallPieceStillChecked(t *testing.T) {
+	orders := &stubOrders{orders: []client.MSOrder{{ID: "order-1", Name: "19191"}}}
+	orders.positions = map[string][]client.MSPosition{
+		"order-1": {position(productWeightedHREF, "Филе-кусок", 0.15, 0)},
+	}
+	catalog := stubCatalog{
+		"w-prod": {ProductID: "w-prod", InternalCode: "10390021", Weighted: true},
+	}
+	repo := newStubRepo()
+	notify := &stubNotifier{}
+	uc := newUC(orders, repo, catalog, notify)
+
+	if err := uc.tick(context.Background()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if len(notify.sent) != 1 {
+		t.Fatalf("сообщений: %d, want 1 (лёгкий кусок обязан сверяться)", len(notify.sent))
+	}
+	if !strings.HasPrefix(notify.sent[0].text, "В заказ 19191 нужно отложить:") ||
+		!strings.Contains(notify.sent[0].text, "Филе-кусок") {
+		t.Errorf("текст: %q", notify.sent[0].text)
+	}
+}
