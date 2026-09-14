@@ -24,13 +24,44 @@ func TestDiscountFromLots(t *testing.T) {
 			{Qty: 1, EffectiveGeneral: i16(20)},
 			{Qty: 1},
 		}, i16(20)},
-		{"ноль — заданная скидка, не отсутствие", []LotState{{Qty: 1, EffectiveGeneral: i16(0)}}, i16(0)},
+		{"ноль — скидки нет (0 = NULL)", []LotState{{Qty: 1, EffectiveGeneral: i16(0)}}, nil},
+		{"ноль у одного лота не мешает другому", []LotState{
+			{Qty: 1, EffectiveGeneral: i16(0)},
+			{Qty: 1, EffectiveGeneral: i16(40)},
+		}, i16(40)},
+		{"все нули — скидки нет", []LotState{{Qty: 1, EffectiveGeneral: i16(0)}, {Qty: 2, EffectiveGeneral: i16(0)}}, nil},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			got := DiscountFromLots(tc.lots)
 			if !reflect.DeepEqual(got, tc.want) {
 				t.Errorf("DiscountFromLots = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// Правило «0 = NULL»: effective = COALESCE(NULLIF(manual,0), NULLIF(plain,0)).
+func TestEffectiveDiscount(t *testing.T) {
+	tests := []struct {
+		name          string
+		manual, plain *int16
+		want          *int16
+	}{
+		{"ручная ноль, «просто» 40 — берётся 40", i16(0), i16(40), i16(40)},
+		{"«просто» ноль, ручной нет — скидки нет", nil, i16(0), nil},
+		{"обе незаданы — скидки нет", nil, nil, nil},
+		{"обе нули — скидки нет", i16(0), i16(0), nil},
+		{"ручная важнее «просто»", i16(7), i16(40), i16(7)},
+		{"ручная ноль не перекрывает «просто» 40", i16(0), i16(40), i16(40)},
+		{"ручная есть, «просто» нет", i16(20), nil, i16(20)},
+		{"ручной нет — берётся «просто»", nil, i16(15), i16(15)},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := EffectiveDiscount(tc.manual, tc.plain)
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("EffectiveDiscount(%v, %v) = %v, want %v", tc.manual, tc.plain, got, tc.want)
 			}
 		})
 	}
@@ -122,15 +153,16 @@ func TestApplyStockChange_Discounts(t *testing.T) {
 		t.Errorf("increases = %v, want [7]", next.DiscountIncreases)
 	}
 
-	// Скидка ноль (NULL → 0): значение, но НЕ повышение.
+	// Ноль у лота — скидки нет (0 = NULL): колонка NULL, increases не растёт.
 	cur = baseDay()
 	cur.InStock = b(true)
+	cur.Discount = i16(10)
 	next, _, _ = ApplyStockChange(cur, []LotState{{Qty: 1, EffectiveGeneral: i16(0)}})
-	if next.Discount == nil || *next.Discount != 0 {
-		t.Errorf("discount = %v, want 0", next.Discount)
+	if next.Discount != nil {
+		t.Errorf("discount = %v, want nil (0 = скидки нет)", next.Discount)
 	}
 	if len(next.DiscountIncreases) != 0 {
-		t.Errorf("increases = %v, want пусто (0 — не повышение)", next.DiscountIncreases)
+		t.Errorf("increases = %v, want пусто (ноль не повышение)", next.DiscountIncreases)
 	}
 
 	// Понижение 10 → 5: колонка меняется, increases не растёт.

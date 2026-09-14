@@ -109,13 +109,15 @@ func (pg *PGClient) SnapshotDone(ctx context.Context, date time.Time) (bool, err
 // созданные событиями/календарём, не перезаписываются: при конфликте
 // дополняются только NULL-поля (COALESCE) — снимок не трогает
 // discount_increases, sold_out_today и orderable.
+// Effective скидка — по правилу «0 = NULL» (владелец, 14.09.2026):
+// COALESCE(NULLIF(manual,0), NULLIF(plain,0)); 0 = «скидки нет», не запрет.
 func (pg *PGClient) SnapshotInsert(ctx context.Context, date time.Time) error {
 	if _, err := pg.Pool.Exec(ctx, `
         INSERT INTO product_day_state (product_id, date, in_stock, discount_start, discount)
         SELECT product_id, $1::date,
                BOOL_OR(qty > 0),
-               MAX(COALESCE(discount_general_manual, discount_general)),
-               MAX(COALESCE(discount_general_manual, discount_general))
+               MAX(COALESCE(NULLIF(discount_general_manual, 0), NULLIF(discount_general, 0))),
+               MAX(COALESCE(NULLIF(discount_general_manual, 0), NULLIF(discount_general, 0)))
         FROM product_stock
         GROUP BY product_id
         ON CONFLICT (product_id, date) DO UPDATE
@@ -130,10 +132,12 @@ func (pg *PGClient) SnapshotInsert(ctx context.Context, date time.Time) error {
 }
 
 // LotsSnapshot читает лоты товара из product_stock: количество и эффективную
-// скидку канала general (COALESCE(manual, plain)) — срез для пересчёта дня.
+// скидку канала general — COALESCE(NULLIF(manual,0), NULLIF(plain,0)):
+// 0 в колонке значит «скидки нет», а не «заданная скидка ноль» (владелец,
+// 14.09.2026), поэтому ноль трактуется как незаданное значение.
 func (pg *PGClient) LotsSnapshot(ctx context.Context, productID string) ([]daystate.LotState, error) {
 	rows, err := pg.Pool.Query(ctx, `
-        SELECT qty, COALESCE(discount_general_manual, discount_general)
+        SELECT qty, COALESCE(NULLIF(discount_general_manual, 0), NULLIF(discount_general, 0))
         FROM product_stock
         WHERE product_id = $1`,
 		productID,

@@ -39,7 +39,8 @@ type DayState struct {
 // LotState — срез лота из product_stock, нужный для пересчёта дня.
 type LotState struct {
 	Qty int64
-	// EffectiveGeneral — эффективная скидка канала «сайт» (COALESCE(manual, plain));
+	// EffectiveGeneral — эффективная скидка канала «сайт»
+	// (COALESCE(NULLIF(manual,0), NULLIF(plain,0)), см. EffectiveDiscount);
 	// nil — скидка не задана. Telegram в состоянии дня не участвует: модуль
 	// расчёта скидок дублирует тг-скидку в general (правило владельца).
 	EffectiveGeneral *int16
@@ -58,17 +59,45 @@ func InStockFromLots(lots []LotState) bool {
 	return false
 }
 
+// EffectiveDiscount — effective-скидка канала из пары колонок product_stock
+// (ручная `_manual`, «просто»): COALESCE(NULLIF(manual,0), NULLIF(plain,0)).
+//
+// Правило «0 = NULL» (владелец, 14.09.2026): 0 в колонке скидки значит
+// «скидки нет», НЕ «запрет скидки», поэтому ноль отбрасывается как незаданное
+// значение — иначе ноль перекрыл бы лестницу расчётных скидок. nil — скидка
+// не задана ни в одной из колонок.
+//
+// Зеркало SQL-правила daystate_repo.go (LotsSnapshot, SnapshotInsert): база —
+// источник значения для состояния дня, функция — для Go-кода и тестов.
+func EffectiveDiscount(manual, plain *int16) *int16 {
+	if v := nonZeroDiscount(manual); v != nil {
+		return v
+	}
+	return nonZeroDiscount(plain)
+}
+
+// nonZeroDiscount — скидка, если она задана и не ноль (0 = «скидки нет»);
+// иначе nil.
+func nonZeroDiscount(v *int16) *int16 {
+	if v == nil || *v == 0 {
+		return nil
+	}
+	return v
+}
+
 // DiscountFromLots — максимальная effective-скидка канала general по лотам;
-// nil, если ни у одного лота скидка не задана.
+// nil, если ни у одного лота скидка не задана (ноль скидкой не считается —
+// правило «0 = NULL», см. EffectiveDiscount).
 func DiscountFromLots(lots []LotState) *int16 {
 	var top *int16
 	for _, l := range lots {
-		if l.EffectiveGeneral == nil {
+		v := nonZeroDiscount(l.EffectiveGeneral)
+		if v == nil {
 			continue
 		}
-		if top == nil || *l.EffectiveGeneral > *top {
-			v := *l.EffectiveGeneral
-			top = &v
+		if top == nil || *v > *top {
+			val := *v
+			top = &val
 		}
 	}
 	return top
@@ -112,7 +141,8 @@ func ApplyStockChange(cur DayState, lots []LotState) (next DayState, soldOutNow,
 
 // isDiscountIncrease — повышение скидки: новое значение строго больше
 // текущего. Текущего нет (NULL = скидка не задана) — повышением считается
-// только значение > 0: заданная скидка ноль — это значение, но не повышение.
+// только значение > 0: ноль скидкой не считается (правило «0 = NULL»),
+// повышением он быть не может.
 func isDiscountIncrease(cur, next *int16) bool {
 	if next == nil {
 		return false
