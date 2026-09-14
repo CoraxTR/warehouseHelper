@@ -38,7 +38,7 @@ func (e *fakeMSError) Permanent() bool {
 // newRunningPool собирает пул с ЖИВЫМИ воркерами: задача выполняется в воркере
 // (там же и ретрай), поэтому проверяется поведение пула, а не отдельной обёртки.
 // Пауза повтора уменьшена до миллисекунды, Stop зовётся на выходе теста.
-func newRunningPool(t *testing.T, warehouse, other int) *MSWorkerPool {
+func newRunningPool(t *testing.T) *MSWorkerPool {
 	t.Helper()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -51,7 +51,7 @@ func newRunningPool(t *testing.T, warehouse, other int) *MSWorkerPool {
 		backoff:        testBackoff,
 	}
 
-	for range warehouse {
+	for range 1 {
 		w := &MSWarehouseWorker{Name: "тест-склад", APIKey: "test-key", rateLimiter: testLimiter()}
 		p.WarehouseWorkers = append(p.WarehouseWorkers, w)
 		p.wg.Add(1)
@@ -59,7 +59,7 @@ func newRunningPool(t *testing.T, warehouse, other int) *MSWorkerPool {
 		go p.warehouseWorkerLoop(w)
 	}
 
-	for range other {
+	for range 1 {
 		w := &MSOtherWorker{Name: "тест-другой", APIKey: "test-key", rateLimiter: testLimiter()}
 		p.OtherWorkers = append(p.OtherWorkers, w)
 		p.wg.Add(1)
@@ -104,7 +104,7 @@ func noRetrySubmitters() map[string]func(*MSWorkerPool, JobFunc) <-chan result {
 func TestRetryOnTransient5xx(t *testing.T) {
 	for name, submit := range retrySubmitters() {
 		t.Run(name, func(t *testing.T) {
-			p := newRunningPool(t, 1, 1)
+			p := newRunningPool(t)
 
 			var calls atomic.Int64
 
@@ -138,7 +138,7 @@ func TestRetryOnTransient5xx(t *testing.T) {
 func TestNoRetryOnPermanent4xx(t *testing.T) {
 	for name, submit := range retrySubmitters() {
 		t.Run(name, func(t *testing.T) {
-			p := newRunningPool(t, 1, 1)
+			p := newRunningPool(t)
 
 			var calls atomic.Int64
 
@@ -167,7 +167,7 @@ func TestNoRetryOnPermanent4xx(t *testing.T) {
 func TestNoRetryOnCanceledContext(t *testing.T) {
 	for name, submit := range retrySubmitters() {
 		t.Run(name, func(t *testing.T) {
-			p := newRunningPool(t, 1, 1)
+			p := newRunningPool(t)
 
 			parent, cancel := context.WithCancel(context.Background())
 			cancel() // отменён ДО постановки задачи
@@ -199,7 +199,7 @@ func TestNoRetryOnCanceledContext(t *testing.T) {
 func TestNoRetrySubmitOnTransient5xx(t *testing.T) {
 	for name, submit := range noRetrySubmitters() {
 		t.Run(name, func(t *testing.T) {
-			p := newRunningPool(t, 1, 1)
+			p := newRunningPool(t)
 
 			var calls atomic.Int64
 
@@ -229,7 +229,7 @@ func TestNoRetrySubmitOnTransient5xx(t *testing.T) {
 func TestRetryExhaustedReturnsLastError(t *testing.T) {
 	for name, submit := range retrySubmitters() {
 		t.Run(name, func(t *testing.T) {
-			p := newRunningPool(t, 1, 1)
+			p := newRunningPool(t)
 
 			var calls atomic.Int64
 
@@ -260,7 +260,7 @@ func TestRetryExhaustedReturnsLastError(t *testing.T) {
 // TestRetryAttemptsOverride — число попыток берётся из поля пула (0 = политика
 // по умолчанию): тесты не зависят от прод-значения, а прод остаётся с 3.
 func TestRetryAttemptsOverride(t *testing.T) {
-	p := newRunningPool(t, 1, 1)
+	p := newRunningPool(t)
 	p.attempts = 5
 
 	var calls atomic.Int64
