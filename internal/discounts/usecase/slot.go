@@ -62,7 +62,14 @@ func (uc *UseCase) RunSlotPlan(ctx context.Context, now time.Time, capacity int)
 	if err != nil {
 		return err
 	}
-	pairs := Evaluate(inputs, nil, day)
+	// Оборот обязателен: слот строится по лестнице (продажи ему не нужны), но
+	// этим же расчётом заменяется снапшот реестра — без оборота из него
+	// пропали бы избыточные пары, и страница с отчётом показали бы пустую очередь.
+	rates, err := uc.turnover.Averages(ctx, inputProductIDs(inputs))
+	if err != nil {
+		return fmt.Errorf("оборот товаров слота: %w", err)
+	}
+	pairs := Evaluate(inputs, rates, day)
 
 	prev, err := uc.repo.LastDigestPairs(ctx)
 	if err != nil {
@@ -114,12 +121,22 @@ func (uc *UseCase) RunRaise(ctx context.Context, now time.Time) error {
 	if err != nil {
 		return err
 	}
-	pairs := Evaluate(inputs, nil, day)
+	// Оборот нужен не подъёму, а снапшоту реестра: он уходит в diff уведомлений
+	// и на страницу, и без оборота из него выпали бы избыточные пары.
+	rates, err := uc.turnover.Averages(ctx, inputProductIDs(inputs))
+	if err != nil {
+		return fmt.Errorf("оборот товаров подъёма: %w", err)
+	}
+	pairs := Evaluate(inputs, rates, day)
 
 	raised := make([]discounts.LotKey, 0, len(plan))
 	if len(plan) > 0 {
 		writes := make([]discounts.DiscountWrite, 0, len(plan))
-		for _, p := range pairs {
+		// По индексу, а не по копии: в реестр должен уйти снапшот с поднятым
+		// значением — иначе уведомление о подъёме не уйдёт, а на следующем часу
+		// придёт ложное «поднять скидку» (движок перечитает БД и увидит рост).
+		for i := range pairs {
+			p := &pairs[i]
 			percent, ok := plan[p.Key]
 			if !ok {
 				continue
@@ -132,16 +149,19 @@ func (uc *UseCase) RunRaise(ctx context.Context, now time.Time) error {
 				continue // уже не ниже плана: не понижаем
 			}
 			general := percent
-			p.Applied = &general
 			p.AppliedPlain = &general
-			p.SourceRaw = discounts.ReasonExpiry
-			writes = append(writes, writeFor(p))
+			p.SourceRaw = discounts.SourceExpiry.String()
+			writes = append(writes, writeFor(*p))
 		}
 
 		if len(writes) > 0 {
 			if err := uc.writer.SetDiscounts(ctx, writes); err != nil {
 				return fmt.Errorf("подъём скидок: %w", err)
 			}
+			// Снапшот реестра должен нести УЖЕ поднятое значение: иначе
+			// уведомление о подъёме не уйдёт, а на следующем часу придёт
+			// ложное «поднимите скидку» (расчёт перечитает БД и увидит рост).
+			applyWrites(pairs, writes)
 		}
 	}
 

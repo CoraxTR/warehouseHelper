@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -82,6 +83,7 @@ type slotHarness struct {
 	uc     *UseCase
 	repo   *fakeSlotRepo
 	writer *fakeDiscountWriter
+	turn   *fakeTurnover
 	chat   *fakeWarehouseNotifier
 	common *fakeCommonNotifier
 	now    time.Time
@@ -92,11 +94,57 @@ func newSlotHarness(now time.Time, inputs ...discounts.Input) *slotHarness {
 	base := newFakeDiscountRepo(inputs...)
 	repo := &fakeSlotRepo{fakeDiscountRepo: base}
 	writer := &fakeDiscountWriter{repo: base}
+	turn := &fakeTurnover{}
 	chat := &fakeWarehouseNotifier{}
 	common := &fakeCommonNotifier{}
-	uc := NewUseCase(repo, &fakeTurnover{}, writer, common, chat, func() time.Time { return now })
+	uc := NewUseCase(repo, turn, writer, common, chat, func() time.Time { return now })
 
-	return &slotHarness{uc: uc, repo: repo, writer: writer, chat: chat, common: common, now: now, today: beginningOfDay(now)}
+	return &slotHarness{uc: uc, repo: repo, writer: writer, turn: turn, chat: chat, common: common, now: now, today: beginningOfDay(now)}
+}
+
+// key — ключ лота пары теста (нормализация срока, как в расчёте).
+func (h *slotHarness) key(pid string, bestBefore time.Time) discounts.LotKey {
+	return discounts.LotKey{ProductID: pid, BestBefore: beginningOfDay(bestBefore)}
+}
+
+// Подъём 16:00 меняет значение канала сайта, поэтому о нём надо сообщить
+// человеку — тем же diff реестра, что и в расчётном тике. Проверяем и обратное:
+// на следующем часу ложного «поднимите скидку» быть не должно (снапшот реестра
+// должен нести УЖЕ поднятое значение).
+func TestRunRaiseNotifiesGrowth(t *testing.T) {
+	// Срока у лота нет: значение канала сайта даёт только избыток (у ступени
+	// лестницы приоритет выше, и подъём проверял бы не то).
+	h := newSlotHarness(recalcNow(1),
+		lotInput("p1", "Колбаса", day(9), 100, telegramInput(slotMainPercent)))
+	ctx := context.Background()
+
+	// Наполняем реестр: медленные продажи дали избыток — движок поставил 10 %.
+	h.turn.rates = map[string]float64{"p1": 30}
+	if err := h.uc.RecalcSurplus(ctx, h.now); err != nil {
+		t.Fatalf("RecalcSurplus (наполнение): %v", err)
+	}
+	h.common.texts, h.common.tries = nil, nil
+
+	// План слота: позиции назначена скидка дня 20 %.
+	h.repo.slot = map[discounts.LotKey]int16{h.key("p1", day(9)): slotMainPercent}
+	if err := h.uc.RunRaise(ctx, h.now); err != nil {
+		t.Fatalf("RunRaise: %v", err)
+	}
+
+	want := []string{"Колбаса (до 23.09): Необходимо поднять скидку до 20%"}
+	if !reflect.DeepEqual(h.common.texts, want) {
+		t.Errorf("уведомления %q, want %q", h.common.texts, want)
+	}
+
+	// Следующий час: расчёт видит уже поднятое значение и молчит.
+	h.common.texts, h.common.tries = nil, nil
+	delete(h.repo.flags, fakeFlagKey(h.today, discounts.FlagSurplus))
+	if err := h.uc.RecalcSurplus(ctx, h.now); err != nil {
+		t.Fatalf("RecalcSurplus (после подъёма): %v", err)
+	}
+	if len(h.common.texts) != 0 {
+		t.Errorf("после подъёма пришло %q, want тишину", h.common.texts)
+	}
 }
 
 // Порядок утренних шагов расписания: дайджест строится по реестру, а реестр

@@ -66,10 +66,15 @@ func (uc *UseCase) RecalcExpiry(ctx context.Context, now time.Time) error {
 	if err != nil {
 		return err
 	}
-	pairs := Evaluate(inputs, nil, today)
+	// Оборот берём из шва: лестница от продаж не зависит, но этим расчётом
+	// заменяется снапшот реестра — без оборота из него выпали бы избыточные
+	// пары (окно, страница «Скидки» и дайджест показали бы пустую очередь).
+	rates, err := uc.turnover.Averages(ctx, inputProductIDs(inputs))
+	if err != nil {
+		return fmt.Errorf("оборот товаров расчёта: %w", err)
+	}
+	pairs := Evaluate(inputs, rates, today)
 
-	// Оборот здесь не освежаем: лестница по сроку от продаж не зависит,
-	// ей хватает действующего оборота снапшота.
 	if err := uc.writeAndRegister(ctx, pairs, expiryWrites(pairs)); err != nil {
 		return err
 	}
