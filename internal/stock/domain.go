@@ -15,9 +15,11 @@ type Lot struct {
 	Qty        int64      `json:"qty"`         // остаток, штук (весовые — по среднему весу)
 	ProducedOn *time.Time `json:"produced_on"` // дата выработки; null — не известна
 
-	// General/Telegram — «просто» скидки, пишет будущий модуль расчёта скидок.
+	// General/Telegram — «просто» скидки, пишет модуль расчёта скидок
+	// (internal/discounts через шов DiscountWriter).
 	// GeneralManual/TelegramManual — ручные, пишет UI сроков.
-	// null = не задана; 0 = заданная скидка ноль.
+	// null и 0 = скидка не задана: ноль означает «скидки нет», а не «запрет
+	// скидки» (правило «0 = NULL», internal/stock/AGENTS.md).
 	General        *int16 `json:"discount_general"`
 	Telegram       *int16 `json:"discount_telegram"`
 	GeneralManual  *int16 `json:"discount_general_manual"`

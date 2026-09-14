@@ -44,7 +44,9 @@ func (h *Handler) DiscountsPage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	page := discountsPage{
-		Date:           time.Now().Format("02.01.2006 15:04"),
+		// Время — из часов юзкейса (инжектированы): своих часов страница
+		// не заводит, чтобы шапка жила по тем же часам, что и расчёт.
+		Date:           uc.Now().Format("02.01.2006 15:04"),
 		WindowCap:      h.discountWindowCap,
 		SurplusPercent: discounts.SurplusPercent(),
 		Window:         uc.Window(h.discountWindowCap),
@@ -77,17 +79,20 @@ func discountSourceLabel(s discounts.Source) string {
 	}
 }
 
-// discountCoeff — коэффициент избытка одним знаком с запятой; без избытка — «—».
+// discountCoeff — коэффициент избытка тем же форматом, что в дайджесте
+// (один знак, запятая — `discounts.FormatCoeff`); без избытка — «—».
 func discountCoeff(v float64) string {
 	if v <= 0 {
 		return "—"
 	}
-	return fmt.Sprintf("%.1f", v)
+	return discounts.FormatCoeff(v)
 }
 
 // убеждаемся, что юзкейс модуля скидок удовлетворяет тому, что зовёт страница
-// (окно и очередь реестра) — проверка компилятором, а не договорённостью.
+// (окно, очередь реестра и часы модуля) — проверка компилятором, а не
+// договорённостью.
 var _ interface {
 	Window(n int) []discounts.Row
 	Queue(windowSize int) []discounts.Row
+	Now() time.Time
 } = (*ducase.UseCase)(nil)

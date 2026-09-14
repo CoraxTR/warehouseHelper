@@ -328,8 +328,8 @@ func slotReason(s slotPosition) string {
 	return discounts.ReasonExpiry
 }
 
-// sortSlot — порядок плана: та же логика, что в отчёте (ручные → срок →
-// избыток, внутри — по сроку), чтобы список читался как дайджест.
+// sortSlot — порядок плана: тот же порядок строк, что в отчёте (правило —
+// `discounts.Less`), чтобы список читался как дайджест.
 func sortSlot(slot []slotPosition) {
 	rows := make([]discounts.Row, len(slot))
 	for i, s := range slot {
@@ -340,41 +340,13 @@ func sortSlot(slot []slotPosition) {
 		order[i] = i
 	}
 	sort.SliceStable(order, func(a, b int) bool {
-		ra, rb := rows[order[a]], rows[order[b]]
-		return lessRow(ra, rb)
+		return discounts.Less(rows[order[a]], rows[order[b]])
 	})
 	sorted := make([]slotPosition, len(slot))
 	for i, idx := range order {
 		sorted[i] = slot[idx]
 	}
 	copy(slot, sorted)
-}
-
-// lessRow — порядок строк отчёта (повторяет discounts.Sort, но без экспорта
-// cmp-функции из домена).
-func lessRow(a, b discounts.Row) bool {
-	ra, rb := rowRank(a.Source), rowRank(b.Source)
-	if ra != rb {
-		return ra < rb
-	}
-	if a.Source == discounts.SourceSurplus {
-		return a.Coeff > b.Coeff
-	}
-	return a.BestBefore.Before(b.BestBefore)
-}
-
-// rowRank — группа строки в порядке отчёта (как discounts.sortRank).
-func rowRank(s discounts.Source) int {
-	switch s {
-	case discounts.SourceManual:
-		return 0
-	case discounts.SourceExpiry:
-		return 1
-	case discounts.SourceSurplus:
-		return 2
-	default:
-		return 3
-	}
 }
 
 // Распроданную позицию отдельно искать не нужно: лот без остатка в снапшоте

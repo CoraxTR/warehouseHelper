@@ -117,10 +117,11 @@ func (uc *UseCase) refreshWindowOnce(ctx context.Context, day time.Time) error {
 		return nil
 	}
 
-	ids, err := uc.productIDs(ctx, day)
+	inputs, err := uc.repo.LoadDiscountInput(ctx, day)
 	if err != nil {
 		return err
 	}
+	ids := inputProductIDs(inputs)
 	if len(ids) > 0 {
 		if _, err := uc.turnover.RefreshWindow(ctx, ids); err != nil {
 			return err
@@ -205,24 +206,4 @@ func isTelegramDay(now time.Time) bool {
 	default:
 		return false
 	}
-}
-
-// productIDs — id товаров с лотами во входе расчёта (без повторов, порядок
-// первого появления): кого обновлять в окне оборотов.
-func (uc *UseCase) productIDs(ctx context.Context, day time.Time) ([]string, error) {
-	inputs, err := uc.repo.LoadDiscountInput(ctx, day)
-	if err != nil {
-		return nil, err
-	}
-
-	seen := make(map[string]struct{}, len(inputs))
-	ids := make([]string, 0, len(inputs))
-	for _, in := range inputs {
-		if _, ok := seen[in.ProductID]; ok {
-			continue
-		}
-		seen[in.ProductID] = struct{}{}
-		ids = append(ids, in.ProductID)
-	}
-	return ids, nil
 }

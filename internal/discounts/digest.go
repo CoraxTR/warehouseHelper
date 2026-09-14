@@ -51,15 +51,23 @@ func sortRank(s Source) int {
 // (порядок выборки из репозитория, а внутри лота — порядок срока).
 func Sort(rows []Row) {
 	sort.SliceStable(rows, func(i, j int) bool {
-		ri, rj := sortRank(rows[i].Source), sortRank(rows[j].Source)
-		if ri != rj {
-			return ri < rj
-		}
-		if rows[i].Source == SourceSurplus {
-			return rows[i].Coeff > rows[j].Coeff
-		}
-		return rows[i].BestBefore.Before(rows[j].BestBefore)
+		return Less(rows[i], rows[j])
 	})
+}
+
+// Less — сравнение строк отчёта: то же правило, что у Sort (ранг источника,
+// затем срок ↑ или коэффициент ↓ у избытка). Наружу — для тех, кто сортирует
+// свои позиции этим же порядком (план ТГ-слота, slot.go), чтобы правило
+// порядка жило в одном месте.
+func Less(a, b Row) bool {
+	ra, rb := sortRank(a.Source), sortRank(b.Source)
+	if ra != rb {
+		return ra < rb
+	}
+	if a.Source == SourceSurplus {
+		return a.Coeff > b.Coeff
+	}
+	return a.BestBefore.Before(b.BestBefore)
 }
 
 // BuildDigest — разложить строки в две секции отчёта: «Позиции в скидках»
@@ -108,14 +116,15 @@ func (d Digest) Text() string {
 		fmt.Fprintf(&b, "Позиции с избытком (Доступны для допродажи со скидкой %d %%):\n", SurplusPercent())
 		for i, r := range d.Surplus {
 			fmt.Fprintf(&b, "%d. %s (до %s) — %d%% (коэф %s)\n",
-				i+1, r.Name, r.BestBefore.Format("02.01"), r.Percent, formatCoeff(r.Coeff))
+				i+1, r.Name, r.BestBefore.Format("02.01"), r.Percent, FormatCoeff(r.Coeff))
 		}
 	}
 	return b.String()
 }
 
-// formatCoeff — коэффициент избытка одним знаком после запятой с запятой как
-// десятичным разделителем (как остальные числа отчёта).
-func formatCoeff(v float64) string {
+// FormatCoeff — коэффициент избытка одним знаком после запятой с запятой как
+// десятичным разделителем (как остальные числа отчёта). Экспорт — чтобы страница
+// «Скидки» печатала коэффициент тем же форматом, а не своей копией правила.
+func FormatCoeff(v float64) string {
 	return strings.Replace(strconv.FormatFloat(v, 'f', 1, 64), ".", ",", 1)
 }
