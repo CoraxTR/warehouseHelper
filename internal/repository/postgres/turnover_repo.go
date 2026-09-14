@@ -3,9 +3,14 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"warehouseHelper/internal/averagesales"
 )
+
+// turnoverReadBatch — размер пачки id при чтении окна оборотов списком товаров:
+// один запрос на пачку (ANY($1)) вместо запроса на товар.
+const turnoverReadBatch = 500
 
 // UpsertMonthlyTurnover пишет месячные обороты батчем (upsert по PK).
 // Одной транзакцией: ошибка любой строки откатывает всю партию.
@@ -92,6 +97,82 @@ func (pg *PGClient) lastTurnover(ctx context.Context, table, periodColumn, produ
 	}
 
 	return out, nil
+}
+
+// turnoverWindow — общее чтение окна оборотов товаров: id бьются пачками по
+// turnoverReadBatch, каждый запрос берёт пачку через ANY($1). since включается
+// в выборку и сравнивается как DATE (без часовых поясов: строка 'YYYY-MM-DD'
+// кастуется в date). Порядок строк — товар по возрастанию, периоды по убыванию.
+func (pg *PGClient) turnoverWindow(ctx context.Context, table, periodColumn string, productIDs []string, since time.Time) ([]averagesales.TurnoverRow, error) {
+	out := make([]averagesales.TurnoverRow, 0, len(productIDs))
+	for _, batch := range idBatches(productIDs, turnoverReadBatch) {
+		rows, err := pg.turnoverWindowBatch(ctx, table, periodColumn, batch, since)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, rows...)
+	}
+
+	return out, nil
+}
+
+// turnoverWindowBatch — один запрос окна по пачке товаров.
+func (pg *PGClient) turnoverWindowBatch(ctx context.Context, table, periodColumn string, productIDs []string, since time.Time) ([]averagesales.TurnoverRow, error) {
+	rows, err := pg.Pool.Query(ctx, fmt.Sprintf(`
+        SELECT product_id, %s, qty
+        FROM %s
+        WHERE product_id = ANY($1::text[]) AND %s >= $2::date
+        ORDER BY product_id, %s DESC`, periodColumn, table, periodColumn, periodColumn),
+		productIDs, since.Format(time.DateOnly),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]averagesales.TurnoverRow, 0, len(productIDs))
+	for rows.Next() {
+		var r averagesales.TurnoverRow
+		if err := rows.Scan(&r.ProductID, &r.PeriodStart, &r.Qty); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return out, nil
+}
+
+// MonthlyTurnoverWindowByProducts — строки месячного оборота перечисленных
+// товаров за периоды не раньше since, пачками по turnoverReadBatch id (1000
+// товаров = 2 запроса). Порядок — как у lastTurnover: периоды по убыванию.
+func (pg *PGClient) MonthlyTurnoverWindowByProducts(ctx context.Context, productIDs []string, since time.Time) ([]averagesales.TurnoverRow, error) {
+	return pg.turnoverWindow(ctx, "product_monthly_turnover", "month_start", productIDs, since)
+}
+
+// WeeklyTurnoverWindowByProducts — то же для недельного ряда.
+func (pg *PGClient) WeeklyTurnoverWindowByProducts(ctx context.Context, productIDs []string, since time.Time) ([]averagesales.TurnoverRow, error) {
+	return pg.turnoverWindow(ctx, "product_weekly_turnover", "week_start", productIDs, since)
+}
+
+// idBatches — id пачками не больше size (порядок сохраняется): пагинация
+// чтения списка товаров батчем, а не товаром за запрос.
+func idBatches(ids []string, size int) [][]string {
+	if size <= 0 {
+		size = 1
+	}
+
+	out := make([][]string, 0, (len(ids)+size-1)/size)
+	for len(ids) > 0 {
+		end := min(size, len(ids))
+		out = append(out, ids[:end])
+		ids = ids[end:]
+	}
+
+	return out
 }
 
 // ProductsMissingMonthlyTurnover — id товаров, у которых в окне последних

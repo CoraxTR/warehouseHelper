@@ -26,6 +26,13 @@ type Repository interface {
 	LastMonthlyTurnover(ctx context.Context, productID string, n int) ([]averagesales.TurnoverRow, error)
 	// LastWeeklyTurnover — последние n строк недельного оборота товара.
 	LastWeeklyTurnover(ctx context.Context, productID string, n int) ([]averagesales.TurnoverRow, error)
+	// MonthlyTurnoverWindowByProducts — строки месячного оборота СПИСКА товаров
+	// за периоды не раньше since (всё окно целиком); внутри — пачки по id, то
+	// есть один запрос на пачку товаров, а не на товар. Порядок — период по
+	// убыванию.
+	MonthlyTurnoverWindowByProducts(ctx context.Context, productIDs []string, since time.Time) ([]averagesales.TurnoverRow, error)
+	// WeeklyTurnoverWindowByProducts — то же для недельного ряда.
+	WeeklyTurnoverWindowByProducts(ctx context.Context, productIDs []string, since time.Time) ([]averagesales.TurnoverRow, error)
 	// ProductsMissingMonthlyTurnover — id товаров, у которых в окне последних
 	// завершённых месяцев (starts, YYYY-MM-DD) есть дыры: нет строки хотя бы
 	// за один период окна (стартовая дозаливка; порядок не важен).

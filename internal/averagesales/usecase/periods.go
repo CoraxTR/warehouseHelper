@@ -93,3 +93,13 @@ func formatPeriodStarts(starts []time.Time) []string {
 	}
 	return out
 }
+
+// windowSince — начало самого дальнего периода окна (n завершённых назад от
+// текущего незакрытого): граница чтения окна оборотов из БД (периоды >= since).
+func windowSince(interval string, n int, now time.Time) time.Time {
+	start := currentPeriodStart(interval, now)
+	for i := 0; i < n; i++ {
+		start = periodBack(interval, start)
+	}
+	return start
+}
