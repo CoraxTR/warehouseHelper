@@ -47,11 +47,21 @@ func (uc *UseCase) runSteps(ctx context.Context, s Schedule) {
 	now := uc.now()
 	day := beginningOfDay(now)
 
-	if err := uc.runMorning(ctx, day, now, s); err != nil {
-		slog.Info(fmt.Sprintf("discounts: утренний шаг: %v", err))
+	// Порядок важен: окно оборотов → часовой избыток (он же наполняет реестр,
+	// по которому строится отчёт) → лестница по сроку → дайджест 09:00. Отчёт
+	// идёт ПОСЛЕ пересчётов: иначе он показывал бы вчерашние скидки, а на
+	// свежем старте — пустой список.
+	if err := uc.runWindow(ctx, day, now, s); err != nil {
+		slog.Info(fmt.Sprintf("discounts: окно оборотов: %v", err))
 	}
 	if err := uc.runSurplus(ctx, now); err != nil {
 		slog.Info(fmt.Sprintf("discounts: пересчёт избытка: %v", err))
+	}
+	if err := uc.runExpiry(ctx, now, s); err != nil {
+		slog.Info(fmt.Sprintf("discounts: пересчёт по сроку: %v", err))
+	}
+	if err := uc.runDigest(ctx, now, s); err != nil {
+		slog.Info(fmt.Sprintf("discounts: дайджест: %v", err))
 	}
 	if !isTelegramDay(now) {
 		return // слот ТГ и подъём — только вт/чт
@@ -64,25 +74,34 @@ func (uc *UseCase) runSteps(ctx context.Context, s Schedule) {
 	}
 }
 
-// runMorning — утренний шаг после Morning: полное окно оборотов (возвраты
-// задним числом — раз в день), пересчёт по сроку в КТ-дни, дайджест в общий чат.
-// Шаги проверяют свои маркеры дня сами, порядок важен: дайджест идёт после
-// пересчёта, иначе отчёт покажет вчерашние значения.
-func (uc *UseCase) runMorning(ctx context.Context, day, now time.Time, s Schedule) error {
+// runWindow — полное окно оборотов товаров с лотами после Morning (один раз за
+// день, свой маркер): забирает возвраты задним числом по старым заказам.
+func (uc *UseCase) runWindow(ctx context.Context, day, now time.Time, s Schedule) error {
 	if now.Sub(day) < s.Morning {
 		return nil
 	}
 
-	if err := uc.refreshWindowOnce(ctx, day); err != nil {
-		return fmt.Errorf("окно оборотов: %w", err)
+	return uc.refreshWindowOnce(ctx, day)
+}
+
+// runExpiry — пересмотр лестницы по сроку после Morning (КТ-дни и маркер дня
+// проверяет сам RecalcExpiry).
+func (uc *UseCase) runExpiry(ctx context.Context, now time.Time, s Schedule) error {
+	if now.Sub(beginningOfDay(now)) < s.Morning {
+		return nil
 	}
-	if err := uc.RecalcExpiry(ctx, now); err != nil {
-		return fmt.Errorf("пересчёт по сроку: %w", err)
+
+	return uc.RecalcExpiry(ctx, now)
+}
+
+// runDigest — дайджест в общий чат после Morning (маркер дня — внутри SendDigest).
+// Идёт после пересчётов: реестр к этому моменту уже наполнен ими.
+func (uc *UseCase) runDigest(ctx context.Context, now time.Time, s Schedule) error {
+	if now.Sub(beginningOfDay(now)) < s.Morning {
+		return nil
 	}
-	if err := uc.SendDigest(ctx, now); err != nil {
-		return fmt.Errorf("дайджест: %w", err)
-	}
-	return nil
+
+	return uc.SendDigest(ctx, now)
 }
 
 // refreshWindowOnce — обновление всего окна оборотов товаров с лотами (один раз

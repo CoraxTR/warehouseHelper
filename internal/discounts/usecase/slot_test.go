@@ -83,9 +83,9 @@ type slotHarness struct {
 	repo   *fakeSlotRepo
 	writer *fakeDiscountWriter
 	chat   *fakeWarehouseNotifier
+	common *fakeCommonNotifier
 	now    time.Time
 	today  time.Time
-	p1, p2 discounts.LotKey
 }
 
 func newSlotHarness(now time.Time, inputs ...discounts.Input) *slotHarness {
@@ -93,9 +93,44 @@ func newSlotHarness(now time.Time, inputs ...discounts.Input) *slotHarness {
 	repo := &fakeSlotRepo{fakeDiscountRepo: base}
 	writer := &fakeDiscountWriter{repo: base}
 	chat := &fakeWarehouseNotifier{}
-	uc := NewUseCase(repo, &fakeTurnover{}, writer, &fakeCommonNotifier{}, chat, func() time.Time { return now })
+	common := &fakeCommonNotifier{}
+	uc := NewUseCase(repo, &fakeTurnover{}, writer, common, chat, func() time.Time { return now })
 
-	return &slotHarness{uc: uc, repo: repo, writer: writer, chat: chat, now: now, today: beginningOfDay(now)}
+	return &slotHarness{uc: uc, repo: repo, writer: writer, chat: chat, common: common, now: now, today: beginningOfDay(now)}
+}
+
+// Порядок утренних шагов расписания: дайджест строится по реестру, а реестр
+// наполняют пересчёты — значит отчёт обязан идти ПОСЛЕ них. Иначе на свежем
+// старте (или после сна) в общий чат уходил бы пустой дайджест.
+func TestRunStepsDigestAfterRecalc(t *testing.T) {
+	// Понедельник 10:00: утро уже наступило, ТГ-день и КТ-день — не сегодня,
+	// поэтому в проходе только наполнение реестра и дайджест.
+	h := newSlotHarness(day(7).Add(10*time.Hour),
+		lotInput("p1", "Колбаса", day(20), 100, manualInput(20)),
+	)
+
+	h.uc.runSteps(context.Background(), Schedule{
+		Morning:     9 * time.Hour,
+		Plan:        14 * time.Hour,
+		Raise:       16 * time.Hour,
+		TelegramCap: 10,
+	})
+
+	var digest string
+	for _, text := range h.common.texts {
+		if strings.HasPrefix(text, "Дайджест по скидкам") {
+			digest = text
+		}
+	}
+	if digest == "" {
+		t.Fatalf("дайджест не отправлен: %q", h.common.texts)
+	}
+	if !strings.Contains(digest, "Колбаса") {
+		t.Errorf("дайджест без позиции реестра: %q", digest)
+	}
+	if !h.repo.flags[fakeFlagKey(h.today, discounts.FlagDigestSent)] {
+		t.Error("маркер дня дайджеста не поставлен")
+	}
 }
 
 // TestRunSlotPlanPublishesLadderAndManual — в слот попадают позиции с ручной
