@@ -77,13 +77,8 @@ func rowQty(t *testing.T, rows []map[string]any, id string) (qty, reserve float6
 
 func TestSubmitPartialPiece(t *testing.T) {
 	fake, o := submitOrder()
-	uc := NewUseCase(fake, submitCatalog(), &fakePicker{})
-	if _, err := uc.Detail(context.Background(), o.ID); err != nil { // греем кэш отправки
-		t.Fatalf("Detail: %v", err)
-	}
-
 	picker := &fakePicker{}
-	uc = NewUseCase(fake, submitCatalog(), picker)
+	uc := NewUseCase(fake, submitCatalog(), picker)
 	res, err := uc.Submit(context.Background(), o.ID, SubmitRequest{Rows: []SubmitRow{
 		{IDs: []string{"pos-1"}, Records: []ScanRecord{
 			{WeightG: 0, BB: "10102026"},
@@ -142,10 +137,6 @@ func TestSubmitFullPiece(t *testing.T) {
 	fake, o := submitOrder()
 	picker := &fakePicker{}
 	uc := NewUseCase(fake, submitCatalog(), picker)
-	if _, err := uc.Detail(context.Background(), o.ID); err != nil {
-		t.Fatalf("Detail: %v", err)
-	}
-
 	if _, err := uc.Submit(context.Background(), o.ID, SubmitRequest{Rows: []SubmitRow{
 		{IDs: []string{"pos-1"}, Records: []ScanRecord{
 			{WeightG: 0, BB: "10102026"},
@@ -173,10 +164,6 @@ func TestSubmitWeightedCovered(t *testing.T) {
 	fake, o := submitOrder()
 	picker := &fakePicker{}
 	uc := NewUseCase(fake, submitCatalog(), picker)
-	if _, err := uc.Detail(context.Background(), o.ID); err != nil {
-		t.Fatalf("Detail: %v", err)
-	}
-
 	if _, err := uc.Submit(context.Background(), o.ID, SubmitRequest{Rows: []SubmitRow{
 		{IDs: []string{"pos-2"}, Records: []ScanRecord{
 			{WeightG: 1250, BB: "01102026"},
@@ -214,10 +201,6 @@ func TestSubmitMergedWeighted(t *testing.T) {
 	}
 	picker := &fakePicker{}
 	uc := NewUseCase(fake, submitCatalog(), picker)
-	if _, err := uc.Detail(context.Background(), o.ID); err != nil {
-		t.Fatalf("Detail: %v", err)
-	}
-
 	if _, err := uc.Submit(context.Background(), o.ID, SubmitRequest{Rows: []SubmitRow{
 		{IDs: []string{"pos-w1", "pos-w2"}, Records: []ScanRecord{
 			{WeightG: 1250, BB: "01102026"},
@@ -244,10 +227,6 @@ func TestSubmitUncoveredPieceSplit(t *testing.T) {
 	fake, o := submitOrder()
 	picker := &fakePicker{}
 	uc := NewUseCase(fake, submitCatalog(), picker)
-	if _, err := uc.Detail(context.Background(), o.ID); err != nil {
-		t.Fatalf("Detail: %v", err)
-	}
-
 	// Покрыта только весовая; штучная (3 ед.) не тронута → 3 заглушки 0,0001.
 	if _, err := uc.Submit(context.Background(), o.ID, SubmitRequest{Rows: []SubmitRow{
 		{IDs: []string{"pos-2"}, Records: []ScanRecord{{WeightG: 1250, BB: "01102026"}}},
@@ -298,9 +277,6 @@ func TestSubmitValidation(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			fake, o := submitOrder()
 			uc := NewUseCase(fake, submitCatalog(), &fakePicker{})
-			if _, err := uc.Detail(context.Background(), o.ID); err != nil {
-				t.Fatalf("Detail: %v", err)
-			}
 			if _, err := uc.Submit(context.Background(), o.ID, tc.req); !errors.Is(err, tc.want) {
 				t.Errorf("Submit err = %v, want %v", err, tc.want)
 			}
@@ -314,10 +290,6 @@ func TestSubmitValidation(t *testing.T) {
 func TestSubmitMissingPosition(t *testing.T) {
 	fake, o := submitOrder()
 	uc := NewUseCase(fake, submitCatalog(), &fakePicker{})
-	if _, err := uc.Detail(context.Background(), o.ID); err != nil {
-		t.Fatalf("Detail: %v", err)
-	}
-
 	_, err := uc.Submit(context.Background(), o.ID, SubmitRequest{Rows: []SubmitRow{
 		{IDs: []string{"ghost"}, Records: []ScanRecord{{BB: "10102026"}}},
 	}})
@@ -332,10 +304,6 @@ func TestSubmitMissingPosition(t *testing.T) {
 func TestSubmitOverpick(t *testing.T) {
 	fake, o := submitOrder()
 	uc := NewUseCase(fake, submitCatalog(), &fakePicker{})
-	if _, err := uc.Detail(context.Background(), o.ID); err != nil {
-		t.Fatalf("Detail: %v", err)
-	}
-
 	_, err := uc.Submit(context.Background(), o.ID, SubmitRequest{Rows: []SubmitRow{
 		{IDs: []string{"pos-1"}, Records: []ScanRecord{
 			{BB: "10102026"}, {BB: "10102026"}, {BB: "10102026"}, {BB: "10102026"},
@@ -371,10 +339,6 @@ func TestSubmitTopupFull(t *testing.T) {
 	fake, o := topupOrder()
 	picker := &fakePicker{}
 	uc := NewUseCase(fake, submitCatalog(), picker)
-	if _, err := uc.Detail(context.Background(), o.ID); err != nil {
-		t.Fatalf("Detail: %v", err)
-	}
-
 	if _, err := uc.Submit(context.Background(), o.ID, SubmitRequest{Rows: []SubmitRow{
 		{IDs: []string{"pos-1"}, From: 2, Records: []ScanRecord{
 			{WeightG: 0, BB: "10102026"},
@@ -404,10 +368,6 @@ func TestSubmitTopupPartial(t *testing.T) {
 	fake, o := topupOrder()
 	picker := &fakePicker{}
 	uc := NewUseCase(fake, submitCatalog(), picker)
-	if _, err := uc.Detail(context.Background(), o.ID); err != nil {
-		t.Fatalf("Detail: %v", err)
-	}
-
 	if _, err := uc.Submit(context.Background(), o.ID, SubmitRequest{Rows: []SubmitRow{
 		{IDs: []string{"pos-1"}, From: 2, Records: []ScanRecord{
 			{WeightG: 0, BB: "10102026"},
@@ -444,10 +404,6 @@ func TestSubmitTopupPartial(t *testing.T) {
 func TestSubmitTopupOverpick(t *testing.T) {
 	fake, o := topupOrder()
 	uc := NewUseCase(fake, submitCatalog(), &fakePicker{})
-	if _, err := uc.Detail(context.Background(), o.ID); err != nil {
-		t.Fatalf("Detail: %v", err)
-	}
-
 	_, err := uc.Submit(context.Background(), o.ID, SubmitRequest{Rows: []SubmitRow{
 		{IDs: []string{"pos-1"}, From: 2, Records: []ScanRecord{
 			{WeightG: 0, BB: "10102026"},
@@ -470,10 +426,6 @@ func TestSubmitTopupFromZero(t *testing.T) {
 	fake, o := topupOrder()
 	picker := &fakePicker{}
 	uc := NewUseCase(fake, submitCatalog(), picker)
-	if _, err := uc.Detail(context.Background(), o.ID); err != nil {
-		t.Fatalf("Detail: %v", err)
-	}
-
 	if _, err := uc.Submit(context.Background(), o.ID, SubmitRequest{Rows: []SubmitRow{
 		{IDs: []string{"pos-1"}, From: 0, Records: []ScanRecord{
 			{WeightG: 0, BB: "10102026"},
@@ -493,9 +445,9 @@ func TestSubmitTopupFromZero(t *testing.T) {
 	}
 }
 
-// TestSubmitCacheMissRefetch — промах кэша отправки догружает заказ теми же
-// GET (повторный Submit ходит в кэш, новых GET нет).
-func TestSubmitCacheMissRefetch(t *testing.T) {
+// TestSubmitRefetchesFromMS — кэша отправки нет: каждый Submit читает заказ
+// из МС заново (решение владельца 14.09 — PUT собирается из свежих данных).
+func TestSubmitRefetchesFromMS(t *testing.T) {
 	fake, o := submitOrder()
 	uc := NewUseCase(fake, submitCatalog(), &fakePicker{})
 
@@ -506,14 +458,14 @@ func TestSubmitCacheMissRefetch(t *testing.T) {
 		t.Fatalf("Submit #1: %v", err)
 	}
 	if fake.fetchByIDCalls != 1 {
-		t.Fatalf("fetchByIDCalls = %d, want 1 (промах → догрузка)", fake.fetchByIDCalls)
+		t.Fatalf("fetchByIDCalls = %d, want 1 (Submit читает заказ сам)", fake.fetchByIDCalls)
 	}
 
 	if _, err := uc.Submit(context.Background(), o.ID, req); err != nil {
 		t.Fatalf("Submit #2: %v", err)
 	}
-	if fake.fetchByIDCalls != 1 {
-		t.Errorf("fetchByIDCalls = %d, want 1 (второй submit из кэша)", fake.fetchByIDCalls)
+	if fake.fetchByIDCalls != 2 {
+		t.Errorf("fetchByIDCalls = %d, want 2 (кэша нет — второй Submit читает заново)", fake.fetchByIDCalls)
 	}
 	if len(fake.putBody) != 2 {
 		t.Errorf("PUT = %d, want 2", len(fake.putBody))
@@ -524,10 +476,6 @@ func TestSubmitMSError(t *testing.T) {
 	fake, o := submitOrder()
 	fake.putErr = errors.New("MS: 400 bad request")
 	uc := NewUseCase(fake, submitCatalog(), &fakePicker{})
-	if _, err := uc.Detail(context.Background(), o.ID); err != nil {
-		t.Fatalf("Detail: %v", err)
-	}
-
 	picker := &fakePicker{}
 	uc = NewUseCase(fake, submitCatalog(), picker)
 	if _, err := uc.Submit(context.Background(), o.ID, SubmitRequest{Rows: []SubmitRow{
@@ -544,10 +492,6 @@ func TestSubmitPickerErrorWarns(t *testing.T) {
 	fake, o := submitOrder()
 	picker := &fakePicker{err: errors.New("pg down")}
 	uc := NewUseCase(fake, submitCatalog(), picker)
-	if _, err := uc.Detail(context.Background(), o.ID); err != nil {
-		t.Fatalf("Detail: %v", err)
-	}
-
 	res, err := uc.Submit(context.Background(), o.ID, SubmitRequest{Rows: []SubmitRow{
 		{IDs: []string{"pos-1"}, Records: []ScanRecord{{BB: "10102026"}}},
 	}})

@@ -1,10 +1,11 @@
-// Пакет usecase — отправка подбора в МойСклад (итерация 3). Страница заказа
-// кэширует сырые ответы GET (заказ + positions + каталог) — те же запросы,
-// что уже делались для рендера. Кнопка «Отправить в МС» шлёт только
-// набранные сканы; usecase пересобирает раздел positions по правилам
-// владельца и PUT-ит заказ сырым телом GET (полная замена строк: с id —
-// обновляются, без id — создаются, отсутствующие удаляются — проверено на
-// живом API). После 200 OK списывает сроки через шов stock (PickStock).
+// Пакет usecase — отправка подбора в МойСклад (итерация 3). Кнопка
+// «Отправить в МС» шлёт только набранные сканы; usecase читает заказ из МС
+// ЗАНОВО (заказ + positions + каталог — те же GET, что и для рендера: кэша
+// нет, решение владельца 14.09 — PUT обязан собираться из свежих данных),
+// пересобирает раздел positions по правилам владельца и PUT-ит заказ сырым
+// телом GET (полная замена строк: с id — обновляются, без id — создаются,
+// отсутствующие удаляются — проверено на живом API). После 200 OK списывает
+// сроки через шов stock (PickStock).
 package usecase
 
 import (
@@ -15,7 +16,6 @@ import (
 	"log/slog"
 	"math"
 	"strings"
-	"sync"
 	"time"
 
 	"warehouseHelper/internal/metrics"
@@ -30,9 +30,7 @@ import (
 const (
 	stubQty        = 0.0001
 	bbLayout       = "02012006" // ДДММГГГГ (срез кода ЧЗ, клиент не парсит)
-	submitCacheTTL = 30 * time.Minute
-	submitCacheMax = 50
-	maxScanWeightG = 99999 // 5 знаков веса в коде
+	maxScanWeightG = 99999      // 5 знаков веса в коде
 )
 
 // Ошибки валидации submit (400 на клиенте).
@@ -89,71 +87,18 @@ type SubmitResult struct {
 	StockWarn string `json:"stock_warn,omitempty"`
 }
 
-// submitCache — сырые ответы МС заказа для отправки подбора: кладутся при
-// рендере детальной страницы (Detail), читаются на Submit. Кэш in-memory
-// без состояния: TTL 30 минут, потолок 50 заказов (вытеснение просроченных,
-// затем самого старого). Промах (рестарт/TTL) — догрузка свежими GET тем же
-// путём fetchAndCache.
-type submitCache struct {
-	mu     sync.Mutex
-	orders map[string]*submitEntry
-}
-
-// submitEntry — сырьё одного заказа: тело GET заказа (эхо для PUT), строки
-// positions как пришли с expand=assortment (порядок МС!), типизированные
-// позиции для страницы и каталог по кодам.
+// submitEntry — сырьё одного заказа, прочитанное на Submit: тело GET заказа
+// (эхо для PUT), строки positions как пришли с expand=assortment (порядок
+// МС!), типизированные позиции для страницы и каталог по кодам.
 type submitEntry struct {
 	orderRaw  json.RawMessage
 	rowsRaw   []json.RawMessage
 	positions []client.MSPosition
 	catalog   map[string]CatalogProduct
-	at        time.Time
 }
 
-func newSubmitCache() *submitCache {
-	return &submitCache{orders: make(map[string]*submitEntry)}
-}
-
-func (c *submitCache) store(id string, e *submitEntry) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if len(c.orders) >= submitCacheMax {
-		now := time.Now()
-		var oldestID string
-		var oldestAt time.Time
-		for k, v := range c.orders {
-			if now.Sub(v.at) > submitCacheTTL {
-				delete(c.orders, k)
-				continue
-			}
-			if oldestID == "" || v.at.Before(oldestAt) {
-				oldestID, oldestAt = k, v.at
-			}
-		}
-		if len(c.orders) >= submitCacheMax && oldestID != "" {
-			delete(c.orders, oldestID)
-		}
-	}
-
-	c.orders[id] = e
-}
-
-// get возвращает свежую запись (просроченная удаляется как промах).
-func (c *submitCache) get(id string) *submitEntry {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	e := c.orders[id]
-	if e == nil || time.Since(e.at) > submitCacheTTL {
-		delete(c.orders, id)
-		return nil
-	}
-	return e
-}
-
-// Submit отправляет подбор в МС: пересобирает positions из кэша отправки по
-// набранным сканам, PUT-ит заказ, при 200 — списывает сроки (PickStock).
+// Submit отправляет подбор в МС: читает заказ заново, пересобирает positions
+// по набранным сканам, PUT-ит заказ, при 200 — списывает сроки (PickStock).
 func (uc *UseCase) Submit(ctx context.Context, id string, req SubmitRequest) (SubmitResult, error) {
 	done := metrics.Track(trackPkg, "Submit")
 	defer done()
@@ -168,12 +113,11 @@ func (uc *UseCase) Submit(ctx context.Context, id string, req SubmitRequest) (Su
 		return SubmitResult{}, err
 	}
 
-	entry := uc.cache.get(id)
-	if entry == nil {
-		// Промах кэша (рестарт/TTL): догружаем теми же GET, что и Detail.
-		if _, entry, err = uc.fetchAndCache(ctx, id); err != nil {
-			return SubmitResult{}, err
-		}
+	// Свежее чтение: PUT собирается из данных на момент отправки (менеджер
+	// мог поменять количества после того, как страница была отрисована).
+	_, entry, err := uc.fetchForSubmit(ctx, id)
+	if err != nil {
+		return SubmitResult{}, err
 	}
 
 	out, lots, err := uc.buildSubmitPositions(req, records, entry)
@@ -317,7 +261,7 @@ func (uc *UseCase) buildSubmitPositions(req SubmitRequest, records map[int][]par
 	for i, raw := range entry.rowsRaw {
 		m, err := rowMap(raw)
 		if err != nil {
-			return nil, nil, fmt.Errorf("parse cached row %d: %w", i, err)
+			return nil, nil, fmt.Errorf("parse order row %d: %w", i, err)
 		}
 		meta := metaFromRow(i, m, entry.catalog)
 		metas = append(metas, meta)
