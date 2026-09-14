@@ -53,6 +53,21 @@ type StockPicker interface {
 	PickStock(ctx context.Context, lots []stock.PickLotIn) error
 }
 
+// StockAcceptor — шов в модуль остатков (stock): приём вернувшихся в сроки
+// единиц по срокам этикеток (qty += по (товар, срок)). Пара к StockPicker:
+// возврат в сроки при переподборе пишет обратно то, что подбор списал.
+// Реализует тот же *stock/usecase.StockUseCase (см. app/di.go).
+type StockAcceptor interface {
+	AcceptStock(ctx context.Context, lots []stock.LotIn) error
+}
+
+// WarehouseNotifier — шов уведомлений в чат склада (Telegram): пересчёт сроков
+// по незакрытым строкам при ручном закрытии возврата. Реализует
+// *telegram.Notifier (см. app/di.go).
+type WarehouseNotifier interface {
+	NotifyWarehouse(text string) error
+}
+
 // SubmitRequest — набранные сканы страницы заказа: покрыты только строки с
 // записями (ненабранные активные строки сервер заглушает сам — B1).
 type SubmitRequest struct {
@@ -238,11 +253,33 @@ type submitRowMeta struct {
 	m         map[string]any
 	id        string
 	code      string
+	name      string // название товара (assortment.name) — для текстов сверки
 	productID string
 	weighted  bool
 	hasCode   bool
 	quantity  float64
 	reserve   float64
+}
+
+// orderRowMetas разбирает строки positions в метаданные: по одной на строку
+// МС (порядок МС сохраняется) и с индексом по id позиции. Общий шаг отправки
+// подбора и возврата в сроки.
+func orderRowMetas(entry *submitEntry) ([]*submitRowMeta, map[string]*submitRowMeta, error) {
+	metas := make([]*submitRowMeta, 0, len(entry.rowsRaw))
+	metaByID := make(map[string]*submitRowMeta, len(entry.rowsRaw))
+	for i, raw := range entry.rowsRaw {
+		m, err := rowMap(raw)
+		if err != nil {
+			return nil, nil, fmt.Errorf("parse order row %d: %w", i, err)
+		}
+		meta := metaFromRow(i, m, entry.catalog)
+		metas = append(metas, meta)
+		if meta.id != "" {
+			metaByID[meta.id] = meta
+		}
+	}
+
+	return metas, metaByID, nil
 }
 
 // buildSubmitPositions собирает итоговый список positions (порядок — как в
@@ -256,18 +293,9 @@ type submitRowMeta struct {
 // исключаются/остаются как есть. Лоты списания — только новые сканы
 // (базовый резерв строки уже списан ранее).
 func (uc *UseCase) buildSubmitPositions(req SubmitRequest, records map[int][]parsedScan, entry *submitEntry) ([]any, []stock.PickLotIn, error) {
-	metas := make([]*submitRowMeta, 0, len(entry.rowsRaw))
-	metaByID := make(map[string]*submitRowMeta, len(entry.rowsRaw))
-	for i, raw := range entry.rowsRaw {
-		m, err := rowMap(raw)
-		if err != nil {
-			return nil, nil, fmt.Errorf("parse order row %d: %w", i, err)
-		}
-		meta := metaFromRow(i, m, entry.catalog)
-		metas = append(metas, meta)
-		if meta.id != "" {
-			metaByID[meta.id] = meta
-		}
+	metas, metaByID, err := orderRowMetas(entry)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	// Покрытые: живая строка (ids[0]) + хвосты группы.
@@ -432,6 +460,7 @@ func metaFromRow(idx int, m map[string]any, catalog map[string]CatalogProduct) *
 
 	if am, ok := m["assortment"].(map[string]any); ok {
 		meta.code = strings.TrimSpace(asString(am["code"]))
+		meta.name = strings.TrimSpace(asString(am["name"]))
 	}
 	if meta.code != "" {
 		if p, ok := catalog[meta.code]; ok {

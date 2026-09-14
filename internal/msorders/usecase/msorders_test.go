@@ -69,7 +69,7 @@ func sampleMSOrders() []client.MSOrder {
 
 func TestSearchMapsOrderRow(t *testing.T) {
 	fake := &fakeOrderSearch{orders: sampleMSOrders()}
-	uc := NewUseCase(fake, nil, nil)
+	uc := NewUseCase(fake, nil, nil, nil, nil)
 
 	rows, err := uc.Search(context.Background(), "  03969  ")
 	if err != nil {
@@ -102,7 +102,7 @@ func TestSearchMapsOrderRow(t *testing.T) {
 
 func TestSearchEmptyName(t *testing.T) {
 	fake := &fakeOrderSearch{}
-	uc := NewUseCase(fake, nil, nil)
+	uc := NewUseCase(fake, nil, nil, nil, nil)
 
 	for _, name := range []string{"", "   "} {
 		_, err := uc.Search(context.Background(), name)
@@ -121,7 +121,7 @@ func TestSearchEmptyValuesBecomeDash(t *testing.T) {
 	orders[0].DeliveryPlannedMoment = ""
 	orders[0].Moment = "не-дата"
 	fake := &fakeOrderSearch{orders: orders}
-	uc := NewUseCase(fake, nil, nil)
+	uc := NewUseCase(fake, nil, nil, nil, nil)
 
 	rows, err := uc.Search(context.Background(), "03969")
 	if err != nil {
@@ -141,7 +141,7 @@ func TestSearchEmptyValuesBecomeDash(t *testing.T) {
 
 func TestSearchClientError(t *testing.T) {
 	fake := &fakeOrderSearch{err: errors.New("429 too many requests")}
-	uc := NewUseCase(fake, nil, nil)
+	uc := NewUseCase(fake, nil, nil, nil, nil)
 
 	_, err := uc.Search(context.Background(), "03969")
 	if err == nil {
@@ -162,7 +162,7 @@ func TestSearchSortedByMomentDesc(t *testing.T) {
 		{ID: "o-new", Name: "00002", Moment: "2026-09-07 10:00:00.000"},
 		{ID: "o-mid", Name: "00003", Moment: "2026-09-06 23:59:59.000"},
 	}}
-	uc := NewUseCase(fake, nil, nil)
+	uc := NewUseCase(fake, nil, nil, nil, nil)
 
 	rows, err := uc.Search(context.Background(), "03969")
 	if err != nil {
@@ -184,7 +184,7 @@ func TestSearchSortedByMomentDesc(t *testing.T) {
 
 func TestSearchNotFound(t *testing.T) {
 	fake := &fakeOrderSearch{orders: []client.MSOrder{}}
-	uc := NewUseCase(fake, nil, nil)
+	uc := NewUseCase(fake, nil, nil, nil, nil)
 
 	rows, err := uc.Search(context.Background(), "00000")
 	if err != nil {
@@ -203,7 +203,7 @@ func TestSearchAgentHopFetchesName(t *testing.T) {
 	orders[0].Agent.Name = "" // expand не сработал — имя не приехало
 	orders[0].Agent.Meta.HREF = "https://api.moysklad.ru/api/remap/1.2/entity/counterparty/cp-1"
 	fake := &fakeOrderSearch{orders: orders, agentName: "ООО \"ХОП\""}
-	uc := NewUseCase(fake, nil, nil)
+	uc := NewUseCase(fake, nil, nil, nil, nil)
 
 	rows, err := uc.Search(context.Background(), "03969")
 	if err != nil {
@@ -219,7 +219,7 @@ func TestSearchAgentHopFetchesName(t *testing.T) {
 
 func TestSearchAgentHopSkippedWhenNamePresent(t *testing.T) {
 	fake := &fakeOrderSearch{orders: sampleMSOrders()} // Agent.Name уже заполнен
-	uc := NewUseCase(fake, nil, nil)
+	uc := NewUseCase(fake, nil, nil, nil, nil)
 
 	if _, err := uc.Search(context.Background(), "03969"); err != nil {
 		t.Fatalf("Search() error: %v", err)
@@ -233,7 +233,7 @@ func TestSearchAgentHopSkippedWithoutHref(t *testing.T) {
 	orders := sampleMSOrders()
 	orders[0].Agent.Name = "" // href агента не задан — хопа нет
 	fake := &fakeOrderSearch{orders: orders}
-	uc := NewUseCase(fake, nil, nil)
+	uc := NewUseCase(fake, nil, nil, nil, nil)
 
 	if _, err := uc.Search(context.Background(), "03969"); err != nil {
 		t.Fatalf("Search() error: %v", err)
@@ -248,7 +248,7 @@ func TestSearchAgentHopErrorKeepsDash(t *testing.T) {
 	orders[0].Agent.Name = ""
 	orders[0].Agent.Meta.HREF = "https://api.moysklad.ru/api/remap/1.2/entity/counterparty/cp-1"
 	fake := &fakeOrderSearch{orders: orders, agentErr: errors.New("network")}
-	uc := NewUseCase(fake, nil, nil)
+	uc := NewUseCase(fake, nil, nil, nil, nil)
 
 	rows, err := uc.Search(context.Background(), "03969")
 	if err != nil {

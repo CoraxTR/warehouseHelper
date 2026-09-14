@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"warehouseHelper/internal/msclient/client"
 	msordersuc "warehouseHelper/internal/msorders/usecase"
+	"warehouseHelper/internal/scanmatch"
 )
 
 // OrderPickData — данные страницы «Подобрать»: форма поиска + результат.
@@ -135,8 +136,10 @@ func (h *Handler) MSOrderSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// isSubmitValidationErr отличает ошибки валидации submit (400) от ошибок
-// клиента МС (502) и внутренних (500).
+// isSubmitValidationErr отличает ошибки валидации подбора/возврата в сроки
+// (400) от ошибок клиента МС (502) и внутренних (500). Ошибки сверки сканов
+// (scanmatch.ValidationError) обрабатываются вызывающим кодом отдельно — это не
+// сентинелы, а тип с текстом отказа.
 func isSubmitValidationErr(err error) bool {
 	for _, e := range []error{
 		msordersuc.ErrEmptyOrderID,
@@ -149,12 +152,101 @@ func isSubmitValidationErr(err error) bool {
 		msordersuc.ErrSubmitBadBB,
 		msordersuc.ErrSubmitBadWeight,
 		msordersuc.ErrSubmitOverpick,
+		msordersuc.ErrReturnEmptyRows,
+		msordersuc.ErrReturnNoScans,
+		msordersuc.ErrReturnCodeMissing,
+		msordersuc.ErrReturnCodeChanged,
+		msordersuc.ErrReturnNoReserve,
+		msordersuc.ErrReturnOverReserve,
 	} {
 		if errors.Is(err, e) {
 			return true
 		}
 	}
 	return false
+}
+
+// MSOrderReturnSave — POST /ms/orders/{id}/return: возврат в сроки при
+// переподборе — приём отсканированных кусков отложенных позиций заказа.
+// Тело — JSON msordersuc.PickReturnRequest (строки заказа со сканами); сервер
+// перечитывает заказ из МС, сверяет сканы с резервом строк правилами
+// scanmatch и пишет остатки (AcceptStock) по срокам этикеток. 204 — принято;
+// 400 — сканы не сошлись/валидация (текст в теле); 502 — МС не отдал заказ;
+// 500 — внутренняя ошибка (шов остатков не подключён).
+func (h *Handler) MSOrderReturnSave(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" {
+		http.Error(w, "не указан id заказа", http.StatusBadRequest)
+
+		return
+	}
+
+	var req msordersuc.PickReturnRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "не удалось разобрать запрос", http.StatusBadRequest)
+
+		return
+	}
+
+	if _, err := h.msOrdersUC.SavePickReturn(r.Context(), id, req); err != nil {
+		h.writeMSOrderReturnErr(w, "return save", id, err)
+
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// MSOrderReturnClose — POST /ms/orders/{id}/return/close: ручное закрытие
+// возврата в сроки (куски не вернулись либо вес не совпал с резервом строки).
+// Тело — JSON msordersuc.PickReturnRequest: в остатки ничего НЕ пишется, в чат
+// склада уходит список незакрытых строк — склад пересчитывает сроки построчно.
+// 204 — закрыто; 400 — валидация (текст в теле); 502 — МС не отдал заказ;
+// 500 — внутренняя ошибка (уведомления не подключены/не ушли).
+func (h *Handler) MSOrderReturnClose(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" {
+		http.Error(w, "не указан id заказа", http.StatusBadRequest)
+
+		return
+	}
+
+	var req msordersuc.PickReturnRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "не удалось разобрать запрос", http.StatusBadRequest)
+
+		return
+	}
+
+	if err := h.msOrdersUC.ClosePickReturn(r.Context(), id, req); err != nil {
+		h.writeMSOrderReturnErr(w, "return close", id, err)
+
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// writeMSOrderReturnErr отдаёт ошибку сценария возврата в сроки: отказ сверки и
+// валидация — 400 с текстом для оператора, ошибка МС — 502, остальное — 500
+// (детали в лог, клиенту общее сообщение).
+func (h *Handler) writeMSOrderReturnErr(w http.ResponseWriter, action, id string, err error) {
+	slog.Info(fmt.Sprintf("ms order %s %q: %v", action, id, err))
+
+	var (
+		apiErr *client.MSAPIError
+		ve     *scanmatch.ValidationError
+	)
+	switch {
+	case errors.As(err, &ve):
+		http.Error(w, ve.Error(), http.StatusBadRequest)
+	case isSubmitValidationErr(err):
+		http.Error(w, err.Error(), http.StatusBadRequest)
+	case errors.As(err, &apiErr):
+		http.Error(w, "МойСклад не отдал заказ: "+apiErr.Error(), http.StatusBadGateway)
+	default:
+		http.Error(w, "не удалось сохранить возврат в сроки — попробуйте позже", http.StatusInternalServerError)
+	}
 }
 
 // MSOrderDetailPage — GET /ms/orders/{id}: детальная страница заказа

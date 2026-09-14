@@ -429,14 +429,22 @@ func (d *DIContainer) ComplaintsUC() *cucase.UseCase {
 	return d.complaintsUC
 }
 
-// MSOrdersUC — сценарии раздела «Заказы» МойСклад: поиск заказа по номеру и
-// детальная страница заказа (подбор). Схемы БД у модуля нет — MSClient
-// реализует mordersuc.OrderClient, каталог склада подключается адаптером
-// (PGClient отдаёт товары типом receiving.ProductRef, модулю нужен свой).
-// Шов списания сроков — StockUC (PickStock): интерфейс совпадает дословно.
+// MSOrdersUC — сценарии раздела «Заказы» МойСклад: поиск заказа по номеру,
+// детальная страница заказа (подбор) и возврат в сроки при переподборе.
+// Схемы БД у модуля нет — MSClient реализует mordersuc.OrderClient, каталог
+// склада подключается адаптером (PGClient отдаёт товары типом
+// receiving.ProductRef, модулю нужен свой). Швы склада — StockUC: списание
+// сроков подбора (PickStock) и приём вернувшихся в сроки единиц (AcceptStock),
+// интерфейсы совпадают дословно; уведомления складу — TelegramNotifier.
 func (d *DIContainer) MSOrdersUC() *mordersuc.UseCase {
 	if d.msOrdersUC == nil {
-		d.msOrdersUC = mordersuc.NewUseCase(d.MSClient(), orderCatalogAdapter{pg: d.OrdersRepository()}, d.StockUC())
+		d.msOrdersUC = mordersuc.NewUseCase(
+			d.MSClient(),
+			orderCatalogAdapter{pg: d.OrdersRepository()},
+			d.StockUC(),
+			d.StockUC(),
+			d.TelegramNotifier(),
+		)
 	}
 
 	return d.msOrdersUC
