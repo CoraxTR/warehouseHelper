@@ -2,55 +2,21 @@ package usecase
 
 import (
 	"context"
-	"math"
 
 	"warehouseHelper/internal/returns"
+	"warehouseHelper/internal/scanmatch"
 )
 
 // Сборка ожиданий возврата по событию аудита: из каких строк (удалённые
 // позиции диффа / позиции живого заказа) и с какими количествами склад
-// должен вернуть товары в продажу.
-
-// candidate — строка-кандидат возврата: удалённая позиция из diff события
-// (kind=positions_removed) или позиция живого заказа (kind=order_cancelled).
-type candidate struct {
-	ProductID string  // uuid товара (последний сегмент meta.href)
-	Name      string  // название (из диффа / позиции заказа)
-	Quantity  float64 // количество строки (кг для весовых, штуки для штучных)
-	Reserve   float64 // резерв строки на момент проверки
-}
-
-// qtyInt — количество в единицах сверки: весовой товар → граммы
-// (round кг×1000 — вес этикетки 29 в граммах), штучный → штуки (round).
-// qtyUnit — единица сверки количества строки возврата: весовой товар
-// сводится в граммы (кг этикетки/диффа ×1000), штучный — в единицы.
-type qtyUnit uint8
-
-const (
-	qtyGrams  qtyUnit = iota // весовой: сравнение/накопление в граммах
-	qtyPieces                // штучный: по количеству единиц
-)
-
-func qtyInt(v float64, u qtyUnit) int64 {
-	if u == qtyGrams {
-		return int64(math.Round(v * 1000))
-	}
-	return int64(math.Round(v))
-}
-
-// reservedEquals — «товар физически отложен»: quantity == reserve строго,
-// без допуска (решение пользователя). Сравнение в единицах сверки (int),
-// не float по кг — 0.657 и 0.657 в double равны, но округление защищает
-// от хвостов вида 0.6570000000001.
-func reservedEquals(q, r float64, u qtyUnit) bool {
-	return qtyInt(q, u) == qtyInt(r, u)
-}
+// должен вернуть товары в продажу. Правила отбора строк (резерв, код склада,
+// единицы сверки) живут в общем ядре internal/scanmatch.
 
 // candidates — строки-кандидаты по виду события. Источник правды —
 // живой МС (снимков в БД нет): для удаления — раскрытие audit/<id>/events,
 // для отмены — позиции заказа в текущем состоянии (МС reserve при отмене
 // НЕ сбрасывает — проверено пользователем 08.09.2026).
-func (uc *UseCase) candidates(ctx context.Context, ev *returns.ReturnEvent) ([]candidate, error) {
+func (uc *UseCase) candidates(ctx context.Context, ev *returns.ReturnEvent) ([]scanmatch.Candidate, error) {
 	switch ev.Kind {
 	case returns.KindRemoved:
 		rows, err := uc.audit.FetchAuditDetail(ctx, ev.ID)
@@ -59,9 +25,9 @@ func (uc *UseCase) candidates(ctx context.Context, ev *returns.ReturnEvent) ([]c
 		}
 
 		out := parseDetail(rows, uc.cfg.CancelledStateID)
-		cands := make([]candidate, 0, len(out.removals))
+		cands := make([]scanmatch.Candidate, 0, len(out.removals))
 		for _, r := range out.removals {
-			cands = append(cands, candidate{
+			cands = append(cands, scanmatch.Candidate{
 				ProductID: r.ProductID,
 				Name:      r.Name,
 				Quantity:  r.Quantity,
@@ -76,9 +42,9 @@ func (uc *UseCase) candidates(ctx context.Context, ev *returns.ReturnEvent) ([]c
 			return nil, err
 		}
 
-		cands := make([]candidate, 0, len(positions))
+		cands := make([]scanmatch.Candidate, 0, len(positions))
 		for _, p := range positions {
-			cands = append(cands, candidate{
+			cands = append(cands, scanmatch.Candidate{
 				ProductID: lastPathSegment(p.Assortment.Meta.HREF),
 				Name:      p.Assortment.Name,
 				Quantity:  p.Quantity,
@@ -92,12 +58,10 @@ func (uc *UseCase) candidates(ctx context.Context, ev *returns.ReturnEvent) ([]c
 	}
 }
 
-// buildExpected — ожидания возврата: по строке на КАЖДУЮ прошедшую фильтры
-// строку отчёта, без склейки по товару (решение владельца 10.09). Порядок
-// строк — порядок отчёта (позиций заказа / диффа аудита), он же Idx.
-// Пропускаются: строки без резерва (quantity != reserved — «товар не был
-// физически отложен»), без internal_code, неизвестные каталогу и с нулевым
-// количеством. Пустой результат — ErrNothingToReturn (возвращать нечего).
+// buildExpected — ожидания возврата: состав строк собирает scanmatch по
+// строкам-кандидатам и каталогу (по строке на КАЖДУЮ прошедшую фильтры
+// строку, без склейки по товару — решение владельца 10.09). Пустой
+// результат — ErrNothingToReturn (возвращать нечего).
 func (uc *UseCase) buildExpected(ctx context.Context, ev *returns.ReturnEvent) ([]returns.Expected, error) {
 	cands, err := uc.candidates(ctx, ev)
 	if err != nil {
@@ -125,35 +89,7 @@ func (uc *UseCase) buildExpected(ctx context.Context, ev *returns.ReturnEvent) (
 		return nil, err
 	}
 
-	expected := make([]returns.Expected, 0, len(cands))
-	for _, c := range cands {
-		p, ok := products[c.ProductID]
-		if !ok || p.InternalCode == "" {
-			continue // нет в каталоге или без кода склада — не складской товар
-		}
-
-		unit := qtyPieces
-		if p.Weighted {
-			unit = qtyGrams
-		}
-		if !reservedEquals(c.Quantity, c.Reserve, unit) {
-			continue // не отложен физически — возвращать нечего
-		}
-		qty := qtyInt(c.Quantity, unit)
-		if qty <= 0 {
-			continue // пустая строка: погасить её сканом нельзя
-		}
-
-		expected = append(expected, returns.Expected{
-			Idx:          len(expected),
-			ProductID:    c.ProductID,
-			InternalCode: p.InternalCode,
-			Name:         c.Name,
-			Weighted:     p.Weighted,
-			ExpectedQty:  qty,
-		})
-	}
-
+	expected := scanmatch.BuildExpected(cands, products)
 	if len(expected) == 0 {
 		return nil, returns.ErrNothingToReturn
 	}
