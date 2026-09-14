@@ -47,12 +47,16 @@ func (uc *UseCase) runSteps(ctx context.Context, s Schedule) {
 	now := uc.now()
 	day := beginningOfDay(now)
 
-	// Порядок важен: окно оборотов → часовой избыток (он же наполняет реестр,
+	// Порядок важен: окно оборотов → пересчёт по событиям стока (затронутые
+	// товары — в ближайшую минуту) → часовой избыток (он же наполняет реестр,
 	// по которому строится отчёт) → лестница по сроку → дайджест 09:00. Отчёт
 	// идёт ПОСЛЕ пересчётов: иначе он показывал бы вчерашние скидки, а на
 	// свежем старте — пустой список.
 	if err := uc.runWindow(ctx, day, now, s); err != nil {
 		slog.Info(fmt.Sprintf("discounts: окно оборотов: %v", err))
+	}
+	if err := uc.runAffected(ctx, now); err != nil {
+		slog.Info(fmt.Sprintf("discounts: пересчёт по событиям стока: %v", err))
 	}
 	if err := uc.runSurplus(ctx, now); err != nil {
 		slog.Info(fmt.Sprintf("discounts: пересчёт избытка: %v", err))
@@ -134,9 +138,40 @@ func (uc *UseCase) refreshWindowOnce(ctx context.Context, day time.Time) error {
 	return nil
 }
 
+// runAffected — пересчёт по событиям стока: товары, помеченные MarkDirty
+// (приёмка, расформирование заказа, ручная правка), считаются в ближайшую
+// минуту, не дожидаясь смены часа и не глядя на КТ-день: минутный цикл Run
+// сам работает дебунсом, а событие — это уже готовое «решение устарело».
+// Решение по метке — полное (лестница по сроку + избыток), см. RecalcAffected.
+//
+// Час после такого пересчёта отмечается пройденным: полный часовой пересчёт в
+// этом же проходе считал бы те же пары второй раз (избыток RecalcAffected
+// пишет по всем парам, не только по затронутым), а сохранённый оборот у него
+// тот же самый.
+//
+// Ошибка шага возвращает товары в метки: событие не должно потеряться из-за
+// разового сбоя БД или МС — ближайшая минута повторит.
+func (uc *UseCase) runAffected(ctx context.Context, now time.Time) error {
+	dirty := uc.takeDirty()
+	if len(dirty) == 0 {
+		return nil
+	}
+
+	if err := uc.RecalcAffected(ctx, now, dirty); err != nil {
+		uc.MarkDirty(dirty...)
+		return err
+	}
+
+	uc.mu.Lock()
+	uc.lastSurplusHour = now.Truncate(time.Hour)
+	uc.mu.Unlock()
+	return nil
+}
+
 // runSurplus — часовой пересчёт избытка: не чаще раза в час; после рестарта
 // идёт сразу (маркер «за этот час не считали» теряется с памятью процесса, а
-// лишний пересчёт безвреден: без изменений он ничего не пишет).
+// лишний пересчёт безвреден: без изменений он ничего не пишет). Час события
+// стока (runAffected) уже прошёл — повторно те же пары не считаем.
 func (uc *UseCase) runSurplus(ctx context.Context, now time.Time) error {
 	hour := now.Truncate(time.Hour)
 	uc.mu.Lock()

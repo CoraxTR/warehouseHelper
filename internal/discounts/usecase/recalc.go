@@ -1,7 +1,9 @@
 // Расчётный цикл модуля: утренний пересмотр лестницы по сроку годности
-// (вт/чт/сб, «только вверх») и часовой пересчёт избытка (RecalcSurplus).
+// (вт/чт/сб, «только вверх»), часовой пересчёт избытка (RecalcSurplus) и
+// пересчёт по событиям стока (RecalcAffected — приёмка, расформирование
+// заказа, ручная правка: полное решение по затронутым товарам в ближайшую минуту).
 //
-// Оба шага идут по одному снапшоту входа: состояния пар считает evaluate.go,
+// Все шаги идут по одному снапшоту входа: состояния пар считает evaluate.go,
 // значения пишет шов стока (DiscountWriter), снапшот расчёта и изменения
 // эффективной скидки держит реестр (registry.go), про изменения людям сообщает
 // notify.go. Своих часов и соединений пакет не заводит: часы — uc.now, данные —
@@ -126,6 +128,78 @@ func (uc *UseCase) RecalcSurplus(ctx context.Context, now time.Time) error {
 	return nil
 }
 
+// RecalcAffected — пересчёт по событиям стока: приёмка, расформирование
+// заказа, ручная правка. Полное решение (лестница по сроку + избыток) только
+// по затронутым товарам: расформированный лот вернулся в остатки, и скидка по
+// сроку должна вернуться на табличку в ту же минуту, а не в ближайший КТ-день.
+// Лестница по остальным товарам не трогается: вне КТ-дней она не пересматривается.
+//
+// Почему ступень по затронутым товарам пишется и вне КТ-дней (решение владельца
+// 14.09.2026): «вне КТ-дней ступень не пересматривается» — правило ПЛАНОВОГО
+// пересмотра окна (RecalcExpiry): раз в день-два автоматика проходит по ВСЕМ
+// товарам сразу. Здесь пересматриваются только товары с событиями стока —
+// приёмка подняла накопленный остаток, расформирование вернуло лот в остатки,
+// человек поправил скидку руками, — и решение по ним обязано совпасть с тем,
+// что дал бы плановый пересмотр. Правило КТ-дней этим не нарушается: остальное
+// окно не тронуто, а строку товара события держит в порядке тот, кто его
+// изменил. Пишем тем же expiryWrites — строго ВВЕРХ: понижений автоматика не
+// делает ни в КТ-день, ни вне его.
+//
+// Ошибка Averages тик не выполняет (без оборота избытки выглядели бы снятыми,
+// а это запись); ошибка RefreshCurrent тик не роняет — считаем по сохранённому
+// обороту. Маркеры дня не трогаются: они про расписание, не про события.
+// Оборот берём у Averages, а не только по метке: этим расчётом заменяется
+// снапшот реестра, и без оборота из него выпали бы избыточные пары (пустая
+// очередь на странице, «Позиции с избытком: нет» в дайджесте) — урок ревью
+// 14.09 про шаги, заменяющие снапшот.
+func (uc *UseCase) RecalcAffected(ctx context.Context, now time.Time, productIDs []string) error {
+	today := beginningOfDay(now)
+
+	inputs, err := uc.loadInputs(ctx, today)
+	if err != nil {
+		return err
+	}
+
+	rates, err := uc.turnover.Averages(ctx, inputProductIDs(inputs))
+	if err != nil {
+		return fmt.Errorf("оборот товаров расчёта: %w", err)
+	}
+
+	// Свежий оборот — только по товарам события: остальным хватает
+	// сохранённого (свежие цифры по ним догонит часовой пересчёт).
+	if fresh := uc.refreshTurnoverByIDs(ctx, productIDs); fresh != nil {
+		for pid, v := range fresh {
+			rates[pid] = v
+		}
+	}
+	pairs := Evaluate(inputs, rates, today)
+
+	affected := make(map[string]struct{}, len(productIDs))
+	for _, pid := range productIDs {
+		affected[pid] = struct{}{}
+	}
+
+	writes := surplusWrites(pairs)
+	// Ступень по сроку — только у затронутых товаров (см. комментарий выше).
+	writes = append(writes, writesForProducts(expiryWrites(pairs), affected)...)
+
+	return uc.writeAndRegister(ctx, pairs, writes)
+}
+
+// writesForProducts — правки только по указанным товарам: событие стока
+// пересчитывает полное решение пары, но писать вправе лишь то, что касается
+// товара события. Ступень по остальным товарам ставит плановый пересмотр.
+func writesForProducts(writes []discounts.DiscountWrite, ids map[string]struct{}) []discounts.DiscountWrite {
+	out := make([]discounts.DiscountWrite, 0, len(writes))
+	for _, w := range writes {
+		if _, ok := ids[w.ProductID]; !ok {
+			continue
+		}
+		out = append(out, w)
+	}
+	return out
+}
+
 // expiryWrites — правки по сроку: только рост. Ступень идёт в правки, если она
 // строго выше того, что уже стоит у пары (эффективной скидки канала и значения
 // plain-колонки): равенство — уже применено, меньше — понижение, которого
@@ -207,17 +281,22 @@ func surplusLeft(p PairState) bool {
 // freshTurnover — свежий оборот по товарам, где решение может уйти: события
 // стока с прошлого тика (MarkDirty) и пары с избытком сейчас. Пустой список —
 // шва не касаемся (nil-карта: расчёт остаётся на сохранённом обороте).
-// Ошибка шва — в лог и та же nil-карта: часовой тик из-за недоступного МС
-// пропускать нельзя, сохранённый оборот уже получен от Averages.
 func (uc *UseCase) freshTurnover(ctx context.Context, pairs []PairState) map[string]float64 {
-	ids := uc.freshIDs(pairs)
+	return uc.refreshTurnoverByIDs(ctx, uc.freshIDs(pairs))
+}
+
+// refreshTurnoverByIDs — свежий оборот по перечисленным товарам (пачкой).
+// Пустой список — шва не касаемся (nil-карта). Ошибка шва — в лог и та же
+// nil-карта: тик из-за недоступного МС пропускать нельзя, расчёт продолжается
+// на сохранённом обороте (его уже дал Averages), свежий догонит ближайший тик.
+func (uc *UseCase) refreshTurnoverByIDs(ctx context.Context, ids []string) map[string]float64 {
 	if len(ids) == 0 {
 		return nil
 	}
 
 	rates, err := uc.turnover.RefreshCurrent(ctx, ids)
 	if err != nil {
-		slog.Info(fmt.Sprintf("discounts: оборот избытка (%d товаров): %v", len(ids), err))
+		slog.Info(fmt.Sprintf("discounts: свежий оборот (%d товаров): %v", len(ids), err))
 		return nil
 	}
 	return rates
