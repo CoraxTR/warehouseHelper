@@ -34,6 +34,8 @@ type Digest struct {
 // Строки без источника (SourceNone) в отчёт не попадают и уходят в конец.
 func sortRank(s Source) int {
 	switch s {
+	case SourceNone:
+		return 3 // строк без источника в отчёте не бывает — держим их в конце
 	case SourceManual:
 		return 0
 	case SourceExpiry:
@@ -86,6 +88,10 @@ func BuildDigest(rows []Row) Digest {
 			d.Surplus = append(d.Surplus, r)
 		case SourceManual, SourceExpiry:
 			d.Discounts = append(d.Discounts, r)
+		case SourceNone:
+			// строки без источника скидки в отчёт не попадают
+		default:
+			// неизвестный источник — тоже мимо
 		}
 	}
 	return d

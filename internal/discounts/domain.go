@@ -69,13 +69,23 @@ func inWindow(w float64, daysLeft int) bool {
 	return float64(daysLeft) <= math.Round(w*10)/10
 }
 
+// asInt16 — приведение int к int16 с проверкой границ. Значения расчёта
+// заведомо малы (0..50), но конверсия без проверки не проходит линт (gosec
+// G115): проверка границ — его же рекомендованный способ.
+func asInt16(v int) int16 {
+	if v < math.MinInt16 || v > math.MaxInt16 {
+		return 0 // недостижимо: ступени лестницы не выходят из 10..50
+	}
+	return int16(v)
+}
+
 // startPercent — первая (минимальная) ступень лестницы: 50 − 10×(N−1).
 // N = 1 → 50, N = 3 → 30, N = 5 → 10.
 func startPercent(n int) int16 {
 	if n < 1 {
 		n = 1
 	}
-	return int16(autoCap) - 10*int16(n-1)
+	return asInt16(autoCap - 10*(n-1))
 }
 
 // ExpiryPercent — скидка по сроку годности, %.
@@ -93,10 +103,8 @@ func ExpiryPercent(shelfLife int16, daysLeft int) int16 {
 		return startPercent(n)
 	}
 	k := int(math.Floor(float64(daysLeft)/step + 1e-9))
-	if k > n-1 {
-		k = n - 1
-	}
-	d := int16(autoCap) - 10*int16(k)
+	k = min(k, n-1)
+	d := asInt16(autoCap - 10*k)
 	if start := startPercent(n); d < start {
 		d = start
 	}
@@ -124,8 +132,10 @@ func DailyRate(turnover float64, periodDays int) float64 {
 // столько, сколько продаётся» — ещё не избыток).
 // Нет данных об обороте, v <= 0 или D <= 0 → (0, false).
 // При coef <= 1 возвращается сам коэф (нужен для отладки/отчёта), ok = false.
-func SurplusCoeff(cumQty int64, rate float64, daysLeft int, hasTurnover bool) (float64, bool) {
-	if !hasTurnover || rate <= 0 || daysLeft <= 0 {
+// Отдельного признака «данные оборота есть» не нужно: скорость v = 0 бывает
+// ровно тогда, когда данных нет, — проверки rate достаточно.
+func SurplusCoeff(cumQty int64, rate float64, daysLeft int) (float64, bool) {
+	if rate <= 0 || daysLeft <= 0 {
 		return 0, false
 	}
 	coef := float64(cumQty) / (rate * float64(daysLeft))
@@ -151,6 +161,8 @@ const (
 // String — короткое имя источника для логов и отчётов.
 func (s Source) String() string {
 	switch s {
+	case SourceNone:
+		return "none" // скидки нет: в product_stock это NULL (пустая метка)
 	case SourceManual:
 		return "manual"
 	case SourceExpiry:

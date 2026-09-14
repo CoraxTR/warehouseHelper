@@ -17,15 +17,6 @@ const (
 	monthDays = 30
 )
 
-// PeriodDays — дни периода оборота товара (7 — недельный ряд, иначе 30).
-// Средний оборот за период делится на это число и даёт скорость, шт/день.
-func PeriodDays(trackWeekly bool) int {
-	if trackWeekly {
-		return weekDays
-	}
-	return monthDays
-}
-
 // PairState — состояние одной пары (лот + канал сайта) на момент расчёта:
 // что даёт каждый источник скидки и что стоит в product_stock сейчас.
 type PairState struct {
@@ -94,7 +85,7 @@ func (p PairState) Row() discounts.Row {
 // оборота: у них решение может уйти в любой момент).
 func SurplusPairs(pairs []PairState) []string {
 	seen := make(map[string]struct{})
-	var ids []string
+	ids := make([]string, 0, len(pairs))
 	for _, p := range pairs {
 		if !p.HasSurplus {
 			continue
@@ -141,7 +132,12 @@ func evaluatePair(in discounts.Input, cumQty int64, rates map[string]float64, da
 
 	periodDays := in.PeriodDays
 	if periodDays <= 0 {
-		periodDays = PeriodDays(in.TrackWeekly)
+		// Дни периода по ряду оборота: недельный — 7, месячный — 30
+		// (решение владельца 14.09.2026, черновик §12).
+		periodDays = monthDays
+		if in.TrackWeekly {
+			periodDays = weekDays
+		}
 	}
 	// Оборот приходит ТОЛЬКО швом модуля средних продаж: своего SQL по его
 	// таблицам расчёт не делает. Товара нет в карте — данных о продажах нет.
@@ -177,7 +173,7 @@ func evaluatePair(in discounts.Input, cumQty int64, rates map[string]float64, da
 		}
 	}
 
-	if coef, ok := discounts.SurplusCoeff(cumQty, rate, daysLeft, hasRate); ok {
+	if coef, ok := discounts.SurplusCoeff(cumQty, rate, daysLeft); ok {
 		percent := discounts.SurplusPercent()
 		p.Surplus = &percent
 		p.Coeff = coef

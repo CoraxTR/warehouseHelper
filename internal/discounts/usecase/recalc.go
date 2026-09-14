@@ -14,6 +14,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"maps"
 	"time"
 
 	"warehouseHelper/internal/discounts"
@@ -25,6 +26,8 @@ func expiryDay(t time.Time) bool {
 	switch t.Weekday() {
 	case time.Tuesday, time.Thursday, time.Saturday:
 		return true
+	case time.Sunday, time.Monday, time.Wednesday, time.Friday:
+		return false
 	default:
 		return false
 	}
@@ -112,9 +115,7 @@ func (uc *UseCase) RecalcSurplus(ctx context.Context, now time.Time) error {
 	pairs := Evaluate(inputs, rates, today)
 
 	if fresh := uc.freshTurnover(ctx, pairs); fresh != nil {
-		for pid, v := range fresh {
-			rates[pid] = v
-		}
+		maps.Copy(rates, fresh)
 		pairs = Evaluate(inputs, rates, today)
 	}
 
@@ -168,9 +169,7 @@ func (uc *UseCase) RecalcAffected(ctx context.Context, now time.Time, productIDs
 	// Свежий оборот — только по товарам события: остальным хватает
 	// сохранённого (свежие цифры по ним догонит часовой пересчёт).
 	if fresh := uc.refreshTurnoverByIDs(ctx, productIDs); fresh != nil {
-		for pid, v := range fresh {
-			rates[pid] = v
-		}
+		maps.Copy(rates, fresh)
 	}
 	pairs := Evaluate(inputs, rates, today)
 
@@ -255,6 +254,8 @@ func surplusWrites(pairs []PairState) []discounts.DiscountWrite {
 				General:    nil, // снятие: движок пишет NULL, а не 0
 				Telegram:   p.TelegramPlain,
 			})
+		default:
+			// ни избытка, ни снятия — правок по паре нет
 		}
 	}
 	return writes

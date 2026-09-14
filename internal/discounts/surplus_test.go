@@ -34,35 +34,33 @@ func TestDailyRate(t *testing.T) {
 // (rate = 5), D=5 → коэф 1,6 — избыток есть.
 func TestSurplusCoeff(t *testing.T) {
 	tests := []struct {
-		name        string
-		cumQty      int64
-		rate        float64
-		daysLeft    int
-		hasTurnover bool
-		wantCoeff   float64
-		wantOK      bool
+		name      string
+		cumQty    int64
+		rate      float64
+		daysLeft  int
+		wantCoeff float64
+		wantOK    bool
 	}{
-		{"хлеб: Q=40, rate=5, D=5 → коэф 1,6", 40, 5, 5, true, 1.6, true},
-		{"коэф ровно 1 — ещё не избыток", 25, 5, 5, true, 1, false},
-		{"коэф меньше 1 — остаток распродаётся", 10, 5, 5, true, 0.4, false},
-		{"хлеб с D=8: коэф 1,0", 40, 5, 8, true, 1, false},
-		{"хлеб с D=4: коэф 2,0", 40, 5, 4, true, 2, true},
-		{"нет оборота — избытка нет", 40, 5, 5, false, 0, false},
-		{"rate=0 — избытка нет", 40, 0, 5, true, 0, false},
-		{"D=0 — избытка нет", 40, 5, 0, true, 0, false},
-		{"D<0 — избытка нет", 40, 5, -3, true, 0, false},
-		{"нулевой остаток", 0, 5, 5, true, 0, false},
+		{"хлеб: Q=40, rate=5, D=5 → коэф 1,6", 40, 5, 5, 1.6, true},
+		{"коэф ровно 1 — ещё не избыток", 25, 5, 5, 1, false},
+		{"коэф меньше 1 — остаток распродаётся", 10, 5, 5, 0.4, false},
+		{"хлеб с D=8: коэф 1,0", 40, 5, 8, 1, false},
+		{"хлеб с D=4: коэф 2,0", 40, 5, 4, 2, true},
+		{"нет данных оборота (rate=0) — избытка нет", 40, 0, 5, 0, false},
+		{"D=0 — избытка нет", 40, 5, 0, 0, false},
+		{"D<0 — избытка нет", 40, 5, -3, 0, false},
+		{"нулевой остаток", 0, 5, 5, 0, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			coef, ok := SurplusCoeff(tc.cumQty, tc.rate, tc.daysLeft, tc.hasTurnover)
+			coef, ok := SurplusCoeff(tc.cumQty, tc.rate, tc.daysLeft)
 			if math.Abs(coef-tc.wantCoeff) > 1e-6 {
-				t.Errorf("SurplusCoeff(%d, %v, %d, %v) = %v, want %v",
-					tc.cumQty, tc.rate, tc.daysLeft, tc.hasTurnover, coef, tc.wantCoeff)
+				t.Errorf("SurplusCoeff(%d, %v, %d) = %v, want %v",
+					tc.cumQty, tc.rate, tc.daysLeft, coef, tc.wantCoeff)
 			}
 			if ok != tc.wantOK {
-				t.Errorf("SurplusCoeff(%d, %v, %d, %v) ok = %v, want %v",
-					tc.cumQty, tc.rate, tc.daysLeft, tc.hasTurnover, ok, tc.wantOK)
+				t.Errorf("SurplusCoeff(%d, %v, %d) ok = %v, want %v",
+					tc.cumQty, tc.rate, tc.daysLeft, ok, tc.wantOK)
 			}
 		})
 	}

@@ -238,6 +238,8 @@ func isTelegramDay(now time.Time) bool {
 	switch now.Weekday() {
 	case time.Tuesday, time.Thursday:
 		return true
+	case time.Sunday, time.Monday, time.Wednesday, time.Friday, time.Saturday:
+		return false
 	default:
 		return false
 	}

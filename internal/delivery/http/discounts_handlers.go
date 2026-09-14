@@ -35,7 +35,7 @@ type discountsPage struct {
 // DiscountsPage — GET /ms/discounts: актуальные скидки и очередь избытка.
 // Реестр живёт в памяти процесса: страница показывает последний расчёт
 // (после рестарта — до первого тика он пуст).
-func (h *Handler) DiscountsPage(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) DiscountsPage(w http.ResponseWriter, _ *http.Request) {
 	uc := h.discountsUC
 	if uc == nil {
 		http.Error(w, "модуль скидок не подключён", http.StatusServiceUnavailable)
@@ -57,10 +57,13 @@ func (h *Handler) DiscountsPage(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// dash — прочерк для пустых значений страницы (дата, коэффициент, источник).
+const dash = "—"
+
 // discountDate — срок годности лота «02.01.2006» (как в текстах уведомлений).
 func discountDate(t time.Time) string {
 	if t.IsZero() {
-		return "—"
+		return dash
 	}
 	return t.Format("02.01.2006")
 }
@@ -74,8 +77,10 @@ func discountSourceLabel(s discounts.Source) string {
 		return "по сроку"
 	case discounts.SourceSurplus:
 		return "избыток"
+	case discounts.SourceNone:
+		return dash
 	default:
-		return "—"
+		return dash
 	}
 }
 
@@ -83,7 +88,7 @@ func discountSourceLabel(s discounts.Source) string {
 // (один знак, запятая — `discounts.FormatCoeff`); без избытка — «—».
 func discountCoeff(v float64) string {
 	if v <= 0 {
-		return "—"
+		return dash
 	}
 	return discounts.FormatCoeff(v)
 }

@@ -129,47 +129,15 @@ func (uc *UseCase) RunRaise(ctx context.Context, now time.Time) error {
 	}
 	pairs := Evaluate(inputs, rates, day)
 
-	raised := make([]discounts.LotKey, 0, len(plan))
-	if len(plan) > 0 {
-		writes := make([]discounts.DiscountWrite, 0, len(plan))
-		// По индексу, а не по копии: в реестр должен уйти снапшот с поднятым
-		// значением — иначе уведомление о подъёме не уйдёт, а на следующем часу
-		// придёт ложное «поднять скидку» (движок перечитает БД и увидит рост).
-		for i := range pairs {
-			p := &pairs[i]
-			percent, ok := plan[p.Key]
-			if !ok {
-				continue
-			}
-			raised = append(raised, p.Key)
-			if p.Manual != nil && *p.Manual > 0 {
-				continue // ручная скидка на сайте важнее плана
-			}
-			// Цель подъёма — максимум из плана слота и ТЕКУЩЕЙ ТГ-колонки: если
-			// менеджер поднял ТГ-скидку руками после 14:00, сайт ведём до неё
-			// (решение владельца 14.09: «до максимального ТГ, если руками»).
-			target := percent
-			if p.TelegramPlain != nil && *p.TelegramPlain > target {
-				target = *p.TelegramPlain
-			}
-			if discountPercent(p.Applied) >= target {
-				continue // уже не ниже цели: не понижаем
-			}
-			general := target
-			p.AppliedPlain = &general
-			p.SourceRaw = discounts.SourceExpiry.String()
-			writes = append(writes, writeFor(*p))
+	raised, writes := raiseWrites(pairs, plan)
+	if len(writes) > 0 {
+		if err := uc.writer.SetDiscounts(ctx, writes); err != nil {
+			return fmt.Errorf("подъём скидок: %w", err)
 		}
-
-		if len(writes) > 0 {
-			if err := uc.writer.SetDiscounts(ctx, writes); err != nil {
-				return fmt.Errorf("подъём скидок: %w", err)
-			}
-			// Снапшот реестра должен нести УЖЕ поднятое значение: иначе
-			// уведомление о подъёме не уйдёт, а на следующем часу придёт
-			// ложное «поднимите скидку» (расчёт перечитает БД и увидит рост).
-			applyWrites(pairs, writes)
-		}
+		// Снапшот реестра должен нести УЖЕ поднятое значение: иначе
+		// уведомление о подъёме не уйдёт, а на следующем часу придёт
+		// ложное «поднимите скидку» (расчёт перечитает БД и увидит рост).
+		applyWrites(pairs, writes)
 	}
 
 	if len(raised) > 0 {
@@ -188,6 +156,44 @@ func (uc *UseCase) RunRaise(ctx context.Context, now time.Time) error {
 	}
 	slog.Info(fmt.Sprintf("discounts: подъём general по %d позициям слота", len(raised)))
 	return nil
+}
+
+// raiseWrites — правки подъёма 16:00: по позициям плана слота поднимаем скидку
+// сайта до максимума плана и ТЕКУЩЕЙ ТГ-колонки (менеджер мог поднять её руками
+// после 14:00 — решение владельца 14.09: «до максимального ТГ, если руками»).
+// Ручная скидка важнее плана, понижений автоматика не делает. Пары правятся по
+// индексу, а не по копии: в реестр должен уйти снапшот с поднятым значением —
+// иначе уведомление о подъёме не уйдёт, а на следующем часу придёт ложное
+// «поднять скидку» (расчёт перечитает БД и увидит рост).
+func raiseWrites(pairs []PairState, plan map[discounts.LotKey]int16) ([]discounts.LotKey, []discounts.DiscountWrite) {
+	if len(plan) == 0 {
+		return nil, nil
+	}
+	raised := make([]discounts.LotKey, 0, len(plan))
+	writes := make([]discounts.DiscountWrite, 0, len(plan))
+	for i := range pairs {
+		p := &pairs[i]
+		percent, ok := plan[p.Key]
+		if !ok {
+			continue
+		}
+		raised = append(raised, p.Key)
+		if p.Manual != nil && *p.Manual > 0 {
+			continue // ручная скидка на сайте важнее плана
+		}
+		target := percent
+		if p.TelegramPlain != nil && *p.TelegramPlain > target {
+			target = *p.TelegramPlain
+		}
+		if discountPercent(p.Applied) >= target {
+			continue // уже не ниже цели: не понижаем
+		}
+		general := target
+		p.AppliedPlain = &general
+		p.SourceRaw = discounts.SourceExpiry.String()
+		writes = append(writes, writeFor(*p))
+	}
+	return raised, writes
 }
 
 // pickSlot — выбор позиций плана: сначала скидка дня 20 % и выше (в порядке
