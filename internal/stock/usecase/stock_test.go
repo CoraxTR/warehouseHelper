@@ -624,6 +624,42 @@ func TestReplaceStockKeepsDiscountSource(t *testing.T) {
 	}
 }
 
+// TestMergeLotsKeepsCurrentEngineDiscount — скидки движка и метку источника
+// слияние берёт из ТЕКУЩЕГО кэша, а не из плана: план замены собран раньше, и
+// расчёт скидок мог записать новое значение в промежутке. Если бы план нёс своё
+// (устаревшее) значение, кэш разошёлся бы с БД до следующей записи.
+func TestMergeLotsKeepsCurrentEngineDiscount(t *testing.T) {
+	general, telegram, manual := int16(30), int16(20), int16(10)
+	cache := []stock.Lot{{
+		BestBefore:     day(1),
+		Qty:            5,
+		General:        &general,
+		Telegram:       &telegram,
+		GeneralManual:  &manual,
+		DiscountSource: stock.DiscountSourceSurplus,
+	}}
+	// План без движковых колонок: замена несёт количество и ручные скидки
+	// (их сохраняет targetLot), движковые — не несёт.
+	plan := &replacePlan{upserts: []stock.Lot{{BestBefore: day(1), Qty: 9, GeneralManual: &manual}}}
+
+	got := mergeLots(cache, plan)
+	if len(got) != 1 {
+		t.Fatalf("слияние: %+v", got)
+	}
+	if got[0].Qty != 9 {
+		t.Errorf("количество из плана %d, want 9", got[0].Qty)
+	}
+	if got[0].General == nil || *got[0].General != 30 || got[0].Telegram == nil || *got[0].Telegram != 20 {
+		t.Errorf("движковая скидка взята не из кэша: %+v", got[0])
+	}
+	if got[0].DiscountSource != stock.DiscountSourceSurplus {
+		t.Errorf("метка источника %q, want %q", got[0].DiscountSource, stock.DiscountSourceSurplus)
+	}
+	if got[0].GeneralManual == nil || *got[0].GeneralManual != 10 {
+		t.Errorf("ручная скидка из плана %v, want 10 (её сохраняет замена)", got[0].GeneralManual)
+	}
+}
+
 // TestMergeLotsResultNeverNil — пустой результат слияния — пустой МАССИВ,
 // не nil: lots в JSON обязан быть [] (клиент итерирует p.lots.length).
 func TestMergeLotsResultNeverNil(t *testing.T) {

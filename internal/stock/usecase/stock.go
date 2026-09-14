@@ -538,19 +538,17 @@ func (uc *StockUseCase) buildReplacePlans(batches map[string]map[time.Time]*agg,
 // qty из сканов, produced_on — COALESCE(существующего, нового), ручные
 // скидки сохраняются только у лотов со сроком не раньше сегодня.
 // ex == nil — лота ещё нет (создаётся с нуля).
+//
+// Скидки движка (General/Telegram и метка источника) в план НЕ тащим: план
+// собирается заранее, а расчёт скидок мог записать значение в промежутке.
+// Их берёт mergeLots из ТЕКУЩЕГО кэша при применении (решение владельца
+// 14.09: «не тащим, пересчёт на новый час»). В БД ReplaceStockLots эти колонки
+// тоже не трогает, так что кэш и БД сходятся.
 func targetLot(ex *stock.Lot, a *agg, bb, today time.Time) (lot stock.Lot, write stock.LotWrite) {
-	var genMan, tgMan, general, telegram *int16
-	var source string
-	if ex != nil {
-		if !bb.Before(today) {
-			genMan = cloneInt16(ex.GeneralManual)
-			tgMan = cloneInt16(ex.TelegramManual)
-		}
-		general = cloneInt16(ex.General)
-		telegram = cloneInt16(ex.Telegram)
-		// Метка источника — свойство лота, а не скана: замена остатков её не
-		// сбрасывает (в БД ReplaceStockLots тоже не трогает discount_source).
-		source = ex.DiscountSource
+	var genMan, tgMan *int16
+	if ex != nil && !bb.Before(today) {
+		genMan = cloneInt16(ex.GeneralManual)
+		tgMan = cloneInt16(ex.TelegramManual)
 	}
 	produced := a.producedOn
 	if ex != nil && ex.ProducedOn != nil {
@@ -560,11 +558,8 @@ func targetLot(ex *stock.Lot, a *agg, bb, today time.Time) (lot stock.Lot, write
 		BestBefore:     bb,
 		Qty:            a.qty,
 		ProducedOn:     &produced,
-		General:        general,
-		Telegram:       telegram,
 		GeneralManual:  genMan,
 		TelegramManual: tgMan,
-		DiscountSource: source,
 	}
 	write = stock.LotWrite{
 		BestBefore:     bb,
@@ -673,6 +668,12 @@ func mergeLots(lots []stock.Lot, pl *replacePlan) []stock.Lot {
 			}
 		}
 		if idx >= 0 {
+			// Скидки движка и метку источника берём из ТЕКУЩЕГО кэша: замена
+			// остатков их не меняет, а план мог быть собран до записи расчёта
+			// (иначе кэш вернул бы устаревшее значение).
+			lot.General = out[idx].General
+			lot.Telegram = out[idx].Telegram
+			lot.DiscountSource = out[idx].DiscountSource
 			out[idx] = lot
 		} else {
 			out = append(out, lot)
