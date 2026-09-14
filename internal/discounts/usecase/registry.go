@@ -36,6 +36,11 @@ type Registry struct {
 	// prev — эффективные значения канала сайта по парам предыдущего снапшота,
 	// ключ — лот (товар + срок): с ними сравнивается новый расчёт.
 	prev map[discounts.LotKey]prevPair
+	// seeded — реестр получил первый снапшот процесса. Первый снапшот только
+	// заполняет базу сравнения и уведомлений не даёт: иначе после каждого
+	// старта в чат уходил бы залп «поставьте скидку» по позициям, которые
+	// человек и так видит на сайте (а после перезапуска посреди дня — ещё раз).
+	seeded bool
 }
 
 // NewRegistry — пустой реестр (расчёта ещё не было).
@@ -62,6 +67,9 @@ func (r *Registry) Replace(pairs []PairState) []Change {
 
 	changes := make([]Change, 0, len(pairs))
 	for _, p := range pairs {
+		if !r.seeded {
+			break // первый снапшот: только заполняем базу сравнения
+		}
 		var prev *int16
 		if old, ok := r.prev[p.Key]; ok {
 			prev = old.applied
@@ -79,6 +87,9 @@ func (r *Registry) Replace(pairs []PairState) []Change {
 	}
 	// Исчезнувшие пары: скидка пары уходит вместе с парой (next = nil).
 	for key, old := range r.prev {
+		if !r.seeded {
+			break
+		}
 		if _, ok := next[key]; ok {
 			continue
 		}
@@ -96,6 +107,7 @@ func (r *Registry) Replace(pairs []PairState) []Change {
 
 	r.snap = append([]PairState(nil), pairs...)
 	r.prev = next
+	r.seeded = true
 
 	return changes
 }
@@ -181,50 +193,56 @@ func (r *Registry) ReplaceProduct(productID string, pairs []PairState) []Change 
 	}
 	next := append(kept, pairs...)
 
-	changes := make([]Change, 0, len(pairs))
-	fresh := make(map[discounts.LotKey]struct{}, len(pairs))
-	for _, p := range pairs {
-		fresh[p.Key] = struct{}{}
-		var prev *int16
-		if old, ok := r.prev[p.Key]; ok {
-			prev = old.applied
+	// Первый снапшот процесса только закладывает базу сравнения (seeded):
+	// уведомлять о состоянии, которое человек и так видит на сайте, не нужно.
+	var changes []Change
+	if r.seeded {
+		changes = make([]Change, 0, len(pairs))
+		fresh := make(map[discounts.LotKey]struct{}, len(pairs))
+		for _, p := range pairs {
+			fresh[p.Key] = struct{}{}
+			var prev *int16
+			if old, ok := r.prev[p.Key]; ok {
+				prev = old.applied
+			}
+			if sameDiscount(prev, p.Applied) {
+				continue
+			}
+			changes = append(changes, Change{
+				ProductID:  p.ProductID,
+				Name:       p.Name,
+				BestBefore: p.BestBefore,
+				Prev:       prev,
+				Next:       p.Applied,
+			})
 		}
-		if sameDiscount(prev, p.Applied) {
-			continue
+		// Пары товара, которых больше нет: скидка уходит вместе с парой.
+		for key, old := range r.prev {
+			if key.ProductID != productID {
+				continue
+			}
+			if _, ok := fresh[key]; ok {
+				continue
+			}
+			if sameDiscount(old.applied, nil) {
+				continue
+			}
+			changes = append(changes, Change{
+				ProductID:  key.ProductID,
+				Name:       old.name,
+				BestBefore: old.bestBefore,
+				Prev:       old.applied,
+			})
 		}
-		changes = append(changes, Change{
-			ProductID:  p.ProductID,
-			Name:       p.Name,
-			BestBefore: p.BestBefore,
-			Prev:       prev,
-			Next:       p.Applied,
-		})
+		sortChanges(changes)
 	}
-	// Пары товара, которых больше нет: скидка уходит вместе с парой.
-	for key, old := range r.prev {
-		if key.ProductID != productID {
-			continue
-		}
-		if _, ok := fresh[key]; ok {
-			continue
-		}
-		if sameDiscount(old.applied, nil) {
-			continue
-		}
-		changes = append(changes, Change{
-			ProductID:  key.ProductID,
-			Name:       old.name,
-			BestBefore: old.bestBefore,
-			Prev:       old.applied,
-		})
-	}
-	sortChanges(changes)
 
 	r.snap = next
 	r.prev = make(map[discounts.LotKey]prevPair, len(next))
 	for _, p := range next {
 		r.prev[p.Key] = prevPair{name: p.Name, bestBefore: p.BestBefore, applied: p.Applied}
 	}
+	r.seeded = true
 
 	return changes
 }

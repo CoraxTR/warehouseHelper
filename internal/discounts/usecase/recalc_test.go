@@ -799,12 +799,25 @@ func TestRecalcSurplusErrors(t *testing.T) {
 // Изменение эффективной скидки уходит людям: рост ступени — «поставить X %»
 // в общий канал (уведомляем о том, что человеку надо сделать на сайте).
 func TestRecalcExpiryNotifiesGrowth(t *testing.T) {
-	h := newRecalcHarness(recalcNow(1), lotInput("p1", "Творог", day(5), 20, shelfLifeInput(30)))
+	h := newRecalcHarness(recalcNow(1),
+		lotInput("p1", "Творог", day(5), 20, shelfLifeInput(30), manualInput(30)))
+	ctx := context.Background()
 
-	if err := h.uc.RecalcExpiry(context.Background(), h.now); err != nil {
+	// Первый пересчёт процесса только наполняет реестр — уведомлений он не даёт.
+	if err := h.uc.RecalcExpiry(ctx, h.now); err != nil {
+		t.Fatalf("RecalcExpiry (наполнение): %v", err)
+	}
+	h.common.texts, h.common.tries = nil, nil
+
+	// Ручную скидку менеджер снял: теперь на сайте решает ступень лестницы —
+	// о росте движок сообщает человеку.
+	h.repo.inputs[0].GeneralManual = nil
+	delete(h.repo.flags, fakeFlagKey(beginningOfDay(h.now), discounts.FlagExpiry))
+
+	if err := h.uc.RecalcExpiry(ctx, h.now); err != nil {
 		t.Fatalf("RecalcExpiry: %v", err)
 	}
-	want := []string{"Творог (до 19.09): Необходимо поставить скидку 40%"}
+	want := []string{"Творог (до 19.09): Необходимо поднять скидку до 40%"}
 	if !reflect.DeepEqual(h.common.texts, want) {
 		t.Errorf("уведомления %q, want %q", h.common.texts, want)
 	}
@@ -814,8 +827,17 @@ func TestRecalcExpiryNotifiesGrowth(t *testing.T) {
 // «поставить 10 %» при появлении избытка и «убрать скидку» при его уходе.
 func TestRecalcSurplusNotifiesChanges(t *testing.T) {
 	h := newRecalcHarness(recalcNow(1), lotInput("p1", "Колбаса", day(10), 100))
-	h.turnover("p1", 30)
+	h.turnover("p1", 400)
 	ctx := context.Background()
+
+	// Наполнение реестра: продажи быстрые, избытка нет — уведомлений тоже нет.
+	if err := h.uc.RecalcSurplus(ctx, h.now); err != nil {
+		t.Fatalf("RecalcSurplus (наполнение): %v", err)
+	}
+	h.common.texts, h.common.tries = nil, nil
+
+	// Продажи замедлились — появился избыток: движок ставит 10 % и сообщает.
+	h.turnover("p1", 30)
 
 	if err := h.uc.RecalcSurplus(ctx, h.now); err != nil {
 		t.Fatalf("RecalcSurplus #1: %v", err)

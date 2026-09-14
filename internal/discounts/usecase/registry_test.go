@@ -235,8 +235,11 @@ func TestRegistryReplaceTransitions(t *testing.T) {
 		regPair("D", "Без изменений", day(10), expiryOpt(30), appliedOpt(15)),
 		regPair("E", "Удалили", day(11), expiryOpt(30), appliedOpt(10)),
 	}
-	if got := r.Replace(first); len(got) != 4 {
-		t.Fatalf("первый расчёт: %d изменений, want 4 (%+v)", len(got), got)
+	// Первый снапшот процесса только закладывает базу сравнения: уведомлений он
+	// не даёт — иначе после каждого старта в чат уходил бы залп «поставьте
+	// скидку» по позициям, которые человек и так видит на сайте.
+	if got := r.Replace(first); len(got) != 0 {
+		t.Fatalf("первый снапшот: %d изменений, want 0 (%+v)", len(got), got)
 	}
 
 	// второй расчёт: A — нет→10, B — 10→20, C — 20→нет, D — без изменений,
