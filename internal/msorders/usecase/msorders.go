@@ -52,9 +52,6 @@ type UseCase struct {
 	ms      OrderClient
 	catalog CatalogReader
 	picker  StockPicker // шов stock: списание сроков после успешного PUT
-
-	// submitCache — сырые ответы МС для отправки подбора (см. msorders_submit.go).
-	cache *submitCache
 }
 
 // NewUseCase создаёт сценарии с клиентом МС, каталогом склада (резолв
@@ -64,7 +61,6 @@ func NewUseCase(ms OrderClient, catalog CatalogReader, picker StockPicker) *UseC
 		ms:      ms,
 		catalog: catalog,
 		picker:  picker,
-		cache:   newSubmitCache(),
 	}
 }
 

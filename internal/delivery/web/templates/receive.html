@@ -134,6 +134,77 @@
         // Нативный <input type=date> трактует сегменты по ЛОКАЛИ браузера
         // (en → mm/dd/yyyy) — «10092026» даёт 09.10 вместо 10.09. Поэтому
         // перехватываем цифры на ЛЮБОМ поле даты приёмки и пишем ISO сами.
+        // ==== Допуск дат: сегодня ±5 лет (решение владельца 14.09) ==========
+        // Диапазон общий для обеих дорог ввода: цифры проверяет inDateBounds,
+        // нативный календарь — атрибуты min/max. Без этого клик по календарю
+        // протаскивал мимо цифровой проверки любую дату (1992, 2150).
+        var DATE_TODAY = new Date();
+        var DATE_MIN = isoOfDate(shiftYears(DATE_TODAY, -5));
+        var DATE_MAX = isoOfDate(shiftYears(DATE_TODAY, 5));
+
+        function pad2(n) { return (n < 10 ? '0' : '') + n; }
+
+        function isoOfDate(d) {
+            return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
+        }
+
+        // shiftYears — сдвиг по календарю (29.02 в невисокосный год → 01.03).
+        function shiftYears(d, years) {
+            return new Date(d.getFullYear() + years, d.getMonth(), d.getDate());
+        }
+
+        // inDateBounds — ISO в допуске; сравнение строками годится: у ISO
+        // фиксированная длина и порядок разрядов.
+        function inDateBounds(iso) {
+            return !!iso && iso.length === 10 && iso >= DATE_MIN && iso <= DATE_MAX;
+        }
+
+        function boundsText() {
+            return fmtDateRu(DATE_MIN) + '–' + fmtDateRu(DATE_MAX);
+        }
+
+        // applyDateBounds — min/max всем полям дат: поля пересоздаются на каждой
+        // перерисовке, поэтому зовётся из render() и один раз после загрузки.
+        function applyDateBounds() {
+            var inputs = scansBox.getElementsByTagName('input');
+            var i;
+            for (i = 0; i < inputs.length; i++) {
+                if (!isDateInput(inputs[i])) { continue; }
+                inputs[i].min = DATE_MIN;
+                inputs[i].max = DATE_MAX;
+            }
+        }
+
+        // ==== Живое эхо у поля даты =========================================
+        // Набираемые цифры в самом <input type=date> не видны (браузер рисует
+        // только целую дату) — показываем их рядом, в .date-echo: янтарь — набор
+        // идёт, красный — дата не принята (решение владельца 14.09).
+        var errorEcho = null;
+
+        function dateEchoOf(el) {
+            var n = el.nextSibling;
+            while (n) {
+                if (n.nodeType === 1 && String(n.className).indexOf('date-echo') >= 0) { return n; }
+                n = n.nextSibling;
+            }
+            return null;
+        }
+
+        function showDateEcho(el, text, bad) {
+            var box = dateEchoOf(el);
+            if (!box) { return; }
+            box.className = text ? (bad ? 'date-echo temp bad' : 'date-echo temp') : 'date-echo';
+            box.style.color = text ? (bad ? '#E0877E' : '#C8A65C') : '#66645C';
+            box.textContent = text || '';
+        }
+
+        // partialDMY — набранные цифры как '10.09.2' (точки после дня и месяца).
+        function partialDMY(dg) {
+            if (dg.length <= 2) { return dg; }
+            if (dg.length <= 4) { return dg.substr(0, 2) + '.' + dg.substr(2); }
+            return dg.substr(0, 2) + '.' + dg.substr(2, 2) + '.' + dg.substr(4);
+        }
+
         var dateBuf = '';
         var dateBufEl = null;
 
@@ -142,7 +213,8 @@
         }
 
         // parseDMY: 8 цифр (или '10.09.2026') → 'YYYY-MM-DD'; null — дата не
-        // существует или вне допуска (год <2000 / >2100).
+        // существует по календарю (13-й месяц, 32-е число). Допуск по годам —
+        // отдельно, inDateBounds: «сегодня ±5 лет».
         function parseDMY(s) {
             if (!s) { return null; }
             var dg = String(s).replace(/\D/g, '');
@@ -150,7 +222,7 @@
             var d = parseInt(dg.substr(0, 2), 10);
             var mo = parseInt(dg.substr(2, 2), 10);
             var y = parseInt(dg.substr(4, 4), 10);
-            if (y < 2000 || y > 2100 || mo < 1 || mo > 12 || d < 1) { return null; }
+            if (mo < 1 || mo > 12 || d < 1) { return null; }
             var leap = (y % 4 === 0 && y % 100 !== 0) || (y % 400 === 0);
             var mdays = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
             if (d > mdays[mo - 1]) { return null; }
@@ -182,16 +254,29 @@
 
         function commitDateDigits(el) {
             var iso = parseDMY(dateBuf);
-            var shown = dateBuf.substr(0, 2) + '.' + dateBuf.substr(2, 2) + '.' + dateBuf.substr(4, 4);
+            var shown = partialDMY(dateBuf);
             dateBuf = '';
             dateBufEl = null;
-            if (iso) {
-                applyIsoDate(el, iso);
-            } else {
+            if (!iso) {
+                // Дата невозможна по календарю (31.02, 32-е число, 13-й месяц).
+                errorEcho = {spec: focusSpec(el), text: shown};
                 el.value = '';
                 applyIsoDate(el, '');
                 statusLine.textContent = 'Дата ' + shown + ' не существует — вводите ддммгггг, например 10092026';
+                return;
             }
+            if (!inDateBounds(iso)) {
+                // Дата существует, но вне допуска: раньше это сообщение звалось
+                // «не существует», хотя дело было в границах (жалоба 14.09).
+                errorEcho = {spec: focusSpec(el), text: shown};
+                el.value = '';
+                applyIsoDate(el, '');
+                statusLine.textContent = 'Дата ' + shown + ' вне допуска: принимаются ' + boundsText() +
+                    ' (сегодня ±5 лет)';
+                return;
+            }
+            errorEcho = null;
+            applyIsoDate(el, iso);
         }
 
         // Делегированный keydown: цифры копим в буфере (preventDefault), на 8-й
@@ -207,14 +292,17 @@
             if (dg) {
                 dateBuf += dg;
                 if (e.preventDefault) { e.preventDefault(); }
+                showDateEcho(el, partialDMY(dateBuf));
                 if (dateBuf.length >= 8) { commitDateDigits(el); }
                 return;
             }
             if (key === 'Backspace' || key === 'Delete' || key === 'Escape' || kc === 8 || kc === 46 || kc === 27) {
                 dateBuf = '';
                 dateBufEl = el;
+                errorEcho = null;
                 el.value = '';
                 if (e.preventDefault) { e.preventDefault(); }
+                showDateEcho(el, '');
                 applyIsoDate(el, '');
                 return;
             }
@@ -236,6 +324,15 @@
             if (iso) {
                 dateBuf = '';
                 dateBufEl = null;
+                if (!inDateBounds(iso)) {
+                    errorEcho = {spec: focusSpec(el), text: fmtDateRu(iso)};
+                    if (e.preventDefault) { e.preventDefault(); }
+                    el.value = '';
+                    applyIsoDate(el, '');
+                    statusLine.textContent = 'Вставленная дата ' + fmtDateRu(iso) + ' вне допуска: принимаются ' +
+                        boundsText() + ' (сегодня ±5 лет)';
+                    return;
+                }
                 if (e.preventDefault) { e.preventDefault(); }
                 applyIsoDate(el, iso);
                 return;
@@ -252,6 +349,18 @@
 
         scannerEl.addEventListener('keydown', onDateKeydown, false);
         scannerEl.addEventListener('paste', onDatePaste, false);
+        // Уход с поля с недобором цифр: эхо гасим, коммита не было. Закоммиченное
+        // эхо (из состояния) не трогаем — оно без класса 'temp'.
+        function onDateBlur(e) {
+            var el = e.target || e.srcElement;
+            if (!isDateInput(el)) { return; }
+            if (dateBufEl === el) { dateBuf = ''; dateBufEl = null; }
+            var box = dateEchoOf(el);
+            if (box && String(box.className).indexOf('temp') >= 0) { showDateEcho(el, ''); }
+        }
+
+        scannerEl.addEventListener('focusout', onDateBlur, false);
+        applyDateBounds();
         // ===================================================================
 
         function sliceRule(rule, raw, i) {
@@ -544,7 +653,51 @@
             return html;
         }
 
+        // focusTarget — куда вернуть фокус после перерисовки: {idx, cls, nth}
+        // (поле карточки items) либо 'keep' (фокус не трогаем). null — фокус в
+        // сканер приёмки, как раньше. Перерисовка пересобирает DOM целиком,
+        // поэтому ссылку на элемент хранить нельзя — поле ищется заново по
+        // индексу карточки и классу.
+        // Решение владельца 14.09: при создании партии и вводе дат страница
+        // остаётся там, где идёт работа, — фокус уезжал в верхний сканер и
+        // утягивал за собой прокрутку наверх.
+        var focusTarget = null;
+
+        // focusSpec — описание поля для возврата фокуса (до перерисовки).
+        function focusSpec(el) {
+            var idx = itemIndexFromDom(el);
+            if (idx < 0) { return null; }
+            var inputs = scansBox.children[idx].getElementsByTagName('input');
+            var cls = el.className || '';
+            var nth = 0;
+            var i;
+            for (i = 0; i < inputs.length; i++) {
+                if (inputs[i] === el) { break; }
+                if (inputs[i].className === cls) { nth++; }
+            }
+            return {idx: idx, cls: cls, nth: nth};
+        }
+
+        // focusBySpec — то же поле в пересобранном DOM (null — не нашлось).
+        function focusBySpec(spec) {
+            var card = scansBox.children[spec.idx];
+            if (!card) { return null; }
+            var inputs = card.getElementsByTagName('input');
+            var seen = 0;
+            var i;
+            for (i = 0; i < inputs.length; i++) {
+                if (inputs[i].className !== spec.cls) { continue; }
+                if (seen === spec.nth) { return inputs[i]; }
+                seen++;
+            }
+            return null;
+        }
+
         function render() {
+            var scrollY = window.pageYOffset || document.documentElement.scrollTop ||
+                document.body.scrollTop || 0;
+            var target = focusTarget;
+            focusTarget = null;
             var html = '';
             var i;
             for (i = 0; i < items.length; i++) {
@@ -558,7 +711,24 @@
             } else {
                 partyHint.style.display = 'none';
             }
-            scanInput.focus();
+            if (target === 'keep') {
+                // действие мышью (имя партии, удаление строки) — фокус не трогаем
+            } else if (target) {
+                var el = focusBySpec(target);
+                if (el) { el.focus(); } else { scanInput.focus(); }
+            } else {
+                // скан/загрузка кэша: фокус остаётся в сканере приёмки
+                scanInput.focus();
+            }
+            if (errorEcho) {
+                // Дату не приняли: состояние сброшено, но оператор должен видеть,
+                // ЧТО он забил и почему — красное эхо на перерисованном поле.
+                var badField = focusBySpec(errorEcho.spec);
+                if (badField) { showDateEcho(badField, errorEcho.text, true); }
+                errorEcho = null;
+            }
+            applyDateBounds();
+            window.scrollTo(0, scrollY);
         }
 
         // itemIndexFromDom — индекс элемента items по разметке (порядок совпадает).
@@ -611,6 +781,15 @@
             it.manual = it.manual || {};
             var kind = el.getAttribute('data-kind');
             var v = el.value;
+            if (isDateInput(el) && v && !inDateBounds(v)) {
+                // Пришло мимо цифровой проверки (нативный календарь, автозаполнение):
+                // принимаем только даты в допуске «сегодня ±5 лет» (жалоба 14.09).
+                el.value = '';
+                statusLine.textContent = 'Дата ' + fmtDateRu(v) + ' вне допуска: принимаются ' + boundsText() +
+                    ' (сегодня ±5 лет)';
+                applyIsoDate(el, '');
+                return;
+            }
             if (kind === 'weight') { it.manual.weight_g = v ? parseInt(v, 10) : null; }
             else if (kind === 'pd') { it.manual.produced_on = v || null; }
             else if (kind === 'bb') { it.manual.best_before = v || null; }
@@ -618,6 +797,7 @@
                 it.manual.product_id = v || null;
                 applyProductToScan(it.scan, v || '');
             }
+            focusTarget = focusSpec(el);
             render();
         }
 
@@ -629,6 +809,15 @@
             var kind = el.getAttribute('data-kind');
             var r = parseInt(el.getAttribute('data-r'), 10);
             var v = el.value;
+            if (isDateInput(el) && v && !inDateBounds(v)) {
+                // То же для полей партии: календарь и автозаполнение не должны
+                // протаскивать даты вне допуска.
+                el.value = '';
+                statusLine.textContent = 'Дата ' + fmtDateRu(v) + ' вне допуска: принимаются ' + boundsText() +
+                    ' (сегодня ±5 лет)';
+                applyIsoDate(el, '');
+                return;
+            }
             if (!isNaN(r) && kind === 'weight') {
                 b.rows[r].manual = b.rows[r].manual || {};
                 b.rows[r].manual.weight_g = v ? parseInt(v, 10) : null;
@@ -640,6 +829,7 @@
             } else if (kind === 'bb') {
                 b.bb = v || '';
             }
+            focusTarget = focusSpec(el);
             render();
         }
 
@@ -668,6 +858,7 @@
             var idx = itemIndexFromDom(btn);
             if (idx < 0) { return; }
             items[idx].rows.push({scan: {kind: 'item', raw: '', unrecognized: true}, manual: {}});
+            focusTarget = 'keep';
             render();
         }
 
@@ -707,6 +898,7 @@
             var idx = itemIndexFromDom(node);
             if (idx < 0) { return; }
             activeParty = items[idx];
+            focusTarget = 'keep';
             render();
         }
 
@@ -715,6 +907,8 @@
             var b = {kind: 'party', id: ++partySeq, pd: '', bb: '', rows: []};
             items.push(b);
             activeParty = b;
+            // Фокус — в дату новой партии: работа идёт здесь, а не у сканера.
+            focusTarget = {idx: items.length - 1, cls: 'party-pd', nth: 0};
             render();
             return b;
         }

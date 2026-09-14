@@ -13,7 +13,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	"warehouseHelper/internal/metrics"
 	"warehouseHelper/internal/msclient/client"
@@ -131,8 +130,7 @@ type OrderItem struct {
 // целиком (позиции без резолва кодов показать нельзя — строки молча стали
 // бы пассивными). Ошибка хопа за контрагентом НЕ роняет: имя/телефон
 // остаются пустыми (вторичные данные, клиент уже залогировал).
-// Побочно кладёт сырые ответы МС в кэш отправки (те же GET, что и так
-// делались для рендера) — на submit новые запросы не нужны.
+// Кэша нет: сырьё для Submit читается там же и заново (см. fetchForSubmit).
 func (uc *UseCase) Detail(ctx context.Context, id string) (*Order, error) {
 	done := metrics.Track(trackPkg, "Detail")
 	defer done()
@@ -142,7 +140,7 @@ func (uc *UseCase) Detail(ctx context.Context, id string) (*Order, error) {
 		return nil, ErrEmptyOrderID
 	}
 
-	order, entry, err := uc.fetchAndCache(ctx, id)
+	order, entry, err := uc.fetchForSubmit(ctx, id)
 	if err != nil {
 		return nil, err
 	}
@@ -173,10 +171,10 @@ func (uc *UseCase) Detail(ctx context.Context, id string) (*Order, error) {
 	}, nil
 }
 
-// fetchAndCache загружает заказ и позиции одним путём для Detail и Submit
-// (догрузка при промахе кэша отправки): типизированные данные для страницы
-// + сырьё (заказ, строки positions, каталог) в кэш отправки.
-func (uc *UseCase) fetchAndCache(ctx context.Context, id string) (*client.MSOrder, *submitEntry, error) {
+// fetchForSubmit загружает заказ и позиции одним путём для Detail и Submit:
+// типизированные данные для страницы + сырьё (заказ, строки positions,
+// каталог) для отправки. Кэша нет — на Submit читаем заново.
+func (uc *UseCase) fetchForSubmit(ctx context.Context, id string) (*client.MSOrder, *submitEntry, error) {
 	order, orderRaw, err := uc.ms.FetchOrderByID(ctx, id)
 	if err != nil {
 		return nil, nil, fmt.Errorf("fetch order %s: %w", id, err)
@@ -197,9 +195,7 @@ func (uc *UseCase) fetchAndCache(ctx context.Context, id string) (*client.MSOrde
 		rowsRaw:   rowsRaw,
 		catalog:   catalog,
 		positions: positions,
-		at:        time.Now(),
 	}
-	uc.cache.store(id, entry)
 
 	return order, entry, nil
 }
