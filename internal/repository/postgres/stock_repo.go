@@ -111,6 +111,41 @@ func (pg *PGClient) SetManualDiscount(ctx context.Context, productID string, bes
 	return nil
 }
 
+// SetDiscounts обновляет «просто»-скидки лотов (только plain-колонки,
+// ручные не трогаются) в одной транзакции. Строки нет — stock.ErrLotNotFound
+// (весь батч откатывается).
+func (pg *PGClient) SetDiscounts(ctx context.Context, writes []stock.DiscountWrite) error {
+	if len(writes) == 0 {
+		return nil
+	}
+	tx, err := pg.Pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("set discounts begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }() // после Commit — no-op
+
+	for _, w := range writes {
+		tag, err := tx.Exec(ctx, `
+                UPDATE product_stock
+                SET discount_general = $3, discount_telegram = $4
+                WHERE product_id = $1 AND best_before = $2`,
+			w.ProductID, w.BestBefore, w.General, w.Telegram,
+		)
+		if err != nil {
+			return fmt.Errorf("set discounts (%s, %s): %w", w.ProductID, w.BestBefore.Format(time.DateOnly), err)
+		}
+		if tag.RowsAffected() == 0 {
+			return stock.ErrLotNotFound
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("set discounts commit: %w", err)
+	}
+
+	return nil
+}
+
 // catalogProductColumns — колонки товара каталога для сканов «Обновить сроки».
 const catalogProductColumns = `id, internal_code, name, group_name, short_list`
 

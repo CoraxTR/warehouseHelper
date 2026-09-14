@@ -25,6 +25,10 @@ type mockRepo struct {
 	acceptErr   error                    // ошибка AcceptStockLots
 	picked      []stock.PickLotIn        // списанные единицы (PickStockLots)
 	pickErr     error                    // ошибка PickStockLots
+
+	discounts      []stock.DiscountWrite // записанные «просто»-скидки (SetDiscounts)
+	discountErr    error                 // ошибка SetDiscounts
+	onSetDiscounts func()                // хук теста: проверка порядка «БД → кэш → событие»
 }
 
 type updateCall struct {
@@ -95,7 +99,22 @@ func (m *mockRepo) PickStockLots(_ context.Context, lots []stock.PickLotIn) erro
 	return nil
 }
 
+// SetDiscounts — заглушка шва записи «просто»-скидок: копит батч, умеет отдавать
+// ошибку и звать хук (тест ловит момент вызова: кэш в нём ещё не обновлён).
+func (m *mockRepo) SetDiscounts(_ context.Context, writes []stock.DiscountWrite) error {
+	if m.discountErr != nil {
+		return m.discountErr
+	}
+	m.discounts = append(m.discounts, writes...)
+	if m.onSetDiscounts != nil {
+		m.onSetDiscounts()
+	}
+	return nil
+}
+
 // mockPub — публикатор-заглушка, копит события и снапшоты каталога.
+// ВНИМАНИЕ: в SetDiscounts публикация идёт под mu.Lock — хук не должен
+// обращаться к кэшу юзкейса (Snapshot возьмёт RLock → самодедлок).
 type mockPub struct {
 	events    []stock.Event
 	snapshots [][]stock.Product
@@ -1298,4 +1317,205 @@ func findTestProduct(snap []stock.Product, id string) stock.Product {
 		}
 	}
 	return stock.Product{}
+}
+
+// testLot достаёт лот из снапшота по товару и сроку (helper проверок кэша).
+func testLot(t *testing.T, uc *StockUseCase, productID string, bb time.Time) stock.Lot {
+	t.Helper()
+	for _, p := range uc.Snapshot() {
+		if p.ID != productID {
+			continue
+		}
+		for _, l := range p.Lots {
+			if l.BestBefore.Equal(bb) {
+				return l
+			}
+		}
+	}
+	t.Fatalf("лот (%s, %s) не найден в кэше", productID, bb.Format(time.DateOnly))
+	return stock.Lot{}
+}
+
+// newDiscountsUC — юзкейс с прогретым кэшем из testStock (p1: лоты 01/05/10.09.2026).
+func newDiscountsUC(t *testing.T, repo Repository, pub Publisher) *StockUseCase {
+	t.Helper()
+	uc := newTestUC(repo, pub)
+	if err := uc.WarmUp(context.Background()); err != nil {
+		t.Fatalf("WarmUp: %v", err)
+	}
+	return uc
+}
+
+// Шов записи SetDiscounts: порядок «БД → кэш → событие» — в момент записи в БД
+// кэш ещё держит прежнее значение, а пришедшее событие несёт уже новое (кэш и
+// публикация идут под одним mu, поэтому событие не может опередить кэш).
+func TestSetDiscountsWritesDBThenCacheThenEvent(t *testing.T) {
+	repo := &mockRepo{products: testStock()}
+	pub := &mockPub{}
+	uc := newDiscountsUC(t, repo, pub)
+
+	// Хук репозитория читает кэш до взятия mu юзкейсом — здесь это безопасно
+	// (в отличие от публикации: она идёт под mu.Lock, Snapshot там же = дедлок).
+	generalAtRepo := int16(-1)
+	repo.onSetDiscounts = func() {
+		if v := testLot(t, uc, "p1", d(2026, 9, 1)).General; v != nil {
+			generalAtRepo = *v
+		}
+	}
+
+	err := uc.SetDiscounts(context.Background(), []stock.DiscountWrite{
+		{
+			ProductID:  "p1",
+			BestBefore: d(2026, 9, 1),
+			General:    i16(40),
+			Telegram:   i16(10),
+		},
+	})
+	if err != nil {
+		t.Fatalf("SetDiscounts: %v", err)
+	}
+
+	if len(repo.discounts) != 1 {
+		t.Fatalf("repo.discounts = %d, want 1", len(repo.discounts))
+	}
+	if w := repo.discounts[0]; w.ProductID != "p1" || w.General == nil || *w.General != 40 ||
+		w.Telegram == nil || *w.Telegram != 10 {
+		t.Errorf("в БД ушло %+v, want p1 general 40 / telegram 10", w)
+	}
+	// При записи в БД кэш ещё держит прежнее значение лота 01.09 (5).
+	if generalAtRepo != 5 {
+		t.Errorf("кэш в момент записи в БД: general = %d, want 5 (старое)", generalAtRepo)
+	}
+
+	lot := testLot(t, uc, "p1", d(2026, 9, 1))
+	if lot.General == nil || *lot.General != 40 || lot.Telegram == nil || *lot.Telegram != 10 {
+		t.Errorf("кэш лота 01.09: general = %v, telegram = %v, want 40/10", lot.General, lot.Telegram)
+	}
+	if len(pub.events) != 1 {
+		t.Fatalf("events = %d, want 1", len(pub.events))
+	}
+	e := pub.events[0]
+	if e.Kind != stock.EventLotUpsert || e.ProductID != "p1" || e.Lot == nil ||
+		e.Lot.General == nil || *e.Lot.General != 40 {
+		t.Errorf("event = %+v, want lot_upsert p1 general 40", e)
+	}
+}
+
+// nil в DiscountWrite = скидка не задана (в БД NULL): в кэше поле обнуляется.
+func TestSetDiscountsNilClearsCache(t *testing.T) {
+	repo := &mockRepo{products: testStock()}
+	uc := newDiscountsUC(t, repo, &mockPub{})
+
+	// p1, лот 05.09: Telegram 20 → снимаем обе скидки.
+	if err := uc.SetDiscounts(context.Background(), []stock.DiscountWrite{{
+		ProductID:  "p1",
+		BestBefore: d(2026, 9, 5),
+	}}); err != nil {
+		t.Fatalf("SetDiscounts: %v", err)
+	}
+
+	if len(repo.discounts) != 1 {
+		t.Fatalf("repo.discounts = %d, want 1", len(repo.discounts))
+	}
+	if w := repo.discounts[0]; w.General != nil || w.Telegram != nil {
+		t.Errorf("в БД должны уйти NULL: general = %v, telegram = %v", w.General, w.Telegram)
+	}
+	lot := testLot(t, uc, "p1", d(2026, 9, 5))
+	if lot.General != nil || lot.Telegram != nil {
+		t.Errorf("кэш лота 05.09: general = %v, telegram = %v, want nil/nil", lot.General, lot.Telegram)
+	}
+}
+
+// Невалидный батч: ошибка до записи — в БД ничего не уходит, кэш не меняется.
+func TestSetDiscountsValidation(t *testing.T) {
+	cases := []struct {
+		name  string
+		write stock.DiscountWrite
+	}{
+		{"скидка сайта 101", stock.DiscountWrite{ProductID: "p1", BestBefore: d(2026, 9, 1), General: i16(101)}},
+		{"скидка ТГ -1", stock.DiscountWrite{ProductID: "p1", BestBefore: d(2026, 9, 1), Telegram: i16(-1)}},
+		{"без товара", stock.DiscountWrite{BestBefore: d(2026, 9, 1), General: i16(10)}},
+		{"без срока", stock.DiscountWrite{ProductID: "p1", General: i16(10)}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			repo := &mockRepo{products: testStock()}
+			uc := newDiscountsUC(t, repo, &mockPub{})
+
+			if err := uc.SetDiscounts(context.Background(), []stock.DiscountWrite{c.write}); err == nil {
+				t.Fatal("ожидалась ошибка валидации")
+			}
+			if len(repo.discounts) != 0 {
+				t.Errorf("в БД ушло %d записей, want 0", len(repo.discounts))
+			}
+			if got := testLot(t, uc, "p1", d(2026, 9, 1)).General; got == nil || *got != 5 {
+				t.Errorf("кэш изменился: general = %v, want 5", got)
+			}
+		})
+	}
+}
+
+// Пустой батч — штатная ситуация: без обращения к БД и без событий.
+func TestSetDiscountsEmptyNoWork(t *testing.T) {
+	repo := &mockRepo{products: testStock()}
+	pub := &mockPub{}
+	uc := newDiscountsUC(t, repo, pub)
+
+	if err := uc.SetDiscounts(context.Background(), nil); err != nil {
+		t.Fatalf("SetDiscounts(nil): %v", err)
+	}
+	if len(repo.discounts) != 0 || len(pub.events) != 0 {
+		t.Errorf("работы быть не должно: БД %d, события %d", len(repo.discounts), len(pub.events))
+	}
+}
+
+// Ошибка БД: операция падает до кэша — кэш и события не меняются.
+func TestSetDiscountsRepoErrorKeepsCache(t *testing.T) {
+	repo := &mockRepo{products: testStock(), discountErr: errors.New("boom")}
+	pub := &mockPub{}
+	uc := newDiscountsUC(t, repo, pub)
+
+	err := uc.SetDiscounts(context.Background(), []stock.DiscountWrite{{
+		ProductID:  "p1",
+		BestBefore: d(2026, 9, 1),
+		General:    i16(40),
+	}})
+	if err == nil {
+		t.Fatal("ожидалась ошибка БД")
+	}
+	if got := testLot(t, uc, "p1", d(2026, 9, 1)).General; got == nil || *got != 5 {
+		t.Errorf("кэш изменился: general = %v, want 5", got)
+	}
+	if len(pub.events) != 0 {
+		t.Errorf("событий быть не должно: %d", len(pub.events))
+	}
+}
+
+// Товара нет в кэше: карточка подгружается из каталога (лотов у неё нет),
+// в БД уже записано — операция не роняется, событий по лоту нет.
+func TestSetDiscountsProductOutsideCache(t *testing.T) {
+	repo := &mockRepo{
+		products:    testStock(),
+		productByID: map[string]stock.Product{"p9": {ID: "p9", InternalCode: "30100009", Name: "Сыр", GroupName: "Молочные"}},
+	}
+	pub := &mockPub{}
+	uc := newDiscountsUC(t, repo, pub)
+
+	if err := uc.SetDiscounts(context.Background(), []stock.DiscountWrite{{
+		ProductID:  "p9",
+		BestBefore: d(2026, 9, 2),
+		General:    i16(15),
+	}}); err != nil {
+		t.Fatalf("SetDiscounts: %v", err)
+	}
+
+	if len(repo.discounts) != 1 {
+		t.Fatalf("repo.discounts = %d, want 1", len(repo.discounts))
+	}
+	if len(pub.events) != 0 {
+		t.Errorf("событий быть не должно (лота в кэше нет): %d", len(pub.events))
+	}
+	if p := findTestProduct(uc.Snapshot(), "p9"); p.ID != "p9" {
+		t.Errorf("карточка p9 не появилась в кэше (Snapshot: %d товаров)", len(uc.Snapshot()))
+	}
 }

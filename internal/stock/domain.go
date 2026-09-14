@@ -74,6 +74,17 @@ type PickLotIn struct {
 	Qty        int64 // единиц к списанию (>0)
 }
 
+// DiscountWrite — «просто»-скидки одного лота (шов записи модуля расчёта
+// скидок): General/Telegram пишутся в plain-колонки discount_general/
+// discount_telegram; nil = скидка не задана → в БД NULL (движок пишет NULL
+// вместо 0). Ручные скидки UI (discount_*_manual) движок не трогает.
+type DiscountWrite struct {
+	ProductID  string
+	BestBefore time.Time
+	General    *int16
+	Telegram   *int16
+}
+
 // Event — факт изменения остатков, публикуется владельцем данных (usecase)
 // в вебсокет-хаб. Клиенты пересчитывают таблицу по своему состоянию.
 type Event struct {
