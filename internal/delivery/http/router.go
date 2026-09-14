@@ -75,6 +75,10 @@ func NewRouter(h *Handler) *http.ServeMux {
 	// Отправка подбора в МС (итерация 3): сервер пересобирает positions из кэша
 	// страницы и PUT-ит заказ; 200 — смена локации на /ms/orders/pick на клиенте.
 	mux.HandleFunc("POST /ms/orders/{id}/submit", h.MSOrderSubmit)
+	// Возврат в сроки при переподборе: приём вернувшихся кусков (остатки по
+	// срокам этикеток) и ручное закрытие с уведомлением складу о пересчёте.
+	mux.HandleFunc("POST /ms/orders/{id}/return", h.MSOrderReturnSave)
+	mux.HandleFunc("POST /ms/orders/{id}/return/close", h.MSOrderReturnClose)
 
 	// Модуль «Жалобы»: обращения клиентов с фото и статусами.
 	mux.HandleFunc("GET /complaints", h.ComplaintsPage)                    // активные обращения (статус != «Завершено»)

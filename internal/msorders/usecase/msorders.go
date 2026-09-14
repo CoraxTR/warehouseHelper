@@ -46,21 +46,29 @@ type OrderRow struct {
 	Href         string // meta.href заказа
 }
 
-// UseCase — сценарии раздела «Заказы» МС: поиск заказа (страница «Подобрать»)
-// и детальная страница заказа для подбора позиций.
+// UseCase — сценарии раздела «Заказы» МС: поиск заказа (страница «Подобрать»),
+// детальная страница заказа для подбора и возврат в сроки при переподборе
+// (сохранение вернувшихся кусков и ручное закрытие).
 type UseCase struct {
-	ms      OrderClient
-	catalog CatalogReader
-	picker  StockPicker // шов stock: списание сроков после успешного PUT
+	ms       OrderClient
+	catalog  CatalogReader
+	picker   StockPicker       // шов stock: списание сроков после успешного PUT
+	acceptor StockAcceptor     // шов stock: приём остатков (возврат в сроки)
+	notify   WarehouseNotifier // шов telegram: пересчёт сроков при ручном закрытии
 }
 
 // NewUseCase создаёт сценарии с клиентом МС, каталогом склада (резолв
-// внутренних кодов позиций) и модулем остатков (списание сроков подбора).
-func NewUseCase(ms OrderClient, catalog CatalogReader, picker StockPicker) *UseCase {
+// внутренних кодов позиций) и швами складских операций: списание сроков
+// подбора (picker), приём возврата в сроки (acceptor) и уведомления складу
+// (notify). Швы складских операций необязательны: без них соответствующий
+// сценарий возвращает понятную ошибку (паники нет).
+func NewUseCase(ms OrderClient, catalog CatalogReader, picker StockPicker, acceptor StockAcceptor, notify WarehouseNotifier) *UseCase {
 	return &UseCase{
-		ms:      ms,
-		catalog: catalog,
-		picker:  picker,
+		ms:       ms,
+		catalog:  catalog,
+		picker:   picker,
+		acceptor: acceptor,
+		notify:   notify,
 	}
 }
 
