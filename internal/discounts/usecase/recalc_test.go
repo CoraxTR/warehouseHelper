@@ -181,11 +181,20 @@ func (w *fakeDiscountWriter) SetDiscounts(_ context.Context, writes []discounts.
 
 // fakeCommonNotifier — общий канал теста: тексты уведомлений по порядку
 // (texts — отправленные, tries — все попытки) и, по желанию теста, ошибка
-// отправки.
+// отправки. chats — ответы в конкретный чат (команда /скидки), errDetails —
+// ошибка такого ответа.
 type fakeCommonNotifier struct {
-	texts []string
-	tries []string
-	err   error
+	texts      []string
+	tries      []string
+	err        error
+	chats      []chatMessage
+	errDetails error
+}
+
+// chatMessage — попытка ответа в конкретный чат (чат + текст).
+type chatMessage struct {
+	chatID int64
+	text   string
 }
 
 func (n *fakeCommonNotifier) NotifyCommon(_ context.Context, text string) error {
@@ -194,6 +203,17 @@ func (n *fakeCommonNotifier) NotifyCommon(_ context.Context, text string) error 
 		return n.err
 	}
 	n.texts = append(n.texts, text)
+
+	return nil
+}
+
+// SendDetails — ответ в конкретный чат: помнит все попытки, ошибку отдаёт по
+// флагу теста. Удачные попытки отдельно не копим: команде важен сам факт ответа.
+func (n *fakeCommonNotifier) SendDetails(_ context.Context, chatID int64, text string) error {
+	n.chats = append(n.chats, chatMessage{chatID: chatID, text: text})
+	if n.errDetails != nil {
+		return n.errDetails
+	}
 
 	return nil
 }
