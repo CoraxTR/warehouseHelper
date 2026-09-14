@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -56,6 +57,21 @@ const (
 	monthlyPeriodDays = 30
 )
 
+// digestPairColumns — колонки пары (товар, срок) позиций рассылки; порядок
+// совпадает со scanLotPair. Префикс i — алиас discount_telegram_digest_item.
+const digestPairColumns = `i.product_id, i.best_before`
+
+// latestSentDigestSQL — подзапрос «последняя отправленная рассылка» (по дню
+// плана, затем по id — в один день бывает два слота: дайджест 09:00 и план
+// 14:00). Отправка важна: собранная, но не отправленная рассылка (sent_at IS
+// NULL) историей публикации не является — позиции такого слота человек не
+// видел, и антидубль их не должен скрывать.
+const latestSentDigestSQL = `
+    SELECT id FROM discount_telegram_digest
+    WHERE sent_at IS NOT NULL
+    ORDER BY planned_at DESC, id DESC
+    LIMIT 1`
+
 // LoadDiscountInput читает вход матчинга формул: все лоты product_stock с
 // товарными признаками из products и оборотом последнего завершённого периода
 // (недельного для track_weekly, месячного для остальных).
@@ -109,4 +125,163 @@ func scanDiscountInput(row pgx.Row) (discounts.Input, error) {
 		}
 	}
 	return in, nil
+}
+
+// SaveDigest сохраняет рассылку вместе с позициями одной транзакцией: строку
+// discount_telegram_digest (id присваивает БД) и строки её позиций. Пустой слот
+// допустим — рассылка есть, позиций нет (публиковать нечего), отдельной ошибки
+// на это нет.
+//
+// Позиции проверяются до вставки (checkDigestItems): CHECK-констрейнт из БД не
+// говорит, какая строка его нарушила.
+func (pg *PGClient) SaveDigest(ctx context.Context, d discounts.DigestRecord, items []discounts.DigestItem) error {
+	if err := checkDigestItems(items); err != nil {
+		return err
+	}
+
+	tx, err := pg.Pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("save digest begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }() // после Commit — no-op
+
+	var digestID int64
+	if err := tx.QueryRow(ctx, `
+        INSERT INTO discount_telegram_digest (planned_at, chat_kind, sent_at)
+        VALUES ($1, $2, $3)
+        RETURNING id`,
+		d.PlannedAt, d.ChatKind, d.SentAt,
+	).Scan(&digestID); err != nil {
+		return fmt.Errorf("insert digest %s %s: %w", d.PlannedAt.Format(time.DateOnly), d.ChatKind, err)
+	}
+
+	for _, it := range items {
+		if _, err := tx.Exec(ctx, `
+            INSERT INTO discount_telegram_digest_item
+                (digest_id, product_id, best_before, percent, coeff, reason)
+            VALUES ($1, $2, $3, $4, $5, $6)`,
+			digestID, it.ProductID, it.BestBefore, it.Percent, it.Coeff, it.Reason,
+		); err != nil {
+			return fmt.Errorf("insert digest item %s %s: %w", it.ProductID, it.BestBefore.Format(time.DateOnly), err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("save digest %s %s commit: %w", d.PlannedAt.Format(time.DateOnly), d.ChatKind, err)
+	}
+	return nil
+}
+
+// checkDigestItems проверяет позиции против CHECK-констрейнтов БД: причина —
+// одна из Reason* (слова совпадают с Source.String()), скидка — 0..100.
+// Порядок позиций не важен; дубли лотов PK отсечёт сам, отдельной ошибки нет.
+func checkDigestItems(items []discounts.DigestItem) error {
+	for _, it := range items {
+		switch it.Reason {
+		case discounts.ReasonManual, discounts.ReasonExpiry, discounts.ReasonSurplus:
+		default:
+			return fmt.Errorf("%w: причина %q у лота %s %s",
+				discounts.ErrBadDigestItem, it.Reason, it.ProductID, it.BestBefore.Format(time.DateOnly))
+		}
+		if it.Percent < 0 || it.Percent > 100 {
+			return fmt.Errorf("%w: скидка %d%% у лота %s %s",
+				discounts.ErrBadDigestItem, it.Percent, it.ProductID, it.BestBefore.Format(time.DateOnly))
+		}
+	}
+	return nil
+}
+
+// LastDigestPairs читает пары (товар, срок) позиций последней отправленной
+// рассылки — антидубль «не было в предыдущей рассылке» (по лоту, не по товару).
+//
+// Рассылки в истории нет — пустая карта, не ошибка: первый слот публикует всё.
+func (pg *PGClient) LastDigestPairs(ctx context.Context) (map[discounts.LotKey]struct{}, error) {
+	rows, err := pg.Pool.Query(ctx, `
+        SELECT `+digestPairColumns+`
+        FROM discount_telegram_digest_item i
+        WHERE i.digest_id = (`+latestSentDigestSQL+`)`,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("last digest pairs: %w", err)
+	}
+	defer rows.Close()
+
+	pairs, err := collectLotPairs(rows)
+	if err != nil {
+		return nil, fmt.Errorf("last digest pairs: %w", err)
+	}
+	return pairs, nil
+}
+
+// collectLotPairs собирает пары (товар, срок) в набор: у лота в рассылке одна
+// строка, дубликаты (если появятся) схлопываются. Выборку не закрывает — это
+// делает вызывающий. Пустая выборка даёт пустую (не nil) карту.
+func collectLotPairs(rows pgx.Rows) (map[discounts.LotKey]struct{}, error) {
+	pairs := map[discounts.LotKey]struct{}{}
+	for rows.Next() {
+		key, err := scanLotPair(rows)
+		if err != nil {
+			return nil, err
+		}
+		pairs[key] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("digest pairs: %w", err)
+	}
+	return pairs, nil
+}
+
+// scanLotPair сканирует строку выборки в discounts.LotKey (порядок
+// digestPairColumns).
+func scanLotPair(row pgx.Row) (discounts.LotKey, error) {
+	var key discounts.LotKey
+	if err := row.Scan(&key.ProductID, &key.BestBefore); err != nil {
+		return discounts.LotKey{}, fmt.Errorf("scan lot pair: %w", err)
+	}
+	return key, nil
+}
+
+// MarkGeneralRaised фиксирует подъём general до telegram (16:00) по позициям
+// плана: general_raised_at = at у строк последней отправленной рассылки (плана
+// 14:00). Уже поднятые строки не трогаются, распроданные до 16:00 в pairs просто
+// не приходят — ноль обновлённых строк не ошибка.
+//
+// Отправленной рассылки в истории нет — discounts.ErrNoDigest (поднимать не по
+// чему). Пустой список пар — не ошибка и запроса не делает.
+func (pg *PGClient) MarkGeneralRaised(ctx context.Context, pairs []discounts.LotKey, at time.Time) error {
+	if len(pairs) == 0 {
+		return nil
+	}
+
+	tx, err := pg.Pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("mark general raised begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }() // после Commit — no-op
+
+	var digestID int64
+	err = tx.QueryRow(ctx, latestSentDigestSQL).Scan(&digestID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return discounts.ErrNoDigest
+	}
+	if err != nil {
+		return fmt.Errorf("mark general raised digest: %w", err)
+	}
+
+	for _, p := range pairs {
+		if _, err := tx.Exec(ctx, `
+            UPDATE discount_telegram_digest_item
+            SET general_raised_at = $4
+            WHERE digest_id = $1 AND product_id = $2 AND best_before = $3
+              AND general_raised_at IS NULL`,
+			digestID, p.ProductID, p.BestBefore, at,
+		); err != nil {
+			return fmt.Errorf("mark general raised %s %s: %w", p.ProductID, p.BestBefore.Format(time.DateOnly), err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("mark general raised commit: %w", err)
+	}
+	return nil
 }

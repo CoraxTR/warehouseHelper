@@ -13,6 +13,12 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+// Лоты подделок: id товара (как в МС — строка) для строк выборки.
+const (
+	testLotMilk   = "p-milk"
+	testLotCheese = "p-cheese"
+)
+
 // ptr — указатель на значение (NULL-колонки в снапшоте — *T).
 func ptr[T any](v T) *T { return &v }
 
@@ -224,6 +230,150 @@ func TestDiscountInputQueryKeepsPeriodsClosed(t *testing.T) {
 	} {
 		if !strings.Contains(discountInputQuery, want) {
 			t.Errorf("в discountInputQuery нет %q", want)
+		}
+	}
+}
+
+// fakeRows — подделка pgx.Rows: по Next отдаёт заранее заданные строки.
+// Остальные методы интерфейса (Close, FieldDescriptions и прочее) хелперу не
+// нужны — берутся у встроенного nil-интерфейса.
+type fakeRows struct {
+	pgx.Rows
+
+	rows [][]any
+	read int
+	err  error
+}
+
+func (r *fakeRows) Next() bool {
+	if r.read >= len(r.rows) {
+		return false
+	}
+	r.read++
+	return true
+}
+
+func (r *fakeRows) Scan(dest ...any) error {
+	if r.read == 0 || r.read > len(r.rows) {
+		return errors.New("подделка Scan вызвана до Next")
+	}
+	vals := r.rows[r.read-1]
+	if len(dest) != len(vals) {
+		return fmt.Errorf("подделка Scan: колонок %d, значений %d", len(dest), len(vals))
+	}
+	for i, v := range vals {
+		if err := scanValue(dest[i], v); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *fakeRows) Err() error { return r.err }
+
+// TestCollectLotPairs — набор пар лотов: пара собирается из строки выборки,
+// дубликат схлопывается, пустая выборка даёт пустую карту (не nil), ошибки
+// строки и выборки пробрасываются.
+func TestCollectLotPairs(t *testing.T) {
+	october := time.Date(2026, time.October, 1, 0, 0, 0, 0, time.UTC)
+	november := time.Date(2026, time.November, 15, 0, 0, 0, 0, time.UTC)
+
+	t.Run("дубликат пары схлопывается", func(t *testing.T) {
+		rows := &fakeRows{rows: [][]any{
+			{testLotMilk, october},
+			{testLotCheese, november},
+			{testLotMilk, october},
+		}}
+		got, err := collectLotPairs(rows)
+		if err != nil {
+			t.Fatalf("collectLotPairs: %v", err)
+		}
+		want := map[discounts.LotKey]struct{}{
+			{ProductID: testLotMilk, BestBefore: october}:    {},
+			{ProductID: testLotCheese, BestBefore: november}: {},
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("collectLotPairs = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("пустая выборка — пустая карта", func(t *testing.T) {
+		got, err := collectLotPairs(&fakeRows{})
+		if err != nil {
+			t.Fatalf("collectLotPairs: %v", err)
+		}
+		if got == nil {
+			t.Fatal("карта nil, want пустую")
+		}
+		if len(got) != 0 {
+			t.Errorf("в карте %d пар, want 0", len(got))
+		}
+	})
+
+	t.Run("короткая строка выборки", func(t *testing.T) {
+		if _, err := collectLotPairs(&fakeRows{rows: [][]any{{testLotMilk}}}); err == nil {
+			t.Fatal("collectLotPairs на короткой строке: ошибки нет")
+		}
+	})
+
+	t.Run("ошибка выборки после строк", func(t *testing.T) {
+		rows := &fakeRows{rows: [][]any{{testLotMilk, october}}, err: errors.New("обрыв связи")}
+		if _, err := collectLotPairs(rows); !errors.Is(err, rows.err) {
+			t.Fatalf("collectLotPairs: %v, want обёртку ошибки выборки", err)
+		}
+	})
+}
+
+// TestCheckDigestItems — проверка позиций до вставки: причина только из Reason*
+// (слова совпадают с CHECK в БД), скидка 0..100; пустой слот — не ошибка.
+func TestCheckDigestItems(t *testing.T) {
+	bestBefore := time.Date(2026, time.October, 1, 0, 0, 0, 0, time.UTC)
+	item := func(reason string, percent int16) discounts.DigestItem {
+		return discounts.DigestItem{
+			ProductID: testLotMilk, BestBefore: bestBefore, Percent: percent, Reason: reason,
+		}
+	}
+
+	tests := []struct {
+		name    string
+		items   []discounts.DigestItem
+		wantErr bool
+	}{
+		{"пустой слот — норма", nil, false},
+		{"ручная", []discounts.DigestItem{item(discounts.ReasonManual, 20)}, false},
+		{"по сроку 0 %", []discounts.DigestItem{item(discounts.ReasonExpiry, 0)}, false},
+		{"избыток 100 %", []discounts.DigestItem{item(discounts.ReasonSurplus, 100)}, false},
+		{"неизвестная причина", []discounts.DigestItem{item("none", 20)}, true},
+		{"пустая причина", []discounts.DigestItem{item("", 20)}, true},
+		{"скидка больше 100", []discounts.DigestItem{item(discounts.ReasonExpiry, 101)}, true},
+		{"скидка отрицательная", []discounts.DigestItem{item(discounts.ReasonExpiry, -1)}, true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := checkDigestItems(tc.items)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("checkDigestItems: %v, wantErr %v", err, tc.wantErr)
+			}
+			if tc.wantErr && !errors.Is(err, discounts.ErrBadDigestItem) {
+				t.Errorf("checkDigestItems: %v, want обёртку discounts.ErrBadDigestItem", err)
+			}
+		})
+	}
+}
+
+// TestLatestSentDigestSQL — «предыдущая рассылка» = последняя ОТПРАВЛЕННАЯ:
+// собранная, но не отправленная рассылка не должна скрывать позиции от
+// антидубля, а порядок выбирает самый свежий слот (дайджест 09:00 против плана
+// 14:00 одного дня).
+func TestLatestSentDigestSQL(t *testing.T) {
+	for _, want := range []string{
+		"sent_at IS NOT NULL",
+		"ORDER BY planned_at DESC, id DESC",
+		"LIMIT 1",
+	} {
+		if !strings.Contains(latestSentDigestSQL, want) {
+			t.Errorf("в latestSentDigestSQL нет %q", want)
 		}
 	}
 }
