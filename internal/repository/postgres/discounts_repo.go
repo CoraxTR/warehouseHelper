@@ -100,15 +100,28 @@ func (pg *PGClient) LoadDiscountInput(ctx context.Context, today time.Time) ([]d
 // track_weekly (7 или 30). Скидки лота переносятся как есть (NULL → nil, метка
 // источника — строка): трактовку «0 = NULL» и приоритеты источников держит
 // домен (discounts.Resolve), а не репозиторий.
+//
+// Две колонки снапшота nullable TEXT — products.group_name (товар без группы) и
+// product_stock.discount_source (метки нет): читаются через *string и textValue.
+// Прямой Scan в string падал на первой же строке без группы или без метки
+// («can't scan into dest[12] (col: discount_source): cannot scan NULL into
+// *string») — то есть на почти любой строке живого склада, и весь пересчёт
+// скидок падал целиком.
 func scanDiscountInput(row pgx.Row) (discounts.Input, error) {
-	var in discounts.Input
+	var (
+		in             discounts.Input
+		groupName      *string // NULL — товар без группы (products.group_name)
+		discountSource *string // NULL — метки источника нет (product_stock.discount_source)
+	)
 	if err := row.Scan(
-		&in.ProductID, &in.Name, &in.GroupName, &in.ShortList, &in.ShelfLife, &in.TrackWeekly,
+		&in.ProductID, &in.Name, &groupName, &in.ShortList, &in.ShelfLife, &in.TrackWeekly,
 		&in.BestBefore, &in.Qty,
-		&in.GeneralPlain, &in.TelegramPlain, &in.GeneralManual, &in.TelegramManual, &in.DiscountSource,
+		&in.GeneralPlain, &in.TelegramPlain, &in.GeneralManual, &in.TelegramManual, &discountSource,
 	); err != nil {
 		return discounts.Input{}, fmt.Errorf("scan discount input: %w", err)
 	}
+	in.GroupName = textValue(groupName)
+	in.DiscountSource = textValue(discountSource)
 
 	in.PeriodDays = monthlyPeriodDays
 	if in.TrackWeekly {

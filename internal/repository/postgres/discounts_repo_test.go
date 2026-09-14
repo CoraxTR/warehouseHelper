@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 	"reflect"
@@ -18,6 +19,10 @@ const (
 	testLotMilk   = "p-milk"
 	testLotCheese = "p-cheese"
 )
+
+// scannerType — тип sql.Scanner: приёмник, который читает SQL NULL сам
+// (sql.NullString и т.п.). Подделка Scan пропускает NULL под него, как pgx.
+var scannerType = reflect.TypeOf((*sql.Scanner)(nil)).Elem()
 
 // ptr — указатель на значение (NULL-колонки в снапшоте — *T).
 func ptr[T any](v T) *T { return &v }
@@ -44,9 +49,17 @@ func (r fakeRow) Scan(dest ...any) error {
 	return nil
 }
 
-// scanValue кладёт src в указатель dst — как pgx: nil даёт нулевое значение
-// (SQL NULL), число/строка приводится к типу указателя, а под указатель
-// (**int16 и т.п.) значение аллоцируется.
+// scanValue кладёт src в указатель dst — как pgx: число/строка приводится к
+// типу указателя, а под указатель (**int16, **string и т.п.) значение
+// аллоцируется.
+//
+// NULL (nil) допустим только под nil-приёмник — указатель, интерфейс, срез,
+// карта или sql.Scanner: NULL в обычный string/int у pgx — ошибка
+// («cannot scan NULL into *string»), и подделка обязана вести себя так же.
+// Мягкая версия (NULL → нулевое значение) пропускала в тестах ровно тот класс
+// ошибок, который валит прод: снапшот скидок читал nullable-колонку
+// (discount_source, group_name) прямо в string и падал на первой строке без
+// метки. Так что здесь намеренная строгость, а не удобство.
 func scanValue(dst, src any) error {
 	dv := reflect.ValueOf(dst)
 	if dv.Kind() != reflect.Pointer || dv.IsNil() {
@@ -54,6 +67,9 @@ func scanValue(dst, src any) error {
 	}
 	elem := dv.Elem()
 	if src == nil {
+		if !nullTarget(elem) {
+			return fmt.Errorf("cannot scan NULL into %T", dst)
+		}
 		elem.Set(reflect.Zero(elem.Type()))
 		return nil
 	}
@@ -71,6 +87,18 @@ func scanValue(dst, src any) error {
 	}
 	elem.Set(sv.Convert(elem.Type()))
 	return nil
+}
+
+// nullTarget — можно ли положить SQL NULL в значение типа elem: nil-приёмники
+// (*T, интерфейс, срез, карта) и всё, что умеет читать себя из NULL само
+// (sql.NullString и прочие sql.Scanner — как в pgx).
+func nullTarget(elem reflect.Value) bool {
+	switch elem.Kind() {
+	case reflect.Pointer, reflect.Interface, reflect.Slice, reflect.Map,
+		reflect.Func, reflect.Chan:
+		return true
+	}
+	return reflect.PointerTo(elem.Type()).Implements(scannerType)
 }
 
 // captureRow запоминает число аргументов Scan и сразу возвращает ошибку —
@@ -153,6 +181,22 @@ func TestScanDiscountInput(t *testing.T) {
 				GeneralPlain: ptr[int16](0), GeneralManual: ptr[int16](0), DiscountSource: "surplus",
 			},
 		},
+		{
+			// Обе nullable TEXT-колонки снапшота NULL: группа товара не задана
+			// (products.group_name), метки источника нет (discount_source).
+			// Регресс: Scan читал их прямо в string и падал на живой БД
+			// («cannot scan NULL into *string»), а подделка Scan клала NULL в
+			// string как пустую строку — тест этого не видел (см. scanValue).
+			name: "группы нет и метки нет — NULL в обеих TEXT-колонках",
+			vals: []any{"p-nogroup", "Без группы", nil, false, 20, true, bb, 7,
+				nil, int16(15), nil, nil, nil},
+			want: discounts.Input{
+				ProductID: "p-nogroup", Name: "Без группы", GroupName: "",
+				ShelfLife: ptr[int16](20), TrackWeekly: true, BestBefore: bb, Qty: 7,
+				PeriodDays:    7,
+				TelegramPlain: ptr[int16](15), DiscountSource: "",
+			},
+		},
 	}
 
 	for _, tc := range tests {
@@ -173,6 +217,40 @@ func TestScanDiscountInput(t *testing.T) {
 func TestScanDiscountInputBadRow(t *testing.T) {
 	if _, err := scanDiscountInput(fakeRow{vals: []any{"p1", "Молоко"}}); err == nil {
 		t.Fatal("scanDiscountInput на короткой строке: ошибки нет")
+	}
+}
+
+// TestScanValueNullStrict — подделка Scan обязана повторять pgx на SQL NULL:
+// NULL в обычный string/int — ошибка (ровно так снапшот скидок падал на живой
+// БД), NULL под *T, **T и sql.Scanner — норма. Без этой строгости тест на
+// scan-хелпер не видит nullable-колонку, читаемую в string, и ошибка уходит в
+// прод: NULL-приёмник проверяется не аккуратностью, а драйвером.
+func TestScanValueNullStrict(t *testing.T) {
+	var (
+		plain  string
+		num    int16
+		optStr *string
+		optNum *int16
+		viaSQL sql.NullString
+	)
+
+	if err := scanValue(&plain, nil); err == nil {
+		t.Error("NULL в string: ошибки нет, а pgx здесь падает")
+	}
+	if err := scanValue(&num, nil); err == nil {
+		t.Error("NULL в int16: ошибки нет, а pgx здесь падает")
+	}
+	if err := scanValue(&optStr, nil); err != nil {
+		t.Errorf("NULL в *string: %v", err)
+	}
+	if err := scanValue(&optNum, nil); err != nil {
+		t.Errorf("NULL в *int16: %v", err)
+	}
+	if err := scanValue(&viaSQL, nil); err != nil {
+		t.Errorf("NULL в sql.NullString: %v", err)
+	}
+	if optStr != nil || optNum != nil {
+		t.Errorf("NULL под *T должен давать nil, получили %v / %v", optStr, optNum)
 	}
 }
 

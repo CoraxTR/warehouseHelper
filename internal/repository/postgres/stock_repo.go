@@ -86,7 +86,7 @@ func (pg *PGClient) LoadAllStock(ctx context.Context) ([]stock.Product, error) {
 			Telegram:       telegram,
 			GeneralManual:  generalManual,
 			TelegramManual: telegramManual,
-			DiscountSource: sourceValue(discountSource),
+			DiscountSource: textValue(discountSource),
 		})
 	}
 	if err := rows.Err(); err != nil {
@@ -96,9 +96,15 @@ func (pg *PGClient) LoadAllStock(ctx context.Context) ([]stock.Product, error) {
 	return products, nil
 }
 
-// sourceValue — метка источника из NULL-колонки: NULL → пустая строка
-// (у stock.Lot пустая строка = «метки нет»; nil-указатель в JSON клиенту не нужен).
-func sourceValue(v *string) string {
+// textValue — NULL-колонка TEXT → строка: NULL → пустая строка. Пустая строка
+// = «не задано» (у stock.Lot — метки источника нет, у discounts.Input — группа
+// не задана); nil-указатель в JSON клиенту не нужен.
+//
+// Нужен потому, что pgx не кладёт NULL в string («cannot scan NULL into
+// *string»), а колонки вида products.group_name и product_stock.discount_source
+// в схеме nullable: без промежуточного *string снапшот падает на первой же
+// строке без группы или без метки. Все nullable TEXT-колонки читаются так.
+func textValue(v *string) string {
 	if v == nil {
 		return ""
 	}
