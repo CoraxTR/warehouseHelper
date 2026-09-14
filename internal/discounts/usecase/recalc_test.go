@@ -482,3 +482,232 @@ func TestRecalcExpiryZeroDiscountIsNoDiscount(t *testing.T) {
 		t.Errorf("general правки %v, want 40 (нулевая скидка — пусто)", got)
 	}
 }
+
+// Часовой пересчёт избытка: 10 % на пустом месте, метка источника, значение
+// ТГ-колонки не затирается, маркер дня отмечается. Оборот спрашиваем у шва —
+// у пары с избытком он может уйти в любой момент.
+func TestRecalcSurplusWritesTenAtExcess(t *testing.T) {
+	h := newRecalcHarness(recalcNow(1),
+		lotInput("p1", "Колбаса", day(10), 100, turnoverInput(30), telegramInput(20)))
+
+	if err := h.uc.RecalcSurplus(context.Background(), h.now); err != nil {
+		t.Fatalf("RecalcSurplus: %v", err)
+	}
+
+	batches := h.batches()
+	if len(batches) != 1 || len(batches[0]) != 1 {
+		t.Fatalf("батчи правок: %+v", batches)
+	}
+	w := batches[0][0]
+	if w.General == nil || *w.General != discounts.SurplusPercent() {
+		t.Errorf("general правки %v, want %d", w.General, discounts.SurplusPercent())
+	}
+	if w.Source != discounts.SourceSurplus.String() {
+		t.Errorf("метка источника %q, want %q", w.Source, discounts.SourceSurplus)
+	}
+	if w.Telegram == nil || *w.Telegram != 20 {
+		t.Errorf("ТГ-колонка правки: %v, want 20 (значение ТГ-дня не затираем)", w.Telegram)
+	}
+
+	if !h.flag(h.now, discounts.FlagSurplus) {
+		t.Errorf("после пересчёта маркер дня не отмечен")
+	}
+	if got := h.uc.Window(12); len(got) != 1 || got[0].Source != discounts.SourceSurplus {
+		t.Errorf("окно реестра: %+v, want избыток", got)
+	}
+	if h.turn.calls != 1 || len(h.turn.asked) != 1 || h.turn.asked[0] != "p1" {
+		t.Errorf("оборот запрошен %v (вызовов %d), want [p1]", h.turn.asked, h.turn.calls)
+	}
+}
+
+// Условие избытка перестало выполняться (продажи ускорились) — 10 % снимается
+// в NULL, метка источника уходит вместе со значением.
+func TestRecalcSurplusClearsWhenExcessGone(t *testing.T) {
+	h := newRecalcHarness(recalcNow(1), lotInput("p1", "Колбаса", day(10), 100, turnoverInput(30)))
+	ctx := context.Background()
+
+	if err := h.uc.RecalcSurplus(ctx, h.now); err != nil {
+		t.Fatalf("RecalcSurplus #1: %v", err)
+	}
+
+	// Продажи ускорились: накопленного остатка хватает с запасом — избытка нет.
+	turnover := 400.0
+	h.repo.inputs[0].Turnover = &turnover
+
+	if err := h.uc.RecalcSurplus(ctx, h.now); err != nil {
+		t.Fatalf("RecalcSurplus #2: %v", err)
+	}
+
+	batches := h.batches()
+	if len(batches) != 2 {
+		t.Fatalf("батчей правок %d, want 2", len(batches))
+	}
+	if got := batches[1][0].General; got != nil {
+		t.Errorf("снятие избытка: general правки %v, want nil (NULL, а не 0)", got)
+	}
+	if got := h.repo.inputs[0].GeneralPlain; got != nil {
+		t.Errorf("general в БД: %v, want NULL", got)
+	}
+	if got := h.repo.inputs[0].DiscountSource; got != "" {
+		t.Errorf("метка источника %q, want пусто (значение снято)", got)
+	}
+}
+
+// Повторный тик того же часа: значение уже стоит — новых правок нет, но оборот
+// пары с избытком спрашивается каждый час (условие может уйти в любой момент).
+func TestRecalcSurplusSecondTickIsSilent(t *testing.T) {
+	h := newRecalcHarness(recalcNow(1), lotInput("p1", "Колбаса", day(10), 100, turnoverInput(30)))
+	ctx := context.Background()
+
+	for i := 0; i < 2; i++ {
+		if err := h.uc.RecalcSurplus(ctx, h.now); err != nil {
+			t.Fatalf("RecalcSurplus #%d: %v", i+1, err)
+		}
+	}
+	if got := len(h.batches()); got != 1 {
+		t.Errorf("батчей правок %d, want 1 (10 %% уже стоит)", got)
+	}
+	if len(h.turn.asked) != 2 {
+		t.Errorf("оборот запрошен %v, want пару и в первом, и во втором тике", h.turn.asked)
+	}
+}
+
+// Чужие скидки избыток не трогает: ручная, ступень по сроку, подъём ТГ-дня
+// (стоящее значение) и значение с чужой меткой источника.
+func TestRecalcSurplusLeavesForeignDiscounts(t *testing.T) {
+	tests := []struct {
+		title string
+		opts  []func(*discounts.Input)
+	}{
+		{"ручная 30", []func(*discounts.Input){manualInput(30)}},
+		{"сроковая ступень 20 держит значение", []func(*discounts.Input){shelfLifeInput(30)}},
+		{"подъём ТГ-дня: стоит 20 %", []func(*discounts.Input){plainInput(20)}},
+		{"значение помечено сроком", []func(*discounts.Input){plainInput(20), sourceInput("expiry")}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.title, func(t *testing.T) {
+			opts := append([]func(*discounts.Input){turnoverInput(30)}, tt.opts...)
+			h := newRecalcHarness(recalcNow(1), lotInput("p1", "Колбаса", day(10), 100, opts...))
+
+			// Пара действительно избыточна: иначе тест был бы пустым.
+			pairs := Evaluate(h.repo.inputs, nil, beginningOfDay(h.now))
+			if len(pairs) != 1 || !pairs[0].HasSurplus {
+				t.Fatalf("пара без избытка: %+v", pairs)
+			}
+
+			if err := h.uc.RecalcSurplus(context.Background(), h.now); err != nil {
+				t.Fatalf("RecalcSurplus: %v", err)
+			}
+			if got := len(h.batches()); got != 0 {
+				t.Fatalf("батчей правок %d, want 0: %+v", got, h.batches())
+			}
+		})
+	}
+}
+
+// Избыток снимается и тогда, когда дорогу уступил ручной скидке: значение 10 %
+// осталось с прошлого тика, а ручная скидка стоит уже своя.
+func TestRecalcSurplusClearsOwnTenUnderManual(t *testing.T) {
+	h := newRecalcHarness(recalcNow(1),
+		lotInput("p1", "Колбаса", day(10), 100,
+			turnoverInput(30), plainInput(10), manualInput(30), sourceInput(discounts.SourceSurplus.String())))
+
+	if err := h.uc.RecalcSurplus(context.Background(), h.now); err != nil {
+		t.Fatalf("RecalcSurplus: %v", err)
+	}
+	batches := h.batches()
+	if len(batches) != 1 || len(batches[0]) != 1 {
+		t.Fatalf("батчи правок: %+v", batches)
+	}
+	if got := batches[0][0].General; got != nil {
+		t.Errorf("снятие под ручной: general правки %v, want nil", got)
+	}
+}
+
+// Свежий оборот меняет решение: снапшот оборота не знает, событие стока
+// (MarkDirty) просит цифры — и по ним появляется избыток.
+func TestRecalcSurplusRefreshChangesDecision(t *testing.T) {
+	h := newRecalcHarness(recalcNow(1), lotInput("p1", "Колбаса", day(10), 100))
+	h.turn.rates = map[string]float64{"p1": 30}
+	h.uc.MarkDirty("p1")
+
+	if err := h.uc.RecalcSurplus(context.Background(), h.now); err != nil {
+		t.Fatalf("RecalcSurplus: %v", err)
+	}
+	if len(h.turn.asked) != 1 || h.turn.asked[0] != "p1" {
+		t.Fatalf("оборот запрошен %v, want [p1]", h.turn.asked)
+	}
+	batches := h.batches()
+	if len(batches) != 1 || len(batches[0]) != 1 {
+		t.Fatalf("батчи правок: %+v", batches)
+	}
+	if got := batches[0][0].General; got == nil || *got != discounts.SurplusPercent() {
+		t.Errorf("general правки %v, want %d", got, discounts.SurplusPercent())
+	}
+}
+
+// Ошибка шва оборота часовой тик не роняет: решение принимается по обороту
+// снапшота (последний завершённый период).
+func TestRecalcSurplusTurnoverErrorUsesSnapshot(t *testing.T) {
+	h := newRecalcHarness(recalcNow(1), lotInput("p1", "Колбаса", day(10), 100, turnoverInput(30)))
+	h.turn.err = errors.New("МС недоступен")
+
+	if err := h.uc.RecalcSurplus(context.Background(), h.now); err != nil {
+		t.Fatalf("тик избытка упал на ошибке оборота: %v", err)
+	}
+	batches := h.batches()
+	if len(batches) != 1 || len(batches[0]) != 1 {
+		t.Fatalf("батчи правок: %+v, want 10 %% по обороту снапшота", batches)
+	}
+}
+
+// Ошибки расчёта избытка не прячутся: снапшот, запись и маркер дня возвращают
+// ошибку, шаг дня при сбое записи не закрывается.
+func TestRecalcSurplusErrors(t *testing.T) {
+	t.Run("снапшот", func(t *testing.T) {
+		h := newRecalcHarness(recalcNow(1), lotInput("p1", "Колбаса", day(10), 100))
+		h.repo.loadErr = errors.New("нет связи")
+
+		if err := h.uc.RecalcSurplus(context.Background(), h.now); err == nil {
+			t.Fatal("ошибка снапшота не вернулась")
+		}
+	})
+	t.Run("запись", func(t *testing.T) {
+		h := newRecalcHarness(recalcNow(1), lotInput("p1", "Колбаса", day(10), 100, turnoverInput(30)))
+		h.writer.err = errors.New("нет связи")
+
+		if err := h.uc.RecalcSurplus(context.Background(), h.now); err == nil {
+			t.Fatal("ошибка записи не вернулась")
+		}
+		if h.flag(h.now, discounts.FlagSurplus) {
+			t.Errorf("при сбое записи шаг дня не закрываем")
+		}
+	})
+	t.Run("маркер дня", func(t *testing.T) {
+		h := newRecalcHarness(recalcNow(1), lotInput("p1", "Колбаса", day(10), 100))
+		h.repo.markErr = errors.New("нет связи")
+
+		if err := h.uc.RecalcSurplus(context.Background(), h.now); err == nil {
+			t.Fatal("ошибка отметки шага дня не вернулась")
+		}
+	})
+}
+
+// Товар без данных о продажах избытка не получает (решение владельца): пустой
+// оборот и оборот с нулём — не повод ставить 10 %.
+func TestRecalcSurplusNoSalesNoExcess(t *testing.T) {
+	h := newRecalcHarness(recalcNow(1),
+		lotInput("p-zero", "Колбаса", day(10), 100, turnoverInput(0)),
+		lotInput("p-none", "Сыр", day(10), 100),
+	)
+
+	if err := h.uc.RecalcSurplus(context.Background(), h.now); err != nil {
+		t.Fatalf("RecalcSurplus: %v", err)
+	}
+	if got := len(h.batches()); got != 0 {
+		t.Fatalf("батчей правок %d, want 0: %+v", got, h.batches())
+	}
+	if h.turn.calls != 0 {
+		t.Errorf("оборот по парам без избытка не спрашиваем, вызовов %d", h.turn.calls)
+	}
+}

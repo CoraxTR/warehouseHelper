@@ -11,6 +11,7 @@ package usecase
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"warehouseHelper/internal/discounts"
@@ -79,6 +80,36 @@ func (uc *UseCase) RecalcExpiry(ctx context.Context, now time.Time) error {
 	return nil
 }
 
+// RecalcSurplus — часовой пересчёт избытка.
+//
+// Оборот освежает только там, где решение может уйти: товары с событиями стока
+// (MarkDirty) и пары, у которых избыток есть сейчас. Ошибка шва оборота тик не
+// роняет — считаем по обороту снапшота (последний завершённый период). Маркер
+// дня отмечается на каждом часу: он говорит «пересчёт за день был», по нему
+// приложение добирает пропущенный запуск после сна.
+func (uc *UseCase) RecalcSurplus(ctx context.Context, now time.Time) error {
+	today := beginningOfDay(now)
+
+	inputs, err := uc.loadInputs(ctx, today)
+	if err != nil {
+		return err
+	}
+	pairs := Evaluate(inputs, nil, today)
+
+	if rates := uc.freshTurnover(ctx, pairs); rates != nil {
+		pairs = Evaluate(inputs, rates, today)
+	}
+
+	if err := uc.writeAndRegister(ctx, pairs, surplusWrites(pairs)); err != nil {
+		return err
+	}
+
+	if err := uc.repo.MarkDayFlag(ctx, today, discounts.FlagSurplus); err != nil {
+		return fmt.Errorf("маркер дня пересчёта избытка: %w", err)
+	}
+	return nil
+}
+
 // expiryWrites — правки по сроку: только рост. Ступень идёт в правки, если она
 // строго выше того, что уже стоит у пары (эффективной скидки канала и значения
 // plain-колонки): равенство — уже применено, меньше — понижение, которого
@@ -101,6 +132,97 @@ func expiryWrites(pairs []PairState) []discounts.DiscountWrite {
 		})
 	}
 	return writes
+}
+
+// surplusWrites — правки по избытку.
+//
+// Избыток — младший источник (ручная → срок → избыток), поэтому 10 % ставим
+// только на паре без ручной и без сроковой скидки и только на пустое место:
+// стоящее значение (в том числе подъём ТГ-дня до 20 %) автоматика не понижает.
+// Снятие (в БД NULL) — только у значения, поставленного избытком: чужую
+// ступень и метку источника пересчёт не убирает.
+func surplusWrites(pairs []PairState) []discounts.DiscountWrite {
+	writes := make([]discounts.DiscountWrite, 0, len(pairs))
+	for _, p := range pairs {
+		switch {
+		case p.Manual == nil && p.Expiry == nil && p.HasSurplus:
+			if appliedTop(p) != 0 {
+				continue // место занято — избыток не понижает и не переписывает
+			}
+			percent := discounts.SurplusPercent()
+			writes = append(writes, discounts.DiscountWrite{
+				ProductID:  p.ProductID,
+				BestBefore: p.BestBefore,
+				General:    &percent,
+				// Колонку ТГ ведёт ТГ-день: своё значение отдаём как есть.
+				Telegram: p.TelegramPlain,
+				Source:   discounts.SourceSurplus.String(),
+			})
+		case surplusLeft(p):
+			writes = append(writes, discounts.DiscountWrite{
+				ProductID:  p.ProductID,
+				BestBefore: p.BestBefore,
+				General:    nil, // снятие: движок пишет NULL, а не 0
+				Telegram:   p.TelegramPlain,
+			})
+		}
+	}
+	return writes
+}
+
+// surplusLeft — значение plain-колонки поставлено избытком и больше не нужно:
+// избыток пропал или дорогу уступил ручной либо сроковой скидке. Узнаём по
+// значению и метке: ровно 10 % (discounts.SurplusPercent) без ступени по сроку
+// на сегодня, а метка источника (product_stock.discount_source), если она есть,
+// должна говорить «избыток».
+func surplusLeft(p PairState) bool {
+	if discountPercent(p.AppliedPlain) != discounts.SurplusPercent() {
+		return false // стоит не избыточное значение — не наше
+	}
+	if p.SourceRaw != "" && p.SourceRaw != discounts.SourceSurplus.String() {
+		return false // метка говорит: значение поставлено не избытком
+	}
+	if p.Expiry != nil {
+		return false // ступень по сроку держит это же значение — не снимаем
+	}
+	return p.Manual != nil || !p.HasSurplus
+}
+
+// freshTurnover — свежий оборот по товарам, где решение может уйти: события
+// стока с прошлого тика (MarkDirty) и пары с избытком сейчас. Пустой список —
+// шва не касаемся (nil-карта: Evaluate возьмёт оборот снапшота). Ошибка шва — в лог
+// и та же nil-карта: часовой тик из-за недоступного МС пропускать нельзя, а
+// оборот последнего завершённого периода есть в снапшоте.
+func (uc *UseCase) freshTurnover(ctx context.Context, pairs []PairState) map[string]float64 {
+	ids := uc.freshIDs(pairs)
+	if len(ids) == 0 {
+		return nil
+	}
+
+	rates, err := uc.turnover.RefreshCurrent(ctx, ids)
+	if err != nil {
+		slog.Info(fmt.Sprintf("discounts: оборот избытка (%d товаров): %v", len(ids), err))
+		return nil
+	}
+	return rates
+}
+
+// freshIDs — товары свежего оборота: события стока (их забирает takeDirty) и
+// пары в избытке, без повторов, в порядке появления.
+func (uc *UseCase) freshIDs(pairs []PairState) []string {
+	ids := uc.takeDirty()
+	seen := make(map[string]struct{}, len(ids))
+	for _, pid := range ids {
+		seen[pid] = struct{}{}
+	}
+	for _, pid := range SurplusPairs(pairs) {
+		if _, ok := seen[pid]; ok {
+			continue
+		}
+		seen[pid] = struct{}{}
+		ids = append(ids, pid)
+	}
+	return ids
 }
 
 // appliedTop — верхняя граница того, что уже стоит у пары в канале сайта:
