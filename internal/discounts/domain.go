@@ -201,6 +201,17 @@ type Input struct {
 	ShelfLife   *int16 // NULL — срок не задан
 	BestBefore  time.Time
 	Qty         int64
-	Turnover    *float64 // оборот за последний завершённый период, шт; nil — данных нет
-	PeriodDays  int      // 7 (недельный) или 30 (месячный); 0 — нет данных
+	Turnover    *float64 // оборот за период, шт (шов модуля средних продаж); nil — данных нет
+	PeriodDays  int      // 7 (недельный ряд) или 30 (месячный); 0 — нет данных
+
+	// Текущие скидки лота (product_stock): plain — «простые» колонки, их пишет
+	// движок расчёта; manual — ручные, их пишет UI сроков. NULL = не задана.
+	GeneralPlain   *int16
+	GeneralManual  *int16
+	TelegramPlain  *int16
+	TelegramManual *int16
+	// DiscountSource — источник действующего plain-значения general
+	// (product_stock.discount_source): "expiry" | "surplus" | "" — не задан.
+	// Нужен, чтобы понимать, что снимать при уходе избытка, и для подсветки.
+	DiscountSource string
 }
