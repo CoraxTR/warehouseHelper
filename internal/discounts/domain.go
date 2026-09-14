@@ -6,7 +6,10 @@
 // (заполняет репозиторий модуля), запись значений идёт через шов стока.
 package discounts
 
-import "math"
+import (
+	"math"
+	"time"
+)
 
 // Параметры лестницы по сроку годности (согласованы 14.09.2026,
 // черновик §4: /root/notes/warehouseHelper-discounts-draft.md).
@@ -132,3 +135,72 @@ func SurplusCoeff(cumQty int64, rate float64, daysLeft int, hasTurnover bool) (f
 // SurplusPercent — скидка по избытку, %: константа 10 (отдельная функция,
 // чтобы число не «магичило» в resolve и в текстах отчёта).
 func SurplusPercent() int16 { return surplusPercent }
+
+// Source — источник скидки пары (лот, канал). Порядок значений задаёт приоритет
+// сведения кандидатов, поэтому SourceNone = 0 — «скидки нет».
+type Source int
+
+// Источники скидки по убыванию приоритета.
+const (
+	SourceNone    Source = iota // скидки нет
+	SourceManual                // ручная скидка менеджера (пишет stock, UI сроков)
+	SourceExpiry                // лестница по сроку годности
+	SourceSurplus               // избыток остатка к скорости продаж
+)
+
+// String — короткое имя источника для логов и отчётов.
+func (s Source) String() string {
+	switch s {
+	case SourceManual:
+		return "manual"
+	case SourceExpiry:
+		return "expiry"
+	case SourceSurplus:
+		return "surplus"
+	default:
+		return "none"
+	}
+}
+
+// Candidate — один претендент на скидку пары (лот, канал) от своего источника.
+// Percent == nil — источник скидку не дал.
+type Candidate struct {
+	Source  Source
+	Percent *int16
+}
+
+// Resolve — победитель среди кандидатов канала по приоритету:
+// ручная → срок годности → избыток. Значения 0 и отрицательные у кандидата
+// равнозначны «источника нет»: 0 в ручной колонке ведёт себя как NULL и лестницу
+// не блокирует (открытый вопрос дизайна «0 = запрет менеджера» пока трактуется
+// как «нет»). Нет ни одного кандидата → (nil, SourceNone).
+func Resolve(manual, expiry, surplus *int16) (*int16, Source) {
+	cands := []Candidate{
+		{Source: SourceManual, Percent: manual},
+		{Source: SourceExpiry, Percent: expiry},
+		{Source: SourceSurplus, Percent: surplus},
+	}
+	for _, c := range cands {
+		if c.Percent != nil && *c.Percent > 0 {
+			return c.Percent, c.Source
+		}
+	}
+	return nil, SourceNone
+}
+
+// Input — вход матчинга формул: одна пара (товар, срок) вместе с товарными
+// признаками и данными оборота. Заполняет репозиторий модуля (Task 6: чтение
+// product_stock JOIN products прямым SQL по образцу daystate.LotsSnapshot);
+// расчётная логика пакета работает только с этим типом и БД не знает.
+type Input struct {
+	ProductID   string
+	Name        string
+	GroupName   string
+	ShortList   bool
+	TrackWeekly bool
+	ShelfLife   *int16 // NULL — срок не задан
+	BestBefore  time.Time
+	Qty         int64
+	Turnover    *float64 // оборот за последний завершённый период, шт; nil — данных нет
+	PeriodDays  int      // 7 (недельный) или 30 (месячный); 0 — нет данных
+}
