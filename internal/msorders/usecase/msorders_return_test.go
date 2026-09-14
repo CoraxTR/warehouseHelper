@@ -5,7 +5,6 @@ import (
 	"errors"
 	"strings"
 	"testing"
-	"time"
 
 	"warehouseHelper/internal/msclient/client"
 	"warehouseHelper/internal/scanmatch"
@@ -84,7 +83,7 @@ func TestSavePickReturnWeighted(t *testing.T) {
 		t.Fatalf("лотов = %d, want 1: %+v", len(acceptor.lots), acceptor.lots)
 	}
 	lot := acceptor.lots[0]
-	if lot.ProductID != "p2" || !lot.BestBefore.Equal(bbDate(time.October, 10)) || lot.Qty != 1 {
+	if lot.ProductID != "p2" || !lot.BestBefore.Equal(oktDate(10)) || lot.Qty != 1 {
 		t.Errorf("лот = %+v, want p2/2026-10-10/1", lot)
 	}
 	if res.Units != 1 || len(res.Rows) != 1 || res.Rows[0].Code != "00220002" || res.Rows[0].Units != 1 {
