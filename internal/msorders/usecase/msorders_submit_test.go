@@ -475,9 +475,8 @@ func TestSubmitRefetchesFromMS(t *testing.T) {
 func TestSubmitMSError(t *testing.T) {
 	fake, o := submitOrder()
 	fake.putErr = errors.New("MS: 400 bad request")
-	uc := NewUseCase(fake, submitCatalog(), &fakePicker{})
 	picker := &fakePicker{}
-	uc = NewUseCase(fake, submitCatalog(), picker)
+	uc := NewUseCase(fake, submitCatalog(), picker)
 	if _, err := uc.Submit(context.Background(), o.ID, SubmitRequest{Rows: []SubmitRow{
 		{IDs: []string{"pos-1"}, Records: []ScanRecord{{BB: "10102026"}}},
 	}}); err == nil {
