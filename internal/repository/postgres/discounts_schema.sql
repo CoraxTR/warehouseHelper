@@ -20,6 +20,10 @@
 --   DROP TABLE IF EXISTS discount_telegram_digest;
 --   DROP TABLE IF EXISTS discount_day_flags;
 -- created_at/updated_at не заводим (решение владельца, 14.09.2026).
+--
+-- ЖИВАЯ БД: таблица discount_day_flags могла быть создана раньше, до появления
+-- колонки turnover_window_done — поэтому ниже идёт идемпотентный ALTER:
+--   ALTER TABLE discount_day_flags ADD COLUMN IF NOT EXISTS turnover_window_done BOOLEAN NOT NULL DEFAULT false;
 
 -- Рассылка (слот ТГ): одна строка = один собранный/отправленный дайджест.
 -- 14:00 — план ТГ-слота в чат склада (chat_kind='warehouse'), 09:00 — дайджест
@@ -59,5 +63,6 @@ CREATE TABLE IF NOT EXISTS discount_day_flags (
     expiry_done   BOOLEAN NOT NULL DEFAULT false,   -- утренний пересчёт по сроку сделан
     digest_sent   BOOLEAN NOT NULL DEFAULT false,   -- дайджест 09:00 отправлен
     tg_plan_done  BOOLEAN NOT NULL DEFAULT false,   -- план ТГ-слота (14:00) собран и отправлен
-    tg_raise_done BOOLEAN NOT NULL DEFAULT false    -- подъём general до telegram (16:00) выполнен
-);
+    tg_raise_done BOOLEAN NOT NULL DEFAULT false,   -- подъём general до telegram (16:00) выполнен
+    turnover_window_done BOOLEAN NOT NULL DEFAULT false  -- полное окно оборотов обновлено (09:00)
+    );

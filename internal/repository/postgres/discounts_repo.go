@@ -302,11 +302,12 @@ func (pg *PGClient) MarkGeneralRaised(ctx context.Context, pairs []discounts.Lot
 // discount_day_flags. Имя колонки подставляется в SQL, поэтому берётся ТОЛЬКО
 // из этой карты: маркер не из списка — ошибка, а не запрос.
 var dayFlagColumns = map[discounts.DayFlag]string{
-	discounts.FlagSurplus:    "surplus_done",
-	discounts.FlagExpiry:     "expiry_done",
-	discounts.FlagDigestSent: "digest_sent",
-	discounts.FlagPlan:       "tg_plan_done",
-	discounts.FlagRaise:      "tg_raise_done",
+	discounts.FlagSurplus:        "surplus_done",
+	discounts.FlagExpiry:         "expiry_done",
+	discounts.FlagDigestSent:     "digest_sent",
+	discounts.FlagPlan:           "tg_plan_done",
+	discounts.FlagRaise:          "tg_raise_done",
+	discounts.FlagTurnoverWindow: "turnover_window_done",
 }
 
 // dayFlagColumn — колонка маркера дня из белого списка; неизвестный маркер —

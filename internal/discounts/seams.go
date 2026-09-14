@@ -39,4 +39,7 @@ const (
 	FlagPlan DayFlag = "tg_plan_done"
 	// FlagRaise — подъём general до telegram выполнен.
 	FlagRaise DayFlag = "tg_raise_done"
+	// FlagTurnoverWindow — полное окно оборотов обновлено из МС (возвраты
+	// задним числом по старым заказам): один раз за день, утром.
+	FlagTurnoverWindow DayFlag = "turnover_window_done"
 )
