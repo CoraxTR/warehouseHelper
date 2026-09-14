@@ -1,0 +1,484 @@
+package usecase
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	"warehouseHelper/internal/discounts"
+)
+
+// recalcHarness — обвязка тестов расчётного цикла: фейковые швы и юзкейс на них.
+// «БД» фейкового репозитория правит фейковый шов записи, поэтому следующий тик
+// видит то, что записал расчёт (так проверяются последовательные тики).
+type recalcHarness struct {
+	uc     *UseCase
+	repo   *fakeDiscountRepo
+	writer *fakeDiscountWriter
+	turn   *fakeTurnover
+	common *fakeCommonNotifier
+	now    time.Time
+}
+
+// newRecalcHarness — обвязка на момент now с парами входа теста.
+func newRecalcHarness(now time.Time, inputs ...discounts.Input) *recalcHarness {
+	repo := newFakeDiscountRepo(inputs...)
+	writer := &fakeDiscountWriter{repo: repo}
+	turn := &fakeTurnover{}
+	common := &fakeCommonNotifier{}
+	uc := NewUseCase(repo, turn, writer, common, nil, func() time.Time { return now })
+
+	return &recalcHarness{uc: uc, repo: repo, writer: writer, turn: turn, common: common, now: now}
+}
+
+// batches — батчи правок, ушедшие в шов записи (пустой батч в шов не уходит).
+func (h *recalcHarness) batches() [][]discounts.DiscountWrite { return h.writer.batches }
+
+// flag — стоит ли маркер дня (день обнуляется, как это делает расчёт).
+func (h *recalcHarness) flag(date time.Time, f discounts.DayFlag) bool {
+	return h.repo.flags[fakeFlagKey(date, f)]
+}
+
+// recalcNow — утро дня теста (время суток у пересчётов не рассматривается).
+func recalcNow(d int) time.Time { return day(d).Add(9 * time.Hour) }
+
+// fakeDiscountRepo — репозиторий расчёта в памяти: «таблица» product_stock
+// (её правит фейковый шов записи), маркеры дня и след вызовов.
+type fakeDiscountRepo struct {
+	inputs    []discounts.Input
+	flags     map[string]bool
+	loads     int
+	lastToday time.Time
+	loadErr   error
+	flagErr   error
+	markErr   error
+}
+
+func newFakeDiscountRepo(inputs ...discounts.Input) *fakeDiscountRepo {
+	return &fakeDiscountRepo{inputs: inputs, flags: map[string]bool{}}
+}
+
+// fakeFlagKey — ключ маркера дня в фейке: день + маркер (как пара PK+колонка).
+func fakeFlagKey(date time.Time, f discounts.DayFlag) string {
+	return beginningOfDay(date).Format(time.DateOnly) + "|" + string(f)
+}
+
+// apply — правки расчёта ложатся в «БД» теста: general/telegram лота получают
+// значение правки (nil — NULL), метка источника — как её передал расчёт.
+func (r *fakeDiscountRepo) apply(writes []discounts.DiscountWrite) {
+	for _, w := range writes {
+		for i := range r.inputs {
+			in := &r.inputs[i]
+			if in.ProductID != w.ProductID || !beginningOfDay(in.BestBefore).Equal(beginningOfDay(w.BestBefore)) {
+				continue
+			}
+			in.GeneralPlain = copyDiscount(w.General)
+			in.TelegramPlain = copyDiscount(w.Telegram)
+			in.DiscountSource = w.Source
+		}
+	}
+}
+
+// LoadDiscountInput — снапшот входа: копия пар теста (правки шва записи видны
+// следующему вызову).
+func (r *fakeDiscountRepo) LoadDiscountInput(_ context.Context, today time.Time) ([]discounts.Input, error) {
+	r.loads++
+	r.lastToday = today
+	if r.loadErr != nil {
+		return nil, r.loadErr
+	}
+	inputs := make([]discounts.Input, len(r.inputs))
+	copy(inputs, r.inputs)
+
+	return inputs, nil
+}
+
+// DayFlagDone — сделан ли шаг дня: строки дня нет → false (не сделан).
+func (r *fakeDiscountRepo) DayFlagDone(_ context.Context, date time.Time, f discounts.DayFlag) (bool, error) {
+	if r.flagErr != nil {
+		return false, r.flagErr
+	}
+	return r.flags[fakeFlagKey(date, f)], nil
+}
+
+// MarkDayFlag — отметить шаг дня сделанным (повторная отметка — no-op).
+func (r *fakeDiscountRepo) MarkDayFlag(_ context.Context, date time.Time, f discounts.DayFlag) error {
+	if r.markErr != nil {
+		return r.markErr
+	}
+	r.flags[fakeFlagKey(date, f)] = true
+
+	return nil
+}
+
+// Остальные методы репозитория пересчёту не нужны: тест падает явной ошибкой,
+// а не молчаливым нулём, если расчёт в них полезет.
+func (r *fakeDiscountRepo) SaveDigest(context.Context, discounts.DigestRecord, []discounts.DigestItem) error {
+	return errRepoMethodUnused
+}
+
+func (r *fakeDiscountRepo) MarkDigestSent(context.Context, string, time.Time, time.Time) error {
+	return errRepoMethodUnused
+}
+
+func (r *fakeDiscountRepo) LastDigestPairs(context.Context) (map[discounts.LotKey]struct{}, error) {
+	return nil, errRepoMethodUnused
+}
+
+func (r *fakeDiscountRepo) TodaySlot(context.Context, time.Time) (map[discounts.LotKey]int16, error) {
+	return nil, errRepoMethodUnused
+}
+
+func (r *fakeDiscountRepo) MarkGeneralRaised(context.Context, []discounts.LotKey, time.Time) error {
+	return errRepoMethodUnused
+}
+
+// errRepoMethodUnused — метод репозитория, которого пересчёт не касается.
+var errRepoMethodUnused = errors.New("фейк-репозиторий: метод вне расчётного цикла")
+
+// fakeTurnover — шов оборота расчёта: отдаёт заданную карту, помнит запросы и
+// число вызовов (тик спрашивает оборот только по кандидатам).
+type fakeTurnover struct {
+	rates map[string]float64
+	err   error
+	asked []string
+	calls int
+}
+
+func (t *fakeTurnover) RefreshCurrent(_ context.Context, productIDs []string) (map[string]float64, error) {
+	t.calls++
+	t.asked = append(t.asked, productIDs...)
+	if t.err != nil {
+		return nil, t.err
+	}
+	return t.rates, nil
+}
+
+// RefreshWindow — полное окно оборотов расчётный цикл не обновляет.
+func (t *fakeTurnover) RefreshWindow(context.Context, []string) (map[string]float64, error) {
+	return nil, errors.New("фейк-оборот: окно в расчётном цикле не обновляется")
+}
+
+// fakeDiscountWriter — шов записи расчёта: батчи правок по порядку (в «БД»
+// фейка их применяет repo.apply) и, по желанию теста, ошибка записи.
+type fakeDiscountWriter struct {
+	repo    *fakeDiscountRepo
+	batches [][]discounts.DiscountWrite
+	err     error
+}
+
+func (w *fakeDiscountWriter) SetDiscounts(_ context.Context, writes []discounts.DiscountWrite) error {
+	if w.err != nil {
+		return w.err
+	}
+	w.batches = append(w.batches, writes)
+	w.repo.apply(writes)
+
+	return nil
+}
+
+// fakeCommonNotifier — общий канал теста: тексты уведомлений по порядку и, по
+// желанию теста, ошибка отправки.
+type fakeCommonNotifier struct {
+	texts []string
+	err   error
+}
+
+func (n *fakeCommonNotifier) NotifyCommon(_ context.Context, text string) error {
+	if n.err != nil {
+		return n.err
+	}
+	n.texts = append(n.texts, text)
+
+	return nil
+}
+
+// lotInput — пара входа расчёта: товар, имя, срок годности, остаток и опции.
+// TrackWeekly не выставляем — товар месячного ряда (период оборота 30 дней).
+func lotInput(pid, name string, bestBefore time.Time, qty int64, opts ...func(*discounts.Input)) discounts.Input {
+	in := discounts.Input{ProductID: pid, Name: name, BestBefore: bestBefore, Qty: qty}
+	for _, opt := range opts {
+		opt(&in)
+	}
+	return in
+}
+
+// shelfLifeInput — срок хранения товара (Г лестницы), дни.
+func shelfLifeInput(v int16) func(*discounts.Input) {
+	return func(in *discounts.Input) { in.ShelfLife = &v }
+}
+
+// turnoverInput — оборот последнего завершённого периода, шт (период — месяц).
+func turnoverInput(v float64) func(*discounts.Input) {
+	return func(in *discounts.Input) {
+		in.Turnover = &v
+		in.PeriodDays = monthDays
+	}
+}
+
+// manualInput — ручная скидка канала сайта (её пишет UI сроков).
+func manualInput(v int16) func(*discounts.Input) {
+	return func(in *discounts.Input) { in.GeneralManual = &v }
+}
+
+// plainInput — «простая» скидка канала сайта (её пишет движок расчёта).
+func plainInput(v int16) func(*discounts.Input) {
+	return func(in *discounts.Input) { in.GeneralPlain = &v }
+}
+
+// telegramInput — «простая» скидка ТГ-колонки лота.
+func telegramInput(v int16) func(*discounts.Input) {
+	return func(in *discounts.Input) { in.TelegramPlain = &v }
+}
+
+// sourceInput — метка источника plain-значения (product_stock.discount_source).
+func sourceInput(s string) func(*discounts.Input) {
+	return func(in *discounts.Input) { in.DiscountSource = s }
+}
+
+// Пересмотр лестницы идёт только в КТ-дни (вт/чт/сб): вне окна шаг не трогает
+// ни записи, ни снапшот входа (одна и та же пара во все семь дней недели).
+func TestRecalcExpiryOnlyOnExpiryDays(t *testing.T) {
+	tests := []struct {
+		title string
+		now   time.Time
+		want  bool
+	}{
+		{"понедельник", recalcNow(0), false},
+		{"вторник", recalcNow(1), true},
+		{"среда", recalcNow(2), false},
+		{"четверг", recalcNow(3), true},
+		{"пятница", recalcNow(4), false},
+		{"суббота", recalcNow(5), true},
+		{"воскресенье", recalcNow(6), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.title, func(t *testing.T) {
+			// Срок — за все семь дней недели (D > 0 у каждого дня):
+			// проверяем окно КТ-дней, а не остаток дней.
+			h := newRecalcHarness(tt.now, lotInput("p1", "Творог", day(10), 20, shelfLifeInput(30)))
+
+			if err := h.uc.RecalcExpiry(context.Background(), h.now); err != nil {
+				t.Fatalf("RecalcExpiry: %v", err)
+			}
+
+			if got := len(h.batches()) == 1; got != tt.want {
+				t.Fatalf("запись: %v, want %v (батчей %d)", got, tt.want, len(h.batches()))
+			}
+			if !tt.want {
+				if h.repo.loads != 0 {
+					t.Errorf("вне КТ-дня снапшот не читаем, чтений %d", h.repo.loads)
+				}
+				if h.flag(h.now, discounts.FlagExpiry) {
+					t.Errorf("вне КТ-дня маркер дня не ставим")
+				}
+				return
+			}
+			if !h.flag(h.now, discounts.FlagExpiry) {
+				t.Errorf("после пересчёта маркер дня не отмечен")
+			}
+		})
+	}
+}
+
+// Вторник с ростом ступени: правка уходит в шов записи (general, метка
+// источника, сохранённое значение ТГ-колонки), день обнуляется до суток, а
+// реестр показывает новое значение.
+func TestRecalcExpiryWritesGrowth(t *testing.T) {
+	now := recalcNow(1)
+	h := newRecalcHarness(now,
+		lotInput("p1", "Творог", day(5), 20,
+			shelfLifeInput(30), telegramInput(15), sourceInput(discounts.SourceSurplus.String())))
+
+	if err := h.uc.RecalcExpiry(context.Background(), h.now); err != nil {
+		t.Fatalf("RecalcExpiry: %v", err)
+	}
+
+	if !h.repo.lastToday.Equal(beginningOfDay(now)) {
+		t.Errorf("снапшот запрошен на %v, want %v", h.repo.lastToday, beginningOfDay(now))
+	}
+
+	batches := h.batches()
+	if len(batches) != 1 || len(batches[0]) != 1 {
+		t.Fatalf("батчи правок: %+v", batches)
+	}
+	w := batches[0][0]
+	if w.ProductID != "p1" || w.General == nil || *w.General != 40 {
+		t.Errorf("правка general: %+v, want p1 40%%", w)
+	}
+	if w.Telegram == nil || *w.Telegram != 15 {
+		t.Errorf("ТГ-колонка правки: %v, want 15 (значение ТГ-дня не затираем)", w.Telegram)
+	}
+	if w.Source != discounts.SourceExpiry.String() {
+		t.Errorf("метка источника %q, want %q", w.Source, discounts.SourceExpiry)
+	}
+
+	// «БД» теста и реестр видят записанное значение.
+	if got := h.repo.inputs[0].GeneralPlain; got == nil || *got != 40 {
+		t.Errorf("general в БД: %v, want 40", got)
+	}
+	window := h.uc.Window(12)
+	if len(window) != 1 || window[0].Percent != 40 || window[0].Source != discounts.SourceExpiry {
+		t.Errorf("окно реестра: %+v, want срок 40%%", window)
+	}
+}
+
+// Повторный вызов в тот же день: маркер дня закрыт — снапшот не читается,
+// правок нет.
+func TestRecalcExpirySecondCallSameDay(t *testing.T) {
+	now := recalcNow(1)
+	h := newRecalcHarness(now, lotInput("p1", "Творог", day(5), 20, shelfLifeInput(30)))
+
+	for i := 0; i < 2; i++ {
+		if err := h.uc.RecalcExpiry(context.Background(), h.now); err != nil {
+			t.Fatalf("RecalcExpiry #%d: %v", i+1, err)
+		}
+	}
+	if h.repo.loads != 1 {
+		t.Errorf("снапшот читался %d раз, want 1", h.repo.loads)
+	}
+	if got := len(h.batches()); got != 1 {
+		t.Errorf("батчей правок %d, want 1", got)
+	}
+}
+
+// «Только вверх»: ступень ниже применённого или равная ему в правки не идёт,
+// рост под ручной скидкой — идёт (ручная остаётся эффективной на сайте).
+func TestRecalcExpiryKeepsHigherApplied(t *testing.T) {
+	tests := []struct {
+		title  string
+		opts   []func(*discounts.Input)
+		want   bool
+		expect *int16
+	}{
+		{
+			title: "пусто → ступень 40: пишем",
+			want:  true, expect: pp(40),
+		},
+		{
+			title: "применено 50, ступень 40: тишина",
+			opts:  []func(*discounts.Input){plainInput(50)},
+		},
+		{
+			title: "применено 40, ступень 40: тишина",
+			opts:  []func(*discounts.Input){plainInput(40)},
+		},
+		{
+			title: "ручная 50, ступень 40: тишина",
+			opts:  []func(*discounts.Input){manualInput(50)},
+		},
+		{
+			title: "ручная 30 ниже ступени 40: пишем колонку движка",
+			opts:  []func(*discounts.Input){manualInput(30)},
+			want:  true, expect: pp(40),
+		},
+		{
+			title: "plain 10 и ручная 30, ступень 40: пишем",
+			opts:  []func(*discounts.Input){plainInput(10), manualInput(30)},
+			want:  true, expect: pp(40),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.title, func(t *testing.T) {
+			opts := append([]func(*discounts.Input){shelfLifeInput(30)}, tt.opts...)
+			// Четверг, D = 5 дней → ступень 40 % (не зависит от недели теста).
+			h := newRecalcHarness(recalcNow(3), lotInput("p1", "Творог", day(8), 20, opts...))
+
+			if err := h.uc.RecalcExpiry(context.Background(), h.now); err != nil {
+				t.Fatalf("RecalcExpiry: %v", err)
+			}
+
+			batches := h.batches()
+			if got := len(batches) == 1; got != tt.want {
+				t.Fatalf("батчей правок %d, want %v", len(batches), tt.want)
+			}
+			if !tt.want {
+				return
+			}
+			got := batches[0][0].General
+			if got == nil || tt.expect == nil || *got != *tt.expect {
+				t.Errorf("general правки %v, want %v", got, tt.expect)
+			}
+		})
+	}
+}
+
+// Пары без ступени на сегодня (вне окна, срок не задан, партия просрочена) не
+// пишутся вовсе: 0 и NULL в колонки скидок не попадают.
+func TestRecalcExpiryNeverWritesOutsideWindow(t *testing.T) {
+	h := newRecalcHarness(recalcNow(3),
+		lotInput("p-out", "Молоко", day(100), 10, shelfLifeInput(30), plainInput(20)),
+		lotInput("p-noshelf", "Сыр", day(5), 10, plainInput(20)),
+		lotInput("p-expired", "Кефир", day(0), 10, shelfLifeInput(30)),
+	)
+
+	if err := h.uc.RecalcExpiry(context.Background(), h.now); err != nil {
+		t.Fatalf("RecalcExpiry: %v", err)
+	}
+	if got := len(h.batches()); got != 0 {
+		t.Fatalf("батчей правок %d, want 0: %+v", got, h.batches())
+	}
+}
+
+// Ошибки швов не прячутся: снапшот, маркер дня и запись возвращают ошибку, а
+// шаг дня без записи не закрывается (после сбоя пересчёт можно повторить).
+func TestRecalcExpiryErrors(t *testing.T) {
+	t.Run("снапшот", func(t *testing.T) {
+		h := newRecalcHarness(recalcNow(1), lotInput("p1", "Творог", day(5), 20, shelfLifeInput(30)))
+		h.repo.loadErr = errors.New("нет связи")
+
+		if err := h.uc.RecalcExpiry(context.Background(), h.now); err == nil {
+			t.Fatal("ошибка снапшота не вернулась")
+		}
+	})
+	t.Run("маркер дня на чтении", func(t *testing.T) {
+		h := newRecalcHarness(recalcNow(1), lotInput("p1", "Творог", day(5), 20, shelfLifeInput(30)))
+		h.repo.flagErr = errors.New("нет связи")
+
+		if err := h.uc.RecalcExpiry(context.Background(), h.now); err == nil {
+			t.Fatal("ошибка маркера дня не вернулась")
+		}
+		if h.repo.loads != 0 {
+			t.Errorf("после ошибки маркера снапшот не читаем, чтений %d", h.repo.loads)
+		}
+	})
+	t.Run("запись", func(t *testing.T) {
+		h := newRecalcHarness(recalcNow(1), lotInput("p1", "Творог", day(5), 20, shelfLifeInput(30)))
+		h.writer.err = errors.New("нет связи")
+
+		if err := h.uc.RecalcExpiry(context.Background(), h.now); err == nil {
+			t.Fatal("ошибка записи не вернулась")
+		}
+		if h.flag(h.now, discounts.FlagExpiry) {
+			t.Errorf("при сбое записи шаг дня не закрываем")
+		}
+	})
+	t.Run("маркер дня на записи", func(t *testing.T) {
+		h := newRecalcHarness(recalcNow(1), lotInput("p1", "Творог", day(5), 20, shelfLifeInput(30)))
+		h.repo.markErr = errors.New("нет связи")
+
+		if err := h.uc.RecalcExpiry(context.Background(), h.now); err == nil {
+			t.Fatal("ошибка отметки шага дня не вернулась")
+		}
+	})
+}
+
+// Значение 0 в колонках читается как «скидки нет» (правило 0 = NULL): нулевая
+// ступень ничего не пишет.
+func TestRecalcExpiryZeroDiscountIsNoDiscount(t *testing.T) {
+	h := newRecalcHarness(recalcNow(1),
+		lotInput("p1", "Творог", day(5), 20, shelfLifeInput(30), plainInput(0)),
+	)
+
+	if err := h.uc.RecalcExpiry(context.Background(), h.now); err != nil {
+		t.Fatalf("RecalcExpiry: %v", err)
+	}
+	batches := h.batches()
+	if len(batches) != 1 {
+		t.Fatalf("батчей правок %d, want 1", len(batches))
+	}
+	if got := batches[0][0].General; got == nil || *got != 40 {
+		t.Errorf("general правки %v, want 40 (нулевая скидка — пусто)", got)
+	}
+}
