@@ -55,3 +55,47 @@ func Step(w float64, n int) float64 {
 	}
 	return w / float64(n)
 }
+
+// inWindow — «остаток дней ещё внутри окна». Окно сравнивается с точностью до
+// десятых дня — в этой же точности печатается таблица модели (§4 черновика),
+// поэтому 14-дневная партия с D = 7 в окне, хотя W = 6,9954 < 7.
+func inWindow(w float64, daysLeft int) bool {
+	if w <= 0 {
+		return false
+	}
+	return float64(daysLeft) <= math.Round(w*10)/10
+}
+
+// startPercent — первая (минимальная) ступень лестницы: 50 − 10×(N−1).
+// N = 1 → 50, N = 3 → 30, N = 5 → 10.
+func startPercent(n int) int16 {
+	if n < 1 {
+		n = 1
+	}
+	return int16(autoCap) - 10*int16(n-1)
+}
+
+// ExpiryPercent — скидка по сроку годности, %.
+// Вне окна (D > W), по просроченной партии (D <= 0) и без заданного срока — 0.
+// Внутри окна ступени идут от старта вверх по 10 % за точку:
+// k = min(floor(D/шаг), N−1), d = max(старт, 50 − 10×k). Потолок автомата — 50.
+func ExpiryPercent(shelfLife int16, daysLeft int) int16 {
+	w := Window(shelfLife)
+	if !inWindow(w, daysLeft) || daysLeft <= 0 {
+		return 0
+	}
+	n := Points(w)
+	step := Step(w, n)
+	if step <= 0 {
+		return startPercent(n)
+	}
+	k := int(math.Floor(float64(daysLeft)/step + 1e-9))
+	if k > n-1 {
+		k = n - 1
+	}
+	d := int16(autoCap) - 10*int16(k)
+	if start := startPercent(n); d < start {
+		d = start
+	}
+	return d
+}
