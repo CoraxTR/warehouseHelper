@@ -544,7 +544,51 @@
             return html;
         }
 
+        // focusTarget — куда вернуть фокус после перерисовки: {idx, cls, nth}
+        // (поле карточки items) либо 'keep' (фокус не трогаем). null — фокус в
+        // сканер приёмки, как раньше. Перерисовка пересобирает DOM целиком,
+        // поэтому ссылку на элемент хранить нельзя — поле ищется заново по
+        // индексу карточки и классу.
+        // Решение владельца 14.09: при создании партии и вводе дат страница
+        // остаётся там, где идёт работа, — фокус уезжал в верхний сканер и
+        // утягивал за собой прокрутку наверх.
+        var focusTarget = null;
+
+        // focusSpec — описание поля для возврата фокуса (до перерисовки).
+        function focusSpec(el) {
+            var idx = itemIndexFromDom(el);
+            if (idx < 0) { return null; }
+            var inputs = scansBox.children[idx].getElementsByTagName('input');
+            var cls = el.className || '';
+            var nth = 0;
+            var i;
+            for (i = 0; i < inputs.length; i++) {
+                if (inputs[i] === el) { break; }
+                if (inputs[i].className === cls) { nth++; }
+            }
+            return {idx: idx, cls: cls, nth: nth};
+        }
+
+        // focusBySpec — то же поле в пересобранном DOM (null — не нашлось).
+        function focusBySpec(spec) {
+            var card = scansBox.children[spec.idx];
+            if (!card) { return null; }
+            var inputs = card.getElementsByTagName('input');
+            var seen = 0;
+            var i;
+            for (i = 0; i < inputs.length; i++) {
+                if (inputs[i].className !== spec.cls) { continue; }
+                if (seen === spec.nth) { return inputs[i]; }
+                seen++;
+            }
+            return null;
+        }
+
         function render() {
+            var scrollY = window.pageYOffset || document.documentElement.scrollTop ||
+                document.body.scrollTop || 0;
+            var target = focusTarget;
+            focusTarget = null;
             var html = '';
             var i;
             for (i = 0; i < items.length; i++) {
@@ -558,7 +602,16 @@
             } else {
                 partyHint.style.display = 'none';
             }
-            scanInput.focus();
+            if (target === 'keep') {
+                // действие мышью (имя партии, удаление строки) — фокус не трогаем
+            } else if (target) {
+                var el = focusBySpec(target);
+                if (el) { el.focus(); } else { scanInput.focus(); }
+            } else {
+                // скан/загрузка кэша: фокус остаётся в сканере приёмки
+                scanInput.focus();
+            }
+            window.scrollTo(0, scrollY);
         }
 
         // itemIndexFromDom — индекс элемента items по разметке (порядок совпадает).
@@ -618,6 +671,7 @@
                 it.manual.product_id = v || null;
                 applyProductToScan(it.scan, v || '');
             }
+            focusTarget = focusSpec(el);
             render();
         }
 
@@ -640,6 +694,7 @@
             } else if (kind === 'bb') {
                 b.bb = v || '';
             }
+            focusTarget = focusSpec(el);
             render();
         }
 
@@ -668,6 +723,7 @@
             var idx = itemIndexFromDom(btn);
             if (idx < 0) { return; }
             items[idx].rows.push({scan: {kind: 'item', raw: '', unrecognized: true}, manual: {}});
+            focusTarget = 'keep';
             render();
         }
 
@@ -707,6 +763,7 @@
             var idx = itemIndexFromDom(node);
             if (idx < 0) { return; }
             activeParty = items[idx];
+            focusTarget = 'keep';
             render();
         }
 
@@ -715,6 +772,8 @@
             var b = {kind: 'party', id: ++partySeq, pd: '', bb: '', rows: []};
             items.push(b);
             activeParty = b;
+            // Фокус — в дату новой партии: работа идёт здесь, а не у сканера.
+            focusTarget = {idx: items.length - 1, cls: 'party-pd', nth: 0};
             render();
             return b;
         }
