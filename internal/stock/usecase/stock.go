@@ -81,6 +81,17 @@ type WarehouseNotifier interface {
 	NotifyWarehouse(text string) error
 }
 
+// LotChangeListener — наблюдатель «лоты товара изменились»: домен остатков не
+// знает, кому это нужно (модуль расчёта скидок, страницы), поэтому потребителя
+// подключает di.go сеттером после создания юзкейса (образец
+// SetCatalogChangeListener у goods). Вызывается после КАЖДОЙ успешной записи
+// лотов, по одному разу на товар. nil — шов отключён (тесты). Ошибка слушателя
+// операцию стока не роняет — только лог (как у DayStateRecorder): в БД и кэше
+// изменения уже приняты, откатывать их из-за наблюдателя нельзя.
+type LotChangeListener interface {
+	OnLotsChanged(ctx context.Context, productID string) error
+}
+
 // maxDiscount — верхняя граница скидки в процентах (CHECK в БД дублирует).
 const maxDiscount = 100
 
@@ -91,6 +102,11 @@ type StockUseCase struct {
 	pub      Publisher
 	dayState DayStateRecorder
 	notifier WarehouseNotifier
+
+	// lotListener — шов «лоты товара изменились» (модуль расчёта скидок).
+	// Ставится сеттером при сборке (di.go) до первой записи, дальше только
+	// читается — как dayState/notifier, без мутекса.
+	lotListener LotChangeListener
 
 	mu     sync.RWMutex
 	cache  map[string]*stock.Product // product_id → товар каталога (Lots — по возрастанию best_before, может быть пустым)
@@ -122,6 +138,37 @@ func (uc *StockUseCase) notifyDayState(ctx context.Context, productIDs ...string
 		seen[pid] = struct{}{}
 		if err := uc.dayState.OnStockChanged(ctx, pid); err != nil {
 			slog.Info(fmt.Sprintf("stock: daystate %s: %v", pid, err))
+		}
+	}
+}
+
+// SetLotChangeListener подключает шов «лоты товара изменились» (di.go после
+// создания юзкейса; nil — отключён, тесты). Вызывается после успешной записи
+// лотов, поэтому ставить его нужно на сборке, а не на ходу.
+func (uc *StockUseCase) SetLotChangeListener(l LotChangeListener) {
+	uc.lotListener = l
+}
+
+// notifyLotChange сообщает слушателю об изменении лотов товара — по разу на
+// уникальный productID (порядок первого появления). Ошибка слушателя только
+// логируется: БД и кэш уже записаны, ронять из-за наблюдателя операцию нельзя
+// (как у notifyDayState).
+func (uc *StockUseCase) notifyLotChange(ctx context.Context, productIDs ...string) {
+	l := uc.lotListener
+	if l == nil {
+		return
+	}
+	seen := make(map[string]struct{}, len(productIDs))
+	for _, pid := range productIDs {
+		if pid == "" {
+			continue
+		}
+		if _, ok := seen[pid]; ok {
+			continue
+		}
+		seen[pid] = struct{}{}
+		if err := l.OnLotsChanged(ctx, pid); err != nil {
+			slog.Info(fmt.Sprintf("stock: lot listener %s: %v", pid, err))
 		}
 	}
 }
@@ -260,6 +307,7 @@ func (uc *StockUseCase) SetManualDiscount(ctx context.Context, productID string,
 		uc.pub.PublishStockChange(stock.Event{Kind: stock.EventLotUpsert, ProductID: productID, Lot: lot})
 	}
 	uc.notifyDayState(ctx, productID)
+	uc.notifyLotChange(ctx, productID)
 
 	return nil
 }
@@ -561,6 +609,7 @@ func (uc *StockUseCase) applyReplacePlans(ctx context.Context, order []string, p
 	uc.mu.Unlock()
 	uc.publishReplaceEvents(order, plans)
 	uc.notifyDayState(ctx, order...)
+	uc.notifyLotChange(ctx, order...)
 
 	return nil
 }
@@ -741,6 +790,7 @@ func (uc *StockUseCase) AcceptStock(ctx context.Context, lots []stock.LotIn) err
 		ids = append(ids, l.ProductID)
 	}
 	uc.notifyDayState(ctx, ids...)
+	uc.notifyLotChange(ctx, ids...)
 
 	return nil
 }
@@ -872,6 +922,7 @@ func (uc *StockUseCase) PickStock(ctx context.Context, lots []stock.PickLotIn) e
 		ids = append(ids, l.ProductID)
 	}
 	uc.notifyDayState(ctx, ids...)
+	uc.notifyLotChange(ctx, ids...)
 
 	if len(deficitGroups) > 0 && uc.notifier != nil {
 		for _, g := range deficitGroups {
@@ -994,7 +1045,8 @@ func addDeficitGroup(cur *stock.Product, groups *[]string, seen map[string]struc
 // General/Telegram идут в discount_general/discount_telegram, ручные скидки UI
 // не трогаются. nil — скидка не задана (в БД NULL). Пустой список — нет работы
 // (без обращения к БД). Запись синхронна: БД → кэш → события ws; затем
-// DayStateRecorder (строки дня) — его ошибка операцию не роняет.
+// DayStateRecorder (строки дня) и слушатель лотов (LotChangeListener) — их
+// ошибки операцию не роняют.
 func (uc *StockUseCase) SetDiscounts(ctx context.Context, writes []stock.DiscountWrite) error {
 	done := metrics.Track(trackPkg, "SetDiscounts")
 	defer done()
@@ -1037,6 +1089,7 @@ func (uc *StockUseCase) SetDiscounts(ctx context.Context, writes []stock.Discoun
 		ids = append(ids, w.ProductID)
 	}
 	uc.notifyDayState(ctx, ids...)
+	uc.notifyLotChange(ctx, ids...)
 
 	return nil
 }

@@ -1519,3 +1519,120 @@ func TestSetDiscountsProductOutsideCache(t *testing.T) {
 		t.Errorf("карточка p9 не появилась в кэше (Snapshot: %d товаров)", len(uc.Snapshot()))
 	}
 }
+
+// mockLotListener — слушатель-заглушка шва «лоты товара изменились»: копит
+// товары и умеет отдавать ошибку (проверка «ошибка слушателя не роняет запись»).
+type mockLotListener struct {
+	calls []string
+	err   error
+}
+
+func (m *mockLotListener) OnLotsChanged(_ context.Context, productID string) error {
+	m.calls = append(m.calls, productID)
+	return m.err
+}
+
+// Шов событий Task 10: после КАЖДОЙ успешной записи слушатель получает товар
+// (по разу на уникальный productID) — приёмка, списание, замена, ручная скидка
+// и «просто»-скидки. Прогрев кэша событием не считается.
+func TestSetLotChangeListenerSeam(t *testing.T) {
+	repo := &mockRepo{
+		products: testStock(),
+		catalog: map[string]stock.Product{
+			"10100001": {ID: "p1", InternalCode: "10100001", Name: "Хлеб бородинский", GroupName: "Хлебобулочные"},
+			"20100002": {ID: "p2", InternalCode: "20100002", Name: "Молоко", GroupName: "Молочные"},
+		},
+	}
+	uc := newDiscountsUC(t, repo, &mockPub{})
+
+	ls := &mockLotListener{}
+	uc.SetLotChangeListener(ls)
+	if len(ls.calls) != 0 {
+		t.Fatalf("прогрев кэша не должен дёргать слушателя: %v", ls.calls)
+	}
+
+	// 1. Приёмка: два лота одного товара — один вызов слушателя.
+	if err := uc.AcceptStock(context.Background(), []stock.LotIn{
+		{ProductID: "p1", BestBefore: d(2026, 9, 5), Qty: 1},
+		{ProductID: "p1", BestBefore: d(2026, 9, 20), Qty: 1},
+	}); err != nil {
+		t.Fatalf("AcceptStock: %v", err)
+	}
+	// 2. Списание другого товара.
+	if err := uc.PickStock(context.Background(), []stock.PickLotIn{
+		{ProductID: "p2", BestBefore: d(2026, 9, 3), Qty: 1},
+	}); err != nil {
+		t.Fatalf("PickStock: %v", err)
+	}
+	// 3. Ручная скидка из UI.
+	if err := uc.SetManualDiscount(context.Background(), "p1", d(2026, 9, 10), i16(10), nil); err != nil {
+		t.Fatalf("SetManualDiscount: %v", err)
+	}
+	// 4. «Просто»-скидки по двум товарам.
+	if err := uc.SetDiscounts(context.Background(), []stock.DiscountWrite{
+		{ProductID: "p1", BestBefore: d(2026, 9, 1), General: i16(30)},
+		{ProductID: "p2", BestBefore: d(2026, 9, 3), General: i16(30)},
+	}); err != nil {
+		t.Fatalf("SetDiscounts: %v", err)
+	}
+	// 5. Замена остатков по сканам.
+	if err := uc.ReplaceStock(context.Background(), ReplaceRequest{
+		Scans: []string{
+			codeItem("10100001", 250, d(2026, 8, 20), d(2026, 9, 25)),
+		},
+	}); err != nil {
+		t.Fatalf("ReplaceStock: %v", err)
+	}
+
+	want := []string{"p1", "p2", "p1", "p1", "p2", "p1"}
+	if len(ls.calls) != len(want) {
+		t.Fatalf("вызовы слушателя = %v, want %v", ls.calls, want)
+	}
+	for i := range want {
+		if ls.calls[i] != want[i] {
+			t.Fatalf("вызовы слушателя = %v, want %v", ls.calls, want)
+		}
+	}
+}
+
+// Ошибка слушателя логируется и НЕ роняет запись: БД и кэш уже изменены,
+// поэтому операция возвращает nil, а слушатель всё равно вызывается.
+func TestLotChangeListenerErrorDoesNotBreakWrites(t *testing.T) {
+	repo := &mockRepo{products: testStock()}
+	uc := newDiscountsUC(t, repo, &mockPub{})
+
+	ls := &mockLotListener{err: errors.New("слушатель упал")}
+	uc.SetLotChangeListener(ls)
+
+	if err := uc.AcceptStock(context.Background(), []stock.LotIn{
+		{ProductID: "p1", BestBefore: d(2026, 9, 5), Qty: 1},
+	}); err != nil {
+		t.Fatalf("AcceptStock при ошибке слушателя: %v", err)
+	}
+	if got := lotQty(t, uc, "p1", d(2026, 9, 5)); got != 6 {
+		t.Errorf("лот 05.09 qty = %d, want 6 (запись должна пройти)", got)
+	}
+
+	if err := uc.SetDiscounts(context.Background(), []stock.DiscountWrite{
+		{ProductID: "p2", BestBefore: d(2026, 9, 3), Telegram: i16(25)},
+	}); err != nil {
+		t.Fatalf("SetDiscounts при ошибке слушателя: %v", err)
+	}
+	if len(repo.discounts) != 1 {
+		t.Errorf("в БД ушло %d записей, want 1", len(repo.discounts))
+	}
+	lot := testLot(t, uc, "p2", d(2026, 9, 3))
+	if lot.Telegram == nil || *lot.Telegram != 25 {
+		t.Errorf("кэш лота 03.09: telegram = %v, want 25", lot.Telegram)
+	}
+
+	want := []string{"p1", "p2"}
+	if len(ls.calls) != len(want) {
+		t.Fatalf("вызовы слушателя = %v, want %v", ls.calls, want)
+	}
+	for i := range want {
+		if ls.calls[i] != want[i] {
+			t.Fatalf("вызовы слушателя = %v, want %v", ls.calls, want)
+		}
+	}
+}
