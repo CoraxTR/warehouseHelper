@@ -151,6 +151,7 @@ func (a *App) initDeps() {
 		a.initStockCache,
 		a.initDayState,
 		a.initAverageSales,
+		a.initDiscounts,
 		a.initTableSizes,
 		a.initComplaints,
 		a.initReturns,
@@ -160,6 +161,17 @@ func (a *App) initDeps() {
 	for _, init := range inits {
 		init()
 	}
+}
+
+// initDiscounts запускает расписание модуля скидок: утренний шаг (окно
+// оборотов, пересчёт по сроку, дайджест в общий чат), часовой пересчёт избытка
+// и ТГ-день — план слота (14:00) и подъём general (16:00) в дни вт/чт. Шаги
+// идемпотентны и проверяют маркеры дня в БД, поэтому после сна или рестарта
+// добираются сами (см. usecase/schedule.go).
+func (a *App) initDiscounts() {
+	uc := a.di.DiscountsUC()
+	schedule := a.di.DiscountSchedule()
+	a.background("скидки: расписание (утро, час, ТГ-день)", func() { uc.Run(a.ctx, schedule) })
 }
 
 // initTableSizes запускает фоновый опрос размеров таблиц БД для метрик
