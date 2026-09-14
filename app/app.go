@@ -155,6 +155,7 @@ func (a *App) initDeps() {
 		a.initDiscounts,
 		a.initTableSizes,
 		a.initComplaints,
+		a.initBotPoller,
 		a.initReturns,
 		a.initReserveWatch,
 	}
@@ -260,25 +261,33 @@ func (a *App) initComplaints() {
 		uc.Start(a.ctx)
 	})
 
+}
+
+// initBotPoller запускает поллер бота: нажатия кнопок карточек жалоб и
+// текстовые команды (сейчас /скидки — отчёт модуля скидок в чат отправителя).
+//
+// Поллер живёт здесь, а не внутри модуля жалоб: он ОДИН на токен (второй
+// getUpdates получит 409 Conflict), а команды принадлежат разным модулям —
+// иначе без жалоб не работала бы и команда скидок.
+func (a *App) initBotPoller() {
 	token := a.di.Config().BotToken
 	if token == "" {
-		slog.Info("complaints: поллер не запущен: токен бота не настроен")
+		slog.Info("бот: поллер не запущен: токен бота не настроен")
 		return
 	}
+
+	complaintsUC := a.di.ComplaintsUC()
 	poller := telegram.NewPoller(token, func(ctx context.Context, cb telegram.CallbackQuery) error {
 		id, ok := cucase.ParseCallbackData(cb.Data)
 		if !ok {
 			return nil // кнопка не нашего модуля — не наше нажатие
 		}
-		return uc.HandleDetailsButton(ctx, cb.ID, cb.ChatID, id)
+		return complaintsUC.HandleDetailsButton(ctx, cb.ID, cb.ChatID, id)
 	})
-	// Поллер один на токен (второй getUpdates получит 409 Conflict), поэтому
-	// текстовые команды других модулей вешаются на него же: /скидки — отчёт по
-	// скидкам в чат отправителя (модуль скидок).
 	poller.SetMessageHandler(a.handleBotMessage)
-	a.background("complaints: поллер кнопок", func() {
+	a.background("бот: поллер апдейтов", func() {
 		if err := poller.Run(a.ctx); err != nil {
-			slog.Info(fmt.Sprintf("complaints: поллер завершился: %v", err))
+			slog.Info(fmt.Sprintf("бот: поллер завершился: %v", err))
 		}
 	})
 }

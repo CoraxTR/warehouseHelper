@@ -14,8 +14,9 @@ import (
 // Repository — данные модуля: снапшот входа расчёта, история ТГ-слотов
 // и маркеры дня.
 type Repository interface {
-	// LoadDiscountInput — все лоты остатков с товарными признаками и действующим
-	// оборотом (одна выборка; today — начало дня расчёта для оборота).
+	// LoadDiscountInput — все лоты остатков с товарными признаками (одна
+	// выборка; today — начало дня расчёта). Оборота здесь НЕТ: это данные
+	// модуля средних продаж, их расчёт берёт его методами (шов Turnover).
 	LoadDiscountInput(ctx context.Context, today time.Time) ([]discounts.Input, error)
 	// SaveDigest — сохранить рассылку с позициями (sent_at NULL: собрана, но
 	// ещё не отправлена; факт отправки фиксирует MarkDigestSent).
