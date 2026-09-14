@@ -87,10 +87,12 @@ func (r *captureRow) Scan(dest ...any) error {
 }
 
 // TestScanDiscountInput — разбор строки снапшота: дни периода берутся из
-// track_weekly, NULL-оборот даёт nil и PeriodDays 0, отрицательный оборот
-// (возвраты задним числом) хранится честно, NULL-срок годности — nil.
-// Скидки лота ложатся по своим полям: plain/ручные — с NULL в nil, метка
-// источника («что снимать при уходе избытка») — строкой.
+// товарного признака track_weekly (7 или 30, нуля больше нет), а оборота в
+// снапшоте нет ВООБЩЕ — это данные модуля средних продаж, и расчёт берёт их его
+// же методами (шов Turnover), а не из этого запроса. NULL-срок годности даёт nil,
+// скидки лота ложатся по своим полям: plain/ручные — с NULL в nil, метка
+// источника («что снимать при уходе избытка») — строкой, ноль переносится как
+// есть (трактовку «0 = NULL» держит домен, а не репозиторий).
 func TestScanDiscountInput(t *testing.T) {
 	bb := time.Date(2026, time.October, 1, 0, 0, 0, 0, time.UTC)
 
@@ -101,52 +103,54 @@ func TestScanDiscountInput(t *testing.T) {
 	}{
 		{
 			name: "недельный товар — период 7 дней",
-			vals: []any{"p-week", "Молоко 3,2%", "Молочка", false, 14, true, bb, 24, 12.5,
+			vals: []any{"p-week", "Молоко 3,2%", "Молочка", false, 14, true, bb, 24,
 				int16(20), nil, nil, int16(15), "expiry"},
 			want: discounts.Input{
 				ProductID: "p-week", Name: "Молоко 3,2%", GroupName: "Молочка",
 				ShelfLife: ptr[int16](14), TrackWeekly: true, BestBefore: bb, Qty: 24,
-				Turnover: ptr(12.5), PeriodDays: 7,
+				PeriodDays:   7,
 				GeneralPlain: ptr[int16](20), TelegramManual: ptr[int16](15), DiscountSource: "expiry",
 			},
 		},
 		{
 			name: "месячный товар — период 30 дней",
-			vals: []any{"p-month", "Сыр", "Молочка", true, 90, false, bb, 8, 40.25,
+			vals: []any{"p-month", "Сыр", "Молочка", true, 90, false, bb, 8,
 				nil, int16(10), int16(30), nil, ""},
 			want: discounts.Input{
 				ProductID: "p-month", Name: "Сыр", GroupName: "Молочка", ShortList: true,
 				ShelfLife: ptr[int16](90), BestBefore: bb, Qty: 8,
-				Turnover: ptr(40.25), PeriodDays: 30,
+				PeriodDays:    30,
 				TelegramPlain: ptr[int16](10), GeneralManual: ptr[int16](30),
 			},
 		},
 		{
-			name: "нет завершённого периода — ни оборота, ни дней",
-			vals: []any{"p-new", "Новинка", "Разное", false, 30, true, bb, 5, nil,
+			name: "нет данных о продажах — дни периода всё равно из товарного признака",
+			vals: []any{"p-new", "Новинка", "Разное", false, 30, true, bb, 5,
 				nil, nil, nil, nil, nil},
 			want: discounts.Input{
 				ProductID: "p-new", Name: "Новинка", GroupName: "Разное",
 				ShelfLife: ptr[int16](30), TrackWeekly: true, BestBefore: bb, Qty: 5,
+				PeriodDays: 7,
 			},
 		},
 		{
 			name: "срок годности не задан — NULL",
-			vals: []any{"p-null", "Без срока", "Разное", false, nil, false, bb, 3, 1.5,
+			vals: []any{"p-null", "Без срока", "Разное", false, nil, false, bb, 3,
 				nil, nil, nil, nil, nil},
 			want: discounts.Input{
 				ProductID: "p-null", Name: "Без срока", GroupName: "Разное",
-				BestBefore: bb, Qty: 3, Turnover: ptr(1.5), PeriodDays: 30,
+				BestBefore: bb, Qty: 3, PeriodDays: 30,
 			},
 		},
 		{
-			name: "отрицательный оборот (возвраты задним числом)",
-			vals: []any{"p-ret", "Творог", "Молочка", false, 7, false, bb, 12, -3.5,
-				nil, nil, nil, nil, nil},
+			name: "нулевая скидка — ноль, а не NULL (трактовка — в домене)",
+			vals: []any{"p-zero", "Йогурт", "Молочка", false, 5, false, bb, 4,
+				int16(0), nil, int16(0), nil, "surplus"},
 			want: discounts.Input{
-				ProductID: "p-ret", Name: "Творог", GroupName: "Молочка",
-				ShelfLife: ptr[int16](7), BestBefore: bb, Qty: 12,
-				Turnover: ptr(-3.5), PeriodDays: 30,
+				ProductID: "p-zero", Name: "Йогурт", GroupName: "Молочка",
+				ShelfLife: ptr[int16](5), BestBefore: bb, Qty: 4,
+				PeriodDays:   30,
+				GeneralPlain: ptr[int16](0), GeneralManual: ptr[int16](0), DiscountSource: "surplus",
 			},
 		},
 	}
@@ -173,7 +177,7 @@ func TestScanDiscountInputBadRow(t *testing.T) {
 }
 
 // countColumns считает элементы списка SELECT по запятым верхнего уровня:
-// запятые внутри вызовов (`COALESCE(w.qty, m.qty)`) колонками не считаются.
+// запятые внутри вызовов (`COALESCE(a, b)`) колонками не считаются.
 func countColumns(list string) int {
 	depth, n := 0, 1
 	for _, r := range list {
@@ -203,8 +207,11 @@ func TestScanDiscountInputColumnCount(t *testing.T) {
 	if row.dests != want {
 		t.Errorf("scan-хелпер разбирает %d колонок, в списке — %d", row.dests, want)
 	}
-	if want == 0 {
-		t.Fatal("список колонок пуст")
+	// 13 колонок: товарные признаки (6), срок и остаток лота (2), четыре скидки
+	// и метка источника (5). Колонки оборота здесь нет — оборот приходит швом
+	// модуля средних продаж, а не из снапшота входа.
+	if want != 13 {
+		t.Errorf("в списке колонок %d, want 13 (оборота в снапшоте нет)", want)
 	}
 }
 
@@ -229,14 +236,17 @@ func TestCountColumns(t *testing.T) {
 	}
 }
 
-// TestDiscountInputQueryKeepsPeriodsClosed — незакрытый период в снапшот не
-// попадает: сравниваются даты (date_trunc … ::date) и строго раньше начала
-// текущей недели/месяца; сегодня — параметр $1, а не «сейчас» в SQL.
-func TestDiscountInputQueryKeepsPeriodsClosed(t *testing.T) {
-	for _, want := range []string{
-		"w.week_start < date_trunc('week', $1::date)::date",
-		"m.month_start < date_trunc('month', $1::date)::date",
-	} {
+// TestDiscountInputQueryHasNoTurnoverJoins — оборота в снапшоте входа нет: это
+// данные модуля средних продаж, и расчёт берёт их его же методами (шов Turnover).
+// Ни LATERAL-джойнов к таблицам оборота, ни параметров у запроса быть не должно:
+// дни периода едут из товарного признака track_weekly, а не из окна оборота.
+func TestDiscountInputQueryHasNoTurnoverJoins(t *testing.T) {
+	for _, bad := range []string{"turnover", "LATERAL", "$1", "date_trunc"} {
+		if strings.Contains(discountInputQuery, bad) {
+			t.Errorf("в discountInputQuery осталось %q: оборота в снапшоте нет", bad)
+		}
+	}
+	for _, want := range []string{"FROM product_stock s", "JOIN products p ON p.id = s.product_id"} {
 		if !strings.Contains(discountInputQuery, want) {
 			t.Errorf("в discountInputQuery нет %q", want)
 		}
@@ -399,6 +409,10 @@ func TestDiscountInputColumnsIncludeDiscounts(t *testing.T) {
 		if !strings.Contains(discountInputColumns, want) {
 			t.Errorf("в discountInputColumns нет %q", want)
 		}
+	}
+	// Оборота в снапшоте нет и не должно быть: его читает шов модуля средних продаж.
+	if strings.Contains(discountInputColumns, "turnover") {
+		t.Errorf("в discountInputColumns осталась колонка оборота")
 	}
 }
 
