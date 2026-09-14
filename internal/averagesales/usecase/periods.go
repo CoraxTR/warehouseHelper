@@ -98,7 +98,7 @@ func formatPeriodStarts(starts []time.Time) []string {
 // текущего незакрытого): граница чтения окна оборотов из БД (периоды >= since).
 func windowSince(interval string, n int, now time.Time) time.Time {
 	start := currentPeriodStart(interval, now)
-	for i := 0; i < n; i++ {
+	for range n {
 		start = periodBack(interval, start)
 	}
 	return start

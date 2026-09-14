@@ -47,7 +47,8 @@ func TestWindow(t *testing.T) {
 			if n != tc.wantN {
 				t.Errorf("Points(%.4f) = %d, want %d", got, n, tc.wantN)
 			}
-			start := autoCap - 10*int16(n-1)
+			// Приведение int → int16 — продовым asInt16 (проверка границ, gosec G115).
+			start := asInt16(autoCap - 10*(n-1))
 			if start != tc.wantStart {
 				t.Errorf("старт при %d точках = %d, want %d", n, start, tc.wantStart)
 			}

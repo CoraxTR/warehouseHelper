@@ -31,6 +31,16 @@ const (
 	weeklyWindow  = 5
 )
 
+// turnoverScope — какие периоды обновлять: всё окно (12 завершённых месяцев +
+// текущий / 5 недель + текущий) или только текущий незакрытый. Тип вместо
+// bool-параметра: контрол-флаг в параметрах запрещён (revive flag-parameter).
+type turnoverScope int
+
+const (
+	scopeWindow      turnoverScope = iota // все периоды окна + текущий
+	scopeCurrentOnly                      // только текущий незакрытый период
+)
+
 // RefreshWindow обновляет из МС ВСЕ периоды окна перечисленных товаров
 // (12 завершённых месяцев + текущий / 5 недель + текущий) и возвращает
 // действующий средний оборот за период (шт). Товары без продаж в карту не
@@ -39,7 +49,7 @@ func (uc *UseCase) RefreshWindow(ctx context.Context, productIDs []string) (map[
 	done := metrics.Track(trackPkg, "RefreshWindow")
 	defer done()
 
-	return uc.refreshTurnover(ctx, productIDs, false)
+	return uc.refreshTurnover(ctx, productIDs, scopeWindow)
 }
 
 // RefreshCurrent обновляет из МС только текущий незакрытый период перечисленных
@@ -49,7 +59,7 @@ func (uc *UseCase) RefreshCurrent(ctx context.Context, productIDs []string) (map
 	done := metrics.Track(trackPkg, "RefreshCurrent")
 	defer done()
 
-	return uc.refreshTurnover(ctx, productIDs, true)
+	return uc.refreshTurnover(ctx, productIDs, scopeCurrentOnly)
 }
 
 // Averages возвращает действующий средний оборот за период (шт) по данным БД,
@@ -77,9 +87,8 @@ func (uc *UseCase) Averages(ctx context.Context, productIDs []string) (map[strin
 	// Два прохода — по ряду: недельные и месячные товары лежат в своих таблицах
 	// и имеют свои размеры окна. Внутри прохода запрос один (пачки — дело
 	// репозитория).
-	for _, weekly := range []bool{false, true} {
-		plan := uc.windowPlan(weekly)
-		subset := idsByTrackWeekly(prods, weekly)
+	for _, plan := range uc.windowPlans() {
+		subset := plan.trackIDs(prods)
 		if len(subset) == 0 {
 			continue
 		}
@@ -92,12 +101,13 @@ func (uc *UseCase) Averages(ctx context.Context, productIDs []string) (map[strin
 		byProduct := rowsByProduct(rows)
 		for _, id := range subset {
 			avg, err := rowsAverage(byProduct[id], plan, uc.now())
+			if errors.Is(err, ErrNoData) {
+				continue // продаж не было ни за один период — товара в карте нет
+			}
 			if err != nil {
 				return nil, fmt.Errorf("среднее товара %s: %w", id, err)
 			}
-			if avg != nil {
-				out[id] = *avg
-			}
+			out[id] = *avg
 		}
 	}
 
@@ -105,8 +115,9 @@ func (uc *UseCase) Averages(ctx context.Context, productIDs []string) (map[strin
 }
 
 // refreshTurnover — общий шаг обновления: товары → параметры окна → запросы
-// отчёта пачками (по периодам) → апсёрт → средние из БД.
-func (uc *UseCase) refreshTurnover(ctx context.Context, productIDs []string, currentOnly bool) (map[string]float64, error) {
+// отчёта пачками (по периодам) → апсёрт → средние из БД. scope выбирает набор
+// периодов (тип вместо bool-флага).
+func (uc *UseCase) refreshTurnover(ctx context.Context, productIDs []string, scope turnoverScope) (map[string]float64, error) {
 	ids := uniqueIDs(productIDs)
 	if len(ids) == 0 {
 		return map[string]float64{}, nil
@@ -122,15 +133,14 @@ func (uc *UseCase) refreshTurnover(ctx context.Context, productIDs []string, cur
 		active[p.ID] = p
 	}
 
-	for _, weekly := range []bool{false, true} {
-		plan := uc.windowPlan(weekly)
-		subset := filterTrackWeekly(active, weekly)
+	for _, plan := range uc.windowPlans() {
+		subset := plan.trackProducts(active)
 		if len(subset) == 0 {
 			continue
 		}
 
 		periods := []time.Time{currentPeriodStart(plan.interval, uc.now())}
-		if !currentOnly {
+		if scope == scopeWindow {
 			periods = append(completedPeriodStarts(plan.interval, plan.n, uc.now()), periods...)
 		}
 
@@ -160,21 +170,55 @@ type windowPlan struct {
 	window   func(ctx context.Context, productIDs []string, since time.Time) ([]averagesales.TurnoverRow, error)
 }
 
-// windowPlan — план окна товара: недельный ряд (5 + текущий) или месячный
-// (12 + текущий).
-func (uc *UseCase) windowPlan(trackWeekly bool) windowPlan {
-	if trackWeekly {
-		return windowPlan{
-			n:        weeklyWindow,
-			interval: intervalWeek,
-			window:   uc.repo.WeeklyTurnoverWindowByProducts,
-		}
-	}
+// windowPlans — планы окон в порядке обхода: месячный ряд, затем недельный
+// (прежние два прохода bool-цикла).
+func (uc *UseCase) windowPlans() []windowPlan {
+	return []windowPlan{uc.monthlyPlan(), uc.weeklyPlan()}
+}
+
+// monthlyPlan — план месячного окна: 12 завершённых месяцев + текущий.
+func (uc *UseCase) monthlyPlan() windowPlan {
 	return windowPlan{
 		n:        monthlyWindow,
 		interval: intervalMonth,
 		window:   uc.repo.MonthlyTurnoverWindowByProducts,
 	}
+}
+
+// weeklyPlan — план недельного окна: 5 завершённых недель + текущий.
+func (uc *UseCase) weeklyPlan() windowPlan {
+	return windowPlan{
+		n:        weeklyWindow,
+		interval: intervalWeek,
+		window:   uc.repo.WeeklyTurnoverWindowByProducts,
+	}
+}
+
+// weeklyTrack — план описывает недельный ряд (иначе — месячный): по этому
+// признаку выбираются товары своего ряда, без bool-параметров в функциях.
+func (p windowPlan) weeklyTrack() bool { return p.interval == intervalWeek }
+
+// trackIDs — id товаров ряда плана (недельного или месячного) в порядке
+// каталога: такие товары читаются одним батчем из своей таблицы.
+func (p windowPlan) trackIDs(prods []averagesales.TurnoverProduct) []string {
+	out := make([]string, 0, len(prods))
+	for _, prod := range prods {
+		if prod.TrackWeekly == p.weeklyTrack() {
+			out = append(out, prod.ID)
+		}
+	}
+	return out
+}
+
+// trackProducts — товары ряда плана (недельного или месячного) по id.
+func (p windowPlan) trackProducts(active map[string]averagesales.TurnoverProduct) map[string]averagesales.TurnoverProduct {
+	out := make(map[string]averagesales.TurnoverProduct, len(active))
+	for id, prod := range active {
+		if prod.TrackWeekly == p.weeklyTrack() {
+			out[id] = prod
+		}
+	}
+	return out
 }
 
 // refreshPeriods — запросы отчёта по каждому периоду: группы товаров одним
@@ -214,14 +258,15 @@ func (uc *UseCase) refreshPeriods(ctx context.Context, interval string, periods 
 
 // rowsAverage — средний оборот товара по строкам его окна: разделение на
 // завершённые периоды и текущий незакрытый (splitWindow) и обычное правило
-// окна (windowAvg). nil — продаж не было ни за один период (товар в карту
-// средних не попадает).
+// окна (windowAvg). ErrNoData — продаж не было ни за один период (товар в
+// карту средних не попадает): sentinel вместо (nil, nil), иначе линт ловит
+// nilnil.
 func rowsAverage(rows []averagesales.TurnoverRow, plan windowPlan, now time.Time) (*float64, error) {
 	finished, current := splitWindow(rows, plan.n, currentPeriodStart(plan.interval, now))
 
 	avg, err := windowAvg(finished, current, plan.n)
 	if errors.Is(err, ErrNoData) {
-		return nil, nil
+		return nil, ErrNoData
 	}
 	if err != nil {
 		return nil, fmt.Errorf("окно %s: %w", plan.interval, err)
@@ -236,18 +281,6 @@ func rowsByProduct(rows []averagesales.TurnoverRow) map[string][]averagesales.Tu
 	out := make(map[string][]averagesales.TurnoverRow, len(rows))
 	for _, r := range rows {
 		out[r.ProductID] = append(out[r.ProductID], r)
-	}
-	return out
-}
-
-// idsByTrackWeekly — id товаров с недельным (true) или месячным (false) учётом
-// в порядке каталога: такие товары читаются одним батчем из своей таблицы.
-func idsByTrackWeekly(prods []averagesales.TurnoverProduct, weekly bool) []string {
-	out := make([]string, 0, len(prods))
-	for _, p := range prods {
-		if p.TrackWeekly == weekly {
-			out = append(out, p.ID)
-		}
 	}
 	return out
 }
@@ -285,17 +318,6 @@ func uniqueIDs(ids []string) []string {
 		}
 		seen[id] = struct{}{}
 		out = append(out, id)
-	}
-	return out
-}
-
-// filterTrackWeekly — товары с недельным (true) или месячным (false) учётом.
-func filterTrackWeekly(active map[string]averagesales.TurnoverProduct, weekly bool) map[string]averagesales.TurnoverProduct {
-	out := make(map[string]averagesales.TurnoverProduct, len(active))
-	for id, p := range active {
-		if p.TrackWeekly == weekly {
-			out[id] = p
-		}
 	}
 	return out
 }

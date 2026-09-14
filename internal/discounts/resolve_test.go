@@ -61,6 +61,8 @@ func TestResolve(t *testing.T) {
 				t.Errorf("Resolve(...) percent = nil, want %d", *tc.wantPercent)
 			case tc.wantPercent != nil && gotPercent != nil && *gotPercent != *tc.wantPercent:
 				t.Errorf("Resolve(...) percent = %d, want %d", *gotPercent, *tc.wantPercent)
+			default:
+				// Значения совпали (в том числе оба nil) — процент проверен.
 			}
 		})
 	}

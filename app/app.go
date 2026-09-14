@@ -260,7 +260,6 @@ func (a *App) initComplaints() {
 	a.background("complaints: тикер напоминаний", func() {
 		uc.Start(a.ctx)
 	})
-
 }
 
 // initBotPoller запускает поллер бота: нажатия кнопок карточек жалоб и
@@ -284,7 +283,7 @@ func (a *App) initBotPoller() {
 		}
 		return complaintsUC.HandleDetailsButton(ctx, cb.ID, cb.ChatID, id)
 	})
-	poller.SetMessageHandler(a.handleBotMessage)
+	poller.SetMessageHandler(a.botMessageHandler())
 	a.background("бот: поллер апдейтов", func() {
 		if err := poller.Run(a.ctx); err != nil {
 			slog.Info(fmt.Sprintf("бот: поллер завершился: %v", err))
@@ -292,14 +291,24 @@ func (a *App) initBotPoller() {
 	})
 }
 
-// handleBotMessage — текстовые команды бота. Сейчас одна: /скидки — отчёт по
-// скидкам (тот же текст, что в дайджест 09:00) в чат отправителя. Чужие
-// сообщения игнорируются: отвечать на них — дело других модулей.
-func (a *App) handleBotMessage(ctx context.Context, msg telegram.Message) error {
-	if !isDiscountsCommand(msg.Text) {
-		return nil
+// botMessageHandler — обработчик текстовых команд бота. Сейчас одна: /скидки —
+// отчёт по скидкам (тот же текст, что в дайджест 09:00) в чат отправителя.
+// Чужие сообщения игнорируются: отвечать на них — дело других модулей.
+//
+// Юзкейс собирается ЗДЕСЬ, до подписки обработчика: за ленивым геттером стоит
+// создание пула БД (context.Background() внутри NewPGClient), а такая цепочка
+// из ctx-функции не проходит линт (contextcheck). Контекст команды уходит в
+// ReplyDigest на каждом вызове.
+func (a *App) botMessageHandler() func(context.Context, telegram.Message) error {
+	uc := a.di.DiscountsUC()
+
+	return func(ctx context.Context, msg telegram.Message) error {
+		if !isDiscountsCommand(msg.Text) {
+			return nil
+		}
+
+		return uc.ReplyDigest(ctx, msg.ChatID)
 	}
-	return a.di.DiscountsUC().ReplyDigest(ctx, msg.ChatID)
 }
 
 // isDiscountsCommand — «/скидки» с необязательным адресом бота и хвостом

@@ -34,7 +34,7 @@ func TestNotifyTextGolden(t *testing.T) {
 		t.Run(tt.title, func(t *testing.T) {
 			got, ok := NotifyText(name, notifyDate(), tt.prev, tt.next)
 			if !ok {
-				t.Fatalf("ok=false, want true")
+				t.Fatal("ok=false, want true")
 			}
 			if got != tt.want {
 				t.Errorf("текст = %q, want %q", got, tt.want)
@@ -97,7 +97,7 @@ func TestNotifyTextTransitions(t *testing.T) {
 func TestNotifyTextEmptyName(t *testing.T) {
 	got, ok := NotifyText("", notifyDate(), nil, pp(20))
 	if !ok {
-		t.Fatalf("ok=false, want true")
+		t.Fatal("ok=false, want true")
 	}
 	const want = " (до 22.06): Необходимо поставить скидку 20%"
 	if got != want {
@@ -157,7 +157,7 @@ func TestNotifyChangesNotifierError(t *testing.T) {
 
 // Уведомитель не подключён (канал не сконфигурирован): изменение не роняет
 // расчёт — текст уходит только в лог.
-func TestNotifyChangesNilNotifier(t *testing.T) {
+func TestNotifyChangesNilNotifier(_ *testing.T) {
 	uc := NewUseCase(nil, nil, nil, nil, nil, nil)
 
 	uc.notifyChanges(context.Background(), []Change{

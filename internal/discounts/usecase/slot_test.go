@@ -313,7 +313,7 @@ func TestRunSlotPlanSecondRunSameDayIsNoop(t *testing.T) {
 		lotInput("p1", "Колбаса", day(9), 100, shelfLifeInput(26)),
 	)
 
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		if err := h.uc.RunSlotPlan(context.Background(), h.now, 4); err != nil {
 			t.Fatalf("план слота (%d): %v", i, err)
 		}

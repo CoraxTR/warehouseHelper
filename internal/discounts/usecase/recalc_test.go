@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"errors"
+	"maps"
 	"reflect"
 	"testing"
 	"time"
@@ -190,9 +191,8 @@ func (t *fakeTurnover) Averages(_ context.Context, productIDs []string) (map[str
 // тестом карта должна остаться такой, какой её задали (и не nil — как у шва).
 func copyRates(rates map[string]float64) map[string]float64 {
 	out := make(map[string]float64, len(rates))
-	for pid, v := range rates {
-		out[pid] = v
-	}
+	maps.Copy(out, rates)
+
 	return out
 }
 
@@ -327,12 +327,12 @@ func TestRecalcExpiryOnlyOnExpiryDays(t *testing.T) {
 					t.Errorf("вне КТ-дня снапшот не читаем, чтений %d", h.repo.loads)
 				}
 				if h.flag(h.now, discounts.FlagExpiry) {
-					t.Errorf("вне КТ-дня маркер дня не ставим")
+					t.Error("вне КТ-дня маркер дня не ставим")
 				}
 				return
 			}
 			if !h.flag(h.now, discounts.FlagExpiry) {
-				t.Errorf("после пересчёта маркер дня не отмечен")
+				t.Error("после пересчёта маркер дня не отмечен")
 			}
 		})
 	}
@@ -386,7 +386,7 @@ func TestRecalcExpirySecondCallSameDay(t *testing.T) {
 	now := recalcNow(1)
 	h := newRecalcHarness(now, lotInput("p1", "Творог", day(5), 20, shelfLifeInput(30)))
 
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		if err := h.uc.RecalcExpiry(context.Background(), h.now); err != nil {
 			t.Fatalf("RecalcExpiry #%d: %v", i+1, err)
 		}
@@ -507,7 +507,7 @@ func TestRecalcExpiryErrors(t *testing.T) {
 			t.Fatal("ошибка записи не вернулась")
 		}
 		if h.flag(h.now, discounts.FlagExpiry) {
-			t.Errorf("при сбое записи шаг дня не закрываем")
+			t.Error("при сбое записи шаг дня не закрываем")
 		}
 	})
 	t.Run("маркер дня на записи", func(t *testing.T) {
@@ -568,7 +568,7 @@ func TestRecalcSurplusWritesTenAtExcess(t *testing.T) {
 	}
 
 	if !h.flag(h.now, discounts.FlagSurplus) {
-		t.Errorf("после пересчёта маркер дня не отмечен")
+		t.Error("после пересчёта маркер дня не отмечен")
 	}
 	if got := h.uc.Window(12); len(got) != 1 || got[0].Source != discounts.SourceSurplus {
 		t.Errorf("окно реестра: %+v, want избыток", got)
@@ -622,7 +622,7 @@ func TestRecalcSurplusSecondTickIsSilent(t *testing.T) {
 	h.turnover("p1", 30)
 	ctx := context.Background()
 
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		if err := h.uc.RecalcSurplus(ctx, h.now); err != nil {
 			t.Fatalf("RecalcSurplus #%d: %v", i+1, err)
 		}
@@ -733,7 +733,7 @@ func TestRecalcSurplusAveragesErrorStopsTick(t *testing.T) {
 		t.Errorf("батчей правок %d, want 0 (тик не выполнен)", got)
 	}
 	if h.flag(h.now, discounts.FlagSurplus) {
-		t.Errorf("при сбое оборота шаг дня не закрываем")
+		t.Error("при сбое оборота шаг дня не закрываем")
 	}
 	if h.turn.calls != 0 {
 		t.Errorf("свежий оборот после ошибки сохранённого не спрашиваем, вызовов %d", h.turn.calls)
@@ -783,7 +783,7 @@ func TestRecalcSurplusErrors(t *testing.T) {
 			t.Fatal("ошибка записи не вернулась")
 		}
 		if h.flag(h.now, discounts.FlagSurplus) {
-			t.Errorf("при сбое записи шаг дня не закрываем")
+			t.Error("при сбое записи шаг дня не закрываем")
 		}
 	})
 	t.Run("маркер дня", func(t *testing.T) {

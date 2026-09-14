@@ -14,7 +14,7 @@ import (
 // Пакетные обновления оборотов (шов модуля скидок): цена обновления — запрос
 // на ПЕРИОД на пачку товаров, а не 13 запросов на товар.
 
-var refreshNow = time.Date(2026, time.September, 14, 10, 0, 0, 0, time.Local) // понедельник
+var refreshNow = time.Date(2026, time.September, 14, 10, 0, 0, 0, time.UTC) // понедельник
 
 func newRefreshUC(repo *stubRepo, sales *stubSales, prods *stubProducts) *UseCase {
 	uc := NewUseCase(repo, sales, prods)
