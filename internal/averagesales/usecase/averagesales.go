@@ -130,27 +130,14 @@ func (uc *UseCase) AverageSales(ctx context.Context, productID string) (*float64
 		}
 	}
 
-	// Перечитать окно и разделить на завершённые/текущий.
+	// Перечитать окно и разделить на завершённые/текущий (общее правило —
+	// splitWindow, им же пользуются пакетные обновления refresh.go).
 	rows, err = last(ctx, productID, n+1)
 	if err != nil {
 		return nil, fmt.Errorf("перечитать обороты товара %s: %w", productID, err)
 	}
 
-	var finished []averagesales.TurnoverRow
-	var current *averagesales.TurnoverRow
-	for _, r := range rows {
-		switch {
-		case r.PeriodStart.Before(periodStart):
-			if len(finished) < n {
-				finished = append(finished, r)
-			}
-		case r.PeriodStart.Equal(periodStart):
-			c := r
-			current = &c
-		default:
-			// Строки за пределами окна (будущие/дубли) — пропуск.
-		}
-	}
+	finished, current := splitWindow(rows, n, periodStart)
 
 	avg, err := windowAvg(finished, current, n)
 	if errors.Is(err, ErrNoData) {
