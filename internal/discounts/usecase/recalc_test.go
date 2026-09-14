@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -178,14 +179,17 @@ func (w *fakeDiscountWriter) SetDiscounts(_ context.Context, writes []discounts.
 	return nil
 }
 
-// fakeCommonNotifier — общий канал теста: тексты уведомлений по порядку и, по
-// желанию теста, ошибка отправки.
+// fakeCommonNotifier — общий канал теста: тексты уведомлений по порядку
+// (texts — отправленные, tries — все попытки) и, по желанию теста, ошибка
+// отправки.
 type fakeCommonNotifier struct {
 	texts []string
+	tries []string
 	err   error
 }
 
 func (n *fakeCommonNotifier) NotifyCommon(_ context.Context, text string) error {
+	n.tries = append(n.tries, text)
 	if n.err != nil {
 		return n.err
 	}
@@ -691,6 +695,50 @@ func TestRecalcSurplusErrors(t *testing.T) {
 			t.Fatal("ошибка отметки шага дня не вернулась")
 		}
 	})
+}
+
+// Изменение эффективной скидки уходит людям: рост ступени — «поставить X %»
+// в общий канал (уведомляем о том, что человеку надо сделать на сайте).
+func TestRecalcExpiryNotifiesGrowth(t *testing.T) {
+	h := newRecalcHarness(recalcNow(1), lotInput("p1", "Творог", day(5), 20, shelfLifeInput(30)))
+
+	if err := h.uc.RecalcExpiry(context.Background(), h.now); err != nil {
+		t.Fatalf("RecalcExpiry: %v", err)
+	}
+	want := []string{"Творог (до 19.09): Необходимо поставить скидку 40%"}
+	if !reflect.DeepEqual(h.common.texts, want) {
+		t.Errorf("уведомления %q, want %q", h.common.texts, want)
+	}
+}
+
+// Два изменения избытка дают два уведомления, а тик без изменений молчит:
+// «поставить 10 %» при появлении избытка и «убрать скидку» при его уходе.
+func TestRecalcSurplusNotifiesChanges(t *testing.T) {
+	h := newRecalcHarness(recalcNow(1), lotInput("p1", "Колбаса", day(10), 100, turnoverInput(30)))
+	ctx := context.Background()
+
+	if err := h.uc.RecalcSurplus(ctx, h.now); err != nil {
+		t.Fatalf("RecalcSurplus #1: %v", err)
+	}
+	if err := h.uc.RecalcSurplus(ctx, h.now); err != nil {
+		t.Fatalf("RecalcSurplus #2: %v", err)
+	}
+
+	// Продажи ускорились — избыток ушёл.
+	turnover := 400.0
+	h.repo.inputs[0].Turnover = &turnover
+
+	if err := h.uc.RecalcSurplus(ctx, h.now); err != nil {
+		t.Fatalf("RecalcSurplus #3: %v", err)
+	}
+
+	want := []string{
+		"Колбаса (до 24.09): Необходимо поставить скидку 10%",
+		"Колбаса (до 24.09): Необходимо убрать скидку",
+	}
+	if !reflect.DeepEqual(h.common.texts, want) {
+		t.Errorf("уведомления %q, want %q", h.common.texts, want)
+	}
 }
 
 // Товар без данных о продажах избытка не получает (решение владельца): пустой

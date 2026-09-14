@@ -1,6 +1,9 @@
 package usecase
 
 import (
+	"context"
+	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -103,4 +106,61 @@ func TestNotifyTextEmptyName(t *testing.T) {
 	if !strings.HasPrefix(got, " (до 22.06):") {
 		t.Errorf("шаблон поехал: %q", got)
 	}
+}
+
+// Изменения эффективной скидки уходят в общий канал текстами правила NotifyText:
+// четыре перехода, а неизменившееся значение молчит.
+func TestNotifyChangesSendsTransitions(t *testing.T) {
+	common := &fakeCommonNotifier{}
+	uc := NewUseCase(nil, nil, nil, common, nil, nil)
+
+	uc.notifyChanges(context.Background(), []Change{
+		{Name: "Творог", BestBefore: notifyDate(), Prev: nil, Next: pp(20)},
+		{Name: "Плов", BestBefore: notifyDate(), Prev: pp(20), Next: pp(30)},
+		{Name: "Сыр", BestBefore: notifyDate(), Prev: pp(20), Next: pp(10)},
+		{Name: "Хлеб", BestBefore: notifyDate(), Prev: pp(20), Next: nil},
+		{Name: "Кефир", BestBefore: notifyDate(), Prev: pp(20), Next: pp(20)},
+	})
+
+	want := []string{
+		"Творог (до 22.06): Необходимо поставить скидку 20%",
+		"Плов (до 22.06): Необходимо поднять скидку до 30%",
+		"Сыр (до 22.06): Необходимо понизить скидку до 10%",
+		"Хлеб (до 22.06): Необходимо убрать скидку",
+	}
+	if !reflect.DeepEqual(common.texts, want) {
+		t.Errorf("уведомления %q, want %q", common.texts, want)
+	}
+	if len(common.tries) != 4 {
+		t.Errorf("попыток отправки %d, want 4 (неизменившееся значение молчит)", len(common.tries))
+	}
+}
+
+// Ошибка отправки пересчёт не роняет: остальные изменения всё равно уходят в
+// канал (тексты только в логе).
+func TestNotifyChangesNotifierError(t *testing.T) {
+	common := &fakeCommonNotifier{err: errors.New("телеграм недоступен")}
+	uc := NewUseCase(nil, nil, nil, common, nil, nil)
+
+	uc.notifyChanges(context.Background(), []Change{
+		{Name: "Творог", BestBefore: notifyDate(), Prev: nil, Next: pp(20)},
+		{Name: "Плов", BestBefore: notifyDate(), Prev: nil, Next: pp(30)},
+	})
+
+	if len(common.texts) != 0 {
+		t.Errorf("отправлено %q при ошибке канала", common.texts)
+	}
+	if len(common.tries) != 2 {
+		t.Errorf("попыток отправки %d, want 2", len(common.tries))
+	}
+}
+
+// Уведомитель не подключён (канал не сконфигурирован): изменение не роняет
+// расчёт — текст уходит только в лог.
+func TestNotifyChangesNilNotifier(t *testing.T) {
+	uc := NewUseCase(nil, nil, nil, nil, nil, nil)
+
+	uc.notifyChanges(context.Background(), []Change{
+		{Name: "Творог", BestBefore: notifyDate(), Prev: nil, Next: pp(20)},
+	})
 }

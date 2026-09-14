@@ -5,7 +5,9 @@
 package usecase
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"time"
 )
 
@@ -50,5 +52,29 @@ func NotifyText(name string, bestBefore time.Time, prev, next *int16) (text stri
 		return fmt.Sprintf("%s (до %s): Необходимо поднять скидку до %d%%", name, date, now), true
 	default:
 		return fmt.Sprintf("%s (до %s): Необходимо понизить скидку до %d%%", name, date, now), true
+	}
+}
+
+// notifyChanges — уведомления об изменениях эффективной скидки канала сайта:
+// по каждому изменению (их считает реестр, registry.go) собирается текст
+// правилом NotifyText и уходит в общий канал. Неизменившиеся значения и «нет →
+// нет» текста не дают и не отправляются.
+//
+// Ошибка отправки пересчёт не роняет: изменение либо догонит ближайший тик, либо
+// останется в логе — важнее, чтобы запись скидок и снапшот расчёта прошли.
+// Уведомитель не подключён (nil) — тексты только в лог.
+func (uc *UseCase) notifyChanges(ctx context.Context, changes []Change) {
+	for _, c := range changes {
+		text, ok := NotifyText(c.Name, c.BestBefore, c.Prev, c.Next)
+		if !ok {
+			continue
+		}
+		if uc.common == nil {
+			slog.Info(fmt.Sprintf("discounts: уведомление (канал не подключён): %s", text))
+			continue
+		}
+		if err := uc.common.NotifyCommon(ctx, text); err != nil {
+			slog.Info(fmt.Sprintf("discounts: уведомление %s: %v", text, err))
+		}
 	}
 }

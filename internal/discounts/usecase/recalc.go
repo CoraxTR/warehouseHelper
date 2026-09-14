@@ -236,10 +236,11 @@ func appliedTop(p PairState) int16 {
 	return top
 }
 
-// writeAndRegister — запись правок через шов стока и обновление снапшота
-// реестра: пустой батч в сток не уходит (работы нет), реестр обновляется всегда
-// — окно, очередь и отчёт живут по последнему расчёту, даже если записывать
-// было нечего.
+// writeAndRegister — запись правок через шов стока, обновление снапшота реестра
+// и уведомления об изменениях: пустой батч в сток не уходит (работы нет), реестр
+// обновляется всегда — окно, очередь и отчёт живут по последнему расчёту, даже
+// если записывать было нечего. Изменения эффективной скидки (реестр сравнивает
+// новый расчёт с предыдущим) уходят людям в общий канал.
 func (uc *UseCase) writeAndRegister(ctx context.Context, pairs []PairState, writes []discounts.DiscountWrite) error {
 	if len(writes) > 0 {
 		if err := uc.writer.SetDiscounts(ctx, writes); err != nil {
@@ -248,7 +249,7 @@ func (uc *UseCase) writeAndRegister(ctx context.Context, pairs []PairState, writ
 	}
 
 	applyWrites(pairs, writes)
-	uc.reg.Replace(pairs)
+	uc.notifyChanges(ctx, uc.reg.Replace(pairs))
 
 	return nil
 }
