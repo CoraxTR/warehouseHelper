@@ -99,3 +99,36 @@ func ExpiryPercent(shelfLife int16, daysLeft int) int16 {
 	}
 	return d
 }
+
+// surplusPercent — скидка по избытку, %: всегда 10 (решение владельца).
+const surplusPercent = 10
+
+// DailyRate — скорость продаж, шт/день: оборот за период, делённый на дни
+// периода (недельный ряд — на 7, месячный — на 30). Период не задан
+// (periodDays <= 0) или оборота нет (в т.ч. отрицательный после возвратов
+// задним числом) → 0.
+func DailyRate(turnover float64, periodDays int) float64 {
+	if periodDays <= 0 || turnover <= 0 {
+		return 0
+	}
+	return turnover / float64(periodDays)
+}
+
+// SurplusCoeff — во сколько раз накопленного остатка больше, чем успеет
+// продаться за оставшийся срок: coef = Q / (v × D), где Q — остаток по паре и
+// всем парам с меньшим сроком включительно, v — скорость (DailyRate),
+// D — остаток дней. Избыток есть ⇔ coef > 1 (строгое сравнение: «ровно
+// столько, сколько продаётся» — ещё не избыток).
+// Нет данных об обороте, v <= 0 или D <= 0 → (0, false).
+// При coef <= 1 возвращается сам коэф (нужен для отладки/отчёта), ok = false.
+func SurplusCoeff(cumQty int64, rate float64, daysLeft int, hasTurnover bool) (float64, bool) {
+	if !hasTurnover || rate <= 0 || daysLeft <= 0 {
+		return 0, false
+	}
+	coef := float64(cumQty) / (rate * float64(daysLeft))
+	return coef, coef > 1
+}
+
+// SurplusPercent — скидка по избытку, %: константа 10 (отдельная функция,
+// чтобы число не «магичило» в resolve и в текстах отчёта).
+func SurplusPercent() int16 { return surplusPercent }
