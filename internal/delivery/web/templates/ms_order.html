@@ -9,6 +9,19 @@
         /* Подытог группы и итог заказа — мелким шрифтом; вне строк подбора. */
         tr.group-total td { font-size: 12px; color: #666; padding-top: 0; }
         tr.order-total td { font-size: 12px; font-weight: bold; border-top: 2px solid #999; }
+
+        /* Переподбор: инлайн-окно количества прямо в строке (штучная позиция).
+           Палитра «Гвардии Ворона»: янтарь — предупреждение/пересчёт. */
+        .qty-pop { background: #16161C; border: 1px solid #4A3E22; border-left: 3px solid #C8A65C; padding: 6px 8px; border-radius: 2px; }
+        .qty-pop__q { font-size: 12px; color: #A7A49A; margin-bottom: 4px; }
+        .qty-pop__row { font-size: 13px; color: #E9E6DD; }
+        .qty-pop__inp { width: 64px; padding: 3px 6px; font-size: 13px; margin: 0 6px; }
+        .qty-pop__err { display: none; font-size: 12px; color: #E0877E; margin-top: 4px; }
+
+        /* Окно «Возврат в сроки»: инпут на всю ширину блока, погашенные строки
+           подсвечены зелёным, как готовые строки подбора. */
+        #ret-scan { width: 100%; }
+        .child-row.done .cname { color: #9ccc65; }
     </style>
 </head>
 
@@ -84,6 +97,29 @@
     </table>
     <p id="order-status" class="hint"></p>
     <p id="submit-status" class="hint"></p>
+
+    <!-- Окно «Возврат в сроки»: переподбор снимает с заказа старые куски, их
+         надо вернуть в остатки по срокам с этикеток. Блок появляется при первом
+         переподборе и блокирует отправку, пока не сохранён. -->
+    <div id="return-block" class="section scan-block" style="display:none;">
+        <h2>Возврат в сроки</h2>
+        <div class="hint">
+            Сканы этикеток снятых с заказа кусков. Строка гасится построчно: штучная — столько сканов,
+            сколько единиц; весовая — ровно один скан с тем же весом. Чужой или не тот по весу штрих-код
+            не принимается: бип и отказ. Строку, которую не гасит ни один скан, закройте вручную — складу
+            уйдёт уведомление о пересчёте сроков. Пока возврат не сохранён и есть строки переподбора,
+            «Отправить в МС» заблокирована.
+        </div>
+        <input id="ret-scan" class="scan-input" type="text" autocomplete="off" placeholder="Отсканируйте этикетку возвращаемого куска…">
+        <div id="ret-error" class="error" style="display:none;"></div>
+        <div id="ret-rows" class="section"></div>
+        <div id="ret-list"></div>
+        <div class="save-row">
+            <button type="button" id="ret-save" class="btn-save" disabled>Сохранить возврат</button>
+        </div>
+        <div id="ret-counter" class="counter"></div>
+    </div>
+
     <button type="button" id="submit-btn" class="resync-btn">Отправить в МС</button>
     <p><a class="back" href="/ms/orders/pick">← К поиску заказов</a></p>
     {{end}}
@@ -95,6 +131,9 @@
         // сканы) >= qty: у доборной строки (0 < reserve < qty, менеджер
         // увеличил количество) счётчик стартует с резерва МС. Кнопка
         // «Объединить» появляется, когда все строки группы забиты.
+        // Переподбор (repickRow): строку пересканируют новыми кусками, а снятые
+        // с заказа возвращаются в остатки через окно «Возврат в сроки» (блок
+        // ниже) — пока возврат не сохранён, отправка в МС заблокирована.
         (function () {
             'use strict';
 
@@ -119,6 +158,14 @@
                     active: tr.getAttribute('data-active') === '1',
                     done: false,
                     merged: false,
+                    // Переподбор (repickRow): fromOverride — что уйдёт в `from`
+                    // при отправке (резерв − N для штучной, 0 для весовой),
+                    // repickTarget — цель сканов (штучная — N новых кусков,
+                    // весовая — 1 скан). Пока переподбора не было, оба поля не
+                    // заданы (undefined) — строка обычная.
+                    // mergeTouched — строка участвовала в склейке: переподбор по
+                    // ней запрещён (ожидание возврата и ids группы не восстановить).
+                    mergeTouched: false,
                     records: [] // {w: граммы, bb: ДДММГГГГ}
                 };
                 rows.push(row);
@@ -209,6 +256,14 @@
             }
 
             function rowPickedText(r) {
+                // Переподбор: цель — только новые сканы (штучная — N, весовая —
+                // 1 кусок); резерв МС в набранное не входит.
+                if (r.repickTarget !== undefined) {
+                    if (r.weighted) {
+                        return 'переподбор: набрано ' + r.records.length + ' из 1 куска';
+                    }
+                    return 'переподбор: набрано ' + r.records.length + ' из ' + r.repickTarget + ' шт';
+                }
                 if (r.weighted) {
                     var g = 0;
                     for (var i = 0; i < r.records.length; i++) { g += r.records[i].w; }
@@ -248,7 +303,10 @@
                 }
 
                 r.records.push({ w: r.weighted ? w : 0, bb: bb });
-                if (r.weighted) {
+                if (r.repickTarget !== undefined) {
+                    // переподбор: цель — ровно N новых сканов (весовая — 1 кусок)
+                    r.done = r.records.length >= r.repickTarget;
+                } else if (r.weighted) {
                     r.done = true; // одна строка = один кусок
                 } else if (r.records.length + r.reserve >= r.qty) {
                     r.done = true;
@@ -293,22 +351,143 @@
                 if (left === 0) { setStatus('Все активные позиции подобраны'); }
             }
 
-            // ---- Переподобрать: резерв в 0, строка становится активной ----
+            // ---- Переподобрать: строка становится активной для сканов новых
+            // кусков. Весовая — сразу (кусок один), штучная — сначала спрашиваем
+            // количество инлайн-окном. Резерв НЕ обнуляем: от него зависят
+            // счётчик, стартовое «набрано» и склейка групп — в отправку уйдёт
+            // своё `from` (см. fromOverride).
             function repickRow(r) {
-                r.active = true;
-                r.reserve = 0; // набираем с нуля: добор не наследуется
-                var cell = r.tr.querySelector('.cell-action');
-                var reserveCell = r.tr.querySelector('.cell-reserve');
-                cell.textContent = '';
-                if (reserveCell) { reserveCell.textContent = fmtQtyText(0, r.weighted); }
+                // Смёрженную строку не переподбираем: у неё ids всей группы, а
+                // ожидание возврата восстановить не по чему.
+                if (r.merged || r.mergeTouched) {
+                    flashError(r.tr, 'Строка участвовала в склейке — переподбор невозможен: '
+                        + 'ожидание возврата и ids группы восстановить нельзя');
+                    return;
+                }
+                if (r.fromOverride !== undefined) { return; } // уже в переподборе
+                if (r.weighted) {
+                    startRepick(r, 1); // весовой кусок один — «сколько» не спрашиваем
+                    return;
+                }
+                openQtyPop(r);
+            }
 
+            // Инлайн-окно количества штучной строки: целое 1…резерв строки;
+            // больше резерва — подсказка-ошибка в самом окне. Enter — ОК,
+            // Esc — отмена, пусто или 0 — окно закрывается без действий.
+            function openQtyPop(r) {
+                var cell = r.tr.querySelector('.cell-action');
+                if (!cell) { return; }
+                var max = Math.round(r.reserve);
+
+                var pop = document.createElement('div');
+                pop.className = 'qty-pop';
+
+                var head = document.createElement('div');
+                head.className = 'qty-pop__q';
+                head.appendChild(document.createTextNode('Переподобрать: '));
+                var nameB = document.createElement('b');
+                nameB.textContent = rowName(r);
+                head.appendChild(nameB);
+
+                var rowQty = document.createElement('div');
+                rowQty.className = 'qty-pop__row';
+                rowQty.appendChild(document.createTextNode('шт: '));
+                var inp = document.createElement('input');
+                inp.type = 'number';
+                inp.className = 'qty-pop__inp';
+                inp.min = '1';
+                inp.max = String(max);
+                inp.value = String(max);
+                rowQty.appendChild(inp);
+                rowQty.appendChild(document.createTextNode('из ' + max + ' шт'));
+
+                var rowBtns = document.createElement('div');
+                rowBtns.className = 'qty-pop__row';
+                rowBtns.style.marginTop = '6px';
+                var okBtn = document.createElement('button');
+                okBtn.type = 'button';
+                okBtn.className = 'small btn-secondary ok';
+                okBtn.textContent = 'ОК';
+                var cancelBtn = document.createElement('button');
+                cancelBtn.type = 'button';
+                cancelBtn.className = 'small cancel';
+                cancelBtn.textContent = 'Отмена';
+                var hintEl = document.createElement('span');
+                hintEl.className = 'muted';
+                hintEl.textContent = ' Enter — ок, Esc — отмена';
+                rowBtns.appendChild(okBtn);
+                rowBtns.appendChild(document.createTextNode(' '));
+                rowBtns.appendChild(cancelBtn);
+                rowBtns.appendChild(hintEl);
+
+                var err = document.createElement('div');
+                err.className = 'qty-pop__err';
+
+                pop.appendChild(head);
+                pop.appendChild(rowQty);
+                pop.appendChild(rowBtns);
+                pop.appendChild(err);
+                cell.textContent = '';
+                cell.appendChild(pop);
+                inp.focus();
+                try { inp.select(); } catch (selErr) { /* старый браузер — хватит фокуса */ }
+
+                // Отмена: вернуть кнопку «Переподобрать» на место.
+                function closePop() {
+                    cell.textContent = '';
+                    var btn = document.createElement('button');
+                    btn.type = 'button';
+                    btn.className = 'btn-secondary repick-btn';
+                    btn.textContent = 'Переподобрать';
+                    btn.addEventListener('click', function () { repickRow(r); });
+                    cell.appendChild(btn);
+                }
+
+                function accept() {
+                    var n = parseInt(inp.value, 10);
+                    if (isNaN(n) || n < 1) { closePop(); return; }
+                    if (n > max) {
+                        err.style.display = 'block';
+                        err.textContent = 'В строке только ' + max + ' шт в резерве.';
+                        inp.focus();
+                        return;
+                    }
+                    startRepick(r, n);
+                }
+
+                okBtn.addEventListener('click', accept);
+                cancelBtn.addEventListener('click', closePop);
+                inp.addEventListener('keydown', function (e) {
+                    if (e.keyCode === 13) { e.preventDefault(); accept(); }
+                    if (e.keyCode === 27) { e.preventDefault(); closePop(); }
+                });
+            }
+
+            // Строка активна для сканов переподбора: цель ровно N штук (штучная)
+            // или 1 скан (весовая). Ожидание возврата уходит в окно внизу.
+            function startRepick(r, units) {
+                if (r.fromOverride !== undefined) { return; }
+                r.active = true;
+                r.repickTarget = units;
+                r.fromOverride = r.weighted ? 0 : r.reserve - units;
+                if (r.fromOverride < 0) { r.fromOverride = 0; }
+
+                addExpectation(r, units);
+
+                var cell = r.tr.querySelector('.cell-action');
+                if (!cell) { return; }
+                cell.textContent = '';
                 var input = document.createElement('input');
                 input.type = 'text';
                 input.className = 'scan-input';
                 input.setAttribute('autocomplete', 'off');
-                input.placeholder = 'штрих-код куска…';
+                input.placeholder = r.weighted
+                    ? 'штрих-код нового куска…'
+                    : ('штрих-код куска… (нужно ' + units + ' шт)');
                 var picked = document.createElement('div');
                 picked.className = 'picked';
+                picked.textContent = rowPickedText(r);
                 cell.appendChild(input);
                 cell.appendChild(picked);
                 (function (rr, inp) {
@@ -337,6 +516,18 @@
                 return grp[0].tr.querySelector('.cell-action');
             }
 
+            // Переподбор и склейка несовместимы: у строки переподбора своё
+            // ожидание возврата и своё `from`, у смёрженной строки — ids всей
+            // группы. Такие строки не склеиваем.
+            function groupRepicked(grp) {
+                for (var i = 0; i < grp.length; i++) {
+                    if (grp[i].fromOverride !== undefined || grp[i].repickTarget !== undefined) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+
             function checkMergeGroups() {
                 for (var i = 0; i < rows.length; i++) {
                     var r = rows[i];
@@ -348,6 +539,8 @@
                         if (!grp[j].done) { allDone = false; break; }
                     }
                     if (!allDone) { continue; }
+                    // Переподбор в группе запрещает склейку (см. groupRepicked).
+                    if (groupRepicked(grp)) { continue; }
                     if (firstActionCell(r.group).querySelector('.merge-btn')) { continue; }
 
                     var cell = firstActionCell(r.group);
@@ -365,12 +558,18 @@
             function mergeGroup(g) {
                 var grp = groupRows(g);
                 if (grp.length < 2) { return; }
+                if (groupRepicked(grp)) { return; } // переподбор не склеиваем
                 var first = grp[0];
                 var totalQty = 0;
                 var totalReserve = 0;
                 for (var i = 0; i < grp.length; i++) {
                     totalQty += grp[i].qty;
                     totalReserve += grp[i].reserve;
+                    // Строка поучаствовала в склейке — переподбор по ней больше не
+                    // предлагаем: ожидание возврата и ids группы не восстановить.
+                    grp[i].mergeTouched = true;
+                    var repickBtn = grp[i].tr.querySelector('.repick-btn');
+                    if (repickBtn) { repickBtn.parentNode.removeChild(repickBtn); }
                     if (grp[i] !== first) {
                         grp[i].merged = true;
                         grp[i].tr.style.display = 'none';
@@ -415,6 +614,520 @@
                 markDone(first);
             }
 
+            // ---- Возврат в сроки (переподбор) ----
+            // Снятые с заказа куски физически остались на складе — их надо вернуть
+            // в остатки по срокам с этикеток. Ожидания копятся здесь, по строке на
+            // каждый переподбор; сверка сканов — теми же правилами, что на
+            // странице «Возврат в продажу» (return.html): весовую строку гасит
+            // ровно один скан с тем же весом (строго), штучную — target сканов.
+            // Незакрытая строка запрещает и сохранение возврата, и отправку в МС.
+            var RET = {
+                expect: [],     // {ids, code, name, weighted, target, qtyText, overridden, saved}
+                scans: [],      // сырые этикетки (29 цифр); разбор — в порядке ожиданий
+                busy: false,
+                savedAny: false // хоть одна строка уже отдана на сервер
+            };
+
+            var retBlock = document.getElementById('return-block');
+            var retInput = document.getElementById('ret-scan');
+            var retSaveBtn = document.getElementById('ret-save');
+
+            function retEl(id) { return document.getElementById(id); }
+
+            function retShowError(msg) {
+                var box = retEl('ret-error');
+                if (!box) { return; }
+                box.textContent = msg;
+                box.style.display = 'block';
+            }
+
+            function retHideError() {
+                var box = retEl('ret-error');
+                if (box) { box.style.display = 'none'; }
+            }
+
+            function retOpen() {
+                if (retBlock) { retBlock.style.display = 'block'; }
+                renderAll();
+            }
+
+            // Имя позиции строки подбора — для строки-ожидания возврата.
+            function rowName(r) {
+                var cell = r.tr.querySelector('.cell-name');
+                return cell ? cell.textContent : '';
+            }
+
+            // Ожидание возврата (накопление: у каждого переподбора свой ids позиции
+            // и своё количество). Весовая — вес снятого куска из резерва МС,
+            // штучная — заявленное N.
+            function addExpectation(r, units) {
+                var weighted = r.weighted;
+                var target = weighted ? Math.round(r.reserve * 1000) : units;
+                RET.expect.push({
+                    ids: [r.tr.getAttribute('data-id')],
+                    code: r.code,
+                    name: rowName(r),
+                    weighted: weighted,
+                    target: target,    // граммы (весовая) или штуки (штучная)
+                    qtyText: weighted ? fmtKgText(target) : String(units) + ' шт',
+                    overridden: false, // закрыта вручную — пересчёт сроков
+                    saved: false       // отдана на сервер (в остатки записана)
+                });
+                retOpen();
+            }
+
+            // Набрано/ожидается в единицах строки: граммы → «0,657 кг», штуки → «2 шт».
+            function fmtAmt(v, weighted) {
+                if (weighted) { return fmtKgText(v); }
+                return v + ' шт';
+            }
+
+            // Вес из этикетки (граммы) — те же 5 цифр с 9-й по 13-ю, что при подборе.
+            function scanWeight(raw) { return parseInt(raw.slice(8, 13), 10); }
+
+            // Индекс ожидания, которое гасит скан; -1 — подходящего нет. Ручное
+            // закрытие строку исключает: остатков по ней уже не будет.
+            function pickRow(prog, raw) {
+                var code = raw.slice(0, 8);
+                var w = scanWeight(raw);
+                for (var i = 0; i < RET.expect.length; i++) {
+                    var exp = RET.expect[i];
+                    if (exp.overridden || exp.code !== code) { continue; }
+                    if (exp.weighted) {
+                        // весовой кусок — строго тот же вес (0,657 кг = 0,657 кг)
+                        if (w > 0 && exp.target === w && prog[i] === 0) { return i; }
+                        continue;
+                    }
+                    if (prog[i] < exp.target) { return i; }
+                }
+                return -1;
+            }
+
+            // Прогресс по строкам + какие этикетки легли в какую строку.
+            function matchScans() {
+                var prog = [];
+                var rowsOf = [];
+                for (var i = 0; i < RET.expect.length; i++) { prog.push(0); rowsOf.push([]); }
+                for (var s = 0; s < RET.scans.length; s++) {
+                    var idx = pickRow(prog, RET.scans[s]);
+                    if (idx < 0) { continue; }
+                    prog[idx] = RET.expect[idx].weighted ? RET.expect[idx].target : prog[idx] + 1;
+                    rowsOf[idx].push(RET.scans[s]);
+                }
+                return { prog: prog, scans: rowsOf };
+            }
+
+            function progressByRow() { return matchScans().prog; }
+
+            // Строка-ожидание закрыта: погашена сканами или закрыта вручную.
+            function rowClosed(exp, got) {
+                return exp.overridden || got === exp.target;
+            }
+
+            // Все строки закрыты (ручное закрытие считается закрытием) —
+            // сохранение возврата и отправка подбора разблокируются.
+            function allMatched(prog) {
+                for (var i = 0; i < RET.expect.length; i++) {
+                    if (!rowClosed(RET.expect[i], prog[i])) { return false; }
+                }
+                return true;
+            }
+
+            function leftCount(prog) {
+                var left = 0;
+                for (var i = 0; i < RET.expect.length; i++) {
+                    if (!rowClosed(RET.expect[i], prog[i])) { left++; }
+                }
+                return left;
+            }
+
+            function overriddenCount() {
+                var n = 0;
+                for (var i = 0; i < RET.expect.length; i++) {
+                    if (RET.expect[i].overridden) { n++; }
+                }
+                return n;
+            }
+
+            // Есть что сохранять: строка закрыта сканами, но ещё не отдана.
+            function hasUnsaved() {
+                var prog = progressByRow();
+                for (var i = 0; i < RET.expect.length; i++) {
+                    var exp = RET.expect[i];
+                    if (!exp.saved && !exp.overridden && prog[i] === exp.target) { return true; }
+                }
+                return false;
+            }
+
+            // Окно закрыто полностью: все строки погашены или закрыты вручную, и
+            // всё погашенное уже отдано на сервер — повторно сохранять нечего.
+            function returnDone() {
+                return RET.expect.length > 0 && allMatched(progressByRow()) && !hasUnsaved();
+            }
+
+            // «Сохранить возврат»: пока окно не закрыто — заблокирована; уже
+            // сохранённое повторно не отправляем (в остатки дважды не пишем).
+            function updateSaveBtn() {
+                if (!retSaveBtn) { return; }
+                var ready = !RET.busy && allMatched(progressByRow()) && hasUnsaved();
+                retSaveBtn.disabled = !ready;
+                retSaveBtn.textContent = returnDone() ? 'Сохранено' : 'Сохранить возврат';
+            }
+
+            // Строки ожиданий с этим кодом — для текстов отказа.
+            function rowsByCode(code) {
+                var out = [];
+                for (var i = 0; i < RET.expect.length; i++) {
+                    if (RET.expect[i].code === code) { out.push(RET.expect[i]); }
+                }
+                return out;
+            }
+
+            // Локальная проверка скана (prog — прогресс ДО него). null — принят,
+            // иначе текст отказа: бип и отказ, окно остаётся открытым.
+            function checkScan(raw, prog) {
+                if (raw.length !== 29) {
+                    return 'Не этикетка куска: ожидается 29 цифр (коробки 33 не участвуют)';
+                }
+                var same = rowsByCode(raw.slice(0, 8));
+                if (same.length === 0) {
+                    return 'Товар с кодом ' + raw.slice(0, 8) + ' не в списке возврата';
+                }
+                if (pickRow(prog, raw) >= 0) { return null; }
+                if (!same[0].weighted) {
+                    return 'Перебор: все строки ' + same[0].name + ' уже закрыты';
+                }
+                var expectText = [];
+                for (var i = 0; i < same.length; i++) { expectText.push(same[i].qtyText); }
+                return 'Вес ' + fmtKgText(scanWeight(raw)) + ' не подходит ни одной строке ' + same[0].name
+                    + ': ожидаются ' + expectText.join(' / ') + '. Закройте строку вручную — складу уйдёт уведомление';
+            }
+
+            function submitScan() {
+                if (!retInput) { return; }
+                var raw = retInput.value.replace(/^\s+|\s+$/g, '');
+                if (raw === '') { return; }
+                var err = checkScan(raw, progressByRow());
+                if (err) {
+                    beep();
+                    retShowError(err);
+                    retInput.value = '';
+                    retInput.focus();
+                    return;
+                }
+                retHideError();
+                RET.scans.push(raw);
+                retInput.value = '';
+                retInput.focus();
+                renderAll();
+            }
+
+            function removeScan(idx) {
+                if (idx < 0 || idx >= RET.scans.length) { return; }
+                RET.scans.splice(idx, 1);
+                renderAll();
+            }
+
+            // Строка-ожидание: имя, internal_code, ожидаемое количество, прогресс.
+            function buildExpectRow(i, got) {
+                var exp = RET.expect[i];
+                var closed = rowClosed(exp, got);
+                var line = document.createElement('div');
+                line.className = 'child-row' + (closed ? ' done' : '');
+
+                var left = document.createElement('span');
+                var nameEl = document.createElement('span');
+                nameEl.className = 'cname';
+                nameEl.textContent = exp.name;
+                var codeEl = document.createElement('span');
+                codeEl.className = 'mono';
+                codeEl.textContent = exp.code;
+                var kindEl = document.createElement('span');
+                kindEl.className = 'meta';
+                kindEl.textContent = exp.weighted ? 'весовой кусок' : 'штучная строка';
+                left.appendChild(nameEl);
+                left.appendChild(document.createTextNode(' '));
+                left.appendChild(codeEl);
+                left.appendChild(document.createTextNode(' '));
+                left.appendChild(kindEl);
+
+                var right = document.createElement('span');
+                right.className = 'meta';
+                right.appendChild(document.createTextNode(
+                    exp.qtyText + ' · погашено ' + fmtAmt(got, exp.weighted) + ' · '));
+                if (exp.overridden) {
+                    var markManual = document.createElement('b');
+                    markManual.style.color = '#C8A65C';
+                    markManual.textContent = 'закрыта вручную (пересчёт сроков)';
+                    right.appendChild(markManual);
+                } else if (closed) {
+                    var markDone = document.createElement('b');
+                    markDone.style.color = '#9ccc65';
+                    markDone.textContent = 'закрыта';
+                    right.appendChild(markDone);
+                } else {
+                    // Ручное закрытие строки: в остатки ничего не пишем, в чат
+                    // склада уходит «необходимо пересчитать сроки».
+                    var closeBtn = document.createElement('button');
+                    closeBtn.type = 'button';
+                    closeBtn.className = 'resync-btn small ret-close';
+                    closeBtn.setAttribute('data-idx', String(i));
+                    closeBtn.textContent = 'Нужен ручной пересчёт';
+                    right.appendChild(closeBtn);
+                }
+
+                line.appendChild(left);
+                line.appendChild(right);
+                return line;
+            }
+
+            function counterText(prog) {
+                var left = leftCount(prog);
+                if (left > 0) {
+                    return 'Незакрытых строк: ' + left + ' · сканов: ' + RET.scans.length
+                        + ' — сохранить нельзя, сканируйте этикетки.';
+                }
+                if (hasUnsaved()) { return 'Все строки закрыты — можно сохранять.'; }
+                if (RET.savedAny) {
+                    var tail = overriddenCount() > 0
+                        ? ' Закрыто вручную (пересчёт сроков): ' + overriddenCount()
+                            + ' — остатки в «Сроки» по ним НЕ записаны.'
+                        : '';
+                    return 'Возврат сохранён: куски вернулись в «Сроки» по срокам с этикеток.' + tail;
+                }
+                return 'Все строки закрыты вручную — остатки в «Сроки» не записаны, '
+                    + 'в чат склада уйдёт «необходимо пересчитать сроки».';
+            }
+
+            // Перерисовка окна: строки-ожидания, список отсканированных этикеток,
+            // счётчик и состояние кнопок.
+            function renderAll() {
+                var m = matchScans();
+
+                var box = retEl('ret-rows');
+                if (box) {
+                    box.textContent = '';
+                    if (RET.expect.length === 0) {
+                        var empty = document.createElement('div');
+                        empty.className = 'meta';
+                        empty.textContent = 'Ожиданий нет: гасить нечего.';
+                        box.appendChild(empty);
+                    }
+                    for (var i = 0; i < RET.expect.length; i++) {
+                        box.appendChild(buildExpectRow(i, m.prog[i]));
+                    }
+                }
+
+                var list = retEl('ret-list');
+                if (list) {
+                    list.textContent = '';
+                    for (var s = 0; s < RET.scans.length; s++) {
+                        var scanRow = document.createElement('div');
+                        scanRow.className = 'scan-row';
+                        var codeEl = document.createElement('span');
+                        codeEl.className = 'code';
+                        codeEl.textContent = RET.scans[s];
+                        var rm = document.createElement('button');
+                        rm.type = 'button';
+                        rm.className = 'rm';
+                        rm.setAttribute('data-idx', String(s));
+                        rm.textContent = '✕';
+                        scanRow.appendChild(codeEl);
+                        scanRow.appendChild(rm);
+                        list.appendChild(scanRow);
+                    }
+                }
+
+                var counter = retEl('ret-counter');
+                if (counter) { counter.textContent = counterText(m.prog); }
+                updateSaveBtn();
+                updateSubmitBtn();
+            }
+
+            // Тело сохранения: по строке на позицию — ids позиции заказа и
+            // internal_code, плюс сканы (штучная — все N, весовая — единственный).
+            function collectReturnRows() {
+                var m = matchScans();
+                var out = [];
+                for (var i = 0; i < RET.expect.length; i++) {
+                    var exp = RET.expect[i];
+                    // уже отдано или закрыто вручную — повторно не пишем
+                    if (exp.saved || exp.overridden) { continue; }
+                    if (m.prog[i] !== exp.target) { continue; }
+                    var scans = [];
+                    for (var s = 0; s < m.scans[i].length; s++) {
+                        var raw = m.scans[i][s];
+                        scans.push({
+                            w: exp.weighted ? scanWeight(raw) : 0,
+                            bb: raw.substr(21, 8) // срок с этикетки, ДДММГГГГ
+                        });
+                    }
+                    out.push({
+                        idx: i,
+                        row: { ids: exp.ids, code: exp.code, weighted: exp.weighted, scans: scans }
+                    });
+                }
+                return out;
+            }
+
+            // Ошибка сохранения/закрытия: 400 — текст сервера (как в return.html),
+            // остальное — общее сообщение.
+            function retFailText(xhr, action) {
+                if (xhr.status === 400 && xhr.responseText) { return xhr.responseText; }
+                return 'Не удалось ' + action + ' (HTTP ' + xhr.status + ')';
+            }
+
+            function saveReturn() {
+                if (RET.busy) { return; }
+                if (!allMatched(progressByRow())) {
+                    retShowError('Возврат неполный — незакрытые строки сохранить нельзя');
+                    return;
+                }
+                var items = collectReturnRows();
+                if (items.length === 0) { return; } // сохранять нечего
+
+                RET.busy = true;
+                updateSaveBtn();
+                var body = { rows: [] };
+                for (var i = 0; i < items.length; i++) { body.rows.push(items[i].row); }
+
+                var xhr = new XMLHttpRequest();
+                xhr.open('POST', '/ms/orders/' + orderId + '/return', true);
+                xhr.setRequestHeader('Content-Type', 'application/json');
+                xhr.timeout = 60000;
+                xhr.onreadystatechange = function () {
+                    if (xhr.readyState !== 4) { return; }
+                    RET.busy = false;
+                    if (xhr.status >= 200 && xhr.status < 300) {
+                        // Повторно эти строки не отправляем: дважды в остатки не пишем.
+                        for (var j = 0; j < items.length; j++) {
+                            RET.expect[items[j].idx].saved = true;
+                        }
+                        RET.savedAny = true;
+                        retHideError();
+                        if (retInput) { retInput.focus(); }
+                    } else {
+                        beep();
+                        retShowError(retFailText(xhr, 'сохранить возврат'));
+                    }
+                    renderAll();
+                };
+                xhr.ontimeout = function () {
+                    RET.busy = false;
+                    beep();
+                    retShowError('Сервер не ответил — попробуйте ещё раз');
+                    renderAll();
+                };
+                xhr.onerror = function () {
+                    RET.busy = false;
+                    beep();
+                    retShowError('Сервер недоступен — попробуйте ещё раз');
+                    renderAll();
+                };
+                xhr.send(JSON.stringify(body));
+            }
+
+            // Ручное закрытие строки: в остатки ничего не пишем, складу — только
+            // уведомление о пересчёте сроков. После 2xx строка закрыта и больше
+            // не блокирует ни сохранение возврата, ни отправку подбора.
+            function closeReturn(idx) {
+                if (RET.busy) { return; }
+                var exp = RET.expect[idx];
+                if (!exp || exp.overridden || exp.saved) { return; }
+                if (progressByRow()[idx] === exp.target) { return; } // погашена — её дело сохранить
+                if (!confirm('Закрыть строку «' + exp.name + '» вручную? Куски НЕ вернутся в остатки '
+                        + '(потеряны / списаны / не нашлись) — складу уйдёт уведомление о пересчёте сроков по позиции.')) {
+                    return;
+                }
+                RET.busy = true;
+                updateSaveBtn();
+                var xhr = new XMLHttpRequest();
+                xhr.open('POST', '/ms/orders/' + orderId + '/return/close', true);
+                xhr.setRequestHeader('Content-Type', 'application/json');
+                xhr.timeout = 60000;
+                xhr.onreadystatechange = function () {
+                    if (xhr.readyState !== 4) { return; }
+                    RET.busy = false;
+                    if (xhr.status >= 200 && xhr.status < 300) {
+                        exp.overridden = true;
+                        retHideError();
+                    } else {
+                        beep();
+                        retShowError(retFailText(xhr, 'закрыть строку вручную'));
+                    }
+                    renderAll();
+                };
+                xhr.ontimeout = function () {
+                    RET.busy = false;
+                    beep();
+                    retShowError('Сервер не ответил — попробуйте ещё раз');
+                    renderAll();
+                };
+                xhr.onerror = function () {
+                    RET.busy = false;
+                    beep();
+                    retShowError('Сервер недоступен — попробуйте ещё раз');
+                    renderAll();
+                };
+                // ids позиции + код товара: серверу нужно знать, по чему уведомлять склад.
+                xhr.send(JSON.stringify({
+                    rows: [{ ids: exp.ids, code: exp.code, weighted: exp.weighted }]
+                }));
+            }
+
+            // «Отправить в МС» ждёт сохранения возврата: пока есть строки
+            // переподбора и хоть одна из них не отдана на сервер и не закрыта
+            // вручную (открытая или закрытая сканами, но не сохранённая) —
+            // кнопка заблокирована. Без переподбора отправка работает как раньше.
+            // Ручное закрытие строку разблокирует: остатки по ней не пишутся.
+            function returnBlocksSubmit() {
+                for (var i = 0; i < RET.expect.length; i++) {
+                    if (!RET.expect[i].saved && !RET.expect[i].overridden) { return true; }
+                }
+                return false;
+            }
+
+            function updateSubmitBtn() {
+                submitBtn.disabled = submitting || returnBlocksSubmit();
+            }
+
+            function retInit() {
+                if (!retBlock || !retInput || !retSaveBtn) { return; }
+                retInput.addEventListener('keydown', function (e) {
+                    if (e.keyCode === 13) { e.preventDefault(); submitScan(); }
+                });
+                // Крестики сканов и ручные закрытия живут на перерисованных
+                // строках — обработчики вешаем на контейнеры (делегирование).
+                var list = retEl('ret-list');
+                if (list) {
+                    list.addEventListener('click', function (e) {
+                        var t = e.target || e.srcElement;
+                        while (t && t !== list) {
+                            if (t.getAttribute && t.getAttribute('data-idx') !== null) {
+                                removeScan(parseInt(t.getAttribute('data-idx'), 10));
+                                return;
+                            }
+                            t = t.parentNode;
+                        }
+                    });
+                }
+                var box = retEl('ret-rows');
+                if (box) {
+                    box.addEventListener('click', function (e) {
+                        var t = e.target || e.srcElement;
+                        while (t && t !== box) {
+                            if (t.className && String(t.className).indexOf('ret-close') >= 0) {
+                                closeReturn(parseInt(t.getAttribute('data-idx'), 10));
+                                return;
+                            }
+                            t = t.parentNode;
+                        }
+                    });
+                }
+                retSaveBtn.addEventListener('click', saveReturn);
+                renderAll();
+            }
+
             // ---- Отправить в МС: набранные строки уходят на сервер, он
             // пересобирает positions заказа из своего кэша и PUT-ит заказ.
             // Клиент шлёт только покрытые строки (records>0): смёрженная
@@ -445,19 +1158,32 @@
                     for (var k = 0; k < r.records.length; k++) {
                         recs.push({ w: r.records[k].w, bb: r.records[k].bb });
                     }
-                    out.push({ ids: ids, from: r.reserve, records: recs });
+                    // from: у переподбора своё значение (резерв − N для штучной,
+                    // 0 для весовой, кусок один), у обычной строки — резерв МС.
+                    out.push({
+                        ids: ids,
+                        from: r.fromOverride !== undefined ? r.fromOverride : r.reserve,
+                        records: recs
+                    });
                 }
                 return out;
             }
 
             function releaseSubmit() {
                 submitting = false;
-                submitBtn.disabled = false;
                 submitBtn.textContent = 'Отправить в МС';
+                updateSubmitBtn();
             }
 
             function doSubmit() {
                 if (submitting) { return; }
+                // Возврат в сроки ждёт: незакрытое окно блокирует отправку подбора.
+                if (returnBlocksSubmit()) {
+                    setStatus('Сначала закройте и сохраните окно «Возврат в сроки» — '
+                        + 'незакрытые строки блокируют отправку в МС');
+                    updateSubmitBtn();
+                    return;
+                }
                 var payload = collectSubmitRows();
                 if (payload.length === 0) {
                     setStatus('Нет набранных позиций — отсканируйте хотя бы одну');
@@ -510,6 +1236,11 @@
             }
 
             submitBtn.addEventListener('click', doSubmit);
+
+            // Окно «Возврат в сроки» и стартовое состояние кнопки отправки:
+            // без переподбора отправка работает как раньше.
+            retInit();
+            updateSubmitBtn();
 
             // автофокус на первую активную строку
             for (var a = 0; a < rows.length; a++) {

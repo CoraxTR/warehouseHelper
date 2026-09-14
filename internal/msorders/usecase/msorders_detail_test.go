@@ -152,7 +152,7 @@ func position(id, code, name string, qty, price, reserve float64) client.MSPosit
 
 func TestDetailHeader(t *testing.T) {
 	fake := &fakeOrderDetail{order: detailOrder(), agentName: "ООО Ромашка", agentPhone: "+7 900 123-45-67"}
-	uc := NewUseCase(fake, &fakeCatalog{}, &fakePicker{})
+	uc := NewUseCase(fake, &fakeCatalog{}, &fakePicker{}, nil, nil)
 
 	o, err := uc.Detail(context.Background(), detailOrder().ID)
 	if err != nil {
@@ -183,7 +183,7 @@ func TestDetailAddressFallbackToShipmentAddress(t *testing.T) {
 	order := detailOrder()
 	order.ShipmentAddressFull = client.MSAddressFull{} // полный адрес пуст
 	fake := &fakeOrderDetail{order: order}
-	uc := NewUseCase(fake, &fakeCatalog{}, &fakePicker{})
+	uc := NewUseCase(fake, &fakeCatalog{}, &fakePicker{}, nil, nil)
 
 	o, err := uc.Detail(context.Background(), order.ID)
 	if err != nil {
@@ -206,7 +206,7 @@ func TestDetailRowsSortingGroupsAndFormatting(t *testing.T) {
 		"00220002": {InternalCode: "00220002", Weighted: true},
 		"00210006": {InternalCode: "00210006", Weighted: true},
 	}}
-	uc := NewUseCase(&fakeOrderDetail{order: detailOrder(), positions: positions}, catalog, &fakePicker{})
+	uc := NewUseCase(&fakeOrderDetail{order: detailOrder(), positions: positions}, catalog, &fakePicker{}, nil, nil)
 
 	o, err := uc.Detail(context.Background(), "id")
 	if err != nil {
@@ -266,7 +266,7 @@ func TestDetailRowFormatting(t *testing.T) {
 	catalog := &fakeCatalog{byCode: map[string]CatalogProduct{
 		"00220002": {InternalCode: "00220002", Weighted: true},
 	}}
-	uc := NewUseCase(&fakeOrderDetail{order: detailOrder(), positions: positions}, catalog, &fakePicker{})
+	uc := NewUseCase(&fakeOrderDetail{order: detailOrder(), positions: positions}, catalog, &fakePicker{}, nil, nil)
 
 	o, err := uc.Detail(context.Background(), "id")
 	if err != nil {
@@ -294,7 +294,7 @@ func TestDetailRowFormatting(t *testing.T) {
 func TestDetailResolveRequiresCatalog(t *testing.T) {
 	positions := []client.MSPosition{position("p1", "00220002", "Стейк", 0.367, 279000, 0)}
 	catalog := &fakeCatalog{err: errors.New("db down")}
-	uc := NewUseCase(&fakeOrderDetail{order: detailOrder(), positions: positions}, catalog, &fakePicker{})
+	uc := NewUseCase(&fakeOrderDetail{order: detailOrder(), positions: positions}, catalog, &fakePicker{}, nil, nil)
 
 	if _, err := uc.Detail(context.Background(), "id"); err == nil {
 		t.Fatal("Detail() error = nil, want ошибку каталога (нельзя показать строки без резолва)")
@@ -303,7 +303,7 @@ func TestDetailResolveRequiresCatalog(t *testing.T) {
 
 func TestDetailPositionsError(t *testing.T) {
 	fake := &fakeOrderDetail{order: detailOrder(), positionsErr: errors.New("network")}
-	uc := NewUseCase(fake, &fakeCatalog{}, &fakePicker{})
+	uc := NewUseCase(fake, &fakeCatalog{}, &fakePicker{}, nil, nil)
 
 	if _, err := uc.Detail(context.Background(), "id"); err == nil {
 		t.Fatal("Detail() error = nil, want ошибку клиента по позициям")
@@ -311,7 +311,7 @@ func TestDetailPositionsError(t *testing.T) {
 }
 
 func TestDetailEmptyID(t *testing.T) {
-	uc := NewUseCase(&fakeOrderDetail{}, &fakeCatalog{}, &fakePicker{})
+	uc := NewUseCase(&fakeOrderDetail{}, &fakeCatalog{}, &fakePicker{}, nil, nil)
 
 	if _, err := uc.Detail(context.Background(), "   "); !errors.Is(err, ErrEmptyOrderID) {
 		t.Fatalf("Detail(' ') error = %v, want ErrEmptyOrderID", err)
@@ -320,7 +320,7 @@ func TestDetailEmptyID(t *testing.T) {
 
 func TestDetailAgentHopErrorKeepsDash(t *testing.T) {
 	fake := &fakeOrderDetail{order: detailOrder(), agentErr: errors.New("network")}
-	uc := NewUseCase(fake, &fakeCatalog{}, &fakePicker{})
+	uc := NewUseCase(fake, &fakeCatalog{}, &fakePicker{}, nil, nil)
 
 	o, err := uc.Detail(context.Background(), "id")
 	if err != nil {
@@ -362,7 +362,7 @@ func TestDetailRowTopupStates(t *testing.T) {
 			position("p-for", "99999999", "Чужое", 1, 10000, 0),       // вне каталога
 		},
 	}
-	uc := NewUseCase(fake, submitCatalog(), &fakePicker{})
+	uc := NewUseCase(fake, submitCatalog(), &fakePicker{}, nil, nil)
 	order, err := uc.Detail(context.Background(), o.ID)
 	if err != nil {
 		t.Fatalf("Detail: %v", err)
@@ -474,7 +474,7 @@ func TestDetailSumsWeightsAndTotals(t *testing.T) {
 			catalog := sumCatalog()
 			catalog.avgWeights = tc.avgWeights
 			catalog.avgErr = tc.avgErr
-			uc := NewUseCase(&fakeOrderDetail{order: detailOrder(), positions: tc.positions}, catalog, &fakePicker{})
+			uc := NewUseCase(&fakeOrderDetail{order: detailOrder(), positions: tc.positions}, catalog, &fakePicker{}, nil, nil)
 
 			order, err := uc.Detail(context.Background(), "id")
 			if err != nil {
@@ -512,7 +512,7 @@ func TestDetailAverageWeightOnlyForPieces(t *testing.T) {
 		position("piece", "21110001", "Хлеб", 3, 1116000, 0),
 		position("wgh", "00220002", "Стейк", 0.367, 279000, 0),
 	}
-	uc := NewUseCase(&fakeOrderDetail{order: detailOrder(), positions: positions}, catalog, &fakePicker{})
+	uc := NewUseCase(&fakeOrderDetail{order: detailOrder(), positions: positions}, catalog, &fakePicker{}, nil, nil)
 
 	order, err := uc.Detail(context.Background(), "id")
 	if err != nil {
@@ -543,7 +543,7 @@ func TestDetailGroupSubtotals(t *testing.T) {
 		position("s1", "21110001", "Хлеб", 2, 30000, 0),
 		position("s2", "21110001", "Хлеб", 3, 30000, 0),
 	}
-	uc := NewUseCase(&fakeOrderDetail{order: detailOrder(), positions: positions}, sumCatalog(), &fakePicker{})
+	uc := NewUseCase(&fakeOrderDetail{order: detailOrder(), positions: positions}, sumCatalog(), &fakePicker{}, nil, nil)
 
 	order, err := uc.Detail(context.Background(), "id")
 	if err != nil {

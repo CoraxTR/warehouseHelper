@@ -24,8 +24,10 @@ func (f *fakePicker) PickStock(_ context.Context, lots []stock.PickLotIn) error 
 	return f.err
 }
 
-func bbDate(year int, month time.Month, day int) time.Time {
-	return time.Date(year, month, day, 0, 0, 0, 0, time.UTC)
+// oktDate — срок для тестов заказа: октябрь 2026 (месяц и год фиксированы,
+// день — параметр), чтобы unparam не считал месяц константным аргументом.
+func oktDate(day int) time.Time {
+	return time.Date(2026, time.October, day, 0, 0, 0, 0, time.UTC)
 }
 
 // submitCatalog — каталог Submit-тестов: штучный p1 и весовой p2.
@@ -78,7 +80,7 @@ func rowQty(t *testing.T, rows []map[string]any, id string) (qty, reserve float6
 func TestSubmitPartialPiece(t *testing.T) {
 	fake, o := submitOrder()
 	picker := &fakePicker{}
-	uc := NewUseCase(fake, submitCatalog(), picker)
+	uc := NewUseCase(fake, submitCatalog(), picker, nil, nil)
 	res, err := uc.Submit(context.Background(), o.ID, SubmitRequest{Rows: []SubmitRow{
 		{IDs: []string{"pos-1"}, Records: []ScanRecord{
 			{WeightG: 0, BB: "10102026"},
@@ -125,7 +127,7 @@ func TestSubmitPartialPiece(t *testing.T) {
 	if picker.calls != 1 || len(picker.lots) != 2 {
 		t.Fatalf("picker: calls=%d lots=%d, want 1/2", picker.calls, len(picker.lots))
 	}
-	bb := bbDate(2026, 10, 10)
+	bb := oktDate(10)
 	for _, l := range picker.lots {
 		if l.ProductID != "p1" || !l.BestBefore.Equal(bb) || l.Qty != 1 {
 			t.Errorf("lot = %+v, want p1 %s qty 1", l, bb.Format("02.01.2006"))
@@ -136,7 +138,7 @@ func TestSubmitPartialPiece(t *testing.T) {
 func TestSubmitFullPiece(t *testing.T) {
 	fake, o := submitOrder()
 	picker := &fakePicker{}
-	uc := NewUseCase(fake, submitCatalog(), picker)
+	uc := NewUseCase(fake, submitCatalog(), picker, nil, nil)
 	if _, err := uc.Submit(context.Background(), o.ID, SubmitRequest{Rows: []SubmitRow{
 		{IDs: []string{"pos-1"}, Records: []ScanRecord{
 			{WeightG: 0, BB: "10102026"},
@@ -163,7 +165,7 @@ func TestSubmitFullPiece(t *testing.T) {
 func TestSubmitWeightedCovered(t *testing.T) {
 	fake, o := submitOrder()
 	picker := &fakePicker{}
-	uc := NewUseCase(fake, submitCatalog(), picker)
+	uc := NewUseCase(fake, submitCatalog(), picker, nil, nil)
 	if _, err := uc.Submit(context.Background(), o.ID, SubmitRequest{Rows: []SubmitRow{
 		{IDs: []string{"pos-2"}, Records: []ScanRecord{
 			{WeightG: 1250, BB: "01102026"},
@@ -187,7 +189,7 @@ func TestSubmitWeightedCovered(t *testing.T) {
 	if len(picker.lots) != 2 {
 		t.Fatalf("lots = %d, want 2", len(picker.lots))
 	}
-	if !picker.lots[0].BestBefore.Equal(bbDate(2026, 10, 1)) || !picker.lots[1].BestBefore.Equal(bbDate(2026, 10, 2)) {
+	if !picker.lots[0].BestBefore.Equal(oktDate(1)) || !picker.lots[1].BestBefore.Equal(oktDate(2)) {
 		t.Errorf("сроки lots = %v / %v, want 01.10 / 02.10", picker.lots[0].BestBefore, picker.lots[1].BestBefore)
 	}
 }
@@ -200,7 +202,7 @@ func TestSubmitMergedWeighted(t *testing.T) {
 		position("pos-w2", "00220002", "Курица", 0.3, 100000, 0),
 	}
 	picker := &fakePicker{}
-	uc := NewUseCase(fake, submitCatalog(), picker)
+	uc := NewUseCase(fake, submitCatalog(), picker, nil, nil)
 	if _, err := uc.Submit(context.Background(), o.ID, SubmitRequest{Rows: []SubmitRow{
 		{IDs: []string{"pos-w1", "pos-w2"}, Records: []ScanRecord{
 			{WeightG: 1250, BB: "01102026"},
@@ -226,7 +228,7 @@ func TestSubmitMergedWeighted(t *testing.T) {
 func TestSubmitUncoveredPieceSplit(t *testing.T) {
 	fake, o := submitOrder()
 	picker := &fakePicker{}
-	uc := NewUseCase(fake, submitCatalog(), picker)
+	uc := NewUseCase(fake, submitCatalog(), picker, nil, nil)
 	// Покрыта только весовая; штучная (3 ед.) не тронута → 3 заглушки 0,0001.
 	if _, err := uc.Submit(context.Background(), o.ID, SubmitRequest{Rows: []SubmitRow{
 		{IDs: []string{"pos-2"}, Records: []ScanRecord{{WeightG: 1250, BB: "01102026"}}},
@@ -276,7 +278,7 @@ func TestSubmitValidation(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			fake, o := submitOrder()
-			uc := NewUseCase(fake, submitCatalog(), &fakePicker{})
+			uc := NewUseCase(fake, submitCatalog(), &fakePicker{}, nil, nil)
 			if _, err := uc.Submit(context.Background(), o.ID, tc.req); !errors.Is(err, tc.want) {
 				t.Errorf("Submit err = %v, want %v", err, tc.want)
 			}
@@ -289,7 +291,7 @@ func TestSubmitValidation(t *testing.T) {
 
 func TestSubmitMissingPosition(t *testing.T) {
 	fake, o := submitOrder()
-	uc := NewUseCase(fake, submitCatalog(), &fakePicker{})
+	uc := NewUseCase(fake, submitCatalog(), &fakePicker{}, nil, nil)
 	_, err := uc.Submit(context.Background(), o.ID, SubmitRequest{Rows: []SubmitRow{
 		{IDs: []string{"ghost"}, Records: []ScanRecord{{BB: "10102026"}}},
 	}})
@@ -303,7 +305,7 @@ func TestSubmitMissingPosition(t *testing.T) {
 
 func TestSubmitOverpick(t *testing.T) {
 	fake, o := submitOrder()
-	uc := NewUseCase(fake, submitCatalog(), &fakePicker{})
+	uc := NewUseCase(fake, submitCatalog(), &fakePicker{}, nil, nil)
 	_, err := uc.Submit(context.Background(), o.ID, SubmitRequest{Rows: []SubmitRow{
 		{IDs: []string{"pos-1"}, Records: []ScanRecord{
 			{BB: "10102026"}, {BB: "10102026"}, {BB: "10102026"}, {BB: "10102026"},
@@ -338,7 +340,7 @@ func topupOrder() (*fakeOrderDetail, *client.MSOrder) {
 func TestSubmitTopupFull(t *testing.T) {
 	fake, o := topupOrder()
 	picker := &fakePicker{}
-	uc := NewUseCase(fake, submitCatalog(), picker)
+	uc := NewUseCase(fake, submitCatalog(), picker, nil, nil)
 	if _, err := uc.Submit(context.Background(), o.ID, SubmitRequest{Rows: []SubmitRow{
 		{IDs: []string{"pos-1"}, From: 2, Records: []ScanRecord{
 			{WeightG: 0, BB: "10102026"},
@@ -367,7 +369,7 @@ func TestSubmitTopupFull(t *testing.T) {
 func TestSubmitTopupPartial(t *testing.T) {
 	fake, o := topupOrder()
 	picker := &fakePicker{}
-	uc := NewUseCase(fake, submitCatalog(), picker)
+	uc := NewUseCase(fake, submitCatalog(), picker, nil, nil)
 	if _, err := uc.Submit(context.Background(), o.ID, SubmitRequest{Rows: []SubmitRow{
 		{IDs: []string{"pos-1"}, From: 2, Records: []ScanRecord{
 			{WeightG: 0, BB: "10102026"},
@@ -403,7 +405,7 @@ func TestSubmitTopupPartial(t *testing.T) {
 // 400 до PUT.
 func TestSubmitTopupOverpick(t *testing.T) {
 	fake, o := topupOrder()
-	uc := NewUseCase(fake, submitCatalog(), &fakePicker{})
+	uc := NewUseCase(fake, submitCatalog(), &fakePicker{}, nil, nil)
 	_, err := uc.Submit(context.Background(), o.ID, SubmitRequest{Rows: []SubmitRow{
 		{IDs: []string{"pos-1"}, From: 2, Records: []ScanRecord{
 			{WeightG: 0, BB: "10102026"},
@@ -425,7 +427,7 @@ func TestSubmitTopupOverpick(t *testing.T) {
 func TestSubmitTopupFromZero(t *testing.T) {
 	fake, o := topupOrder()
 	picker := &fakePicker{}
-	uc := NewUseCase(fake, submitCatalog(), picker)
+	uc := NewUseCase(fake, submitCatalog(), picker, nil, nil)
 	if _, err := uc.Submit(context.Background(), o.ID, SubmitRequest{Rows: []SubmitRow{
 		{IDs: []string{"pos-1"}, From: 0, Records: []ScanRecord{
 			{WeightG: 0, BB: "10102026"},
@@ -449,7 +451,7 @@ func TestSubmitTopupFromZero(t *testing.T) {
 // из МС заново (решение владельца 14.09 — PUT собирается из свежих данных).
 func TestSubmitRefetchesFromMS(t *testing.T) {
 	fake, o := submitOrder()
-	uc := NewUseCase(fake, submitCatalog(), &fakePicker{})
+	uc := NewUseCase(fake, submitCatalog(), &fakePicker{}, nil, nil)
 
 	req := SubmitRequest{Rows: []SubmitRow{
 		{IDs: []string{"pos-1"}, Records: []ScanRecord{{BB: "10102026"}}},
@@ -476,7 +478,7 @@ func TestSubmitMSError(t *testing.T) {
 	fake, o := submitOrder()
 	fake.putErr = errors.New("MS: 400 bad request")
 	picker := &fakePicker{}
-	uc := NewUseCase(fake, submitCatalog(), picker)
+	uc := NewUseCase(fake, submitCatalog(), picker, nil, nil)
 	if _, err := uc.Submit(context.Background(), o.ID, SubmitRequest{Rows: []SubmitRow{
 		{IDs: []string{"pos-1"}, Records: []ScanRecord{{BB: "10102026"}}},
 	}}); err == nil {
@@ -490,7 +492,7 @@ func TestSubmitMSError(t *testing.T) {
 func TestSubmitPickerErrorWarns(t *testing.T) {
 	fake, o := submitOrder()
 	picker := &fakePicker{err: errors.New("pg down")}
-	uc := NewUseCase(fake, submitCatalog(), picker)
+	uc := NewUseCase(fake, submitCatalog(), picker, nil, nil)
 	res, err := uc.Submit(context.Background(), o.ID, SubmitRequest{Rows: []SubmitRow{
 		{IDs: []string{"pos-1"}, Records: []ScanRecord{{BB: "10102026"}}},
 	}})
