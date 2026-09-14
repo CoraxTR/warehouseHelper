@@ -89,6 +89,8 @@ func (r *captureRow) Scan(dest ...any) error {
 // TestScanDiscountInput — разбор строки снапшота: дни периода берутся из
 // track_weekly, NULL-оборот даёт nil и PeriodDays 0, отрицательный оборот
 // (возвраты задним числом) хранится честно, NULL-срок годности — nil.
+// Скидки лота ложатся по своим полям: plain/ручные — с NULL в nil, метка
+// источника («что снимать при уходе избытка») — строкой.
 func TestScanDiscountInput(t *testing.T) {
 	bb := time.Date(2026, time.October, 1, 0, 0, 0, 0, time.UTC)
 
@@ -99,25 +101,30 @@ func TestScanDiscountInput(t *testing.T) {
 	}{
 		{
 			name: "недельный товар — период 7 дней",
-			vals: []any{"p-week", "Молоко 3,2%", "Молочка", false, 14, true, bb, 24, 12.5},
+			vals: []any{"p-week", "Молоко 3,2%", "Молочка", false, 14, true, bb, 24, 12.5,
+				int16(20), nil, nil, int16(15), "expiry"},
 			want: discounts.Input{
 				ProductID: "p-week", Name: "Молоко 3,2%", GroupName: "Молочка",
 				ShelfLife: ptr[int16](14), TrackWeekly: true, BestBefore: bb, Qty: 24,
 				Turnover: ptr(12.5), PeriodDays: 7,
+				GeneralPlain: ptr[int16](20), TelegramManual: ptr[int16](15), DiscountSource: "expiry",
 			},
 		},
 		{
 			name: "месячный товар — период 30 дней",
-			vals: []any{"p-month", "Сыр", "Молочка", true, 90, false, bb, 8, 40.25},
+			vals: []any{"p-month", "Сыр", "Молочка", true, 90, false, bb, 8, 40.25,
+				nil, int16(10), int16(30), nil, ""},
 			want: discounts.Input{
 				ProductID: "p-month", Name: "Сыр", GroupName: "Молочка", ShortList: true,
 				ShelfLife: ptr[int16](90), BestBefore: bb, Qty: 8,
 				Turnover: ptr(40.25), PeriodDays: 30,
+				TelegramPlain: ptr[int16](10), GeneralManual: ptr[int16](30),
 			},
 		},
 		{
 			name: "нет завершённого периода — ни оборота, ни дней",
-			vals: []any{"p-new", "Новинка", "Разное", false, 30, true, bb, 5, nil},
+			vals: []any{"p-new", "Новинка", "Разное", false, 30, true, bb, 5, nil,
+				nil, nil, nil, nil, nil},
 			want: discounts.Input{
 				ProductID: "p-new", Name: "Новинка", GroupName: "Разное",
 				ShelfLife: ptr[int16](30), TrackWeekly: true, BestBefore: bb, Qty: 5,
@@ -125,7 +132,8 @@ func TestScanDiscountInput(t *testing.T) {
 		},
 		{
 			name: "срок годности не задан — NULL",
-			vals: []any{"p-null", "Без срока", "Разное", false, nil, false, bb, 3, 1.5},
+			vals: []any{"p-null", "Без срока", "Разное", false, nil, false, bb, 3, 1.5,
+				nil, nil, nil, nil, nil},
 			want: discounts.Input{
 				ProductID: "p-null", Name: "Без срока", GroupName: "Разное",
 				BestBefore: bb, Qty: 3, Turnover: ptr(1.5), PeriodDays: 30,
@@ -133,7 +141,8 @@ func TestScanDiscountInput(t *testing.T) {
 		},
 		{
 			name: "отрицательный оборот (возвраты задним числом)",
-			vals: []any{"p-ret", "Творог", "Молочка", false, 7, false, bb, 12, -3.5},
+			vals: []any{"p-ret", "Творог", "Молочка", false, 7, false, bb, 12, -3.5,
+				nil, nil, nil, nil, nil},
 			want: discounts.Input{
 				ProductID: "p-ret", Name: "Творог", GroupName: "Молочка",
 				ShelfLife: ptr[int16](7), BestBefore: bb, Qty: 12,
@@ -374,6 +383,121 @@ func TestLatestSentDigestSQL(t *testing.T) {
 	} {
 		if !strings.Contains(latestSentDigestSQL, want) {
 			t.Errorf("в latestSentDigestSQL нет %q", want)
+		}
+	}
+}
+
+// TestDiscountInputColumnsIncludeDiscounts — снапшот расчёта обязан нести
+// текущие скидки лота и метку источника: без них автоматика не знает, что уже
+// стоит в БД («только вверх» для general, приоритет ручной, «что снимать» —
+// по метке), и пишет вслепую.
+func TestDiscountInputColumnsIncludeDiscounts(t *testing.T) {
+	for _, want := range []string{
+		"s.discount_general,", "s.discount_telegram,",
+		"s.discount_general_manual,", "s.discount_telegram_manual,", "s.discount_source",
+	} {
+		if !strings.Contains(discountInputColumns, want) {
+			t.Errorf("в discountInputColumns нет %q", want)
+		}
+	}
+}
+
+// TestDayFlagColumn — маркер дня → колонка discount_day_flags. Имена колонок
+// подставляются в SQL, поэтому берутся только из белого списка: неизвестный
+// маркер (в том числе попытка подсунуть SQL) — ошибка ДО запроса.
+func TestDayFlagColumn(t *testing.T) {
+	known := []struct {
+		flag discounts.DayFlag
+		want string
+	}{
+		{discounts.FlagSurplus, "surplus_done"},
+		{discounts.FlagExpiry, "expiry_done"},
+		{discounts.FlagDigestSent, "digest_sent"},
+		{discounts.FlagPlan, "tg_plan_done"},
+		{discounts.FlagRaise, "tg_raise_done"},
+	}
+	for _, tc := range known {
+		got, err := dayFlagColumn(tc.flag)
+		if err != nil {
+			t.Errorf("dayFlagColumn(%q): %v", tc.flag, err)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("dayFlagColumn(%q) = %q, want %q", tc.flag, got, tc.want)
+		}
+	}
+
+	for _, bad := range []discounts.DayFlag{"", "none", "surplus_done; DROP TABLE product_stock"} {
+		if _, err := dayFlagColumn(bad); !errors.Is(err, discounts.ErrBadDayFlag) {
+			t.Errorf("dayFlagColumn(%q) = %v, want обёртку discounts.ErrBadDayFlag", bad, err)
+		}
+	}
+}
+
+// TestCollectTodaySlot — карта слота дня «лот → скидка плана»: пустой день даёт
+// пустую (не nil) карту, короткая строка и ошибка выборки не молчат.
+func TestCollectTodaySlot(t *testing.T) {
+	october := time.Date(2026, time.October, 1, 0, 0, 0, 0, time.UTC)
+	november := time.Date(2026, time.November, 15, 0, 0, 0, 0, time.UTC)
+
+	t.Run("позиции слота", func(t *testing.T) {
+		rows := &fakeRows{rows: [][]any{
+			{testLotMilk, october, int16(10)},
+			{testLotCheese, november, int16(20)},
+		}}
+		got, err := collectTodaySlot(rows)
+		if err != nil {
+			t.Fatalf("collectTodaySlot: %v", err)
+		}
+		want := map[discounts.LotKey]int16{
+			{ProductID: testLotMilk, BestBefore: october}:    10,
+			{ProductID: testLotCheese, BestBefore: november}: 20,
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("collectTodaySlot = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("дня без публикации — пустая карта", func(t *testing.T) {
+		got, err := collectTodaySlot(&fakeRows{})
+		if err != nil {
+			t.Fatalf("collectTodaySlot: %v", err)
+		}
+		if got == nil {
+			t.Fatal("карта nil, want пустую")
+		}
+		if len(got) != 0 {
+			t.Errorf("в карте %d лотов, want 0", len(got))
+		}
+	})
+
+	t.Run("короткая строка выборки", func(t *testing.T) {
+		if _, err := collectTodaySlot(&fakeRows{rows: [][]any{{testLotMilk}}}); err == nil {
+			t.Fatal("collectTodaySlot на короткой строке: ошибки нет")
+		}
+	})
+
+	t.Run("ошибка выборки после строк", func(t *testing.T) {
+		rows := &fakeRows{rows: [][]any{{testLotMilk, october, int16(10)}}, err: errors.New("обрыв связи")}
+		if _, err := collectTodaySlot(rows); !errors.Is(err, rows.err) {
+			t.Fatalf("collectTodaySlot: %v, want обёртку ошибки выборки", err)
+		}
+	})
+}
+
+// TestTodaySlotSQL — слотом дня считаем последний ОТПРАВЛЕННЫЙ слот этого дня
+// (план 14:00 идёт после дайджеста 09:00): по нему держат эскалацию 10→20 и по
+// нему же поднимают general в 16:00. Отправленный слот важен — собранную, но не
+// отправленную рассылку человек не видел.
+func TestTodaySlotSQL(t *testing.T) {
+	for _, want := range []string{
+		"sent_at IS NOT NULL",
+		"planned_at = $1::date",
+		"ORDER BY id DESC",
+		"LIMIT 1",
+	} {
+		if !strings.Contains(todaySlotSQL, want) {
+			t.Errorf("в todaySlotSQL нет %q", want)
 		}
 	}
 }

@@ -18,5 +18,6 @@ CREATE TABLE product_stock (
     discount_telegram      SMALLINT CHECK (discount_telegram BETWEEN 0 AND 100),       -- скидка телеграм, %; NULL — не задана («просто»)
     discount_general_manual SMALLINT CHECK (discount_general_manual BETWEEN 0 AND 100), -- ручная скидка сайт, %; NULL — не задана (пишет UI сроков)
     discount_telegram_manual SMALLINT CHECK (discount_telegram_manual BETWEEN 0 AND 100), -- ручная скидка телеграм, %; NULL — не задана
+    discount_source        TEXT CHECK (discount_source IN ('manual', 'expiry', 'surplus')), -- метка источника «простой» скидки сайта (какую скидку снял/поднял движок: подсветка ячеек); NULL — метки нет
     PRIMARY KEY (product_id, best_before)
 );
