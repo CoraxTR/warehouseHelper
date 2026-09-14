@@ -598,6 +598,32 @@ func TestReplaceStockExpiredClearsManual(t *testing.T) {
 	}
 }
 
+// Метка источника (discount_source) — свойство лота, а не скана: «Обновить
+// сроки» не должно гасить подсветку в кэше (в БД ReplaceStockLots колонку
+// тоже не трогает).
+func TestReplaceStockKeepsDiscountSource(t *testing.T) {
+	repo := replaceRepo()
+	repo.products[0].Lots[0].DiscountSource = stock.DiscountSourceExpiry
+	uc := newTestUC(repo, &mockPub{})
+	if err := uc.WarmUp(context.Background()); err != nil {
+		t.Fatalf("WarmUp: %v", err)
+	}
+
+	if err := uc.ReplaceStock(context.Background(), ReplaceRequest{
+		Scans: []string{codeItem("10100001", 250, day(-10), day(1))},
+	}); err != nil {
+		t.Fatalf("ReplaceStock: %v", err)
+	}
+
+	lots := uc.Snapshot()[0].Lots
+	if len(lots) != 1 || !lots[0].BestBefore.Equal(day(1)) {
+		t.Fatalf("кэш p1: %+v", lots)
+	}
+	if lots[0].DiscountSource != stock.DiscountSourceExpiry {
+		t.Errorf("метка источника потеряна заменой: %q, want %q", lots[0].DiscountSource, stock.DiscountSourceExpiry)
+	}
+}
+
 // TestMergeLotsResultNeverNil — пустой результат слияния — пустой МАССИВ,
 // не nil: lots в JSON обязан быть [] (клиент итерирует p.lots.length).
 func TestMergeLotsResultNeverNil(t *testing.T) {
@@ -1436,6 +1462,7 @@ func TestSetDiscountsValidation(t *testing.T) {
 		{"скидка ТГ -1", stock.DiscountWrite{ProductID: "p1", BestBefore: d(2026, 9, 1), Telegram: i16(-1)}},
 		{"без товара", stock.DiscountWrite{BestBefore: d(2026, 9, 1), General: i16(10)}},
 		{"без срока", stock.DiscountWrite{ProductID: "p1", General: i16(10)}},
+		{"неизвестная метка источника", stock.DiscountWrite{ProductID: "p1", BestBefore: d(2026, 9, 1), General: i16(10), Source: "expiryy"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -1517,6 +1544,123 @@ func TestSetDiscountsProductOutsideCache(t *testing.T) {
 	}
 	if p := findTestProduct(uc.Snapshot(), "p9"); p.ID != "p9" {
 		t.Errorf("карточка p9 не появилась в кэше (Snapshot: %d товаров)", len(uc.Snapshot()))
+	}
+}
+
+// Метка источника доходит до кэша и до БД, событие несёт её клиенту (клиент
+// решает подсветку пары «значение + метка»).
+func TestSetDiscountsSourceReachesCacheAndEvent(t *testing.T) {
+	repo := &mockRepo{products: testStock()}
+	pub := &mockPub{}
+	uc := newDiscountsUC(t, repo, pub)
+
+	err := uc.SetDiscounts(context.Background(), []stock.DiscountWrite{{
+		ProductID:  "p1",
+		BestBefore: d(2026, 9, 1),
+		General:    i16(20),
+		Source:     stock.DiscountSourceExpiry,
+	}})
+	if err != nil {
+		t.Fatalf("SetDiscounts: %v", err)
+	}
+
+	if len(repo.discounts) != 1 {
+		t.Fatalf("repo.discounts = %d, want 1", len(repo.discounts))
+	}
+	if w := repo.discounts[0]; w.Source != stock.DiscountSourceExpiry {
+		t.Errorf("в БД ушла метка %q, want %q", w.Source, stock.DiscountSourceExpiry)
+	}
+	if got := testLot(t, uc, "p1", d(2026, 9, 1)).DiscountSource; got != stock.DiscountSourceExpiry {
+		t.Errorf("кэш: метка %q, want %q", got, stock.DiscountSourceExpiry)
+	}
+	if len(pub.events) != 1 || pub.events[0].Lot == nil {
+		t.Fatalf("events = %+v, want один lot_upsert", pub.events)
+	}
+	if got := pub.events[0].Lot.DiscountSource; got != stock.DiscountSourceExpiry {
+		t.Errorf("событие: метка %q, want %q", got, stock.DiscountSourceExpiry)
+	}
+}
+
+// Снятие скидки движком (пустая метка в правке) убирает и метку, и значение:
+// кэш совпадает с БД (в БД NULL = метки нет).
+func TestSetDiscountsEmptySourceClearsLabel(t *testing.T) {
+	repo := &mockRepo{products: testStock()}
+	uc := newDiscountsUC(t, repo, &mockPub{})
+
+	// Сначала избыток со своей меткой.
+	if err := uc.SetDiscounts(context.Background(), []stock.DiscountWrite{{
+		ProductID:  "p1",
+		BestBefore: d(2026, 9, 10),
+		General:    i16(10),
+		Source:     stock.DiscountSourceSurplus,
+	}}); err != nil {
+		t.Fatalf("SetDiscounts(избыток): %v", err)
+	}
+	if got := testLot(t, uc, "p1", d(2026, 9, 10)).DiscountSource; got != stock.DiscountSourceSurplus {
+		t.Fatalf("подготовка: метка %q, want %q", got, stock.DiscountSourceSurplus)
+	}
+
+	// Избыток кончился: движок снимает значение и метку (пустая строка → NULL).
+	repo.discounts = nil
+	if err := uc.SetDiscounts(context.Background(), []stock.DiscountWrite{{
+		ProductID:  "p1",
+		BestBefore: d(2026, 9, 10),
+	}}); err != nil {
+		t.Fatalf("SetDiscounts(снятие): %v", err)
+	}
+
+	if len(repo.discounts) != 1 {
+		t.Fatalf("repo.discounts = %d, want 1", len(repo.discounts))
+	}
+	if w := repo.discounts[0]; w.Source != "" || w.General != nil {
+		t.Errorf("в БД ушло %+v, want пустую метку и NULL-скидку", w)
+	}
+	lot := testLot(t, uc, "p1", d(2026, 9, 10))
+	if lot.DiscountSource != "" || lot.General != nil {
+		t.Errorf("кэш: метка %q, general = %v, want \"\"/nil", lot.DiscountSource, lot.General)
+	}
+}
+
+// Правка метки источника — это правка только plain-колонок: ручные скидки UI
+// остаются на месте (и остаются приоритетнее движка).
+func TestSetDiscountsSourceKeepsManual(t *testing.T) {
+	repo := &mockRepo{products: testStock()}
+	uc := newDiscountsUC(t, repo, &mockPub{})
+
+	if err := uc.SetManualDiscount(context.Background(), "p1", d(2026, 9, 1), i16(7), i16(3)); err != nil {
+		t.Fatalf("SetManualDiscount: %v", err)
+	}
+	if err := uc.SetDiscounts(context.Background(), []stock.DiscountWrite{{
+		ProductID:  "p1",
+		BestBefore: d(2026, 9, 1),
+		General:    i16(20),
+		Source:     stock.DiscountSourceExpiry,
+	}}); err != nil {
+		t.Fatalf("SetDiscounts: %v", err)
+	}
+
+	lot := testLot(t, uc, "p1", d(2026, 9, 1))
+	if lot.GeneralManual == nil || *lot.GeneralManual != 7 || lot.TelegramManual == nil || *lot.TelegramManual != 3 {
+		t.Errorf("ручные скидки затёрты: %v/%v, want 7/3", lot.GeneralManual, lot.TelegramManual)
+	}
+	if lot.DiscountSource != stock.DiscountSourceExpiry {
+		t.Errorf("метка = %q, want %q", lot.DiscountSource, stock.DiscountSourceExpiry)
+	}
+}
+
+// Ручная правка из UI (SetManualDiscount) метку источника не трогает — её
+// ставит и снимает только движок (шов SetDiscounts).
+func TestSetManualDiscountKeepsSource(t *testing.T) {
+	repo := &mockRepo{products: testStock()}
+	repo.products[0].Lots[0].DiscountSource = stock.DiscountSourceSurplus
+	uc := newDiscountsUC(t, repo, &mockPub{})
+
+	if err := uc.SetManualDiscount(context.Background(), "p1", d(2026, 9, 1), i16(15), nil); err != nil {
+		t.Fatalf("SetManualDiscount: %v", err)
+	}
+
+	if got := testLot(t, uc, "p1", d(2026, 9, 1)).DiscountSource; got != stock.DiscountSourceSurplus {
+		t.Errorf("метка после ручной правки = %q, want %q", got, stock.DiscountSourceSurplus)
 	}
 }
 

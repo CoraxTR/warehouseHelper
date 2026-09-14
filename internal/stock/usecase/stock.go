@@ -540,6 +540,7 @@ func (uc *StockUseCase) buildReplacePlans(batches map[string]map[time.Time]*agg,
 // ex == nil — лота ещё нет (создаётся с нуля).
 func targetLot(ex *stock.Lot, a *agg, bb, today time.Time) (lot stock.Lot, write stock.LotWrite) {
 	var genMan, tgMan, general, telegram *int16
+	var source string
 	if ex != nil {
 		if !bb.Before(today) {
 			genMan = cloneInt16(ex.GeneralManual)
@@ -547,6 +548,9 @@ func targetLot(ex *stock.Lot, a *agg, bb, today time.Time) (lot stock.Lot, write
 		}
 		general = cloneInt16(ex.General)
 		telegram = cloneInt16(ex.Telegram)
+		// Метка источника — свойство лота, а не скана: замена остатков её не
+		// сбрасывает (в БД ReplaceStockLots тоже не трогает discount_source).
+		source = ex.DiscountSource
 	}
 	produced := a.producedOn
 	if ex != nil && ex.ProducedOn != nil {
@@ -560,6 +564,7 @@ func targetLot(ex *stock.Lot, a *agg, bb, today time.Time) (lot stock.Lot, write
 		Telegram:       telegram,
 		GeneralManual:  genMan,
 		TelegramManual: tgMan,
+		DiscountSource: source,
 	}
 	write = stock.LotWrite{
 		BestBefore:     bb,
@@ -1042,7 +1047,8 @@ func addDeficitGroup(cur *stock.Product, groups *[]string, seen map[string]struc
 }
 
 // SetDiscounts записывает «просто»-скидки лотов (шов модуля расчёта скидок):
-// General/Telegram идут в discount_general/discount_telegram, ручные скидки UI
+// General/Telegram идут в discount_general/discount_telegram, метка источника
+// (Source) — в discount_source (пустая строка = NULL), ручные скидки UI
 // не трогаются. nil — скидка не задана (в БД NULL). Пустой список — нет работы
 // (без обращения к БД). Запись синхронна: БД → кэш → события ws; затем
 // DayStateRecorder (строки дня) и слушатель лотов (LotChangeListener) — их
@@ -1112,15 +1118,32 @@ func normalizeDiscountWrites(writes []stock.DiscountWrite) ([]stock.DiscountWrit
 		if err := validateManualDiscount("скидка ТГ (просто)", w.Telegram); err != nil {
 			return nil, err
 		}
+		source := strings.TrimSpace(w.Source)
+		if err := validateDiscountSource(source); err != nil {
+			return nil, err
+		}
 		items = append(items, stock.DiscountWrite{
 			ProductID:  w.ProductID,
 			BestBefore: normalizeDate(w.BestBefore),
 			General:    cloneInt16(w.General),
 			Telegram:   cloneInt16(w.Telegram),
+			Source:     source,
 		})
 	}
 
 	return items, nil
+}
+
+// validateDiscountSource — метка источника: пустая («метки нет») или одна из
+// значений, разрешённых CHECK-ом колонки product_stock.discount_source.
+// Опечатка движка не должна тихо лечь в БД как чужой источник.
+func validateDiscountSource(source string) error {
+	switch source {
+	case "", stock.DiscountSourceManual, stock.DiscountSourceExpiry, stock.DiscountSourceSurplus:
+		return nil
+	}
+
+	return fmt.Errorf("скидки: неизвестный источник %q", source)
 }
 
 // loadDiscountCatalog подгружает из каталога товары, которых нет в кэше
@@ -1180,6 +1203,9 @@ func (uc *StockUseCase) applyDiscountsCacheLocked(writes []stock.DiscountWrite, 
 		}
 		lot.General = cloneInt16(w.General)
 		lot.Telegram = cloneInt16(w.Telegram)
+		// Метка идёт вместе со скидками: пустая строка правки = метки нет
+		// (движок снял свою скидку) — кэш обязан совпасть с БД.
+		lot.DiscountSource = w.Source
 
 		updated := *lot
 		events = append(events, stock.Event{

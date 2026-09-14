@@ -16,7 +16,8 @@ const stockProductColumns = `
     p.id, p.internal_code, p.name, p.group_name, p.short_list,
     ps.best_before, ps.qty, ps.produced_on,
     ps.discount_general, ps.discount_telegram,
-    ps.discount_general_manual, ps.discount_telegram_manual`
+    ps.discount_general_manual, ps.discount_telegram_manual,
+    ps.discount_source`
 
 // LoadAllStock возвращает все товары каталога с их лотами остатков,
 // отсортированные по (group_name, name, best_before). Товар без остатков
@@ -47,11 +48,13 @@ func (pg *PGClient) LoadAllStock(ctx context.Context) ([]stock.Product, error) {
 			producedOn                         *time.Time
 			general, telegram                  *int16
 			generalManual, telegramManual      *int16
+			discountSource                     *string // NULL — метки нет
 		)
 		if err := rows.Scan(
 			&pID, &internalCode, &name, &groupName, &shortList,
 			&bestBefore, &qty, &producedOn,
 			&general, &telegram, &generalManual, &telegramManual,
+			&discountSource,
 		); err != nil {
 			return nil, fmt.Errorf("scan stock row: %w", err)
 		}
@@ -83,6 +86,7 @@ func (pg *PGClient) LoadAllStock(ctx context.Context) ([]stock.Product, error) {
 			Telegram:       telegram,
 			GeneralManual:  generalManual,
 			TelegramManual: telegramManual,
+			DiscountSource: sourceValue(discountSource),
 		})
 	}
 	if err := rows.Err(); err != nil {
@@ -90,6 +94,15 @@ func (pg *PGClient) LoadAllStock(ctx context.Context) ([]stock.Product, error) {
 	}
 
 	return products, nil
+}
+
+// sourceValue — метка источника из NULL-колонки: NULL → пустая строка
+// (у stock.Lot пустая строка = «метки нет»; nil-указатель в JSON клиенту не нужен).
+func sourceValue(v *string) string {
+	if v == nil {
+		return ""
+	}
+	return *v
 }
 
 // SetManualDiscount обновляет ручные скидки лота по PK (product_id, best_before).
@@ -114,6 +127,8 @@ func (pg *PGClient) SetManualDiscount(ctx context.Context, productID string, bes
 // SetDiscounts обновляет «просто»-скидки лотов (только plain-колонки,
 // ручные не трогаются) в одной транзакции. Строки нет — stock.ErrLotNotFound
 // (весь батч откатывается).
+// Метка источника (discount_source) пишется вместе со скидками: пустая строка
+// правки = NULL (метки нет) — так движок снимает свою метку при снятии скидки.
 func (pg *PGClient) SetDiscounts(ctx context.Context, writes []stock.DiscountWrite) error {
 	if len(writes) == 0 {
 		return nil
@@ -127,9 +142,10 @@ func (pg *PGClient) SetDiscounts(ctx context.Context, writes []stock.DiscountWri
 	for _, w := range writes {
 		tag, err := tx.Exec(ctx, `
                 UPDATE product_stock
-                SET discount_general = $3, discount_telegram = $4
+                SET discount_general = $3, discount_telegram = $4,
+                    discount_source = NULLIF($5, '')
                 WHERE product_id = $1 AND best_before = $2`,
-			w.ProductID, w.BestBefore, w.General, w.Telegram,
+			w.ProductID, w.BestBefore, w.General, w.Telegram, w.Source,
 		)
 		if err != nil {
 			return fmt.Errorf("set discounts (%s, %s): %w", w.ProductID, w.BestBefore.Format(time.DateOnly), err)
