@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -271,11 +272,39 @@ func (a *App) initComplaints() {
 		}
 		return uc.HandleDetailsButton(ctx, cb.ID, cb.ChatID, id)
 	})
+	// Поллер один на токен (второй getUpdates получит 409 Conflict), поэтому
+	// текстовые команды других модулей вешаются на него же: /скидки — отчёт по
+	// скидкам в чат отправителя (модуль скидок).
+	poller.SetMessageHandler(a.handleBotMessage)
 	a.background("complaints: поллер кнопок", func() {
 		if err := poller.Run(a.ctx); err != nil {
 			slog.Info(fmt.Sprintf("complaints: поллер завершился: %v", err))
 		}
 	})
+}
+
+// handleBotMessage — текстовые команды бота. Сейчас одна: /скидки — отчёт по
+// скидкам (тот же текст, что в дайджест 09:00) в чат отправителя. Чужие
+// сообщения игнорируются: отвечать на них — дело других модулей.
+func (a *App) handleBotMessage(ctx context.Context, msg telegram.Message) error {
+	if !isDiscountsCommand(msg.Text) {
+		return nil
+	}
+	return a.di.DiscountsUC().ReplyDigest(ctx, msg.ChatID)
+}
+
+// isDiscountsCommand — «/скидки» с необязательным адресом бота и хвостом
+// («/скидки@warehouse_bot», «/скидки ?»): сравнение по первому слову, регистр
+// не важен.
+func isDiscountsCommand(text string) bool {
+	cmd := strings.ToLower(strings.TrimSpace(text))
+	if i := strings.IndexAny(cmd, " \n\t"); i >= 0 {
+		cmd = cmd[:i]
+	}
+	if i := strings.Index(cmd, "@"); i >= 0 {
+		cmd = cmd[:i]
+	}
+	return cmd == "/скидки"
 }
 
 // initReturns запускает наблюдатель журнала действий МС (модуль returns:
