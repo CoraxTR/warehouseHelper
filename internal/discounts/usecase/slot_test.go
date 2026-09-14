@@ -357,6 +357,26 @@ func TestRunRaiseUpgradesGeneralFromPlan(t *testing.T) {
 	}
 }
 
+// TestRunRaiseUsesHigherTelegramValue — если менеджер поднял ТГ-скидку руками
+// после 14:00, сайт поднимаем до неё, а не до плана рассылки (решение владельца).
+func TestRunRaiseUsesHigherTelegramValue(t *testing.T) {
+	h := newSlotHarness(recalcNow(1),
+		lotInput("p1", "Колбаса", day(9), 100, telegramInput(30)),
+	)
+	h.repo.slot = map[discounts.LotKey]int16{h.key("p1", day(9)): slotMainPercent}
+
+	if err := h.uc.RunRaise(context.Background(), h.now); err != nil {
+		t.Fatalf("подъём general: %v", err)
+	}
+
+	if len(h.writer.batches) != 1 || len(h.writer.batches[0]) != 1 {
+		t.Fatalf("правки подъёма: %+v", h.writer.batches)
+	}
+	if got := h.writer.batches[0][0].General; got == nil || *got != 30 {
+		t.Errorf("general правки %v, want 30 (текущая ТГ-колонка выше плана)", got)
+	}
+}
+
 // TestRunRaiseDoesNotLowerOrTouchManual — автоматика не понижает: скидка выше
 // плана остаётся, ручная скидка не переписывается.
 func TestRunRaiseDoesNotLowerOrTouchManual(t *testing.T) {

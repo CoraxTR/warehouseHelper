@@ -143,12 +143,19 @@ func (uc *UseCase) RunRaise(ctx context.Context, now time.Time) error {
 			}
 			raised = append(raised, p.Key)
 			if p.Manual != nil && *p.Manual > 0 {
-				continue // ручная скидка важнее плана
+				continue // ручная скидка на сайте важнее плана
 			}
-			if discountPercent(p.Applied) >= percent {
-				continue // уже не ниже плана: не понижаем
+			// Цель подъёма — максимум из плана слота и ТЕКУЩЕЙ ТГ-колонки: если
+			// менеджер поднял ТГ-скидку руками после 14:00, сайт ведём до неё
+			// (решение владельца 14.09: «до максимального ТГ, если руками»).
+			target := percent
+			if p.TelegramPlain != nil && *p.TelegramPlain > target {
+				target = *p.TelegramPlain
 			}
-			general := percent
+			if discountPercent(p.Applied) >= target {
+				continue // уже не ниже цели: не понижаем
+			}
+			general := target
 			p.AppliedPlain = &general
 			p.SourceRaw = discounts.SourceExpiry.String()
 			writes = append(writes, writeFor(*p))
