@@ -82,11 +82,14 @@ func (uc *UseCase) RecalcExpiry(ctx context.Context, now time.Time) error {
 
 // RecalcSurplus — часовой пересчёт избытка.
 //
-// Оборот освежает только там, где решение может уйти: товары с событиями стока
-// (MarkDirty) и пары, у которых избыток есть сейчас. Ошибка шва оборота тик не
-// роняет — считаем по обороту снапшота (последний завершённый период). Маркер
-// дня отмечается на каждом часу: он говорит «пересчёт за день был», по нему
-// приложение добирает пропущенный запуск после сна.
+// Оборот приходит только швом модуля средних продаж: сохранённый —
+// Turnover.Averages (без обращений в МС), затем свежий — Turnover.RefreshCurrent
+// по товарам, где решение может уйти (события стока MarkDirty и пары в избытке
+// сейчас). Ошибка Averages тик НЕ выполняет: без оборота все избытки выглядели
+// бы снятыми, а снятие избытка — это запись. Ошибка RefreshCurrent тик не
+// роняет (считаем по сохранённому обороту, свежий догонит следующий час).
+// Маркер дня отмечается на каждом часу: он говорит «пересчёт за день был», по
+// нему приложение добирает пропущенный запуск после сна.
 func (uc *UseCase) RecalcSurplus(ctx context.Context, now time.Time) error {
 	today := beginningOfDay(now)
 
@@ -94,9 +97,17 @@ func (uc *UseCase) RecalcSurplus(ctx context.Context, now time.Time) error {
 	if err != nil {
 		return err
 	}
-	pairs := Evaluate(inputs, nil, today)
 
-	if rates := uc.freshTurnover(ctx, pairs); rates != nil {
+	rates, err := uc.turnover.Averages(ctx, inputProductIDs(inputs))
+	if err != nil {
+		return fmt.Errorf("оборот товаров расчёта: %w", err)
+	}
+	pairs := Evaluate(inputs, rates, today)
+
+	if fresh := uc.freshTurnover(ctx, pairs); fresh != nil {
+		for pid, v := range fresh {
+			rates[pid] = v
+		}
 		pairs = Evaluate(inputs, rates, today)
 	}
 
@@ -190,9 +201,9 @@ func surplusLeft(p PairState) bool {
 
 // freshTurnover — свежий оборот по товарам, где решение может уйти: события
 // стока с прошлого тика (MarkDirty) и пары с избытком сейчас. Пустой список —
-// шва не касаемся (nil-карта: Evaluate возьмёт оборот снапшота). Ошибка шва — в лог
-// и та же nil-карта: часовой тик из-за недоступного МС пропускать нельзя, а
-// оборот последнего завершённого периода есть в снапшоте.
+// шва не касаемся (nil-карта: расчёт остаётся на сохранённом обороте).
+// Ошибка шва — в лог и та же nil-карта: часовой тик из-за недоступного МС
+// пропускать нельзя, сохранённый оборот уже получен от Averages.
 func (uc *UseCase) freshTurnover(ctx context.Context, pairs []PairState) map[string]float64 {
 	ids := uc.freshIDs(pairs)
 	if len(ids) == 0 {
@@ -205,6 +216,21 @@ func (uc *UseCase) freshTurnover(ctx context.Context, pairs []PairState) map[str
 		return nil
 	}
 	return rates
+}
+
+// inputProductIDs — товары входа расчёта без повторов (кого спрашивать об
+// обороте): лоты одного товара дают одну строку.
+func inputProductIDs(inputs []discounts.Input) []string {
+	seen := make(map[string]struct{}, len(inputs))
+	ids := make([]string, 0, len(inputs))
+	for _, in := range inputs {
+		if _, ok := seen[in.ProductID]; ok {
+			continue
+		}
+		seen[in.ProductID] = struct{}{}
+		ids = append(ids, in.ProductID)
+	}
+	return ids
 }
 
 // freshIDs — товары свежего оборота: события стока (их забирает takeDirty) и

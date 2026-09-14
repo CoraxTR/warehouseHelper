@@ -53,6 +53,10 @@ type Turnover interface {
 	// один раз в день (09:00) и на первом запуске дня: забирает возвраты
 	// задним числом по старым заказам.
 	RefreshWindow(ctx context.Context, productIDs []string) (map[string]float64, error)
+	// Averages — действующий средний оборот товаров по данным БД, без
+	// обращений в МС: значение для всех, кому тик период не обновлял.
+	// Оборот — данные модуля средних продаж, расчёт читает их только здесь.
+	Averages(ctx context.Context, productIDs []string) (map[string]float64, error)
 }
 
 // DiscountWriter — запись «простых» скидок лотов (шов модуля «Сроки»):

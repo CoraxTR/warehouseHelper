@@ -22,42 +22,21 @@ import (
 // «скидка не задана»).
 const discountInputColumns = `
     s.product_id, p.name, p.group_name, p.short_list, p.shelf_life, p.track_weekly,
-    s.best_before, s.qty, COALESCE(w.qty, m.qty),
+    s.best_before, s.qty,
     s.discount_general, s.discount_telegram,
     s.discount_general_manual, s.discount_telegram_manual, s.discount_source`
 
-// discountInputQuery — снапшот целиком: лоты стока с товарными признаками и
-// оборотом последнего ЗАВЕРШЁННОГО периода. Ряды оборотов содержат и текущий
-// незакрытый период (неделю/месяц), поэтому периоды ограничены строго раньше
-// начала текущей недели (Postgres: неделя с понедельника) и текущего месяца;
-// дата сравнивается с датой (date_trunc … ::date), не со временем. Вчера/сегодня
-// приходят параметром $1 (сегодня) — «сейчас» внутри SQL не берём, чтобы выбор
-// периода был тестируемым.
-// Период выбирается по признаку товара, а не по наличию данных: недельному
-// товару месячный ряд не подставляется (и наоборот), период оборота — часть
-// товарного признака (DailyRate: v = оборот / 7 или 30).
+// discountInputQuery — снапшот целиком: лоты стока с товарными признаками.
+//
+// Оборота здесь НЕТ намеренно: это данные модуля средних продаж, и расчёт
+// получает их его методами (шов Turnover: RefreshCurrent для кандидатов,
+// Averages для остальных) — читать чужие таблицы своим SQL модуль скидок не
+// должен. От products берём только товарный признак периода (track_weekly →
+// дни периода: недельный ряд 7, месячный 30), сам оборот — не отсюда.
 const discountInputQuery = `
     SELECT ` + discountInputColumns + `
     FROM product_stock s
     JOIN products p ON p.id = s.product_id
-    LEFT JOIN LATERAL (
-        SELECT w.qty
-        FROM product_weekly_turnover w
-        WHERE p.track_weekly
-          AND w.product_id = s.product_id
-          AND w.week_start < date_trunc('week', $1::date)::date
-        ORDER BY w.week_start DESC
-        LIMIT 1
-    ) w ON true
-    LEFT JOIN LATERAL (
-        SELECT m.qty
-        FROM product_monthly_turnover m
-        WHERE NOT p.track_weekly
-          AND m.product_id = s.product_id
-          AND m.month_start < date_trunc('month', $1::date)::date
-        ORDER BY m.month_start DESC
-        LIMIT 1
-    ) m ON true
     ORDER BY s.product_id, s.best_before`
 
 // Дни периода оборота — Input.PeriodDays: недельный ряд 7 дней, месячный 30.
@@ -70,32 +49,33 @@ const (
 // совпадает со scanLotPair. Префикс i — алиас discount_telegram_digest_item.
 const digestPairColumns = `i.product_id, i.best_before`
 
-// latestSentDigestSQL — подзапрос «последняя отправленная рассылка» (по дню
-// плана, затем по id — в один день бывает два слота: дайджест 09:00 и план
-// 14:00). Отправка важна: собранная, но не отправленная рассылка (sent_at IS
-// NULL) историей публикации не является — позиции такого слота человек не
-// видел, и антидубль их не должен скрывать.
+// latestSentDigestSQL — подзапрос «последняя отправленная рассылка КАНАЛА»
+// (по дню плана, затем по id — в один день бывает два слота: дайджест 09:00 в
+// общий чат и план 14:00 в чат склада). $1 — канал (chat_kind).
+//
+// Канал обязателен: без него «последней рассылкой» для слота оказывался бы
+// утренний дайджест общего чата — в нём все позиции со скидками, и антидубль
+// вычистил бы слот целиком. Отправка важна: собранная, но не отправленная
+// рассылка (sent_at IS NULL) историей публикации не является — позиции такого
+// слота человек не видел.
 const latestSentDigestSQL = `
     SELECT id FROM discount_telegram_digest
-    WHERE sent_at IS NOT NULL
+    WHERE sent_at IS NOT NULL AND chat_kind = $1
     ORDER BY planned_at DESC, id DESC
     LIMIT 1`
 
-// LoadDiscountInput читает вход матчинга формул: все лоты product_stock с
-// товарными признаками из products и оборотом последнего завершённого периода
-// (недельного для track_weekly, месячного для остальных).
+// LoadDiscountInput читает вход расчёта: все лоты product_stock с товарными
+// признаками из products. Оборот в снапшот не входит — расчёт берёт его
+// методами модуля средних продаж (шов Turnover).
 //
-// today — локальная дата склада, задающая границу незакрытого периода; она
-// параметр, а не «сейчас», чтобы расчёт был тестируемым.
+// today — локальная дата склада (начало дня расчёта): шов её принимает (по ней
+// расчёт обнуляет день и помечает сбой в журнале), но в самом запросе параметров
+// больше нет — окон оборота в снапшоте не осталось.
 //
-// Оборот — в штуках (весовые пересчитаны по average_weight в модуле оборота),
-// конвертации здесь нет. Отрицательный оборот (возвраты задним числом) отдаём
-// как есть — чинит не репозиторий. Нет данных о завершённом периоде — Turnover
-// nil и PeriodDays 0 (нет данных о скорости продаж).
 // Фильтров по количеству нет: обнулённые лоты сток удаляет сам (DELETE в
 // ReplaceStockLots), а что делать с нулём остатка, решает расчёт.
 func (pg *PGClient) LoadDiscountInput(ctx context.Context, today time.Time) ([]discounts.Input, error) {
-	rows, err := pg.Pool.Query(ctx, discountInputQuery, today)
+	rows, err := pg.Pool.Query(ctx, discountInputQuery)
 	if err != nil {
 		return nil, fmt.Errorf("load discount input %s: %w", today.Format(time.DateOnly), err)
 	}
@@ -116,25 +96,23 @@ func (pg *PGClient) LoadDiscountInput(ctx context.Context, today time.Time) ([]d
 }
 
 // scanDiscountInput сканирует строку снапшота в discounts.Input (порядок
-// discountInputColumns). Оборот есть ⇔ колонка оборота не NULL; дни периода
-// задаёт track_weekly (7 или 30), а не наличие данных. Скидки лота переносятся
-// как есть (NULL → nil, метка источника — строка): трактовку «0 = NULL» и
-// приоритеты источников держит домен (discounts.Resolve), а не репозиторий.
+// discountInputColumns). Дни периода оборота задаёт товарный признак
+// track_weekly (7 или 30). Скидки лота переносятся как есть (NULL → nil, метка
+// источника — строка): трактовку «0 = NULL» и приоритеты источников держит
+// домен (discounts.Resolve), а не репозиторий.
 func scanDiscountInput(row pgx.Row) (discounts.Input, error) {
 	var in discounts.Input
 	if err := row.Scan(
 		&in.ProductID, &in.Name, &in.GroupName, &in.ShortList, &in.ShelfLife, &in.TrackWeekly,
-		&in.BestBefore, &in.Qty, &in.Turnover,
+		&in.BestBefore, &in.Qty,
 		&in.GeneralPlain, &in.TelegramPlain, &in.GeneralManual, &in.TelegramManual, &in.DiscountSource,
 	); err != nil {
 		return discounts.Input{}, fmt.Errorf("scan discount input: %w", err)
 	}
 
-	if in.Turnover != nil {
-		in.PeriodDays = monthlyPeriodDays
-		if in.TrackWeekly {
-			in.PeriodDays = weeklyPeriodDays
-		}
+	in.PeriodDays = monthlyPeriodDays
+	if in.TrackWeekly {
+		in.PeriodDays = weeklyPeriodDays
 	}
 	return in, nil
 }
@@ -212,6 +190,7 @@ func (pg *PGClient) LastDigestPairs(ctx context.Context) (map[discounts.LotKey]s
         SELECT `+digestPairColumns+`
         FROM discount_telegram_digest_item i
         WHERE i.digest_id = (`+latestSentDigestSQL+`)`,
+		discounts.ChatWarehouse,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("last digest pairs: %w", err)
@@ -272,7 +251,7 @@ func (pg *PGClient) MarkGeneralRaised(ctx context.Context, pairs []discounts.Lot
 	defer func() { _ = tx.Rollback(ctx) }() // после Commit — no-op
 
 	var digestID int64
-	err = tx.QueryRow(ctx, latestSentDigestSQL).Scan(&digestID)
+	err = tx.QueryRow(ctx, latestSentDigestSQL, discounts.ChatWarehouse).Scan(&digestID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return discounts.ErrNoDigest
 	}
@@ -362,15 +341,16 @@ func (pg *PGClient) MarkDayFlag(ctx context.Context, date time.Time, flag discou
 
 // todaySlotSQL — позиции последнего ОТПРАВЛЕННОГО слота дня (лот → скидка
 // плана). Слотов в дне два — дайджест 09:00 в общий чат и план 14:00 в чат
-// склада; слотом дня считаем последний по id (план 14:00): по нему держат
-// эскалацию 10→20 до конца дня и по нему же поднимают general в 16:00.
-// Отправка важна: собранную, но не отправленную рассылку человек не видел.
+// склада; слотом дня считаем последний по id в СВОЁМ канале (план 14:00): по
+// нему держат эскалацию 10→20 до конца дня и по нему же поднимают general в
+// 16:00. $1 — день плана, $2 — канал (chat_kind). Отправка важна: собранную,
+// но не отправленную рассылку человек не видел.
 const todaySlotSQL = `
     SELECT i.product_id, i.best_before, i.percent
     FROM discount_telegram_digest_item i
     WHERE i.digest_id = (
         SELECT id FROM discount_telegram_digest
-        WHERE sent_at IS NOT NULL AND planned_at = $1::date
+        WHERE sent_at IS NOT NULL AND planned_at = $1::date AND chat_kind = $2
         ORDER BY id DESC
         LIMIT 1
     )`
@@ -379,7 +359,7 @@ const todaySlotSQL = `
 // Пустой день (слота не было) — пустая (не nil) карта, не ошибка: первый день
 // работы модуля и дни без публикации — обычное состояние.
 func (pg *PGClient) TodaySlot(ctx context.Context, date time.Time) (map[discounts.LotKey]int16, error) {
-	rows, err := pg.Pool.Query(ctx, todaySlotSQL, date)
+	rows, err := pg.Pool.Query(ctx, todaySlotSQL, date, discounts.ChatWarehouse)
 	if err != nil {
 		return nil, fmt.Errorf("today slot %s: %w", date.Format(time.DateOnly), err)
 	}

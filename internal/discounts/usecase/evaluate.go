@@ -110,11 +110,11 @@ func SurplusPairs(pairs []PairState) []string {
 
 // Evaluate — состояния всех пар входа на момент расчёта.
 //
-// rates — действующий средний оборот за период (шт), полученный от модуля
-// средних продаж: значение товара перекрывает оборот из снапшота входа
-// (свежая цифра по кандидатам важнее кэша). Товар без данных о продажах
-// (нет ни в карте, ни в снапшоте, либо оборот <= 0) избытка не получает —
-// решение владельца 14.09.2026.
+// rates — действующий средний оборот за период (шт) от модуля средних продаж
+// (шов Turnover): для кандидатов — свежий (RefreshCurrent), для остальных —
+// сохранённый (Averages). Единственный источник оборота: своих запросов к
+// таблицам оборота у расчёта нет. Товар без данных (нет в карте либо оборот
+// <= 0) избытка не получает — решение владельца 14.09.2026.
 //
 // today — дата расчёта (локальная дата склада, время обнуляется).
 func Evaluate(inputs []discounts.Input, rates map[string]float64, today time.Time) []PairState {
@@ -143,12 +143,9 @@ func evaluatePair(in discounts.Input, cumQty int64, rates map[string]float64, da
 	if periodDays <= 0 {
 		periodDays = PeriodDays(in.TrackWeekly)
 	}
-	turnover := 0.0
-	if v, ok := rates[in.ProductID]; ok {
-		turnover = v
-	} else if in.Turnover != nil {
-		turnover = *in.Turnover
-	}
+	// Оборот приходит ТОЛЬКО швом модуля средних продаж: своего SQL по его
+	// таблицам расчёт не делает. Товара нет в карте — данных о продажах нет.
+	turnover := rates[in.ProductID]
 	rate := discounts.DailyRate(turnover, periodDays)
 	hasRate := rate > 0
 
