@@ -1094,7 +1094,11 @@ func (msac *MSAPIClient) CreateDemand(parentctx context.Context, template json.R
 		return nil, nil
 	}
 
-	resCh := msac.workerpool.SubmitOther(job)
+	// БЕЗ повторов (NoRetry): POST создания отгрузки неидемпотентен. При 5xx или
+	// таймауте МС мог успеть создать demand и потерять ответ — повтор создаст
+	// вторую отгрузку в учёте, а разбирать дубли оператору вручную. Лучше
+	// вернуть ошибку наверх: оператор видит её в UI и решает сам.
+	resCh := msac.workerpool.SubmitOtherNoRetry(job)
 
 	select {
 	case res := <-resCh:
