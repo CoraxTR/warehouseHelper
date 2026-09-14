@@ -40,7 +40,7 @@ func (f *fakeNotifier) NotifyWarehouse(text string) error {
 
 // returnOrder — заказ под тесты возврата: штучная строка с резервом 5 шт и
 // весовая с резервом 0,657 кг (обе — с остатком, как после подбора).
-func returnOrder() (*fakeOrderDetail, string) {
+func returnOrder() (order *fakeOrderDetail, orderID string) {
 	fake, o := submitOrder()
 	fake.positions = []client.MSPosition{
 		position("pos-1", "21110001", "Соус терияки", 5, 50000, 5),
@@ -84,7 +84,7 @@ func TestSavePickReturnWeighted(t *testing.T) {
 		t.Fatalf("лотов = %d, want 1: %+v", len(acceptor.lots), acceptor.lots)
 	}
 	lot := acceptor.lots[0]
-	if lot.ProductID != "p2" || !lot.BestBefore.Equal(bbDate(2026, time.October, 10)) || lot.Qty != 1 {
+	if lot.ProductID != "p2" || !lot.BestBefore.Equal(bbDate(time.October, 10)) || lot.Qty != 1 {
 		t.Errorf("лот = %+v, want p2/2026-10-10/1", lot)
 	}
 	if res.Units != 1 || len(res.Rows) != 1 || res.Rows[0].Code != "00220002" || res.Rows[0].Units != 1 {
@@ -190,7 +190,7 @@ func TestSavePickReturnOverReserve(t *testing.T) {
 	uc := returnUC(fake, acceptor, &fakeNotifier{})
 
 	scans := make([]ScanRecord, 0, 6)
-	for i := 0; i < 6; i++ {
+	for range 6 {
 		scans = append(scans, ScanRecord{BB: "10102026"})
 	}
 
@@ -303,7 +303,7 @@ func TestClosePickReturnAllClosedSilent(t *testing.T) {
 	uc := returnUC(fake, &fakeAcceptor{}, notifier)
 
 	scans := make([]ScanRecord, 0, 5)
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		scans = append(scans, ScanRecord{BB: "10102026"})
 	}
 

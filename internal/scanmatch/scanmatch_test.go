@@ -22,7 +22,9 @@ const (
 // etiketa — этикетка куска (29 цифр) каноническим кодировщиком innercode.
 func etiketa(t *testing.T, code string, weightG int64) string {
 	t.Helper()
-	raw, err := innercode.EncodeItem(code, weightG, time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 9, 15, 0, 0, 0, 0, time.UTC))
+	raw, err := innercode.EncodeItem(code, weightG,
+		time.Date(2026, time.September, 1, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, time.September, 15, 0, 0, 0, 0, time.UTC))
 	if err != nil {
 		t.Fatalf("EncodeItem: %v", err)
 	}
@@ -97,7 +99,7 @@ func TestMatch_PiecesByCount(t *testing.T) {
 	expected := []Expected{{Idx: 0, ProductID: prodD, InternalCode: codeD, Name: "Соус", Weighted: false, ExpectedQty: 5}}
 
 	scans := make([]string, 0, 5)
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		scans = append(scans, etiketa(t, codeD, 1))
 	}
 	if _, err := Match(scans, expected); err != nil {
@@ -147,7 +149,7 @@ func TestBuildExpected_Filters(t *testing.T) {
 // Существующий лот: сканы одного товара с одним сроком складываются, с разными
 // сроками — разные лоты.
 func TestAggregateLots_GroupByProductAndDate(t *testing.T) {
-	exp := time.Date(2026, 9, 15, 0, 0, 0, 0, time.UTC)
+	exp := time.Date(2026, time.September, 15, 0, 0, 0, 0, time.UTC)
 	units := []ScannedUnit{
 		{Row: Expected{ProductID: prodD}, ExpDate: exp},
 		{Row: Expected{ProductID: prodD}, ExpDate: exp},

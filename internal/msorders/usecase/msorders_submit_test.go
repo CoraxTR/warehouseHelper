@@ -24,8 +24,8 @@ func (f *fakePicker) PickStock(_ context.Context, lots []stock.PickLotIn) error 
 	return f.err
 }
 
-func bbDate(year int, month time.Month, day int) time.Time {
-	return time.Date(year, month, day, 0, 0, 0, 0, time.UTC)
+func bbDate(month time.Month, day int) time.Time {
+	return time.Date(2026, month, day, 0, 0, 0, 0, time.UTC)
 }
 
 // submitCatalog — каталог Submit-тестов: штучный p1 и весовой p2.
@@ -125,7 +125,7 @@ func TestSubmitPartialPiece(t *testing.T) {
 	if picker.calls != 1 || len(picker.lots) != 2 {
 		t.Fatalf("picker: calls=%d lots=%d, want 1/2", picker.calls, len(picker.lots))
 	}
-	bb := bbDate(2026, 10, 10)
+	bb := bbDate(time.October, 10)
 	for _, l := range picker.lots {
 		if l.ProductID != "p1" || !l.BestBefore.Equal(bb) || l.Qty != 1 {
 			t.Errorf("lot = %+v, want p1 %s qty 1", l, bb.Format("02.01.2006"))
@@ -187,7 +187,7 @@ func TestSubmitWeightedCovered(t *testing.T) {
 	if len(picker.lots) != 2 {
 		t.Fatalf("lots = %d, want 2", len(picker.lots))
 	}
-	if !picker.lots[0].BestBefore.Equal(bbDate(2026, 10, 1)) || !picker.lots[1].BestBefore.Equal(bbDate(2026, 10, 2)) {
+	if !picker.lots[0].BestBefore.Equal(bbDate(time.October, 1)) || !picker.lots[1].BestBefore.Equal(bbDate(time.October, 2)) {
 		t.Errorf("сроки lots = %v / %v, want 01.10 / 02.10", picker.lots[0].BestBefore, picker.lots[1].BestBefore)
 	}
 }

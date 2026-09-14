@@ -218,7 +218,7 @@ func buildReturnPlans(rows []PickReturnRow, entry *submitEntry) ([]returnPlan, e
 		if err != nil {
 			return nil, err
 		}
-		if err := validateReturnScans(i, product.Weighted, row.Scans); err != nil {
+		if err := validateReturnScans(i, product, row.Scans); err != nil {
 			return nil, err
 		}
 
@@ -312,11 +312,11 @@ func returnRowProduct(num int, row *PickReturnRow, live *submitRowMeta, catalog 
 }
 
 // validateReturnScans проверяет записи сканов строки до сверки: дата срока
-// ДДММГГГГ и вес 0..99999 г, у весовой строки — строго больше нуля (куска без
+// ДДММГГГГ и вес 0..99999 г, у весового товара — строго больше нуля (куска без
 // веса не существует, сверка идёт по весу). Тексты ошибок общие с Submit.
-func validateReturnScans(num int, weighted bool, scans []ScanRecord) error {
+func validateReturnScans(num int, product CatalogProduct, scans []ScanRecord) error {
 	for _, rec := range scans {
-		if rec.WeightG < 0 || rec.WeightG > maxScanWeightG || (weighted && rec.WeightG == 0) {
+		if rec.WeightG < 0 || rec.WeightG > maxScanWeightG || (product.Weighted && rec.WeightG == 0) {
 			return fmt.Errorf("строка %d: %w: %d", num+1, ErrSubmitBadWeight, rec.WeightG)
 		}
 		if _, err := parseBB(rec.BB); err != nil {
@@ -366,7 +366,7 @@ func returnScanLabel(expected *scanmatch.Expected, rec ScanRecord) (string, erro
 	}
 	label, err := innercode.EncodeItem(expected.InternalCode, weightG, bb, bb)
 	if err != nil {
-		return "", fmt.Errorf("строка %d: %w: %q: %v", expected.Idx+1, ErrReturnCodeMissing, expected.InternalCode, err)
+		return "", fmt.Errorf("строка %d: %w: %q: %w", expected.Idx+1, ErrReturnCodeMissing, expected.InternalCode, err)
 	}
 
 	return label, nil
