@@ -33,8 +33,10 @@ func manualOpt(v int16) func(*PairState) {
 	return func(p *PairState) { p.Manual = &v }
 }
 
-// expiryOpt — ступень лестницы по сроку годности.
-func expiryOpt(v int16) func(*PairState) {
+// expiryOpt — ступень лестницы по сроку годности. Значение в тестах реестра не
+// важно (порядок и переходы), поэтому оно одно на все случаи.
+func expiryOpt() func(*PairState) {
+	v := int16(30)
 	return func(p *PairState) { p.Expiry = &v }
 }
 
@@ -61,7 +63,7 @@ func day(n int) time.Time { return testDay.AddDate(0, 0, n) }
 func TestRegistryWindowManualBeatsLadderAndSurplus(t *testing.T) {
 	r := NewRegistry()
 	r.Replace([]PairState{
-		regPair("p-expiry", "Сроковый", day(6), expiryOpt(30)),
+		regPair("p-expiry", "Сроковый", day(6), expiryOpt()),
 		regPair("p-surplus", "Избыточный", day(12), surplusOpt(2.5)),
 		regPair("p-manual", "Ручной", day(9), manualOpt(40)),
 	})
@@ -92,7 +94,7 @@ func TestRegistryWindowOrderMatchesSort(t *testing.T) {
 	r := NewRegistry()
 	r.Replace([]PairState{
 		regPair("p-s1", "Избыток слабый", day(11), surplusOpt(1.2)),
-		regPair("p-e", "Сроковый", day(6), expiryOpt(30)),
+		regPair("p-e", "Сроковый", day(6), expiryOpt()),
 		regPair("p-m2", "Ручной поздний", day(9), manualOpt(40)),
 		regPair("p-s2", "Избыток сильный", day(12), surplusOpt(2.5)),
 		regPair("p-m1", "Ручной ранний", day(4), manualOpt(20)),
@@ -127,7 +129,7 @@ func TestRegistryWindowShorterThanSlots(t *testing.T) {
 		t.Errorf("пустой реестр: %d строк, want 0", len(got))
 	}
 
-	r.Replace([]PairState{regPair("p1", "Один", day(5), expiryOpt(30))})
+	r.Replace([]PairState{regPair("p1", "Один", day(5), expiryOpt())})
 	if got := r.Window(12); len(got) != 1 {
 		t.Errorf("одна активная пара: %d строк, want 1", len(got))
 	}
@@ -139,7 +141,7 @@ func TestRegistryWindowSkipsInactivePairs(t *testing.T) {
 	r.Replace([]PairState{
 		regPair("p-idle", "Без скидки", day(20)),
 		regPair("p-zero", "Нулевая ручная", day(10), manualOpt(0)),
-		regPair("p-active", "Активная", day(7), expiryOpt(30)),
+		regPair("p-active", "Активная", day(7), expiryOpt()),
 	})
 
 	got := r.Window(12)
@@ -156,7 +158,7 @@ func TestRegistryWindowSkipsInactivePairs(t *testing.T) {
 func TestRegistryWindowSlotFreedByNextRank(t *testing.T) {
 	r := NewRegistry()
 	manual := regPair("p-manual", "Ручной", day(9), manualOpt(40))
-	expiry := regPair("p-expiry", "Сроковый", day(6), expiryOpt(30))
+	expiry := regPair("p-expiry", "Сроковый", day(6), expiryOpt())
 	surplus := regPair("p-surplus", "Избыточный", day(12), surplusOpt(2.5))
 	r.Replace([]PairState{manual, expiry, surplus})
 
@@ -185,7 +187,7 @@ func TestRegistryQueueSurplusBeyondWindow(t *testing.T) {
 	r := NewRegistry()
 	r.Replace([]PairState{
 		regPair("p-manual", "Ручной", day(8), manualOpt(40)),
-		regPair("p-expiry", "Сроковый", day(6), expiryOpt(30)),
+		regPair("p-expiry", "Сроковый", day(6), expiryOpt()),
 		regPair("p-s3", "Избыток 3", day(9), surplusOpt(3.0)),
 		regPair("p-s2", "Избыток 2", day(10), surplusOpt(2.0)),
 		regPair("p-s1", "Избыток 1", day(11), surplusOpt(1.5)),
@@ -229,11 +231,11 @@ func TestRegistryReplaceTransitions(t *testing.T) {
 
 	// первый расчёт: у A скидки нет, у B/C/D/E стоит значение
 	first := []PairState{
-		regPair("A", "Нет скидки", day(7), expiryOpt(30)),
-		regPair("B", "Десять", day(8), expiryOpt(30), appliedOpt(10)),
-		regPair("C", "Двадцать", day(9), expiryOpt(30), appliedOpt(20)),
-		regPair("D", "Без изменений", day(10), expiryOpt(30), appliedOpt(15)),
-		regPair("E", "Удалили", day(11), expiryOpt(30), appliedOpt(10)),
+		regPair("A", "Нет скидки", day(7), expiryOpt()),
+		regPair("B", "Десять", day(8), expiryOpt(), appliedOpt(10)),
+		regPair("C", "Двадцать", day(9), expiryOpt(), appliedOpt(20)),
+		regPair("D", "Без изменений", day(10), expiryOpt(), appliedOpt(15)),
+		regPair("E", "Удалили", day(11), expiryOpt(), appliedOpt(10)),
 	}
 	// Первый снапшот процесса только закладывает базу сравнения: уведомлений он
 	// не даёт — иначе после каждого старта в чат уходил бы залп «поставьте
@@ -245,10 +247,10 @@ func TestRegistryReplaceTransitions(t *testing.T) {
 	// второй расчёт: A — нет→10, B — 10→20, C — 20→нет, D — без изменений,
 	// E из расчёта ушла (её скидка уходит вместе с парой)
 	second := []PairState{
-		regPair("A", "Нет скидки", day(7), expiryOpt(30), appliedOpt(10)),
-		regPair("B", "Десять", day(8), expiryOpt(30), appliedOpt(20)),
-		regPair("C", "Двадцать", day(9), expiryOpt(30)),
-		regPair("D", "Без изменений", day(10), expiryOpt(30), appliedOpt(15)),
+		regPair("A", "Нет скидки", day(7), expiryOpt(), appliedOpt(10)),
+		regPair("B", "Десять", day(8), expiryOpt(), appliedOpt(20)),
+		regPair("C", "Двадцать", day(9), expiryOpt()),
+		regPair("D", "Без изменений", day(10), expiryOpt(), appliedOpt(15)),
 	}
 	want := []Change{
 		{ProductID: "A", Name: "Нет скидки", BestBefore: day(7), Next: pp(10)},
@@ -275,9 +277,9 @@ func TestRegistryReplaceChangeOrder(t *testing.T) {
 
 	// первый расчёт: скидки в БД нет ни у одной пары — изменений нет
 	silent := []PairState{
-		regPair("P1", "Товар", late, expiryOpt(30)),
-		regPair("P0", "Первый", early, expiryOpt(30)),
-		regPair("P1", "Товар", early, expiryOpt(30)),
+		regPair("P1", "Товар", late, expiryOpt()),
+		regPair("P0", "Первый", early, expiryOpt()),
+		regPair("P1", "Товар", early, expiryOpt()),
 	}
 	if got := r.Replace(silent); len(got) != 0 {
 		t.Fatalf("расчёт без скидок: %d изменений, want 0", len(got))
@@ -285,9 +287,9 @@ func TestRegistryReplaceChangeOrder(t *testing.T) {
 
 	// второй расчёт: скидка появилась у всех трёх пар
 	noisy := []PairState{
-		regPair("P1", "Товар", late, expiryOpt(30), appliedOpt(30)),
-		regPair("P0", "Первый", early, expiryOpt(30), appliedOpt(30)),
-		regPair("P1", "Товар", early, expiryOpt(30), appliedOpt(30)),
+		regPair("P1", "Товар", late, expiryOpt(), appliedOpt(30)),
+		regPair("P0", "Первый", early, expiryOpt(), appliedOpt(30)),
+		regPair("P1", "Товар", early, expiryOpt(), appliedOpt(30)),
 	}
 	got := r.Replace(noisy)
 	order := make([]string, 0, len(got))
@@ -304,10 +306,10 @@ func TestRegistryReplaceChangeOrder(t *testing.T) {
 func TestRegistryReplaceZeroEqualsNil(t *testing.T) {
 	r := NewRegistry()
 
-	if got := r.Replace([]PairState{regPair("A", "Ноль", day(5), expiryOpt(30), appliedOpt(0))}); len(got) != 0 {
+	if got := r.Replace([]PairState{regPair("A", "Ноль", day(5), expiryOpt(), appliedOpt(0))}); len(got) != 0 {
 		t.Fatalf("0 в пустом реестре: %d изменений, want 0", len(got))
 	}
-	if got := r.Replace([]PairState{regPair("A", "Ноль", day(5), expiryOpt(30))}); len(got) != 0 {
+	if got := r.Replace([]PairState{regPair("A", "Ноль", day(5), expiryOpt())}); len(got) != 0 {
 		t.Fatalf("0 → NULL: %d изменений, want 0", len(got))
 	}
 }
@@ -319,7 +321,7 @@ func TestRegistryDigestSectionsAndGoldenText(t *testing.T) {
 	r.Replace([]PairState{
 		regPair("p1", "Масло", day(11), surplusOpt(1.5)),
 		regPair("p2", "Творог", day(8), manualOpt(40)),
-		regPair("p3", "Сыр", day(5), expiryOpt(30)),
+		regPair("p3", "Сыр", day(5), expiryOpt()),
 		regPair("p4", "Хлеб", day(12), surplusOpt(2.5)),
 		regPair("p5", "Без скидки", day(20)),
 	})

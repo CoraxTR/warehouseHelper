@@ -23,14 +23,8 @@ import (
 // expiryDay — день пересмотра лестницы по сроку: вторник, четверг, суббота
 // (КТ-дни склада). В остальные дни автоматика ступени не двигает.
 func expiryDay(t time.Time) bool {
-	switch t.Weekday() {
-	case time.Tuesday, time.Thursday, time.Saturday:
-		return true
-	case time.Sunday, time.Monday, time.Wednesday, time.Friday:
-		return false
-	default:
-		return false
-	}
+	wd := t.Weekday()
+	return wd == time.Tuesday || wd == time.Thursday || wd == time.Saturday
 }
 
 // loadInputs — общий шаг обоих пересчётов: снапшот входа расчёта на день.

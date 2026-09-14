@@ -70,16 +70,15 @@ func discountDate(t time.Time) string {
 
 // discountSourceLabel — источник скидки по-русски (для колонки «Источник»).
 func discountSourceLabel(s discounts.Source) string {
-	switch s {
-	case discounts.SourceManual:
+	switch {
+	case s == discounts.SourceManual:
 		return "ручная"
-	case discounts.SourceExpiry:
+	case s == discounts.SourceExpiry:
 		return "по сроку"
-	case discounts.SourceSurplus:
+	case s == discounts.SourceSurplus:
 		return "избыток"
-	case discounts.SourceNone:
-		return dash
 	default:
+		// SourceNone и неизвестные источники — прочерк
 		return dash
 	}
 }

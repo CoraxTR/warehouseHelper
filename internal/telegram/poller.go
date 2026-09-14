@@ -160,6 +160,8 @@ func (p *Poller) dispatch(ctx context.Context, u tgUpdate) {
 		p.handle(ctx, u)
 	case u.Message != nil:
 		p.handleMessage(ctx, u)
+	default:
+		// прочие типы апдейтов (правки, реакции, участники) пропускаем
 	}
 }
 

@@ -169,9 +169,8 @@ func (s Source) String() string {
 		return "expiry"
 	case SourceSurplus:
 		return "surplus"
-	default:
-		return "none"
 	}
+	return "none" // недостижимо: все значения Source перечислены выше
 }
 
 // Candidate — один претендент на скидку пары (лот, канал) от своего источника.

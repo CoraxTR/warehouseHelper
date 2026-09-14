@@ -190,6 +190,8 @@ func countColumns(list string) int {
 			if depth == 0 {
 				n++
 			}
+		default:
+			// прочие символы на структуру SELECT не влияют
 		}
 	}
 	return n

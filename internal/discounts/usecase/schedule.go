@@ -235,12 +235,6 @@ func (uc *UseCase) runRaise(ctx context.Context, day, now time.Time, s Schedule)
 
 // isTelegramDay — день рассылки ТГ-слота: вт или чт (решение владельца 14.09).
 func isTelegramDay(now time.Time) bool {
-	switch now.Weekday() {
-	case time.Tuesday, time.Thursday:
-		return true
-	case time.Sunday, time.Monday, time.Wednesday, time.Friday, time.Saturday:
-		return false
-	default:
-		return false
-	}
+	wd := now.Weekday()
+	return wd == time.Tuesday || wd == time.Thursday
 }

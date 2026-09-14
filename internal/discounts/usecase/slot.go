@@ -214,6 +214,8 @@ func (uc *UseCase) pickSlot(pairs []PairState, prev map[discounts.LotKey]struct{
 			slot = append(slot, slotPosition{pair: p, percent: *p.Manual})
 		case p.Expiry != nil && *p.Expiry >= slotMainPercent:
 			slot = append(slot, slotPosition{pair: p, percent: *p.Expiry, writeTelegram: true})
+		default:
+			// ступень ниже планки слота — в слот не берём
 		}
 	}
 	sortSlot(slot)

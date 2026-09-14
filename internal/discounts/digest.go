@@ -33,17 +33,15 @@ type Digest struct {
 // sortRank — группа строки в порядке отчёта: ручные → сроковые → избыточные.
 // Строки без источника (SourceNone) в отчёт не попадают и уходят в конец.
 func sortRank(s Source) int {
-	switch s {
-	case SourceNone:
-		return 3 // строк без источника в отчёте не бывает — держим их в конце
-	case SourceManual:
+	switch {
+	case s == SourceManual:
 		return 0
-	case SourceExpiry:
+	case s == SourceExpiry:
 		return 1
-	case SourceSurplus:
+	case s == SourceSurplus:
 		return 2
 	default:
-		return 3
+		return 3 // SourceNone и любые будущие источники — в конец списка
 	}
 }
 
@@ -83,16 +81,14 @@ func BuildDigest(rows []Row) Digest {
 	Sort(sorted)
 	var d Digest
 	for _, r := range sorted {
-		switch r.Source {
-		case SourceSurplus:
+		if r.Source == SourceSurplus {
 			d.Surplus = append(d.Surplus, r)
-		case SourceManual, SourceExpiry:
-			d.Discounts = append(d.Discounts, r)
-		case SourceNone:
-			// строки без источника скидки в отчёт не попадают
-		default:
-			// неизвестный источник — тоже мимо
+			continue
 		}
+		if r.Source == SourceManual || r.Source == SourceExpiry {
+			d.Discounts = append(d.Discounts, r)
+		}
+		// строки без источника скидки (SourceNone) в отчёт не попадают
 	}
 	return d
 }
