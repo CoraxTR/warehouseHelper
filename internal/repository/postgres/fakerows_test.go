@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -18,7 +19,7 @@ import (
 
 // scannerType — тип sql.Scanner: приёмник, который читает SQL NULL сам
 // (sql.NullString и т.п.). Подделка Scan пропускает NULL под него, как pgx.
-var scannerType = reflect.TypeOf((*sql.Scanner)(nil)).Elem()
+var scannerType = reflect.TypeFor[sql.Scanner]()
 
 // ptr — указатель на значение (NULL-колонки в снапшотах — *T).
 func ptr[T any](v T) *T { return &v }
@@ -124,14 +125,17 @@ func scanValue(dst, src any) error {
 }
 
 // nullTarget — можно ли положить SQL NULL в значение типа elem: nil-приёмники
-// (*T, интерфейс, срез, карта) и всё, что умеет читать себя из NULL само
-// (sql.NullString и прочие sql.Scanner — как в pgx).
+// (*T, интерфейс, срез, карта, функция, канал) и всё, что умеет читать себя из
+// NULL само (sql.NullString и прочие sql.Scanner — как в pgx).
 func nullTarget(elem reflect.Value) bool {
-	switch elem.Kind() {
-	case reflect.Pointer, reflect.Interface, reflect.Slice, reflect.Map,
-		reflect.Func, reflect.Chan:
+	nilableKinds := []reflect.Kind{
+		reflect.Pointer, reflect.Interface, reflect.Slice,
+		reflect.Map, reflect.Func, reflect.Chan,
+	}
+	if slices.Contains(nilableKinds, elem.Kind()) {
 		return true
 	}
+
 	return reflect.PointerTo(elem.Type()).Implements(scannerType)
 }
 
