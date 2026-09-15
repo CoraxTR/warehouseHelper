@@ -301,6 +301,53 @@ func (h *Handler) ReturnsManualSave(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// ── Вывод из продажи (списание кусков по сканам) ───────────────────────────
+
+var withdrawTmpl = template.Must(template.ParseFiles("../internal/delivery/web/templates/goods_withdraw.html", "../internal/delivery/web/templates/_nav.html"))
+
+// GoodsWithdrawPage — GET /goods/withdraw: страница сканирования кусков для
+// вывода из продажи. Вывод не привязан ни к заказу, ни к документу МС:
+// каждый скан = один кусок, снимаемый со сроков (лот по сроку этикетки).
+func (h *Handler) GoodsWithdrawPage(w http.ResponseWriter, _ *http.Request) {
+	if err := withdrawTmpl.Execute(w, nil); err != nil {
+		slog.Error(fmt.Sprintf("withdraw template: %v", err))
+	}
+}
+
+// GoodsWithdrawSave — POST /goods/withdraw/save: приём сканов вывода из
+// продажи. body: {"scans":[...]}. 200 {"withdrawn":N} — куски списаны из
+// остатков (пересчёт скидок запускает шов stock сам); 400 — батч отклонён
+// целиком (текст причины); 500 — сбой.
+func (h *Handler) GoodsWithdrawSave(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Scans []string `json:"scans"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || len(req.Scans) == 0 {
+		http.Error(w, "нет сканов", http.StatusBadRequest)
+
+		return
+	}
+
+	n, err := h.returnsUC.WithdrawFromSale(r.Context(), req.Scans)
+	if err != nil {
+		var ve *retucase.ValidationError
+		switch {
+		case errors.As(err, &ve):
+			http.Error(w, ve.Error(), http.StatusBadRequest)
+		default:
+			slog.Error(fmt.Sprintf("withdraw from sale: %v", err))
+			http.Error(w, "не удалось вывести из продажи — попробуйте позже", http.StatusInternalServerError)
+		}
+
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(map[string]int{"withdrawn": n}); err != nil {
+		slog.Error(fmt.Sprintf("withdraw save: %v", err))
+	}
+}
+
 // ReturnsClose — POST /goods/return/close: ручное закрытие (куски не
 // вернулись: потеряны/списаны; либо строку не гасит ни один скан — вес не
 // совпал, позиция «слита»). В остатки не пишется, в МС ничего не меняется,

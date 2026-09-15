@@ -51,9 +51,13 @@ type Orders interface {
 	ClearOrderReserves(ctx context.Context, orderID string) error
 }
 
-// Stock — возврат в остатки (шов stock): подтверждение приёма = nil-ошибка.
+// Stock — остатки (шов stock): ручной возврат кусков принимает (AcceptStock),
+// вывод из продажи — списывает куски из сроков (PickStock). Списание PickStock
+// заодно дёргает шов «лоты товара изменились» (stock.LotChangeListener) —
+// пересчёт скидок модуля discounts идёт следом, отдельной механики не нужно.
 type Stock interface {
 	AcceptStock(ctx context.Context, lots []stock.LotIn) error
+	PickStock(ctx context.Context, lots []stock.PickLotIn) error
 }
 
 // Notifier — уведомления в чат склада (Telegram).

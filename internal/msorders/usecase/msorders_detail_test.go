@@ -25,6 +25,7 @@ type fakeOrderDetail struct {
 	orderRaw       json.RawMessage   // сырое тело GET заказа (nil — из order)
 	rowsRaw        []json.RawMessage // сырые строки positions (nil — из positions)
 	putBody        []json.RawMessage // тела PUT (UpdateCustomerOrder)
+	putStates      []string          // id статуса «Вес подобран» по PUT (пусто — без статуса)
 	putErr         error
 }
 
@@ -64,6 +65,15 @@ func (f *fakeOrderDetail) UpdateCustomerOrder(_ context.Context, _ string, body 
 		return f.putErr
 	}
 	f.putBody = append(f.putBody, body)
+	return nil
+}
+
+func (f *fakeOrderDetail) UpdateCustomerOrderState(_ context.Context, _ string, body json.RawMessage, stateID string) error {
+	if f.putErr != nil {
+		return f.putErr
+	}
+	f.putBody = append(f.putBody, body)
+	f.putStates = append(f.putStates, stateID)
 	return nil
 }
 

@@ -50,9 +50,13 @@ func NewRouter(h *Handler) *http.ServeMux {
 	mux.HandleFunc("POST /goods/return/close", h.ReturnsClose)            // закрыть вручную
 	mux.HandleFunc("GET /goods/return/manual", h.ReturnsManualPage)       // ручной возврат: страница
 	mux.HandleFunc("POST /goods/return/manual/save", h.ReturnsManualSave) // ручной возврат: принять сканы
-	mux.HandleFunc("/qrcodes", h.QRPage)                                  // GET — модуль «Честный знак»
-	mux.HandleFunc("/qrcodes/add", h.QRAdd)                               // GET — форма, POST — сохранение фото
-	mux.HandleFunc("/qrcodes/list", h.QRList)                             // GET — таблица заказов с фото
+	// «Вывод из продажи»: зеркало ручного возврата — сканы кусков снимают их
+	// со сроков (остатков), документ МС не создаётся.
+	mux.HandleFunc("GET /goods/withdraw", h.GoodsWithdrawPage)       // вывод из продажи: страница
+	mux.HandleFunc("POST /goods/withdraw/save", h.GoodsWithdrawSave) // вывод из продажи: списать сканы
+	mux.HandleFunc("/qrcodes", h.QRPage)                             // GET — модуль «Честный знак»
+	mux.HandleFunc("/qrcodes/add", h.QRAdd)                          // GET — форма, POST — сохранение фото
+	mux.HandleFunc("/qrcodes/list", h.QRList)                        // GET — таблица заказов с фото
 	mux.Handle("/qrcodes/photos/", http.StripPrefix("/qrcodes/photos/", qrPhotosHandler(h.qrUC.PhotosDir())))
 
 	// Модуль «МойСклад»: хаб и справочник поставщиков.
@@ -75,6 +79,10 @@ func NewRouter(h *Handler) *http.ServeMux {
 	// Отправка подбора в МС (итерация 3): сервер пересобирает positions из кэша
 	// страницы и PUT-ит заказ; 200 — смена локации на /ms/orders/pick на клиенте.
 	mux.HandleFunc("POST /ms/orders/{id}/submit", h.MSOrderSubmit)
+	// Ручное подтверждение подбора: оператор вводит вес/количество строки
+	// вместо сканов (qty = reserve = введённое), сроки не списываются —
+	// складу уходит уведомление о пересчёте остатков.
+	mux.HandleFunc("POST /ms/orders/{id}/submit-manual", h.MSOrderSubmitManual)
 	// Возврат в сроки при переподборе: приём вернувшихся кусков (остатки по
 	// срокам этикеток) и ручное закрытие с уведомлением складу о пересчёте.
 	mux.HandleFunc("POST /ms/orders/{id}/return", h.MSOrderReturnSave)
