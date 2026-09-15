@@ -33,8 +33,13 @@ type fakeRepo struct {
 	updated         []daystate.DayState
 	orderableCalls  []orderableCall
 	cleared         []string
+	lastKnownCalls  int
 	err             error
+	lastKnownErr    error
 }
+
+// compile-check: заглушка обязана покрывать весь контракт хранилища.
+var _ Repository = (*fakeRepo)(nil)
 
 type orderableCall struct {
 	productID string
@@ -108,6 +113,37 @@ func (f *fakeRepo) LotsSnapshot(_ context.Context, productID string) ([]daystate
 		return nil, f.err
 	}
 	return f.lots[productID], nil
+}
+
+// LastKnownInStock повторяет SQL-контракт: ближайшая строка дня ДО before с
+// заполненным in_stock; NULL-строки (календарь) пропускаются, истории нет — nil.
+// Счётчик вызовов — чтобы тесты видели, что история читается только там, где
+// состояние дня неизвестно (нет строки / строка от календаря).
+func (f *fakeRepo) LastKnownInStock(_ context.Context, productID string, before time.Time) (*bool, error) {
+	f.lastKnownCalls++
+	if f.err != nil {
+		return nil, f.err
+	}
+	if f.lastKnownErr != nil {
+		return nil, f.lastKnownErr
+	}
+
+	var best *daystate.DayState
+	for _, d := range f.days {
+		if d.ProductID != productID || !d.Date.Before(before) || d.InStock == nil {
+			continue
+		}
+		if best == nil || d.Date.After(best.Date) {
+			best = d
+		}
+	}
+	if best == nil {
+		//nolint:nilnil // контракт репозитория: (nil, nil) = истории нет
+		return nil, nil
+	}
+	v := *best.InStock
+
+	return &v, nil
 }
 
 func (f *fakeRepo) ClearSoldOut(_ context.Context, productID string, date time.Time) error {
@@ -567,5 +603,242 @@ func TestStockReport(t *testing.T) {
 	}
 	if cells[2].Kind != daystate.CellEmpty {
 		t.Errorf("день 3 (нет строки): kind = %s, want empty", cells[2].Kind)
+	}
+}
+
+// sameBoolPtr сравнивает два «необязательных» булевых (nil = «неизвестно»).
+func sameBoolPtr(a, b *bool) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
+}
+
+// boolText печатает «необязательный» булев читаемо (в %v указатель даёт адрес).
+func boolText(v *bool) string {
+	switch {
+	case v == nil:
+		return "nil"
+	case *v:
+		return "true"
+	default:
+		return "false"
+	}
+}
+
+// backInStockCase — сценарий теста истории наличия.
+type backInStockCase struct {
+	name             string
+	days             map[string]*daystate.DayState
+	lastKnownErr     error
+	wantEnsured      int   // 1 — строку дня создавали (холодный путь), 0 — уже была
+	wantSeed         *bool // ensured[0].InStock — «было» при создании строки
+	wantLastKnown    int   // сколько раз читалась история наличия
+	wantBackInStock  []string
+	wantUpdated      *bool    // updated[0].InStock — пересчёт из лотов
+	wantSoldOutToday bool     // маркер дня после пересчёта (сохраняется приходом)
+	emptyLots        bool     // товар отсутствует (лотов нет)
+	wantSoldOut      []string // уведомления «закончился» в общий канал
+	wantSoldOutCalls []string // эмиты SoldOut в ordercoeff
+	wantOrderable    *bool    // orderable строки дня после пересчёта (nil — не проверяем)
+	wantErr          bool
+}
+
+// «Товар появился» определяется по истории наличия: у товара, который был в
+// полном отсутствии, строки дня нет вовсе (лот, списанный до нуля, удаляется —
+// снапшот дня его не видит), поэтому «было» берётся из последней известной
+// строки. В лотах товара «p1» после приёмки qty > 0 — товар теперь в наличии.
+// История читается только там, где состояние дня неизвестно: у строки дня от
+// снапшота/события лишнего запроса нет (wantLastKnown = 0).
+func TestOnStockChanged_BackInStockFromHistory(t *testing.T) {
+	today := day(10)
+	yesterday := day(9)
+	twoDaysAgo := day(8)
+
+	cases := []backInStockCase{
+		{
+			name: "нет строки дня, вчера не было в наличии → уведомление",
+			days: map[string]*daystate.DayState{
+				key("p1", yesterday): {ProductID: "p1", Date: yesterday, InStock: b(false), Orderable: true},
+			},
+			wantEnsured:     1,
+			wantSeed:        b(false),
+			wantLastKnown:   1,
+			wantBackInStock: []string{"p1"},
+			wantUpdated:     b(true),
+		},
+		{
+			name:            "нет строки дня, истории нет → уведомления нет, посев из лотов",
+			days:            map[string]*daystate.DayState{},
+			wantEnsured:     1,
+			wantSeed:        b(true),
+			wantLastKnown:   1,
+			wantBackInStock: nil,
+			wantUpdated:     b(true),
+		},
+		{
+			name: "вчера NULL (календарь), позавчера не было → уведомление",
+			days: map[string]*daystate.DayState{
+				key("p1", yesterday):  {ProductID: "p1", Date: yesterday},
+				key("p1", twoDaysAgo): {ProductID: "p1", Date: twoDaysAgo, InStock: b(false)},
+			},
+			wantEnsured:     1,
+			wantSeed:        b(false),
+			wantLastKnown:   1,
+			wantBackInStock: []string{"p1"},
+			wantUpdated:     b(true),
+		},
+		{
+			name: "строка дня уже есть с in_stock=true (снапшот) → ложного уведомления нет, история не читается",
+			days: map[string]*daystate.DayState{
+				key("p1", today):     {ProductID: "p1", Date: today, InStock: b(true), Orderable: true},
+				key("p1", yesterday): {ProductID: "p1", Date: yesterday, InStock: b(false), Orderable: true},
+			},
+			wantEnsured:     0,
+			wantLastKnown:   0,
+			wantBackInStock: nil,
+			wantUpdated:     b(true),
+		},
+		{
+			name: "строка дня есть с in_stock=NULL (календарь) → «было» из истории, уведомление",
+			days: map[string]*daystate.DayState{
+				key("p1", today):     {ProductID: "p1", Date: today, Orderable: true},
+				key("p1", yesterday): {ProductID: "p1", Date: yesterday, InStock: b(false), Orderable: true},
+			},
+			wantEnsured:     0,
+			wantLastKnown:   1,
+			wantBackInStock: []string{"p1"},
+			wantUpdated:     b(true),
+		},
+		{
+			name: "строка дня есть с in_stock=false (закончился), история true → уведомление по строке дня",
+			days: map[string]*daystate.DayState{
+				key("p1", today):     {ProductID: "p1", Date: today, InStock: b(false), SoldOutToday: true, Orderable: true},
+				key("p1", yesterday): {ProductID: "p1", Date: yesterday, InStock: b(true), Orderable: true},
+			},
+			wantEnsured:     0,
+			wantLastKnown:   0,
+			wantBackInStock: []string{"p1"},
+			wantUpdated:     b(true),
+			// Маркер дня приход не снимает (снимает только откат расформирования).
+			wantSoldOutToday: true,
+		},
+		{
+			name:          "ошибка чтения истории → строка дня не создана и не пересчитана",
+			days:          map[string]*daystate.DayState{},
+			lastKnownErr:  errors.New("db down"),
+			wantEnsured:   0,
+			wantLastKnown: 1,
+			wantErr:       true,
+		},
+		{
+			// Решение владельца 15.09.2026: историю берём и для обратного перехода —
+			// догоняющее «закончился» остаётся (товара действительно нет).
+			name: "история true, лотов нет (обнуление контур не видел) → SoldOut",
+			days: map[string]*daystate.DayState{
+				key("p1", yesterday): {ProductID: "p1", Date: yesterday, InStock: b(true), Orderable: true},
+			},
+			emptyLots:        true,
+			wantEnsured:      1,
+			wantSeed:         b(true),
+			wantLastKnown:    1,
+			wantSoldOut:      []string{"p1"},
+			wantSoldOutCalls: []string{"p1"},
+			wantUpdated:      b(false),
+			wantSoldOutToday: true,
+		},
+		{
+			// Решение владельца 15.09.2026: позицию, снятую календарём с заказа,
+			// приход всё равно уведомляет («товар появился» — факт поступления).
+			name: "строка дня orderable=false (календарь), история false → уведомление, метка календаря цела",
+			days: map[string]*daystate.DayState{
+				key("p1", today):     {ProductID: "p1", Date: today, Orderable: false},
+				key("p1", yesterday): {ProductID: "p1", Date: yesterday, InStock: b(false), Orderable: true},
+			},
+			wantEnsured:     0,
+			wantLastKnown:   1,
+			wantBackInStock: []string{"p1"},
+			wantUpdated:     b(true),
+			wantOrderable:   b(false),
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			runBackInStockCase(t, c, today)
+		})
+	}
+}
+
+// runBackInStockCase прогоняет один сценарий: свежие фейки, вызов шва и
+// проверки. Вынесено из таблицы, чтобы она не разрасталась в одну функцию
+// (gocognit).
+func runBackInStockCase(t *testing.T, c backInStockCase, today time.Time) {
+	t.Helper()
+
+	// Свежие фейки на каждый подтест — состояние не переиспользуется.
+	lots := []daystate.LotState{{Qty: 5, EffectiveGeneral: i16(0)}}
+	if c.emptyLots {
+		lots = nil
+	}
+	repo := &fakeRepo{
+		days:         c.days,
+		lots:         map[string][]daystate.LotState{"p1": lots},
+		lastKnownErr: c.lastKnownErr,
+	}
+	soldOut := &fakeSoldOut{}
+	status := &fakeStockStatus{}
+	uc := newTestUC(repo, &fakeCatalog{}, soldOut, &fakeUnavailable{}, &fakeRollback{}, status, today)
+
+	err := uc.OnStockChanged(context.Background(), "p1")
+	if c.wantErr {
+		if err == nil {
+			t.Fatal("OnStockChanged: ошибки нет, want ошибку")
+		}
+		if len(repo.ensured) != c.wantEnsured {
+			t.Errorf("ensured: %d записей, want %d (строка дня не создана)", len(repo.ensured), c.wantEnsured)
+		}
+		if len(repo.updated) != 0 {
+			t.Errorf("updated: %d записей, want 0 (строка дня не пересчитана)", len(repo.updated))
+		}
+		if repo.lastKnownCalls != c.wantLastKnown {
+			t.Errorf("LastKnownInStock: %d вызовов, want %d", repo.lastKnownCalls, c.wantLastKnown)
+		}
+		return
+	}
+	if err != nil {
+		t.Fatalf("OnStockChanged: %v", err)
+	}
+
+	if !reflect.DeepEqual(status.backInStock, c.wantBackInStock) {
+		t.Errorf("backInStock = %v, want %v", status.backInStock, c.wantBackInStock)
+	}
+	if !reflect.DeepEqual(status.soldOut, c.wantSoldOut) {
+		t.Errorf("soldOut = %v, want %v", status.soldOut, c.wantSoldOut)
+	}
+	if !reflect.DeepEqual(soldOut.calls, c.wantSoldOutCalls) {
+		t.Errorf("ordercoeff SoldOut: %v, want %v", soldOut.calls, c.wantSoldOutCalls)
+	}
+	if len(repo.ensured) != c.wantEnsured {
+		t.Fatalf("ensured: %d записей, want %d", len(repo.ensured), c.wantEnsured)
+	}
+	if c.wantEnsured == 1 && !sameBoolPtr(repo.ensured[0].InStock, c.wantSeed) {
+		t.Errorf("ensured.InStock = %s, want %s (посев «было»)",
+			boolText(repo.ensured[0].InStock), boolText(c.wantSeed))
+	}
+	if repo.lastKnownCalls != c.wantLastKnown {
+		t.Errorf("LastKnownInStock: %d вызовов, want %d", repo.lastKnownCalls, c.wantLastKnown)
+	}
+	if len(repo.updated) != 1 {
+		t.Fatalf("updated: len = %d, want 1", len(repo.updated))
+	}
+	if got := repo.updated[0].InStock; !sameBoolPtr(got, c.wantUpdated) {
+		t.Errorf("updated.InStock = %s, want %s", boolText(got), boolText(c.wantUpdated))
+	}
+	if repo.updated[0].SoldOutToday != c.wantSoldOutToday {
+		t.Errorf("SoldOutToday = %v, want %v", repo.updated[0].SoldOutToday, c.wantSoldOutToday)
+	}
+	if c.wantOrderable != nil && repo.updated[0].Orderable != *c.wantOrderable {
+		t.Errorf("updated.Orderable = %v, want %v", repo.updated[0].Orderable, *c.wantOrderable)
 	}
 }
