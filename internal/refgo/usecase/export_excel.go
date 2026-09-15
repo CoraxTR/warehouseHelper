@@ -117,6 +117,11 @@ func (uc *ExportToExcelUseCase) ExportOrders(ctx context.Context) (summary *Expo
 	// не должна ждать обхода всех заказов в МС. Фон учитывается в wg и
 	// закрывается Stop: иначе процесс уйдёт посреди пометок, и часть
 	// заказов останется помеченной в базе, но не в МС.
+	//
+	// Вызов обязателен: без него экспорт создаёт файл-таблицу, а заказы в МС
+	// не помечаются и отгрузки не создаются (регрессия #100 — фон был написан,
+	// но не стартовал; ловится тестом TestExportOrdersStartsShipmentProcessing).
+	uc.startShipmentsProcessing(orders)
 
 	return summary, nil
 }
