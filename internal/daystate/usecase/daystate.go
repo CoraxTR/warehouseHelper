@@ -38,6 +38,13 @@ type Repository interface {
 	// LotsSnapshot читает лоты товара из product_stock (qty + effective
 	// general-скидка) — срез для пересчёта дня.
 	LotsSnapshot(ctx context.Context, productID string) ([]daystate.LotState, error)
+	// LastKnownInStock — последнее известное наличие товара до даты before
+	// (ближайшая строка дня с заполненным in_stock; строки календаря
+	// «Доступность» пропускаются); истории нет — nil: у товара в полном
+	// отсутствии строк в таблице нет вовсе (лот, списанный до нуля, удаляется,
+	// снапшот дня такого товара не видит). Первый приход нового товара
+	// уведомления не даёт — «появился» считается по последней известной строке.
+	LastKnownInStock(ctx context.Context, productID string, before time.Time) (*bool, error)
 	// ClearSoldOut сбрасывает маркер «закончилась» строки дня; строки нет —
 	// не ошибка (нечего сбрасывать).
 	ClearSoldOut(ctx context.Context, productID string, date time.Time) error
@@ -167,11 +174,24 @@ func (uc *UseCase) trySnapshot(ctx context.Context, snapshotTime time.Duration) 
 }
 
 // OnStockChanged — шов стока: вызывается после каждой записи остатков
-// (приёмка, «Обновить сроки», ручная скидка). Страхует строку дня (создаёт
-// со снимком текущих значений, если её нет), пересчитывает из лотов; при
-// переходе в «нет в наличии» ставит sold_out_today и эмитит SoldOut в
-// ordercoeff. Наблюдатель: ошибка возвращается, сток её только логирует
-// (операция стока не роняется).
+// (приёмка, «Обновить сроки», ручная скидка). Страхует строку дня (создаёт,
+// если её нет: in_stock — из последнего известного наличия, скидки — из
+// лотов), пересчитывает из лотов; при переходе в «нет в наличии» ставит
+// sold_out_today и эмитит SoldOut в ordercoeff. Наблюдатель: ошибка
+// возвращается, сток её только логирует (операция стока не роняется).
+//
+// «Было» для дня без строки берётся из последнего известного наличия
+// (LastKnownInStock), а не из текущих лотов: у товара в полном отсутствии
+// строк нет вовсе (лот, списанный до нуля, удаляется — снапшот дня его не
+// видит), поэтому посев из лотов терял переход «не было → появилось».
+// Истории нет (первый приход нового товара) — прежнее поведение: посев из
+// лотов, перехода нет; устаревшая последняя строка (обнуление не наблюдалось
+// контуром: приложение не работало, остатки правились не через склад) даёт
+// пропуск уведомления. История читается только там, где состояние дня
+// неизвестно (строки нет или она от календаря) — на обычном событии дня
+// лишнего запроса нет. Сбой UpdateDay после EnsureDay оставляет строку дня
+// не пересчитанной — окно не-транзакционности, исправляется следующим
+// событием дня.
 func (uc *UseCase) OnStockChanged(ctx context.Context, productID string) error {
 	done := metrics.Track(trackPkg, "OnStockChanged")
 	defer done()
@@ -185,21 +205,27 @@ func (uc *UseCase) OnStockChanged(ctx context.Context, productID string) error {
 	}
 
 	today := normalizeDate(uc.now())
-	if err := uc.repo.EnsureDay(ctx, daystate.DayState{
-		ProductID:     productID,
-		Date:          today,
-		InStock:       boolPtr(daystate.InStockFromLots(lots)),
-		DiscountStart: daystate.DiscountFromLots(lots),
-		Discount:      daystate.DiscountFromLots(lots),
-		Orderable:     true,
-	}); err != nil {
+	cur, err := uc.repo.GetDay(ctx, productID, today)
+	switch {
+	case errors.Is(err, daystate.ErrDayNotFound):
+		cur, err = uc.createDayRow(ctx, productID, today, lots)
+		if err != nil {
+			return err
+		}
+	case err != nil:
 		return err
+	default:
+		// Строка дня от календаря «Доступность» (состояние неизвестно):
+		// «было» тоже берём из истории, иначе переход не увидеть.
+		if cur.InStock == nil {
+			prior, err := uc.repo.LastKnownInStock(ctx, productID, today)
+			if err != nil {
+				return err
+			}
+			cur.InStock = prior
+		}
 	}
 
-	cur, err := uc.repo.GetDay(ctx, productID, today)
-	if err != nil {
-		return err
-	}
 	next, soldOutNow, backInStock := daystate.ApplyStockChange(*cur, lots)
 	if err := uc.repo.UpdateDay(ctx, next); err != nil {
 		return err
@@ -221,6 +247,35 @@ func (uc *UseCase) OnStockChanged(ctx context.Context, productID string) error {
 		}
 	}
 	return nil
+}
+
+// createDayRow — холодный путь шва стока: строки дня нет, создаём её.
+// in_stock — последнее известное наличие (истории нет — из текущих лотов:
+// прежнее поведение, перехода не будет), скидки — из лотов. Строка читается
+// обратно: при гонке её мог создать кто-то ещё, а EnsureDay существующую
+// строку не перезаписывает.
+func (uc *UseCase) createDayRow(ctx context.Context, productID string, today time.Time, lots []daystate.LotState) (*daystate.DayState, error) {
+	prior, err := uc.repo.LastKnownInStock(ctx, productID, today)
+	if err != nil {
+		return nil, err
+	}
+	seed := boolPtr(daystate.InStockFromLots(lots))
+	if prior != nil {
+		seed = prior
+	}
+
+	if err := uc.repo.EnsureDay(ctx, daystate.DayState{
+		ProductID:     productID,
+		Date:          today,
+		InStock:       seed,
+		DiscountStart: daystate.DiscountFromLots(lots),
+		Discount:      daystate.DiscountFromLots(lots),
+		Orderable:     true,
+	}); err != nil {
+		return nil, err
+	}
+
+	return uc.repo.GetDay(ctx, productID, today)
 }
 
 // SetOrderable — календарь «Доступность товаров»: даты доступны для заказа

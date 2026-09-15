@@ -46,6 +46,36 @@ func (pg *PGClient) GetDay(ctx context.Context, productID string, date time.Time
 	return &d, nil
 }
 
+// LastKnownInStock читает последнее известное состояние наличия товара до даты
+// before (строго раньше): ближайшая по дате строка дня с заполненным in_stock.
+// Строки с in_stock NULL (календарь «Доступность») пропускаются, строки
+// будущих дат не рассматриваются. Истории нет — nil, nil: у товара в полном
+// отсутствии строк в таблице нет вовсе (лот, списанный до нуля, удаляется,
+// снапшот дня такого товара не видит). Устаревшая последняя строка (обнуление
+// не наблюдалось контуром) даёт «в наличии» для фактически отсутствующего
+// товара — переход «не было → появилось» тогда не детектируется.
+//
+//nolint:nilnil // контракт репозитория: (nil, nil) = истории нет
+func (pg *PGClient) LastKnownInStock(ctx context.Context, productID string, before time.Time) (*bool, error) {
+	var inStock bool
+	err := pg.Pool.QueryRow(ctx, `
+        SELECT in_stock
+        FROM product_day_state
+        WHERE product_id = $1 AND date < $2 AND in_stock IS NOT NULL
+        ORDER BY date DESC
+        LIMIT 1`,
+		productID, before,
+	).Scan(&inStock)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("last known in stock %s %s: %w", productID, before.Format(time.DateOnly), err)
+	}
+
+	return &inStock, nil
+}
+
 // UpdateDay обновляет пересчитываемые поля строки дня (in_stock, discount,
 // discount_increases, sold_out_today); строки нет — daystate.ErrDayNotFound.
 func (pg *PGClient) UpdateDay(ctx context.Context, d daystate.DayState) error {
