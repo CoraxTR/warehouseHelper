@@ -593,7 +593,16 @@
             if (!p) {
                 return;
             }
-            UPDATE_CTX = { kind: 'product', id: p.id, name: p.name, code: p.internal_code || '' };
+            if (!p.internal_code) {
+                // Обновление по товару ограничено его внутренним кодом: без
+                // кода страница вернула бы 400 сырым текстом — говорим прямо.
+                showModal('<div class="modal-title">' + esc(p.name) + '</div>' +
+                    '<div class="modal-line">У товара нет внутреннего кода — обновить сроки по нему нельзя. ' +
+                    'Заведите код в МС и выгрузите каталог.</div>' +
+                    '<div class="modal-actions"><button type="button" onclick="closeModal()">Закрыть</button></div>');
+                return;
+            }
+            UPDATE_CTX = { kind: 'product', id: p.id, name: p.name, code: p.internal_code };
             var html = '<div class="modal-title">' + esc(p.name) + '</div>';
             if (p.internal_code) {
                 html += '<div class="modal-line">Код: ' + esc(p.internal_code) + '</div>';
@@ -609,7 +618,11 @@
         function openGroupModal(groupName) {
             var code = groupCode(groupName);
             if (!code) {
-                return; // в названии нет номера группы — обновление по группе недоступно
+                // Раньше выходили молча — кнопка «Обновить сроки группы»
+                // выглядела нерабочей. Группе номера нет, если у её товаров
+                // пустой внутренний код.
+                setStatus('у группы нет номера в внутреннем коде — обновление по группе недоступно', 'offline');
+                return;
             }
             var display = groupLabel(groupName) || 'Без группы';
             UPDATE_CTX = { kind: 'group', code: code, name: display };
@@ -626,14 +639,30 @@
         // internal_code (индексы 1..3). Полный group_name усекается до
         // последнего сегмента («…/003 - Cresud» → «003»).
         function groupCode(name) {
+            // Номер группы = цифры 1..3 внутреннего кода (у товаров группы он
+            // один) — берём из данных снапшота. Разбор отображаемого названия
+            // остаётся фолбэком: у названий вида «Специи 001» ведущих цифр нет,
+            // и раньше это давало тихий отказ кнопки.
+            if (STOCK.products) {
+                for (var i = 0; i < STOCK.products.length; i++) {
+                    var p = STOCK.products[i];
+                    if (p.group_name === name && p.internal_code && p.internal_code.length >= 4) {
+                        return p.internal_code.slice(1, 4);
+                    }
+                }
+            }
             var m = /^(\d{3})/.exec(groupLabel(name));
             return m ? m[1] : null;
         }
 
+        // Контекст читаем ДО закрытия окна: closeModal() затирает UPDATE_CTX
+        // (MODAL/UPDATE_CTX — состояние окна), из-за чего кнопка «Обновить
+        // сроки …» гасила модалку и молча выходила — перехода не было.
         function goUpdate() {
-            closeModal();
             var c = UPDATE_CTX;
+            closeModal();
             if (!c) {
+                setStatus('контекст обновления потерян — откройте окно заново', 'offline');
                 return;
             }
             var url = (c.kind === 'product')
