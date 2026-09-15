@@ -44,7 +44,7 @@ jobs:
       - name: Линт (golangci-lint, конфиг .golangci.yml)
         uses: golangci/golangci-lint-action@v7
         with:
-          version: v2.6.0
+          version: v2.13.2
           # verify тянет JSON-схему конфига с golangci-lint.run — внешняя
           # зависимость, из-за неё прогон падал по таймауту сети. Конфиг
           # валиден (проверено локально и зелёными прогонами), отключаем.
