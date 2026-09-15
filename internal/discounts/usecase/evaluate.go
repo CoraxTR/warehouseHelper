@@ -41,11 +41,18 @@ type PairState struct {
 	HasRate    bool // есть ли данные о продажах (нет данных → избытка нет)
 
 	// Кандидаты по каналам: nil — источник скидку не даёт.
-	Manual     *int16  // ручная скидка канала сайта (>0)
+	Manual     *int16  // ручная скидка канала сайта: nil — ручного нет, значение (в т.ч. 0 — «скидка 0 %», пара заморожена) применяется
 	Expiry     *int16  // лестница по сроку на сегодня (>0), вне окна — nil
 	Surplus    *int16  // 10 при избытке, nil — избытка нет
 	Coeff      float64 // коэффициент избытка Q/(v×D), >1 — избыток
 	HasSurplus bool
+
+	// BlockedByManualZero — пара накрыта запретом менеджера: у товара есть пара
+	// с ручной 0 («скидка 0 %») и её срок не позже этой. Запрет каскадный:
+	// «0 блокирует все сроки дальше того, на который поставлен» (решение
+	// владельца, 15.09.2026), поэтому запрет получает и сама нулевая пара,
+	// и все пары товара с более далёким сроком. Ставит флаг Evaluate.
+	BlockedByManualZero bool
 
 	// То, что стоит в БД: Applied — эффективная скидка канала (ручная
 	// перекрывает plain), AppliedPlain — значение plain-колонки,
@@ -58,8 +65,48 @@ type PairState struct {
 
 // Desired — какой источник должен победить по кандидатам дня (приоритет
 // ручная → срок → избыток). nil — ни один источник скидку не даёт.
+// Замороженная ручным нулём пара даёт (0, SourceManual): скидки-значения нет,
+// но источник есть — это «скидка 0 %», а не «скидки нет» (см. Frozen).
 func (p PairState) Desired() (*int16, discounts.Source) {
+	if p.BlockedByManualZero && p.Manual == nil {
+		// Каскадный запрет менеджера: скидки по паре быть не должно, ни один
+		// источник не победитель (скидка снимается — см. banWrites).
+		return nil, discounts.SourceNone
+	}
 	return discounts.Resolve(p.Manual, p.Expiry, p.Surplus)
+}
+
+// Frozen — пара заморожена ручным нулём: ручная скидка задана и равна 0
+// («скидка 0 %», решение владельца, сентябрь 2026). Движок такую пару не
+// трогает вовсе: plain не пишет, уведомлений «пора X %» не шлёт, в план
+// ТГ-слота и дайджест не берёт (см. expiryWrites/surplusWrites/activeLocked/
+// slotEligible). Ручная > 0 работает как раньше: значение держит ручная,
+// автомат может поднимать только plain-колонку выше неё.
+func (p PairState) Frozen() bool {
+	return p.BlockedByManualZero || zeroManual(p.Manual)
+}
+
+// zeroManual — ручная скидка задана нулём: «0 %», а не «скидки нет».
+func zeroManual(v *int16) bool {
+	return v != nil && *v == 0
+}
+
+// banThreshold — порог запрета скидок по товару: самый близкий срок среди пар
+// с заданной ручной нулём (по любой из колонок каналов — решение владельца
+// 15.09.2026, каналы симметричны). Пары с годностью не раньше порога
+// автоматических скидок не получают вовсе. nil — запрета нет.
+func banThreshold(lots []discounts.Input) *time.Time {
+	var ban *time.Time
+	for _, in := range lots {
+		if !zeroManual(in.GeneralManual) && !zeroManual(in.TelegramManual) {
+			continue
+		}
+		if ban == nil || in.BestBefore.Before(*ban) {
+			bb := in.BestBefore
+			ban = &bb
+		}
+	}
+	return ban
 }
 
 // Row — строка отчёта/реестра по паре (канал сайта).
@@ -116,10 +163,15 @@ func Evaluate(inputs []discounts.Input, rates map[string]float64, today time.Tim
 
 	for _, pid := range orderProducts(inputs) {
 		lots := byProduct[pid]
+		ban := banThreshold(lots)
 		var cum int64
 		for _, in := range lots {
 			cum += in.Qty
-			out = append(out, evaluatePair(in, cum, rates, day))
+			state := evaluatePair(in, cum, rates, day)
+			if ban != nil && !in.BestBefore.Before(*ban) {
+				state.BlockedByManualZero = true
+			}
+			out = append(out, state)
 		}
 	}
 
@@ -160,7 +212,7 @@ func evaluatePair(in discounts.Input, cumQty int64, rates map[string]float64, da
 		PeriodDays:    periodDays,
 		Rate:          rate,
 		HasRate:       hasRate,
-		Manual:        positiveDiscount(in.GeneralManual),
+		Manual:        manualDiscount(in.GeneralManual),
 		Applied:       effectiveDiscount(in.GeneralManual, in.GeneralPlain),
 		AppliedPlain:  positiveDiscount(in.GeneralPlain),
 		SourceRaw:     in.DiscountSource,
@@ -218,16 +270,31 @@ func orderProducts(inputs []discounts.Input) []string {
 	return order
 }
 
-// effectiveDiscount — эффективная скидка канала: ручная перекрывает plain,
-// ноль и nil равнозначны «скидки нет» (правило «0 = NULL»).
+// effectiveDiscount — эффективная скидка канала: ручная перекрывает plain
+// КАК ЕСТЬ, включая заданный ноль («0 %», пара заморожена). plain применяется,
+// только если ручной нет; легаси-ноль в plain-колонке значит «скидки нет»
+// (движок туда нулей не пишет). Решение владельца, сентябрь 2026 (было
+// «0 = NULL» для обеих колонок, 14.09.2026).
 func effectiveDiscount(manual, plain *int16) *int16 {
-	if v := positiveDiscount(manual); v != nil {
+	if v := manualDiscount(manual); v != nil {
 		return v
 	}
 	return positiveDiscount(plain)
 }
 
-// positiveDiscount — скидка, если она задана и больше нуля; иначе nil.
+// manualDiscount — ручная скидка как она есть: nil — ручного применения нет,
+// заданное значение (в том числе 0 — «скидка 0 %») применяется. Отрицательное
+// значение — мусор из БД (запись валидируется 0..100), как и в discounts.Resolve.
+func manualDiscount(v *int16) *int16 {
+	if v == nil || *v < 0 {
+		return nil
+	}
+	return v
+}
+
+// positiveDiscount — plain-скидка, если она задана и больше нуля; иначе nil
+// (ноль в plain-колонке — legacy-«скидки нет», репозиторий отдаёт значение
+// как есть, трактовку держит домен).
 func positiveDiscount(v *int16) *int16 {
 	if v == nil || *v <= 0 {
 		return nil

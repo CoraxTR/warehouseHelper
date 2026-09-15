@@ -520,7 +520,7 @@ func TestRecalcExpiryErrors(t *testing.T) {
 	})
 }
 
-// Значение 0 в колонках читается как «скидки нет» (правило 0 = NULL): нулевая
+// Значение 0 в PLAIN-колонке читается как «скидки нет» (движок пишет NULL): нулевая
 // ступень ничего не пишет.
 func TestRecalcExpiryZeroDiscountIsNoDiscount(t *testing.T) {
 	h := newRecalcHarness(recalcNow(1),

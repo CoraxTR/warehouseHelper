@@ -74,7 +74,11 @@ func (uc *UseCase) RecalcExpiry(ctx context.Context, now time.Time) error {
 	}
 	pairs := Evaluate(inputs, rates, today)
 
-	if err := uc.writeAndRegister(ctx, pairs, expiryWrites(pairs)); err != nil {
+	// Правки по сроку + снятие запрета менеджера (ручная 0): запрет обязан
+	// убрать с сайта ступень, поставленную движком до него.
+	writes := append(expiryWrites(pairs), banWrites(pairs)...)
+
+	if err := uc.writeAndRegister(ctx, pairs, writes); err != nil {
 		return err
 	}
 
@@ -175,6 +179,9 @@ func (uc *UseCase) RecalcAffected(ctx context.Context, now time.Time, productIDs
 	writes := surplusWrites(pairs)
 	// Ступень по сроку — только у затронутых товаров (см. комментарий выше).
 	writes = append(writes, writesForProducts(expiryWrites(pairs), affected)...)
+	// Снятие по запрету менеджера — тоже только по товару события: ручную 0
+	// ставят через страницу «Сроки», а её запись дёргает пересчёт товара.
+	writes = append(writes, writesForProducts(banWrites(pairs), affected)...)
 
 	return uc.writeAndRegister(ctx, pairs, writes)
 }
@@ -198,9 +205,14 @@ func writesForProducts(writes []discounts.DiscountWrite, ids map[string]struct{}
 // plain-колонки): равенство — уже применено, меньше — понижение, которого
 // автоматика не делает. Ручная скидка тоже входит в «уже стоит», поэтому рост
 // под ней поднимает только колонку движка, а на сайте остаётся ручная.
+// Пара, замороженная ручным нулём (0 %), из правок выпадает целиком: лестница
+// по ней не работает и plain не пишется — решение владельца, сентябрь 2026.
 func expiryWrites(pairs []PairState) []discounts.DiscountWrite {
 	writes := make([]discounts.DiscountWrite, 0, len(pairs))
 	for _, p := range pairs {
+		if p.Frozen() {
+			continue // ручная 0 % — пара заморожена
+		}
 		if p.Expiry == nil || *p.Expiry <= appliedTop(p) {
 			continue
 		}
@@ -224,9 +236,14 @@ func expiryWrites(pairs []PairState) []discounts.DiscountWrite {
 // стоящее значение (в том числе подъём ТГ-дня до 20 %) автоматика не понижает.
 // Снятие (в БД NULL) — только у значения, поставленного избытком: чужую
 // ступень и метку источника пересчёт не убирает.
+// Пара, замороженная ручным нулём (0 %), из работы движка исключена совсем:
+// ни 10 %, ни снятия по ней не пишем — решение владельца, сентябрь 2026.
 func surplusWrites(pairs []PairState) []discounts.DiscountWrite {
 	writes := make([]discounts.DiscountWrite, 0, len(pairs))
 	for _, p := range pairs {
+		if p.Frozen() {
+			continue // ручная 0 % — пара заморожена
+		}
 		switch {
 		case p.Manual == nil && p.Expiry == nil && p.HasSurplus:
 			if appliedTop(p) != 0 {
@@ -251,6 +268,28 @@ func surplusWrites(pairs []PairState) []discounts.DiscountWrite {
 		default:
 			// ни избытка, ни снятия — правок по паре нет
 		}
+	}
+	return writes
+}
+
+// banWrites — снятие скидки с пар, накрытых запретом менеджера (ручная 0 на
+// паре с не меньшим сроком): «0 блокирует все сроки дальше того, на который
+// поставлен» (решение владельца, 15.09.2026). Ступень, поставленная движком до
+// запрета, обязана уйти с сайта — единственное место, где автоматика снимает
+// своё значение: это не понижение расчёта, а исполнение запрета человека.
+// Колонку ТГ ведёт ТГ-день: её значение отдаём как есть.
+func banWrites(pairs []PairState) []discounts.DiscountWrite {
+	writes := make([]discounts.DiscountWrite, 0, len(pairs))
+	for _, p := range pairs {
+		if !p.Frozen() || p.AppliedPlain == nil {
+			continue
+		}
+		writes = append(writes, discounts.DiscountWrite{
+			ProductID:  p.ProductID,
+			BestBefore: p.BestBefore,
+			General:    nil, // снятие: движок пишет NULL, а не 0
+			Telegram:   p.TelegramPlain,
+		})
 	}
 	return writes
 }
@@ -331,8 +370,10 @@ func (uc *UseCase) freshIDs(pairs []PairState) []string {
 }
 
 // appliedTop — верхняя граница того, что уже стоит у пары в канале сайта:
-// эффективная скидка (ручная перекрывает plain) и отдельно значение
-// plain-колонки. 0 — скидки не стоит. Автоматика пишет только выше границы.
+// эффективная скидка (ручная перекрывает plain как есть, включая 0) и отдельно
+// значение plain-колонки. 0 — скидки не стоит. Автоматика пишет только выше
+// границы. У замороженной пары (ручная 0, PairState.Frozen) границу считать
+// незачем: правок по ней нет вовсе.
 func appliedTop(p PairState) int16 {
 	top := discountPercent(p.Applied)
 	if v := discountPercent(p.AppliedPlain); v > top {
@@ -360,9 +401,9 @@ func (uc *UseCase) writeAndRegister(ctx context.Context, pairs []PairState, writ
 }
 
 // applyWrites — снапшот расчёта после записи: у пары с правкой эффективная
-// скидка канала — ручная (если она есть), иначе записанное значение; снятое
-// значение (nil) убирает и plain, и эффективную. Без этого реестр сравнивал бы
-// новые значения со старыми из БД и не видел бы изменений.
+// скидка канала — ручная (если она есть, включая 0), иначе записанное значение;
+// снятое значение (nil) убирает и plain, и эффективную. Без этого реестр
+// сравнивал бы новые значения со старыми из БД и не видел бы изменений.
 func applyWrites(pairs []PairState, writes []discounts.DiscountWrite) {
 	byKey := make(map[discounts.LotKey]discounts.DiscountWrite, len(writes))
 	for _, w := range writes {
