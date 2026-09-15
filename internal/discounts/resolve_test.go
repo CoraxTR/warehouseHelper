@@ -2,7 +2,8 @@ package discounts
 
 import "testing"
 
-func i16(v int16) *int16 { return &v }
+//go:fix inline
+func i16(v int16) *int16 { return new(v) }
 
 func TestSourceString(t *testing.T) {
 	tests := []struct {

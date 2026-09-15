@@ -37,7 +37,9 @@ func banFixtures() banFixture {
 }
 
 // banPercent — указатель на процент для полей входа.
-func banPercent(v int16) *int16 { return &v }
+//
+//go:fix inline
+func banPercent(v int16) *int16 { return new(v) }
 
 // Запрет менеджера: ручная 0 блокирует все сроки дальше того, на который
 // поставлена (решение владельца, 15.09.2026): накрытая пара и все пары товара

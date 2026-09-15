@@ -34,7 +34,7 @@ func TestScanProductNullableText(t *testing.T) {
 			want: domain.Product{
 				ID: "p-2", InternalCode: "00001234", Name: "Сыр", UOM: "кг",
 				GroupName: "Молочка/Сыры", FolderID: "folder-7",
-				AverageWeight: ptr(0.35), InventoryType: "Копейка", TrackWeekly: true,
+				AverageWeight: new(0.35), InventoryType: "Копейка", TrackWeekly: true,
 			},
 		},
 	}

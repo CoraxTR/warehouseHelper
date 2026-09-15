@@ -153,7 +153,7 @@ func (o *MSOrder) SetAgentNameAndPhone(s1, s2 string) {
 func (o *MSOrder) SuitableForDelivery() bool {
 	dayAftertomorrow := time.Now().AddDate(0, 0, 2).Format(time.DateOnly)
 
-	deliveryDate := strings.Split(o.DeliveryPlannedMoment, " ")[0]
+	deliveryDate, _, _ := strings.Cut(o.DeliveryPlannedMoment, " ")
 	if deliveryDate == dayAftertomorrow && o.AttributesMap["Регион доставки"] != "СПБ" {
 		return false
 	}

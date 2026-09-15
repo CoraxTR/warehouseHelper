@@ -6,9 +6,11 @@ import (
 	"time"
 )
 
-func i16(v int16) *int16 { return &v }
+//go:fix inline
+func i16(v int16) *int16 { return new(v) }
 
-func b(v bool) *bool { return &v }
+//go:fix inline
+func b(v bool) *bool { return new(v) }
 
 func TestDiscountFromLots(t *testing.T) {
 	tests := []struct {
@@ -100,7 +102,7 @@ func baseDay() DayState {
 func TestApplyStockChange_StockTransitions(t *testing.T) {
 	// Переход «было в наличии → стало нет»: маркер + эмит.
 	cur := baseDay()
-	cur.InStock = b(true)
+	cur.InStock = new(true)
 	next, soldOutNow, backInStock := ApplyStockChange(cur, nil)
 	if !next.SoldOutToday || !soldOutNow || backInStock || next.InStock == nil || *next.InStock {
 		t.Errorf("переход в ноль: soldOutToday=%v soldOutNow=%v backInStock=%v inStock=%v", next.SoldOutToday, soldOutNow, backInStock, next.InStock)
@@ -108,7 +110,7 @@ func TestApplyStockChange_StockTransitions(t *testing.T) {
 
 	// Уже закончился — перехода нет, эмита нет.
 	cur = baseDay()
-	cur.InStock = b(false)
+	cur.InStock = new(false)
 	cur.SoldOutToday = true
 	next, soldOutNow, backInStock = ApplyStockChange(cur, nil)
 	if soldOutNow || backInStock || !next.SoldOutToday {
@@ -117,7 +119,7 @@ func TestApplyStockChange_StockTransitions(t *testing.T) {
 
 	// Приход после sold_out: маркер НЕ сбрасывается, но «появился» — да.
 	cur = baseDay()
-	cur.InStock = b(false)
+	cur.InStock = new(false)
 	cur.SoldOutToday = true
 	next, soldOutNow, backInStock = ApplyStockChange(cur, []LotState{{Qty: 5}})
 	if soldOutNow || !backInStock || !next.SoldOutToday || next.InStock == nil || !*next.InStock {
@@ -136,7 +138,7 @@ func TestApplyStockChange_StockTransitions(t *testing.T) {
 func TestApplyStockChange_Discounts(t *testing.T) {
 	// Повышение скидки: 5 → 10, append в increases.
 	cur := baseDay()
-	cur.InStock = b(true)
+	cur.InStock = new(true)
 	cur.Discount = i16(5)
 	cur.DiscountIncreases = []int16{7}
 	next, _, _ := ApplyStockChange(cur, []LotState{{Qty: 1, EffectiveGeneral: i16(10)}})
@@ -149,7 +151,7 @@ func TestApplyStockChange_Discounts(t *testing.T) {
 
 	// Скидка появилась (NULL → 7): повышение.
 	cur = baseDay()
-	cur.InStock = b(true)
+	cur.InStock = new(true)
 	next, _, _ = ApplyStockChange(cur, []LotState{{Qty: 1, EffectiveGeneral: i16(7)}})
 	if !reflect.DeepEqual(next.DiscountIncreases, []int16{7}) {
 		t.Errorf("increases = %v, want [7]", next.DiscountIncreases)
@@ -157,7 +159,7 @@ func TestApplyStockChange_Discounts(t *testing.T) {
 
 	// Ноль у лота — скидка 0 % (ручной запрет): колонка 0, increases не растёт.
 	cur = baseDay()
-	cur.InStock = b(true)
+	cur.InStock = new(true)
 	cur.Discount = i16(10)
 	next, _, _ = ApplyStockChange(cur, []LotState{{Qty: 1, EffectiveGeneral: i16(0)}})
 	if next.Discount == nil || *next.Discount != 0 {
@@ -169,7 +171,7 @@ func TestApplyStockChange_Discounts(t *testing.T) {
 
 	// Понижение 10 → 5: колонка меняется, increases не растёт.
 	cur = baseDay()
-	cur.InStock = b(true)
+	cur.InStock = new(true)
 	cur.Discount = i16(10)
 	cur.DiscountIncreases = []int16{10}
 	next, _, _ = ApplyStockChange(cur, []LotState{{Qty: 1, EffectiveGeneral: i16(5)}})
@@ -182,7 +184,7 @@ func TestApplyStockChange_Discounts(t *testing.T) {
 
 	// Снятие скидки 10 → NULL: колонка NULL, increases не растёт.
 	cur = baseDay()
-	cur.InStock = b(true)
+	cur.InStock = new(true)
 	cur.Discount = i16(10)
 	next, _, _ = ApplyStockChange(cur, []LotState{{Qty: 1}})
 	if next.Discount != nil {
@@ -211,13 +213,13 @@ func TestCellFor(t *testing.T) {
 		{"будущая дата — пусто", nil, today.Add(24 * time.Hour), CellEmpty, ""},
 		{"нет строки — пусто", nil, today, CellEmpty, ""},
 		{"in_stock NULL — пусто", &DayState{Date: today, InStock: nil, Orderable: true}, today, CellEmpty, ""},
-		{"недоступна — серая", &DayState{Date: today, InStock: b(true), Orderable: false}, today, CellGray, "0%"},
-		{"закончилась — красная x", &DayState{Date: today, InStock: b(false), Orderable: true}, today, CellRed, "x"},
-		{"в наличии — белая", &DayState{Date: today, InStock: b(true), Orderable: true}, today, CellPlain, "0%"},
-		{"в наличии + скидка — жёлтая", &DayState{Date: today, InStock: b(true), Discount: i16(15), Orderable: true}, today, CellYellow, "15%"},
-		{"sold_out + скидка — жёлтая с красным шрифтом", &DayState{Date: today, InStock: b(true), Discount: i16(15), SoldOutToday: true, Orderable: true}, today, CellYellowRed, "15%"},
-		{"sold_out — красная", &DayState{Date: today, InStock: b(true), SoldOutToday: true, Orderable: true}, today, CellRed, "0%"},
-		{"серая выигрывает у sold_out", &DayState{Date: today, InStock: b(true), SoldOutToday: true, Orderable: false}, today, CellGray, "0%"},
+		{"недоступна — серая", &DayState{Date: today, InStock: new(true), Orderable: false}, today, CellGray, "0%"},
+		{"закончилась — красная x", &DayState{Date: today, InStock: new(false), Orderable: true}, today, CellRed, "x"},
+		{"в наличии — белая", &DayState{Date: today, InStock: new(true), Orderable: true}, today, CellPlain, "0%"},
+		{"в наличии + скидка — жёлтая", &DayState{Date: today, InStock: new(true), Discount: i16(15), Orderable: true}, today, CellYellow, "15%"},
+		{"sold_out + скидка — жёлтая с красным шрифтом", &DayState{Date: today, InStock: new(true), Discount: i16(15), SoldOutToday: true, Orderable: true}, today, CellYellowRed, "15%"},
+		{"sold_out — красная", &DayState{Date: today, InStock: new(true), SoldOutToday: true, Orderable: true}, today, CellRed, "0%"},
+		{"серая выигрывает у sold_out", &DayState{Date: today, InStock: new(true), SoldOutToday: true, Orderable: false}, today, CellGray, "0%"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -236,12 +238,12 @@ func TestTextFor(t *testing.T) {
 		d    *DayState
 		want string
 	}{
-		{"скидки нет — 0%", &DayState{InStock: b(true)}, "0%"},
-		{"старт без изменений", &DayState{InStock: b(true), DiscountStart: i16(10), Discount: i16(10)}, "10%"},
-		{"цепочка повышений", &DayState{InStock: b(true), DiscountStart: i16(10), DiscountIncreases: []int16{15, 20}, Discount: i16(20)}, "10% → 15% → 20%"},
-		{"понижение — финал отличается", &DayState{InStock: b(true), DiscountStart: i16(10), Discount: i16(5)}, "10% → 5%"},
-		{"закончилась — финал x", &DayState{InStock: b(false), DiscountStart: i16(10), DiscountIncreases: []int16{15}, Discount: i16(15)}, "10% → 15% → x"},
-		{"сразу закончилась — просто x", &DayState{InStock: b(false)}, "x"},
+		{"скидки нет — 0%", &DayState{InStock: new(true)}, "0%"},
+		{"старт без изменений", &DayState{InStock: new(true), DiscountStart: i16(10), Discount: i16(10)}, "10%"},
+		{"цепочка повышений", &DayState{InStock: new(true), DiscountStart: i16(10), DiscountIncreases: []int16{15, 20}, Discount: i16(20)}, "10% → 15% → 20%"},
+		{"понижение — финал отличается", &DayState{InStock: new(true), DiscountStart: i16(10), Discount: i16(5)}, "10% → 5%"},
+		{"закончилась — финал x", &DayState{InStock: new(false), DiscountStart: i16(10), DiscountIncreases: []int16{15}, Discount: i16(15)}, "10% → 15% → x"},
+		{"сразу закончилась — просто x", &DayState{InStock: new(false)}, "x"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

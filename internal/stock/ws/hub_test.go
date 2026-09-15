@@ -13,7 +13,8 @@ import (
 	"warehouseHelper/internal/stock"
 )
 
-func i16(v int16) *int16 { return &v }
+//go:fix inline
+func i16(v int16) *int16 { return new(v) }
 
 // TestHubSnapshotThenDelta — клиент получает снапшот при подключении,
 // затем дельту после PublishStockChange (порядок гарантирован регистрацией

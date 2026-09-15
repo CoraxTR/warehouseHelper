@@ -22,7 +22,9 @@ import (
 var scannerType = reflect.TypeFor[sql.Scanner]()
 
 // ptr — указатель на значение (NULL-колонки в снапшотах — *T).
-func ptr[T any](v T) *T { return &v }
+//
+//go:fix inline
+func ptr[T any](v T) *T { return new(v) }
 
 // fakeRow — подделка pgx.Row для проверки scan-хелперов без БД: Scan
 // раскладывает заранее заданные значения по указателям (nil — SQL NULL).

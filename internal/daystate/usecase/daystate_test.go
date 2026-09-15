@@ -10,9 +10,11 @@ import (
 	"warehouseHelper/internal/daystate"
 )
 
-func i16(v int16) *int16 { return &v }
+//go:fix inline
+func i16(v int16) *int16 { return new(v) }
 
-func b(v bool) *bool { return &v }
+//go:fix inline
+func b(v bool) *bool { return new(v) }
 
 func day(d int) time.Time {
 	return time.Date(2026, time.September, d, 0, 0, 0, 0, time.UTC)
@@ -303,7 +305,7 @@ func TestOnStockChanged_SoldOutTransition(t *testing.T) {
 	today := day(1)
 	repo := &fakeRepo{
 		days: map[string]*daystate.DayState{
-			key("p1", today): {ProductID: "p1", Date: today, InStock: b(true), Discount: i16(5), Orderable: true},
+			key("p1", today): {ProductID: "p1", Date: today, InStock: new(true), Discount: i16(5), Orderable: true},
 		},
 		lots: map[string][]daystate.LotState{"p1": {{Qty: 0}}},
 	}
@@ -330,7 +332,7 @@ func TestOnStockChanged_NoEmitWhenAlreadyOut(t *testing.T) {
 	today := day(1)
 	repo := &fakeRepo{
 		days: map[string]*daystate.DayState{
-			key("p1", today): {ProductID: "p1", Date: today, InStock: b(false), SoldOutToday: true, Orderable: true},
+			key("p1", today): {ProductID: "p1", Date: today, InStock: new(false), SoldOutToday: true, Orderable: true},
 		},
 		lots: map[string][]daystate.LotState{"p1": nil},
 	}
@@ -352,7 +354,7 @@ func TestOnStockChanged_DiscountIncreaseAppends(t *testing.T) {
 	today := day(1)
 	repo := &fakeRepo{
 		days: map[string]*daystate.DayState{
-			key("p1", today): {ProductID: "p1", Date: today, InStock: b(true), Discount: i16(5), DiscountIncreases: []int16{5}, Orderable: true},
+			key("p1", today): {ProductID: "p1", Date: today, InStock: new(true), Discount: i16(5), DiscountIncreases: []int16{5}, Orderable: true},
 		},
 		lots: map[string][]daystate.LotState{"p1": {{Qty: 1, EffectiveGeneral: i16(15)}}},
 	}
@@ -375,7 +377,7 @@ func TestOnStockChangedNotifications(t *testing.T) {
 	today := day(1)
 	base := &fakeRepo{
 		days: map[string]*daystate.DayState{
-			key("p1", today): {ProductID: "p1", Date: today, InStock: b(true), Orderable: true},
+			key("p1", today): {ProductID: "p1", Date: today, InStock: new(true), Orderable: true},
 		},
 		lots: map[string][]daystate.LotState{"p1": {{Qty: 0}}},
 	}
@@ -411,7 +413,7 @@ func TestOnStockChanged_NotifyError(t *testing.T) {
 	today := day(1)
 	repo := &fakeRepo{
 		days: map[string]*daystate.DayState{
-			key("p1", today): {ProductID: "p1", Date: today, InStock: b(true), Orderable: true},
+			key("p1", today): {ProductID: "p1", Date: today, InStock: new(true), Orderable: true},
 		},
 		lots: map[string][]daystate.LotState{"p1": {{Qty: 0}}},
 	}
@@ -579,8 +581,8 @@ func TestAvailability(t *testing.T) {
 func TestStockReport(t *testing.T) {
 	now := day(15) // середина месяца: дни 1..2 уже прошли
 	repo := &fakeRepo{days: map[string]*daystate.DayState{
-		key("p1", day(1)): {ProductID: "p1", Date: day(1), InStock: b(true), Discount: i16(15), Orderable: true},
-		key("p1", day(2)): {ProductID: "p1", Date: day(2), InStock: b(false), Orderable: true},
+		key("p1", day(1)): {ProductID: "p1", Date: day(1), InStock: new(true), Discount: i16(15), Orderable: true},
+		key("p1", day(2)): {ProductID: "p1", Date: day(2), InStock: new(false), Orderable: true},
 	}}
 	catalog := &fakeCatalog{products: []daystate.CatalogProduct{
 		{ID: "p1", Name: "Хлеб", GroupName: "Хлебобулочные"},
@@ -659,67 +661,67 @@ func TestOnStockChanged_BackInStockFromHistory(t *testing.T) {
 		{
 			name: "нет строки дня, вчера не было в наличии → уведомление",
 			days: map[string]*daystate.DayState{
-				key("p1", yesterday): {ProductID: "p1", Date: yesterday, InStock: b(false), Orderable: true},
+				key("p1", yesterday): {ProductID: "p1", Date: yesterday, InStock: new(false), Orderable: true},
 			},
 			wantEnsured:     1,
-			wantSeed:        b(false),
+			wantSeed:        new(false),
 			wantLastKnown:   1,
 			wantBackInStock: []string{"p1"},
-			wantUpdated:     b(true),
+			wantUpdated:     new(true),
 		},
 		{
 			name:            "нет строки дня, истории нет → уведомления нет, посев из лотов",
 			days:            map[string]*daystate.DayState{},
 			wantEnsured:     1,
-			wantSeed:        b(true),
+			wantSeed:        new(true),
 			wantLastKnown:   1,
 			wantBackInStock: nil,
-			wantUpdated:     b(true),
+			wantUpdated:     new(true),
 		},
 		{
 			name: "вчера NULL (календарь), позавчера не было → уведомление",
 			days: map[string]*daystate.DayState{
 				key("p1", yesterday):  {ProductID: "p1", Date: yesterday},
-				key("p1", twoDaysAgo): {ProductID: "p1", Date: twoDaysAgo, InStock: b(false)},
+				key("p1", twoDaysAgo): {ProductID: "p1", Date: twoDaysAgo, InStock: new(false)},
 			},
 			wantEnsured:     1,
-			wantSeed:        b(false),
+			wantSeed:        new(false),
 			wantLastKnown:   1,
 			wantBackInStock: []string{"p1"},
-			wantUpdated:     b(true),
+			wantUpdated:     new(true),
 		},
 		{
 			name: "строка дня уже есть с in_stock=true (снапшот) → ложного уведомления нет, история не читается",
 			days: map[string]*daystate.DayState{
-				key("p1", today):     {ProductID: "p1", Date: today, InStock: b(true), Orderable: true},
-				key("p1", yesterday): {ProductID: "p1", Date: yesterday, InStock: b(false), Orderable: true},
+				key("p1", today):     {ProductID: "p1", Date: today, InStock: new(true), Orderable: true},
+				key("p1", yesterday): {ProductID: "p1", Date: yesterday, InStock: new(false), Orderable: true},
 			},
 			wantEnsured:     0,
 			wantLastKnown:   0,
 			wantBackInStock: nil,
-			wantUpdated:     b(true),
+			wantUpdated:     new(true),
 		},
 		{
 			name: "строка дня есть с in_stock=NULL (календарь) → «было» из истории, уведомление",
 			days: map[string]*daystate.DayState{
 				key("p1", today):     {ProductID: "p1", Date: today, Orderable: true},
-				key("p1", yesterday): {ProductID: "p1", Date: yesterday, InStock: b(false), Orderable: true},
+				key("p1", yesterday): {ProductID: "p1", Date: yesterday, InStock: new(false), Orderable: true},
 			},
 			wantEnsured:     0,
 			wantLastKnown:   1,
 			wantBackInStock: []string{"p1"},
-			wantUpdated:     b(true),
+			wantUpdated:     new(true),
 		},
 		{
 			name: "строка дня есть с in_stock=false (закончился), история true → уведомление по строке дня",
 			days: map[string]*daystate.DayState{
-				key("p1", today):     {ProductID: "p1", Date: today, InStock: b(false), SoldOutToday: true, Orderable: true},
-				key("p1", yesterday): {ProductID: "p1", Date: yesterday, InStock: b(true), Orderable: true},
+				key("p1", today):     {ProductID: "p1", Date: today, InStock: new(false), SoldOutToday: true, Orderable: true},
+				key("p1", yesterday): {ProductID: "p1", Date: yesterday, InStock: new(true), Orderable: true},
 			},
 			wantEnsured:     0,
 			wantLastKnown:   0,
 			wantBackInStock: []string{"p1"},
-			wantUpdated:     b(true),
+			wantUpdated:     new(true),
 			// Маркер дня приход не снимает (снимает только откат расформирования).
 			wantSoldOutToday: true,
 		},
@@ -736,15 +738,15 @@ func TestOnStockChanged_BackInStockFromHistory(t *testing.T) {
 			// догоняющее «закончился» остаётся (товара действительно нет).
 			name: "история true, лотов нет (обнуление контур не видел) → SoldOut",
 			days: map[string]*daystate.DayState{
-				key("p1", yesterday): {ProductID: "p1", Date: yesterday, InStock: b(true), Orderable: true},
+				key("p1", yesterday): {ProductID: "p1", Date: yesterday, InStock: new(true), Orderable: true},
 			},
 			emptyLots:        true,
 			wantEnsured:      1,
-			wantSeed:         b(true),
+			wantSeed:         new(true),
 			wantLastKnown:    1,
 			wantSoldOut:      []string{"p1"},
 			wantSoldOutCalls: []string{"p1"},
-			wantUpdated:      b(false),
+			wantUpdated:      new(false),
 			wantSoldOutToday: true,
 		},
 		{
@@ -753,13 +755,13 @@ func TestOnStockChanged_BackInStockFromHistory(t *testing.T) {
 			name: "строка дня orderable=false (календарь), история false → уведомление, метка календаря цела",
 			days: map[string]*daystate.DayState{
 				key("p1", today):     {ProductID: "p1", Date: today, Orderable: false},
-				key("p1", yesterday): {ProductID: "p1", Date: yesterday, InStock: b(false), Orderable: true},
+				key("p1", yesterday): {ProductID: "p1", Date: yesterday, InStock: new(false), Orderable: true},
 			},
 			wantEnsured:     0,
 			wantLastKnown:   1,
 			wantBackInStock: []string{"p1"},
-			wantUpdated:     b(true),
-			wantOrderable:   b(false),
+			wantUpdated:     new(true),
+			wantOrderable:   new(false),
 		},
 	}
 

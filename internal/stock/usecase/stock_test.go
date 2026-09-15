@@ -142,7 +142,8 @@ func (m *mockNotifier) NotifyWarehouse(text string) error {
 	return nil
 }
 
-func i16(v int16) *int16 { return &v }
+//go:fix inline
+func i16(v int16) *int16 { return new(v) }
 
 func d(year int, month time.Month, day int) time.Time {
 	return time.Date(year, month, day, 0, 0, 0, 0, time.UTC)
@@ -920,7 +921,7 @@ func TestAcceptStock_NewLot(t *testing.T) {
 
 	// Новый срок — новая строка, лоты остаются отсортированными по датам.
 	err := uc.AcceptStock(context.Background(), []stock.LotIn{
-		{ProductID: "p1", BestBefore: d(2026, 9, 7), Qty: 4, ProducedOn: ptrTime(d(2026, 8, 30))},
+		{ProductID: "p1", BestBefore: d(2026, 9, 7), Qty: 4, ProducedOn: new(d(2026, 8, 30))},
 	})
 	if err != nil {
 		t.Fatalf("AcceptStock: %v", err)
@@ -988,7 +989,7 @@ func TestAcceptStock_ProducedOnCoalesce(t *testing.T) {
 
 	// Приёмка знает другую дату выработки — существующая не затирается.
 	err := uc.AcceptStock(context.Background(), []stock.LotIn{
-		{ProductID: "p1", BestBefore: d(2026, 9, 10), Qty: 1, ProducedOn: ptrTime(d(2026, 8, 1))},
+		{ProductID: "p1", BestBefore: d(2026, 9, 10), Qty: 1, ProducedOn: new(d(2026, 8, 1))},
 	})
 	if err != nil {
 		t.Fatalf("AcceptStock: %v", err)
@@ -1055,8 +1056,9 @@ func TestAcceptStock_RepoError(t *testing.T) {
 	}
 }
 
+//go:fix inline
 func ptrTime(v time.Time) *time.Time {
-	return &v
+	return new(v)
 }
 
 // mockDayState — наблюдатель-заглушка состояния по дням: запоминает товары,

@@ -10,7 +10,9 @@ import (
 )
 
 // pp — процент как указатель: удобно писать пары (было, стало) в таблицах.
-func pp(v int16) *int16 { return &v }
+//
+//go:fix inline
+func pp(v int16) *int16 { return new(v) }
 
 // notifyDate — срок из golden-строк (22.06).
 func notifyDate() time.Time {
