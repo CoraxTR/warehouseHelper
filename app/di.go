@@ -514,6 +514,8 @@ func (d *DIContainer) MSOrdersUC() *mordersuc.UseCase {
 			d.StockUC(),
 			d.TelegramNotifier(),
 		)
+		// Статус «Вес подобран» (env): пусто — подбор статус не меняет.
+		d.msOrdersUC.SetWeightPickedState(d.Config().Refs.WeightPickedStateID)
 	}
 
 	return d.msOrdersUC

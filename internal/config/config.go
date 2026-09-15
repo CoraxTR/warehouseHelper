@@ -409,13 +409,17 @@ func reserveWatchStatesEnv() []string {
 //   - шаблон печати:    customtemplate/{id}
 //   - организация:      organization/{id}
 type MSRefs struct {
-	ReadystateID      string
-	ShipedstateID     string
-	SellTypeOtherID   string
-	SellTypeOtherType string
-	OrgID             string
-	RefGoCourierID    string
-	PrinttemplateID   string
+	ReadystateID  string
+	ShipedstateID string
+	// WeightPickedStateID — статус заказа «Вес подобран»: ставится при акте
+	// подбора (модуль msorders). Необязательный: пусто — статус не ставится,
+	// старт приложения не падает (прод .env правит владелец руками).
+	WeightPickedStateID string
+	SellTypeOtherID     string
+	SellTypeOtherType   string
+	OrgID               string
+	RefGoCourierID      string
+	PrinttemplateID     string
 }
 
 func loadMSRefs() *MSRefs {
@@ -454,14 +458,20 @@ func loadMSRefs() *MSRefs {
 		os.Exit(1)
 	}
 
+	// Статус «Вес подобран» (модуль подбора) — необязательный: прод .env
+	// правит владелец руками, поэтому пустое значение деградирует мягко
+	// (подбор не ставит статус), а не роняет старт, как обязательные refs.
+	weightPickedStateID := strings.Trim(os.Getenv("MSAPI_WEIGHT_PICKED_STATE_ID"), `"`)
+
 	return &MSRefs{
-		ReadystateID:      readystateID,
-		ShipedstateID:     shipedstateID,
-		SellTypeOtherID:   sellTypeOtherID,
-		SellTypeOtherType: sellTypeOtherType,
-		OrgID:             orgID,
-		RefGoCourierID:    refGoCourierID,
-		PrinttemplateID:   printtemplateID,
+		ReadystateID:        readystateID,
+		ShipedstateID:       shipedstateID,
+		WeightPickedStateID: weightPickedStateID,
+		SellTypeOtherID:     sellTypeOtherID,
+		SellTypeOtherType:   sellTypeOtherType,
+		OrgID:               orgID,
+		RefGoCourierID:      refGoCourierID,
+		PrinttemplateID:     printtemplateID,
 	}
 }
 

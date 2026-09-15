@@ -1169,6 +1169,36 @@ func (msac *MSAPIClient) UpdateCustomerOrder(parentctx context.Context, id strin
 	}
 }
 
+// UpdateCustomerOrderState — тот же PUT заказа, но с добавленным статусом:
+// в тело (полный ответ GET с заменёнными positions) добавляется state =
+// customerorder/metadata/states/{stateID}. Пустой stateID — обычный PUT без
+// смены статуса. href собирается только здесь: слои выше передают id
+// (href'ы не пересекают границы слоёв, см. AGENTS.md).
+func (msac *MSAPIClient) UpdateCustomerOrderState(parentctx context.Context, id string, body json.RawMessage, stateID string) error {
+	if stateID == "" {
+		return msac.UpdateCustomerOrder(parentctx, id, body)
+	}
+
+	var doc map[string]any
+	if err := json.Unmarshal(body, &doc); err != nil {
+		return fmt.Errorf("update order %s: state: %w", id, err)
+	}
+	doc["state"] = map[string]any{
+		"meta": map[string]any{
+			"href":      msac.refHref("customerorder/metadata/states", stateID),
+			"type":      "state",
+			"mediaType": MSApplicationJSON,
+		},
+		"id": stateID,
+	}
+	patched, err := json.Marshal(doc)
+	if err != nil {
+		return fmt.Errorf("update order %s: state: %w", id, err)
+	}
+
+	return msac.UpdateCustomerOrder(parentctx, id, patched)
+}
+
 // entityEndpoint — URL эндпоинта МойСклад: URLstart (заканчивается на /entity/)
 // + <parts...>. Сущность добавлять НЕ нужно: она уже в URLstart (см. .env.example).
 // refHref собирает href сущности МС из пути и id: URLstart + path + id.

@@ -35,6 +35,10 @@ type OrderDetailClient interface {
 	// UpdateCustomerOrder — PUT entity/customerorder/{id} сырым телом
 	// (полный ответ GET заказа с отредактированным positions). Не-2xx — MSAPIError.
 	UpdateCustomerOrder(ctx context.Context, id string, body json.RawMessage) error
+	// UpdateCustomerOrderState — тот же PUT, но с добавленным статусом заказа
+	// (id статуса, не href: href собирает клиент МС). Пустой stateID — обычный
+	// PUT без смены статуса.
+	UpdateCustomerOrderState(ctx context.Context, id string, body json.RawMessage, stateID string) error
 }
 
 // OrderClient — полный контракт модуля к клиенту МС: поиск заказа

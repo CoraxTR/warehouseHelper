@@ -50,6 +50,10 @@ func (f *fakeOrderSearch) UpdateCustomerOrder(context.Context, string, json.RawM
 	return errors.New("UpdateCustomerOrder не реализован в поисковых тестах")
 }
 
+func (f *fakeOrderSearch) UpdateCustomerOrderState(context.Context, string, json.RawMessage, string) error {
+	return errors.New("UpdateCustomerOrderState не реализован в поисковых тестах")
+}
+
 func sampleMSOrders() []client.MSOrder {
 	return []client.MSOrder{
 		{

@@ -55,6 +55,16 @@ type UseCase struct {
 	picker   StockPicker       // шов stock: списание сроков после успешного PUT
 	acceptor StockAcceptor     // шов stock: приём остатков (возврат в сроки)
 	notify   WarehouseNotifier // шов telegram: пересчёт сроков при ручном закрытии
+	// weightStateID — id статуса «Вес подобран» (env MSAPI_WEIGHT_PICKED_STATE_ID):
+	// ставится при любом акте подбора (Submit/SubmitManual/переподбор).
+	// Пусто — статус не ставится (прод .env правит владелец руками).
+	weightStateID string
+}
+
+// SetWeightPickedState — шов конфига: id статуса «Вес подобран». Ставится при
+// сборке (di.go) до первого подбора; пусто — подбор не меняет статус заказа.
+func (uc *UseCase) SetWeightPickedState(stateID string) {
+	uc.weightStateID = stateID
 }
 
 // NewUseCase создаёт сценарии с клиентом МС, каталогом склада (резолв

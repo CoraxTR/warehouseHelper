@@ -20,6 +20,7 @@ import (
 
 	"warehouseHelper/internal/metrics"
 	"warehouseHelper/internal/msclient/client"
+	"warehouseHelper/internal/scanmatch"
 	"warehouseHelper/internal/stock"
 )
 
@@ -44,6 +45,11 @@ var (
 	ErrSubmitBadBB          = errors.New("неверная дата срока годности (ожидается ДДММГГГГ)")
 	ErrSubmitBadWeight      = errors.New("неверный вес в записи скана")
 	ErrSubmitOverpick       = errors.New("отсканировано больше единиц, чем в строке заказа")
+	// ErrManualEmptyRows — ручное подтверждение без строк.
+	ErrManualEmptyRows = errors.New("нет строк для ручного подтверждения")
+	// ErrManualBadQty — некорректное ручное значение строки (≤ 0; у штучной —
+	// дробное, у весовой — точнее грамма).
+	ErrManualBadQty = errors.New("некорректное значение строки (весовая — кг, штучная — целые штуки)")
 )
 
 // StockPicker — шов в модуль остатков (stock): списание подобранных единиц
@@ -145,7 +151,9 @@ func (uc *UseCase) Submit(ctx context.Context, id string, req SubmitRequest) (Su
 		return SubmitResult{}, err
 	}
 
-	if err := uc.ms.UpdateCustomerOrder(ctx, id, body); err != nil {
+	// Статус «Вес подобран» — при любом акте подбора (в т.ч. переподбор);
+	// пустой id в конфиге — PUT без смены статуса.
+	if err := uc.ms.UpdateCustomerOrderState(ctx, id, body, uc.weightStateID); err != nil {
 		return SubmitResult{}, fmt.Errorf("update order %s: %w", id, err)
 	}
 
@@ -521,4 +529,172 @@ func buildPutBody(orderRaw json.RawMessage, positions []any) (json.RawMessage, e
 		return nil, fmt.Errorf("marshal order body: %w", err)
 	}
 	return out, nil
+}
+
+// ManualRow — строка ручного подтверждения подбора: ids позиции заказа (как в
+// SubmitRow: первая — живая строка, остальные — смёрженные хвосты группы) и
+// значение, введённое оператором вручную. «Вес» строки = её quantity: у
+// весовой это кг, у штучной — штуки.
+type ManualRow struct {
+	IDs []string `json:"ids"`
+	Qty float64  `json:"qty"`
+}
+
+// ManualRequest — тело POST /ms/orders/{id}/submit-manual.
+type ManualRequest struct {
+	Rows []ManualRow `json:"rows"`
+}
+
+// manualNoNotifyWarn — предупреждение оператору: заказ в МС обновлён, но складу
+// не ушло уведомление о пересчёте остатков (шов telegram не подключён/упал).
+const manualNoNotifyWarn = "вес подтверждён вручную, но складу не ушло уведомление о пересчёте остатков — предупредите склад отдельно"
+
+// SubmitManual подтверждает подбор вручную: оператор вводит вес/количество
+// строки вместо сканирования кусков (менеджеры просят «общим весом», потом вес
+// правят, убрав единицу) — накопительно куски не сканируются. По сохранению в
+// МС уходит quantity = reserve = введённое значение и статус «Вес подобран».
+// Сроки при этом НЕ списываются: ручной ввод — не подбор кусков, остатки
+// расходятся с заказом, поэтому складу уходит уведомление «Необходимо
+// пересчитать сроки по позициям…» (как при ручном закрытии возврата).
+func (uc *UseCase) SubmitManual(ctx context.Context, id string, req ManualRequest) (SubmitResult, error) {
+	done := metrics.Track(trackPkg, "SubmitManual")
+	defer done()
+
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return SubmitResult{}, ErrEmptyOrderID
+	}
+	if len(req.Rows) == 0 {
+		return SubmitResult{}, ErrManualEmptyRows
+	}
+
+	// Свежее чтение: PUT собирается из данных на момент подтверждения.
+	_, entry, err := uc.fetchForSubmit(ctx, id)
+	if err != nil {
+		return SubmitResult{}, err
+	}
+
+	out, recount, err := buildManualPositions(req, entry)
+	if err != nil {
+		return SubmitResult{}, err
+	}
+
+	body, err := buildPutBody(entry.orderRaw, out)
+	if err != nil {
+		return SubmitResult{}, err
+	}
+
+	if err := uc.ms.UpdateCustomerOrderState(ctx, id, body, uc.weightStateID); err != nil {
+		return SubmitResult{}, fmt.Errorf("update order %s: %w", id, err)
+	}
+
+	// Остатки не трогаем: ручной вес — не подбор кусков (решение владельца).
+	res := SubmitResult{}
+	if uc.notify == nil {
+		slog.Error(fmt.Sprintf("msorders: warehouse notifier not wired for order %s", id))
+		res.StockWarn = manualNoNotifyWarn
+
+		return res, nil
+	}
+	if err := uc.notify.NotifyWarehouse(recountText(recount)); err != nil {
+		slog.Error(fmt.Sprintf("msorders: notify warehouse about order %s: %v", id, err))
+		res.StockWarn = manualNoNotifyWarn
+	}
+
+	slog.Info("msorders: подбор подтверждён вручную", "order", id, "rows", len(recount))
+
+	return res, nil
+}
+
+// buildManualPositions собирает positions ручного подтверждения: покрытые
+// строки получают quantity = reserve = введённое значение, смёрженные хвосты
+// группы выбывают (их количество вошло в живую строку — оператор вводит вес
+// всей строки), ненабранные активные строки остаются заглушками 0,0001
+// (как в обычном подборе), пассивные и строки переподбора — как есть. Лоты
+// списания не собираются: ручное подтверждение остатки не трогает. Второе
+// значение — позиции для уведомления складу о пересчёте сроков.
+func buildManualPositions(req ManualRequest, entry *submitEntry) ([]any, []scanmatch.Expected, error) {
+	metas, metaByID, err := orderRowMetas(entry)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	manualByID := make(map[string]float64, len(req.Rows))
+	mergedByID := make(map[string]struct{})
+	recount := make([]scanmatch.Expected, 0, len(req.Rows))
+	for i := range req.Rows {
+		r := &req.Rows[i]
+		if len(r.IDs) == 0 {
+			return nil, nil, fmt.Errorf("строка %d: %w", i+1, ErrSubmitBadRow)
+		}
+		live, ok := metaByID[strings.TrimSpace(r.IDs[0])]
+		if !ok {
+			return nil, nil, fmt.Errorf("%w: %s", ErrSubmitRowMissing, r.IDs[0])
+		}
+		if !live.hasCode {
+			return nil, nil, fmt.Errorf("%w: %s", ErrSubmitRowUnavailable, live.id)
+		}
+		if err := checkManualQty(live, r.Qty); err != nil {
+			return nil, nil, err
+		}
+		for _, rawID := range r.IDs[1:] {
+			id := strings.TrimSpace(rawID)
+			if _, ok := metaByID[id]; !ok {
+				return nil, nil, fmt.Errorf("%w: %s", ErrSubmitRowMissing, id)
+			}
+			mergedByID[id] = struct{}{}
+		}
+		manualByID[live.id] = r.Qty
+		recount = append(recount, scanmatch.Expected{InternalCode: live.code, Name: live.name})
+	}
+
+	out := make([]any, 0, len(metas))
+	for _, meta := range metas {
+		if qty, covered := manualByID[meta.id]; covered {
+			// Ручное значение перекрывает сканы: qty = reserve = введённое.
+			setQtyReserve(meta.m, qty, qty)
+			out = append(out, meta.m)
+
+			continue
+		}
+		if _, merged := mergedByID[meta.id]; merged {
+			continue // смёрженный хвост выбывает
+		}
+		if !meta.hasCode || meta.reserve > 0 {
+			out = append(out, entry.rowsRaw[meta.idx]) // пассивная / переподбор — как есть
+
+			continue
+		}
+		// Ненабранная активная строка — заглушка по типу товара (как в Submit).
+		if meta.weighted {
+			setQtyReserve(meta.m, stubQty, 0)
+			out = append(out, meta.m)
+
+			continue
+		}
+		out = append(out, stubPieceRow(meta)...)
+	}
+
+	return out, recount, nil
+}
+
+// checkManualQty проверяет введённое значение: больше нуля; у штучной строки —
+// целое число штук (дробных штук не бывает), у весовой — кг с точностью до
+// грамма (более трёх знаков после запятой — опечатка).
+func checkManualQty(meta *submitRowMeta, qty float64) error {
+	if qty <= 0 {
+		return fmt.Errorf("%w: %s (значение %v)", ErrManualBadQty, meta.code, qty)
+	}
+	if meta.weighted {
+		if math.Abs(qty*1000-math.Round(qty*1000)) > 1e-6 {
+			return fmt.Errorf("%w: %s (у весовой — кг, точнее грамма)", ErrManualBadQty, meta.code)
+		}
+
+		return nil
+	}
+	if math.Abs(qty-math.Round(qty)) > 1e-9 {
+		return fmt.Errorf("%w: %s (у штучной — целое число штук)", ErrManualBadQty, meta.code)
+	}
+
+	return nil
 }

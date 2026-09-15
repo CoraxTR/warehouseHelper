@@ -136,12 +136,55 @@ func (h *Handler) MSOrderSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// MSOrderSubmitManual — POST /ms/orders/{id}/submit-manual: ручное подтверждение
+// подбора (оператор вводит вес/количество строки вместо сканирования кусков).
+// Заказ обновляется (quantity = reserve = введённое значение + статус «Вес
+// подобран»), сроки НЕ списываются — складу уходит уведомление о пересчёте.
+func (h *Handler) MSOrderSubmitManual(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" {
+		http.Error(w, "не указан id заказа", http.StatusBadRequest)
+
+		return
+	}
+
+	var req msordersuc.ManualRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "не удалось разобрать запрос", http.StatusBadRequest)
+
+		return
+	}
+
+	res, err := h.msOrdersUC.SubmitManual(r.Context(), id, req)
+	if err != nil {
+		slog.Info(fmt.Sprintf("ms order submit-manual %q: %v", id, err))
+		var apiErr *client.MSAPIError
+		switch {
+		case isSubmitValidationErr(err):
+			http.Error(w, err.Error(), http.StatusBadRequest)
+		case errors.As(err, &apiErr):
+			http.Error(w, "МойСклад не принял заказ: "+apiErr.Error(), http.StatusBadGateway)
+		default:
+			http.Error(w, "не удалось подтвердить подбор вручную", http.StatusInternalServerError)
+		}
+
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(res); err != nil {
+		slog.Info(fmt.Sprintf("ms order submit-manual %q: encode: %v", id, err))
+	}
+}
+
 // isSubmitValidationErr отличает ошибки валидации подбора/возврата в сроки
 // (400) от ошибок клиента МС (502) и внутренних (500). Ошибки сверки сканов
 // (scanmatch.ValidationError) обрабатываются вызывающим кодом отдельно — это не
 // сентинелы, а тип с текстом отказа.
 func isSubmitValidationErr(err error) bool {
 	for _, e := range []error{
+		msordersuc.ErrManualEmptyRows,
+		msordersuc.ErrManualBadQty,
 		msordersuc.ErrEmptyOrderID,
 		msordersuc.ErrSubmitEmptyRows,
 		msordersuc.ErrSubmitBadRow,

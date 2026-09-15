@@ -63,6 +63,7 @@
             <tr class="order-row{{if and .HasCode (gt .GroupSize 1)}} merge-row{{end}}"
                 data-id="{{.ID}}" data-code="{{.Code}}" data-hascode="{{if .HasCode}}1{{else}}0{{end}}"
                 data-weighted="{{if .Weighted}}1{{else}}0{{end}}" data-qty="{{.Qty}}"
+                data-avg-weight="{{if .AverageWeightKg}}{{.AverageWeightKg}}{{end}}"
                 data-price="{{printf "%.0f" .Price}}"
                 data-group="{{.Group}}" data-gsize="{{.GroupSize}}"
                 data-reserve="{{.Reserve}}"
@@ -86,12 +87,12 @@
             </tr>
             {{if .GroupLast}}
             <tr class="group-total" data-group="{{.Group}}">
-                <td colspan="7">итого: {{.GroupQtyText}}</td>
+                <td colspan="7">итого: {{.GroupQtyText}}<span class="group-weight"></span></td>
             </tr>
             {{end}}
             {{end}}
             <tr class="order-total">
-                <td colspan="7">Общий вес заказа: {{.Order.TotalWeightText}} · Общая сумма: {{.Order.TotalSumText}}{{if gt .Order.WeightMissingPositions 0}} · без {{.Order.WeightMissingPositions}} поз. — нет среднего веса{{end}}</td>
+                <td colspan="7">Общий вес заказа: <span id="total-weight">{{.Order.TotalWeightText}}</span> · Общая сумма: {{.Order.TotalSumText}}{{if gt .Order.WeightMissingPositions 0}} · без {{.Order.WeightMissingPositions}} поз. — нет среднего веса{{end}}</td>
             </tr>
         </tbody>
     </table>
@@ -120,7 +121,28 @@
         <div id="ret-counter" class="counter"></div>
     </div>
 
+    <!-- Ручное подтверждение подбора: оператор вводит вес/количество строки
+         вместо сканирования кусков (менеджеры просят «общим весом», потом вес
+         правят). В МС уйдут quantity = reserve = введённое значение; сроки НЕ
+         списываются — складу уходит уведомление о пересчёте остатков. -->
+    <div id="manual-block" class="section scan-block" style="display:none;">
+        <h2>Подтвердить вручную</h2>
+        <div class="hint">
+            Введите вес строки: весовые — килограммы (точнее грамма), штучные — целые штуки. Поле уже
+            заполнено набранным — правьте как нужно; пустое поле строку не трогает. Куски не сканируются:
+            после подтверждения в МС уйдут quantity = reserve = введённое, а складу — уведомление о
+            пересчёте остатков по позициям.
+        </div>
+        <div id="manual-error" class="error" style="display:none;"></div>
+        <div id="manual-rows" class="section"></div>
+        <div class="save-row">
+            <button type="button" id="manual-save" class="btn-save">Подтвердить</button>
+            <button type="button" id="manual-cancel">Отмена</button>
+        </div>
+    </div>
+
     <button type="button" id="submit-btn" class="resync-btn">Отправить в МС</button>
+    <button type="button" id="manual-btn" class="resync-btn">Подтвердить вручную</button>
     <p><a class="back" href="/ms/orders/pick">← К поиску заказов</a></p>
     {{end}}
 
@@ -152,6 +174,9 @@
                     weighted: tr.getAttribute('data-weighted') === '1',
                     qty: parseFloat(tr.getAttribute('data-qty')) || 0,
                     price: parseFloat(tr.getAttribute('data-price')) || 0,
+                    // avgWeight — средний вес штуки из каталога (кг), 0 — не
+                    // задан: вклад штучной строки в справочный вес = сканы × он.
+                    avgWeight: parseFloat(tr.getAttribute('data-avg-weight')) || 0,
                     group: parseInt(tr.getAttribute('data-group'), 10) || 0,
                     gsize: parseInt(tr.getAttribute('data-gsize'), 10) || 0,
                     reserve: parseFloat(tr.getAttribute('data-reserve')) || 0,
@@ -255,6 +280,53 @@
                 return String(Math.round(n)) + ' шт';
             }
 
+            // ---- Справочный вес (только отсканированное, в браузере) ----
+            // Не отсканировано — в вес не входит. Весовая строка — Σ весов
+            // сканов, штучная — число сканов × средний вес товара. Это
+            // визуальный контроль подбора, не хранимые данные: серверный
+            // «Общий вес заказа» (из МС) остаётся в шаблоне как есть.
+            function rowScanKg(r) {
+                if (r.weighted) {
+                    var g = 0;
+                    for (var i = 0; i < r.records.length; i++) { g += r.records[i].w; }
+                    return g / 1000;
+                }
+                return r.records.length * (r.avgWeight || 0);
+            }
+
+            function fmtWeightKg(kg) {
+                if (!kg) { return '0 кг'; }
+                return fmtKgText(Math.round(kg * 1000));
+            }
+
+            function recalcWeights() {
+                var total = 0;
+                var byGroup = {};
+                for (var i = 0; i < rows.length; i++) {
+                    var r = rows[i];
+                    // Смёрженные строки не считаем: их сканы перенесены в первую
+                    // строку группы (иначе вес группы удвоится).
+                    if (r.merged) { continue; }
+                    var kg = rowScanKg(r);
+                    total += kg;
+                    if (r.group !== 0) {
+                        var g = String(r.group);
+                        byGroup[g] = (byGroup[g] || 0) + kg;
+                    }
+                }
+
+                var totalEl = document.getElementById('total-weight');
+                if (totalEl) { totalEl.textContent = fmtWeightKg(total); }
+
+                var groupRows = document.querySelectorAll('tr.group-total');
+                for (var j = 0; j < groupRows.length; j++) {
+                    var span = groupRows[j].querySelector('.group-weight');
+                    if (!span) { continue; }
+                    var gw = byGroup[String(groupRows[j].getAttribute('data-group'))] || 0;
+                    span.textContent = gw > 0 ? ' · вес группы: ' + fmtWeightKg(gw) : '';
+                }
+            }
+
             function rowPickedText(r) {
                 // Переподбор: цель — только новые сканы (штучная — N, весовая —
                 // 1 кусок); резерв МС в набранное не входит.
@@ -316,6 +388,7 @@
                 if (picked) { picked.textContent = rowPickedText(r); }
                 if (r.done) { markDone(r); }
 
+                recalcWeights();
                 checkMergeGroups();
                 focusNext(r);
             }
@@ -582,6 +655,9 @@
                 first.records = records;
                 first.qty = totalQty;
                 first.reserve = totalReserve;
+
+                // Сканы группы переехали в первую строку — вес пересчитываем.
+                recalcWeights();
 
                 var qtyCell = first.tr.querySelector('.cell-qty');
                 if (qtyCell) { qtyCell.textContent = fmtQtyText(totalQty, first.weighted); }
@@ -1235,12 +1311,176 @@
                 xhr.send(JSON.stringify({ rows: payload }));
             }
 
+            // ---- Подтвердить вручную ----
+            // Сценарий: насканировали → менеджеры просят «общим весом» → вес
+            // правят (убрали единицу). Куски при этом НЕ сканируются: оператор
+            // вводит вес строки, в МС уходят quantity = reserve = введённое, а
+            // сроки остаются нетронутыми — складу уходит уведомление о пересчёте.
+            var manualBtn = document.getElementById('manual-btn');
+            var manualBlock = document.getElementById('manual-block');
+            var manualRowsBox = document.getElementById('manual-rows');
+            var manualSaveBtn = document.getElementById('manual-save');
+            var manualCancelBtn = document.getElementById('manual-cancel');
+            var manualErrBox = document.getElementById('manual-error');
+            var manualBusy = false;
+
+            function manualErr(msg) {
+                if (!manualErrBox) { return; }
+                manualErrBox.textContent = msg;
+                manualErrBox.style.display = '';
+            }
+
+            function manualHideErr() {
+                if (manualErrBox) { manualErrBox.style.display = 'none'; }
+            }
+
+            // Текущее значение строки текстом: весовая — кг набранного, штучная
+            // — набрано с учётом резерва МС (как в подписи под строкой).
+            function manualCurrentText(r) {
+                if (r.weighted) {
+                    var kg = rowScanKg(r);
+                    return kg > 0 ? fmtKgText(Math.round(kg * 1000)) : '';
+                }
+                var units = r.records.length + r.reserve;
+                return units > 0 ? String(Math.round(units)) : '';
+            }
+
+            function openManual() {
+                if (!manualRowsBox) { return; }
+                manualRowsBox.textContent = '';
+                manualHideErr();
+                for (var i = 0; i < rows.length; i++) {
+                    var r = rows[i];
+                    if (!r.active) { continue; }
+                    var line = document.createElement('div');
+                    line.className = 'scan-row';
+                    var nameEl = document.createElement('span');
+                    nameEl.className = 'code';
+                    var label = r.tr.querySelector('.cell-name');
+                    nameEl.textContent = (label ? label.textContent : r.code) + ' — набрано: '
+                        + (manualCurrentText(r) || '—');
+                    var inp = document.createElement('input');
+                    inp.type = 'text';
+                    inp.className = 'scan-input';
+                    inp.setAttribute('data-idx', String(i));
+                    inp.setAttribute('autocomplete', 'off');
+                    inp.setAttribute('placeholder', r.weighted ? 'вес, кг' : 'штук');
+                    inp.value = manualCurrentText(r);
+                    line.appendChild(nameEl);
+                    line.appendChild(inp);
+                    manualRowsBox.appendChild(line);
+                }
+                manualBlock.style.display = '';
+                var first = manualRowsBox.querySelector('input');
+                if (first) { first.focus(); }
+            }
+
+            function closeManual() {
+                if (!manualBlock) { return; }
+                manualBlock.style.display = 'none';
+                if (manualRowsBox) { manualRowsBox.textContent = ''; }
+                manualHideErr();
+            }
+
+            // Строки для сервера: только заполненные поля; ids — как в отправке
+            // сканов (для смёрженной группы — id всех её строк, первая живая).
+            function collectManualRows() {
+                var inputs = manualRowsBox.querySelectorAll('input[data-idx]');
+                var out = [];
+                for (var k = 0; k < inputs.length; k++) {
+                    var raw = inputs[k].value.replace(/^\s+|\s+$/g, '').replace(',', '.');
+                    if (raw === '') { continue; }
+                    var r = rows[parseInt(inputs[k].getAttribute('data-idx'), 10)];
+                    if (!r) { continue; }
+                    var qty = parseFloat(raw);
+                    if (!(qty > 0)) {
+                        manualErr('Значение должно быть больше нуля: ' + inputs[k].value);
+                        return null;
+                    }
+                    if (!r.weighted && Math.abs(qty - Math.round(qty)) > 1e-9) {
+                        manualErr('Штучной строке нужно целое число штук: ' + inputs[k].value);
+                        return null;
+                    }
+                    var ids = [r.tr.getAttribute('data-id')];
+                    if (r.group !== 0) {
+                        for (var j = 0; j < rows.length; j++) {
+                            var s = rows[j];
+                            if (s !== r && s.group === r.group && s.merged) {
+                                ids.push(s.tr.getAttribute('data-id'));
+                            }
+                        }
+                    }
+                    out.push({ ids: ids, qty: qty });
+                }
+                return out;
+            }
+
+            function submitManual() {
+                if (manualBusy) { return; }
+                var rowList = collectManualRows();
+                if (rowList === null) { beep(); return; }
+                if (rowList.length === 0) {
+                    manualErr('Введите вес хотя бы по одной строке');
+                    beep();
+                    return;
+                }
+                if (!confirm('Подтвердить подбор вручную? В МС уйдут количества как введено, '
+                        + 'сроки НЕ списываются — складу уйдёт уведомление о пересчёте остатков.')) {
+                    return;
+                }
+
+                manualBusy = true;
+                manualSaveBtn.disabled = true;
+                manualSaveBtn.textContent = 'Подтверждение…';
+                manualHideErr();
+
+                var xhr = new XMLHttpRequest();
+                xhr.open('POST', '/ms/orders/' + orderId + '/submit-manual', true);
+                xhr.setRequestHeader('Content-Type', 'application/json');
+                xhr.timeout = 120000;
+
+                var release = function () {
+                    manualBusy = false;
+                    manualSaveBtn.disabled = false;
+                    manualSaveBtn.textContent = 'Подтвердить';
+                };
+                xhr.onreadystatechange = function () {
+                    if (xhr.readyState !== 4) { return; }
+                    release();
+                    if (xhr.status >= 200 && xhr.status < 300) {
+                        var warn = '';
+                        try {
+                            var res = JSON.parse(xhr.responseText);
+                            warn = res && res.stock_warn ? res.stock_warn : '';
+                        } catch (e) { /* нет тела — обычный успех */ }
+                        closeManual();
+                        submitStatus.textContent = 'Подбор подтверждён вручную. '
+                            + (warn ? warn : 'Остатки пересчитает склад по уведомлению.');
+                        setTimeout(function () { location.href = '/ms/orders/pick'; }, 5000);
+                        return;
+                    }
+                    // 400 — текст сервера (что не так со строкой), 502/500 — общее
+                    manualErr(xhr.status === 400 && xhr.responseText
+                        ? xhr.responseText
+                        : 'Не удалось подтвердить вручную (HTTP ' + xhr.status + ')');
+                    beep();
+                };
+                xhr.onerror = function () { release(); beep(); manualErr('Сервер недоступен — попробуйте ещё раз'); };
+                xhr.ontimeout = function () { release(); beep(); manualErr('МойСклад не ответил вовремя — попробуйте ещё раз'); };
+                xhr.send(JSON.stringify({ rows: rowList }));
+            }
+
+            if (manualBtn) { manualBtn.addEventListener('click', openManual); }
+            if (manualSaveBtn) { manualSaveBtn.addEventListener('click', submitManual); }
+            if (manualCancelBtn) { manualCancelBtn.addEventListener('click', closeManual); }
+
             submitBtn.addEventListener('click', doSubmit);
 
             // Окно «Возврат в сроки» и стартовое состояние кнопки отправки:
             // без переподбора отправка работает как раньше.
             retInit();
             updateSubmitBtn();
+            recalcWeights(); // вес внизу — по уже отсканированному (после F5 — пусто)
 
             // автофокус на первую активную строку
             for (var a = 0; a < rows.length; a++) {
