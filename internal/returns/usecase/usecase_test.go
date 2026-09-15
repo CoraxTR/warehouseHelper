@@ -142,6 +142,7 @@ func (c stubCatalog) ProductsByInternalCodes(_ context.Context, codes []string) 
 
 type stubStock struct {
 	accepted []stock.LotIn
+	picked   []stock.PickLotIn
 	err      error
 }
 
@@ -150,6 +151,14 @@ func (s *stubStock) AcceptStock(_ context.Context, lots []stock.LotIn) error {
 		return s.err
 	}
 	s.accepted = append(s.accepted, lots...)
+	return nil
+}
+
+func (s *stubStock) PickStock(_ context.Context, lots []stock.PickLotIn) error {
+	if s.err != nil {
+		return s.err
+	}
+	s.picked = append(s.picked, lots...)
 	return nil
 }
 
