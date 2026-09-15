@@ -370,10 +370,3 @@ func uniqueDates(dates []time.Time) []time.Time {
 	}
 	return out
 }
-
-// boolPtr копирует значение в указатель.
-//
-//go:fix inline
-func boolPtr(v bool) *bool {
-	return new(v)
-}

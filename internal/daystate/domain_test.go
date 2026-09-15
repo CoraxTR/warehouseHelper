@@ -9,9 +9,6 @@ import (
 //go:fix inline
 func i16(v int16) *int16 { return new(v) }
 
-//go:fix inline
-func b(v bool) *bool { return new(v) }
-
 func TestDiscountFromLots(t *testing.T) {
 	tests := []struct {
 		name string

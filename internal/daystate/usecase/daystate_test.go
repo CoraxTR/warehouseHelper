@@ -13,9 +13,6 @@ import (
 //go:fix inline
 func i16(v int16) *int16 { return new(v) }
 
-//go:fix inline
-func b(v bool) *bool { return new(v) }
-
 func day(d int) time.Time {
 	return time.Date(2026, time.September, d, 0, 0, 0, 0, time.UTC)
 }

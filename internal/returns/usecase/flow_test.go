@@ -12,9 +12,6 @@ import (
 	"warehouseHelper/internal/returns"
 )
 
-//go:fix inline
-func strptr(s string) *string { return new(s) }
-
 func auditRow(source string) client.AuditRow {
 	return client.AuditRow{
 		ID:         auditID,
