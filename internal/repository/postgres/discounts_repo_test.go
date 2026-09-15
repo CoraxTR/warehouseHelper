@@ -2,7 +2,6 @@ package postgres
 
 import (
 	"errors"
-	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -18,73 +17,6 @@ const (
 	testLotMilk   = "p-milk"
 	testLotCheese = "p-cheese"
 )
-
-// ptr — указатель на значение (NULL-колонки в снапшоте — *T).
-func ptr[T any](v T) *T { return &v }
-
-// fakeRow — подделка pgx.Row для проверки scan-хелперов без БД: Scan
-// раскладывает заранее заданные значения по указателям (nil — SQL NULL).
-// Остальные методы интерфейса хелперу не нужны — берутся у встроенного
-// nil-интерфейса.
-type fakeRow struct {
-	pgx.Row
-
-	vals []any
-}
-
-func (r fakeRow) Scan(dest ...any) error {
-	if len(dest) != len(r.vals) {
-		return fmt.Errorf("подделка Scan: колонок %d, значений %d", len(dest), len(r.vals))
-	}
-	for i, v := range r.vals {
-		if err := scanValue(dest[i], v); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// scanValue кладёт src в указатель dst — как pgx: nil даёт нулевое значение
-// (SQL NULL), число/строка приводится к типу указателя, а под указатель
-// (**int16 и т.п.) значение аллоцируется.
-func scanValue(dst, src any) error {
-	dv := reflect.ValueOf(dst)
-	if dv.Kind() != reflect.Pointer || dv.IsNil() {
-		return fmt.Errorf("scan dest не указатель: %T", dst)
-	}
-	elem := dv.Elem()
-	if src == nil {
-		elem.Set(reflect.Zero(elem.Type()))
-		return nil
-	}
-	if elem.Kind() == reflect.Pointer {
-		p := reflect.New(elem.Type().Elem())
-		if err := scanValue(p.Interface(), src); err != nil {
-			return err
-		}
-		elem.Set(p)
-		return nil
-	}
-	sv := reflect.ValueOf(src)
-	if !sv.Type().ConvertibleTo(elem.Type()) {
-		return fmt.Errorf("scan %T → %s: тип несовместим", src, elem.Type())
-	}
-	elem.Set(sv.Convert(elem.Type()))
-	return nil
-}
-
-// captureRow запоминает число аргументов Scan и сразу возвращает ошибку —
-// нужен, чтобы сверить арность списка колонок с арностью scan-хелпера.
-type captureRow struct {
-	pgx.Row
-
-	dests int
-}
-
-func (r *captureRow) Scan(dest ...any) error {
-	r.dests = len(dest)
-	return pgx.ErrNoRows
-}
 
 // TestScanDiscountInput — разбор строки снапшота: дни периода берутся из
 // товарного признака track_weekly (7 или 30, нуля больше нет), а оборота в
@@ -151,6 +83,22 @@ func TestScanDiscountInput(t *testing.T) {
 				ShelfLife: ptr[int16](5), BestBefore: bb, Qty: 4,
 				PeriodDays:   30,
 				GeneralPlain: ptr[int16](0), GeneralManual: ptr[int16](0), DiscountSource: "surplus",
+			},
+		},
+		{
+			// Обе nullable TEXT-колонки снапшота NULL: группа товара не задана
+			// (products.group_name), метки источника нет (discount_source).
+			// Регресс: Scan читал их прямо в string и падал на живой БД
+			// («cannot scan NULL into *string»), а подделка Scan клала NULL в
+			// string как пустую строку — тест этого не видел (см. scanValue).
+			name: "группы нет и метки нет — NULL в обеих TEXT-колонках",
+			vals: []any{"p-nogroup", "Без группы", nil, false, 20, true, bb, 7,
+				nil, int16(15), nil, nil, nil},
+			want: discounts.Input{
+				ProductID: "p-nogroup", Name: "Без группы", GroupName: "",
+				ShelfLife: ptr[int16](20), TrackWeekly: true, BestBefore: bb, Qty: 7,
+				PeriodDays:    7,
+				TelegramPlain: ptr[int16](15), DiscountSource: "",
 			},
 		},
 	}
@@ -254,43 +202,6 @@ func TestDiscountInputQueryHasNoTurnoverJoins(t *testing.T) {
 		}
 	}
 }
-
-// fakeRows — подделка pgx.Rows: по Next отдаёт заранее заданные строки.
-// Остальные методы интерфейса (Close, FieldDescriptions и прочее) хелперу не
-// нужны — берутся у встроенного nil-интерфейса.
-type fakeRows struct {
-	pgx.Rows
-
-	rows [][]any
-	read int
-	err  error
-}
-
-func (r *fakeRows) Next() bool {
-	if r.read >= len(r.rows) {
-		return false
-	}
-	r.read++
-	return true
-}
-
-func (r *fakeRows) Scan(dest ...any) error {
-	if r.read == 0 || r.read > len(r.rows) {
-		return errors.New("подделка Scan вызвана до Next")
-	}
-	vals := r.rows[r.read-1]
-	if len(dest) != len(vals) {
-		return fmt.Errorf("подделка Scan: колонок %d, значений %d", len(dest), len(vals))
-	}
-	for i, v := range vals {
-		if err := scanValue(dest[i], v); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (r *fakeRows) Err() error { return r.err }
 
 // TestCollectLotPairs — набор пар лотов: пара собирается из строки выборки,
 // дубликат схлопывается, пустая выборка даёт пустую карту (не nil), ошибки

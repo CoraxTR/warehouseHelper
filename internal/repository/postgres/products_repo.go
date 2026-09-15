@@ -17,15 +17,26 @@ const productColumns = `id, internal_code, name, uom, group_name, folder_id, ave
     shelf_life, pack_size, inventory_type, short_list, track_weekly`
 
 // scanProduct сканирует строку в domain.Product (порядок productColumns).
+//
+// nullable TEXT-колонки каталога (internal_code, group_name, folder_id) читаются
+// через *string: pgx не кладёт NULL в string, а по схеме products эти колонки
+// nullable (код МС не задан, товар без папки) — прямая запись в string падала бы
+// на первом же таком товаре. Пустая строка = «не задано» (textValue).
 func scanProduct(row pgx.Row) (*domain.Product, error) {
-	var p domain.Product
+	var (
+		p                                 domain.Product
+		internalCode, groupName, folderID *string
+	)
 	if err := row.Scan(
-		&p.ID, &p.InternalCode, &p.Name, &p.UOM, &p.GroupName, &p.FolderID,
+		&p.ID, &internalCode, &p.Name, &p.UOM, &groupName, &folderID,
 		&p.AverageWeight, &p.ShelfLife, &p.PackSize,
 		&p.InventoryType, &p.ShortList, &p.TrackWeekly,
 	); err != nil {
 		return nil, err
 	}
+	p.InternalCode = textValue(internalCode)
+	p.GroupName = textValue(groupName)
+	p.FolderID = textValue(folderID)
 
 	return &p, nil
 }

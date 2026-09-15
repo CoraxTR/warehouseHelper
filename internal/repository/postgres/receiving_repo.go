@@ -11,11 +11,36 @@ import (
 	"warehouseHelper/internal/receiving"
 )
 
+// barcodeRefColumns — колонки связки «внешний код → товар» в порядке Scan
+// scanBarcodeRef. p.internal_code по схеме products nullable (код МС не задан) —
+// читается через *string, см. scanBarcodeRef.
+const barcodeRefColumns = `psb.external_code, psb.product_id, p.name, p.internal_code, p.uom`
+
+// scanBarcodeRef сканирует строку barcodeRefColumns в receiving.BarcodeRef.
+//
+// nullable TEXT-колонка p.internal_code читается через *string: pgx не кладёт
+// NULL в string, а у товара без кода МС в БД именно NULL. Пустая строка =
+// «кода нет» (textValue). Weighted считается здесь же — по uom товара.
+func scanBarcodeRef(row pgx.Row) (receiving.BarcodeRef, error) {
+	var (
+		b            receiving.BarcodeRef
+		internalCode *string
+		uom          string
+	)
+	if err := row.Scan(&b.ExternalCode, &b.ProductID, &b.ProductName, &internalCode, &uom); err != nil {
+		return receiving.BarcodeRef{}, err
+	}
+	b.InternalCode = textValue(internalCode)
+	b.Weighted = weightedUOM(uom)
+
+	return b, nil
+}
+
 // LoadSupplierBarcodes возвращает все связки «внешний код → товар» поставщика
 // с данными товаров (виджет поставщика и кеш приёмки).
 func (pg *PGClient) LoadSupplierBarcodes(ctx context.Context, supplierID string) ([]receiving.BarcodeRef, error) {
 	rows, err := pg.Pool.Query(ctx, `
-        SELECT psb.external_code, psb.product_id, p.name, p.internal_code, p.uom
+        SELECT `+barcodeRefColumns+`
         FROM product_supplier_barcodes psb
         JOIN products p ON p.id = psb.product_id
         WHERE psb.supplier_id = $1
@@ -28,14 +53,10 @@ func (pg *PGClient) LoadSupplierBarcodes(ctx context.Context, supplierID string)
 
 	out := make([]receiving.BarcodeRef, 0)
 	for rows.Next() {
-		var (
-			b   receiving.BarcodeRef
-			uom string
-		)
-		if err := rows.Scan(&b.ExternalCode, &b.ProductID, &b.ProductName, &b.InternalCode, &uom); err != nil {
+		b, err := scanBarcodeRef(rows)
+		if err != nil {
 			return nil, err
 		}
-		b.Weighted = weightedUOM(uom)
 
 		out = append(out, b)
 	}
@@ -51,24 +72,20 @@ func (pg *PGClient) LoadSupplierBarcodes(ctx context.Context, supplierID string)
 //nolint:nilnil // контракт репозитория: (nil, nil) = связка не найдена
 func (pg *PGClient) GetSupplierBarcode(ctx context.Context, supplierID, externalCode string) (*receiving.BarcodeRef, error) {
 	row := pg.Pool.QueryRow(ctx, `
-        SELECT psb.external_code, psb.product_id, p.name, p.internal_code, p.uom
+        SELECT `+barcodeRefColumns+`
         FROM product_supplier_barcodes psb
         JOIN products p ON p.id = psb.product_id
         WHERE psb.supplier_id = $1 AND psb.external_code = $2
     `, supplierID, externalCode)
 
-	var (
-		b   receiving.BarcodeRef
-		uom string
-	)
-	if err := row.Scan(&b.ExternalCode, &b.ProductID, &b.ProductName, &b.InternalCode, &uom); err != nil {
+	b, err := scanBarcodeRef(row)
+	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
 		}
 
 		return nil, err
 	}
-	b.Weighted = weightedUOM(uom)
 
 	return &b, nil
 }

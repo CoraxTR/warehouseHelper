@@ -41,14 +41,15 @@ func (pg *PGClient) LoadAllStock(ctx context.Context) ([]stock.Product, error) {
 	)
 	for rows.Next() {
 		var (
-			pID, internalCode, name, groupName string
-			shortList                          bool
-			bestBefore                         *time.Time // NULL — товар без остатков
-			qty                                *int64
-			producedOn                         *time.Time
-			general, telegram                  *int16
-			generalManual, telegramManual      *int16
-			discountSource                     *string // NULL — метки нет
+			pID, name                     string
+			internalCode, groupName       *string // nullable TEXT: нет кода МС / нет группы
+			shortList                     bool
+			bestBefore                    *time.Time // NULL — товар без остатков
+			qty                           *int64
+			producedOn                    *time.Time
+			general, telegram             *int16
+			generalManual, telegramManual *int16
+			discountSource                *string // NULL — метки нет
 		)
 		if err := rows.Scan(
 			&pID, &internalCode, &name, &groupName, &shortList,
@@ -65,9 +66,9 @@ func (pg *PGClient) LoadAllStock(ctx context.Context) ([]stock.Product, error) {
 			byID[pID] = i
 			products = append(products, stock.Product{
 				ID:           pID,
-				InternalCode: internalCode,
+				InternalCode: textValue(internalCode),
 				Name:         name,
-				GroupName:    groupName,
+				GroupName:    textValue(groupName),
 				ShortList:    shortList,
 				// lots в JSON обязан быть массивом, не null (клиент итерирует
 				// p.lots.length) — товар без остатков = пустой массив.
@@ -86,7 +87,7 @@ func (pg *PGClient) LoadAllStock(ctx context.Context) ([]stock.Product, error) {
 			Telegram:       telegram,
 			GeneralManual:  generalManual,
 			TelegramManual: telegramManual,
-			DiscountSource: sourceValue(discountSource),
+			DiscountSource: textValue(discountSource),
 		})
 	}
 	if err := rows.Err(); err != nil {
@@ -96,9 +97,15 @@ func (pg *PGClient) LoadAllStock(ctx context.Context) ([]stock.Product, error) {
 	return products, nil
 }
 
-// sourceValue — метка источника из NULL-колонки: NULL → пустая строка
-// (у stock.Lot пустая строка = «метки нет»; nil-указатель в JSON клиенту не нужен).
-func sourceValue(v *string) string {
+// textValue — NULL-колонка TEXT → строка: NULL → пустая строка. Пустая строка
+// = «не задано» (у stock.Lot — метки источника нет, у discounts.Input — группа
+// не задана); nil-указатель в JSON клиенту не нужен.
+//
+// Нужен потому, что pgx не кладёт NULL в string («cannot scan NULL into
+// *string»), а колонки вида products.group_name и product_stock.discount_source
+// в схеме nullable: без промежуточного *string снапшот падает на первой же
+// строке без группы или без метки. Все nullable TEXT-колонки читаются так.
+func textValue(v *string) string {
 	if v == nil {
 		return ""
 	}
@@ -165,6 +172,26 @@ func (pg *PGClient) SetDiscounts(ctx context.Context, writes []stock.DiscountWri
 // catalogProductColumns — колонки товара каталога для сканов «Обновить сроки».
 const catalogProductColumns = `id, internal_code, name, group_name, short_list`
 
+// scanCatalogProduct сканирует строку в stock.Product по catalogProductColumns.
+//
+// nullable TEXT-колонки каталога (internal_code, group_name) читаются через
+// *string: pgx не кладёт NULL в string, а «нет кода МС»/«нет группы» по схеме
+// products — это NULL; в модели им отвечает пустая строка (textValue).
+func scanCatalogProduct(row pgx.Row) (stock.Product, error) {
+	var (
+		p                       stock.Product
+		internalCode, groupName *string
+	)
+	if err := row.Scan(&p.ID, &internalCode, &p.Name, &groupName, &p.ShortList); err != nil {
+		return stock.Product{}, err
+	}
+	p.InternalCode = textValue(internalCode)
+	p.GroupName = textValue(groupName)
+	p.Lots = []stock.Lot{} // lots в JSON — [], не null (клиент итерирует p.lots.length)
+
+	return p, nil
+}
+
 // LoadProductsByCodes возвращает товары каталога по internal_code (включая
 // товары без остатков) — карта code → товар. Используется валидацией сканов
 // страницы «Обновить сроки».
@@ -183,11 +210,10 @@ func (pg *PGClient) LoadProductsByCodes(ctx context.Context, codes []string) (ma
 
 	out := make(map[string]stock.Product, len(codes))
 	for rows.Next() {
-		var p stock.Product
-		if err := rows.Scan(&p.ID, &p.InternalCode, &p.Name, &p.GroupName, &p.ShortList); err != nil {
+		p, err := scanCatalogProduct(rows)
+		if err != nil {
 			return nil, fmt.Errorf("scan product by code: %w", err)
 		}
-		p.Lots = []stock.Lot{} // lots в JSON — [], не null (клиент итерирует p.lots.length)
 		out[p.InternalCode] = p
 	}
 	if err := rows.Err(); err != nil {
@@ -199,19 +225,16 @@ func (pg *PGClient) LoadProductsByCodes(ctx context.Context, codes []string) (ma
 
 // LoadProductByID возвращает товар каталога по id; строки нет — stock.ErrProductNotFound.
 func (pg *PGClient) LoadProductByID(ctx context.Context, productID string) (stock.Product, error) {
-	var p stock.Product
-	err := pg.Pool.QueryRow(ctx, `
+	p, err := scanCatalogProduct(pg.Pool.QueryRow(ctx, `
         SELECT `+catalogProductColumns+`
         FROM products
-        WHERE id = $1`, productID,
-	).Scan(&p.ID, &p.InternalCode, &p.Name, &p.GroupName, &p.ShortList)
+        WHERE id = $1`, productID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return stock.Product{}, fmt.Errorf("%w: %s", stock.ErrProductNotFound, productID)
 	}
 	if err != nil {
 		return stock.Product{}, fmt.Errorf("load product by id: %w", err)
 	}
-	p.Lots = []stock.Lot{} // lots в JSON — [], не null (клиент итерирует p.lots.length)
 
 	return p, nil
 }
