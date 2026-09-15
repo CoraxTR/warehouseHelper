@@ -1,12 +1,17 @@
 -- Миграция product_stock для модуля скидок (задача 11) — две правки, обе
 -- идемпотентны, применяются одним запуском на живой БД:
---   1) «0 = NULL» в колонках скидок;
+--   1) «0 = NULL» в PLAIN-колонках скидок;
 --   2) новая колонка discount_source (метка источника «простой» скидки сайта).
--- Решение владельца 14.09.2026: 0 в колонке скидки значит «скидки нет», НЕ «запрет скидки».
--- Поэтому заданный ноль приводим к NULL: «0 = NULL» — единственное каноническое
--- представление «скидки нет» (движок расчёта тоже пишет NULL вместо 0), а ноль,
--- оставшийся в базе от старого кода, расходится с этим правилом у читателей
--- (кэш стока, страница «Сроки», effective-скидка дня).
+-- Применена владельцем в проде 15.09.2026.
+--
+-- ПРАВИЛО ИЗМЕНИЛОСЬ (решение владельца 15.09.2026, инверсия прежнего от 14.09.2026):
+--   * discount_general / discount_telegram («просто», пишет движок) — 0 = «скидки нет»,
+--     каноническое представление NULL (движок пишет NULL вместо 0);
+--   * discount_general_manual / discount_telegram_manual (ручные, пишет UI сроков) —
+--     0 значит «скидка 0 %» и блокирует расчёт по этой паре и всем более дальним
+--     срокам товара, NULL значит «ручного применения нет».
+-- Поэтому ручные нули больше НЕ приводятся к NULL (строки 0→NULL для manual-колонок
+-- из этой миграции убраны): иначе ручной запрет молча превратился бы в снятие запрета.
 -- Применяет ВЛАДЕЛЕЦ на живой БД (Postgres на VM разработки нет):
 --   psql -f product_stock_zero_discount_migration.sql
 -- идемпотентна: повторный запуск ничего не меняет (строк с 0 уже нет, колонка
@@ -22,11 +27,21 @@ ALTER TABLE product_stock
     ADD COLUMN IF NOT EXISTS discount_source TEXT
     CHECK (discount_source IN ('manual', 'expiry', 'surplus'));
 
+-- Нули в plain-колонках — «скидки нет» (движок пишет NULL, а не 0).
 UPDATE product_stock SET discount_general = NULL         WHERE discount_general = 0;
 UPDATE product_stock SET discount_telegram = NULL        WHERE discount_telegram = 0;
-UPDATE product_stock SET discount_general_manual = NULL  WHERE discount_general_manual = 0;
-UPDATE product_stock SET discount_telegram_manual = NULL WHERE discount_telegram_manual = 0;
 
--- Контроль: нулей в колонках скидок быть не должно.
+-- РУЧНЫЕ колонки НЕ обнуляем (инверсия правила, решение владельца 15.09.2026):
+-- 0 в discount_*_manual — это «скидка 0 %» и запрет расчёта по этой и более
+-- дальним парам товара, а NULL — отмена ручного применения. Прежние строки
+-- UPDATE ... SET discount_*_manual = NULL WHERE ... = 0 отменены: эта миграция
+-- применена в проде 15.09.2026, поэтому сохранённых ручных нулей там уже нет,
+-- а новые нули обязаны значить «0 %».
+-- Если в вашей базе миграция НЕ применялась (ручные нули сохранились как «нет
+-- скидки» по старому смыслу) — сначала очистите их вручную, иначе они станут
+-- запретом: UPDATE product_stock SET discount_general_manual = NULL
+--   WHERE discount_general_manual = 0;  -- и то же для discount_telegram_manual
+
+-- Контроль: нулей остаться не должно только в plain-колонках.
 -- SELECT count(*) FROM product_stock
---  WHERE 0 IN (discount_general, discount_telegram, discount_general_manual, discount_telegram_manual);
+--  WHERE 0 IN (discount_general, discount_telegram);

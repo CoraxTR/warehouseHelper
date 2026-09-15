@@ -18,8 +18,10 @@ type Lot struct {
 	// General/Telegram — «просто» скидки, пишет модуль расчёта скидок
 	// (internal/discounts через шов DiscountWriter).
 	// GeneralManual/TelegramManual — ручные, пишет UI сроков.
-	// null и 0 = скидка не задана: ноль означает «скидки нет», а не «запрет
-	// скидки» (правило «0 = NULL», internal/stock/AGENTS.md).
+	// null и 0 в PLAIN-колонках = скидка не задана (ноль означает «скидки нет»);
+	// в РУЧНЫХ колонках 0 = «скидка 0 %» и запрет расчёта по паре и более дальним
+	// срокам товара, null = ручного применения нет (решение владельца, 15.09.2026;
+	// см. internal/stock/AGENTS.md).
 	General        *int16 `json:"discount_general"`
 	Telegram       *int16 `json:"discount_telegram"`
 	GeneralManual  *int16 `json:"discount_general_manual"`

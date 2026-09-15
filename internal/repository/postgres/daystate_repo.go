@@ -139,16 +139,30 @@ func (pg *PGClient) SnapshotDone(ctx context.Context, date time.Time) (bool, err
 // созданные событиями/календарём, не перезаписываются: при конфликте
 // дополняются только NULL-поля (COALESCE) — снимок не трогает
 // discount_increases, sold_out_today и orderable.
-// Effective скидка — по правилу «0 = NULL» (владелец, 14.09.2026):
-// COALESCE(NULLIF(manual,0), NULLIF(plain,0)); 0 = «скидки нет», не запрет.
+// Effective скидка (решение владельца, сентябрь 2026):
+// COALESCE(manual, NULLIF(plain,0)) — ручная перекрывает «просто» как есть,
+// включая заданный 0 («скидка 0 %», лестница по паре заморожена); ноль в
+// plain-колонке — legacy-«скидки нет» и лестницу не перекрывает.
+//
+// Запрет менеджера (решение владельца, 15.09.2026): ручная 0 блокирует все
+// сроки ДАЛЬШЕ того, на который поставлена, — пары товара с годностью не раньше
+// ban_from (самый близкий срок среди пар с ручной 0) в скидку дня дают 0.
 func (pg *PGClient) SnapshotInsert(ctx context.Context, date time.Time) error {
 	if _, err := pg.Pool.Exec(ctx, `
+        WITH lots AS (
+            SELECT product_id, qty, best_before,
+                   COALESCE(discount_general_manual, NULLIF(discount_general, 0)) AS eff,
+                   MIN(best_before) FILTER (
+                       WHERE discount_general_manual = 0 OR discount_telegram_manual = 0
+                   ) OVER (PARTITION BY product_id) AS ban_from
+            FROM product_stock
+        )
         INSERT INTO product_day_state (product_id, date, in_stock, discount_start, discount)
         SELECT product_id, $1::date,
                BOOL_OR(qty > 0),
-               MAX(COALESCE(NULLIF(discount_general_manual, 0), NULLIF(discount_general, 0))),
-               MAX(COALESCE(NULLIF(discount_general_manual, 0), NULLIF(discount_general, 0)))
-        FROM product_stock
+               MAX(CASE WHEN ban_from IS NOT NULL AND best_before >= ban_from THEN 0 ELSE eff END),
+               MAX(CASE WHEN ban_from IS NOT NULL AND best_before >= ban_from THEN 0 ELSE eff END)
+        FROM lots
         GROUP BY product_id
         ON CONFLICT (product_id, date) DO UPDATE
           SET in_stock = COALESCE(product_day_state.in_stock, EXCLUDED.in_stock),
@@ -162,14 +176,24 @@ func (pg *PGClient) SnapshotInsert(ctx context.Context, date time.Time) error {
 }
 
 // LotsSnapshot читает лоты товара из product_stock: количество и эффективную
-// скидку канала general — COALESCE(NULLIF(manual,0), NULLIF(plain,0)):
-// 0 в колонке значит «скидки нет», а не «заданная скидка ноль» (владелец,
-// 14.09.2026), поэтому ноль трактуется как незаданное значение.
+// скидку канала general — COALESCE(manual, NULLIF(plain,0)): заданная ручная
+// (в том числе 0 — «скидка 0 %», пара заморожена) перекрывает «просто» как
+// есть, а ноль в plain-колонке значит «скидки нет» (решение владельца,
+// сентябрь 2026 — было «0 = NULL» для обеих колонок, 14.09.2026).
 func (pg *PGClient) LotsSnapshot(ctx context.Context, productID string) ([]daystate.LotState, error) {
 	rows, err := pg.Pool.Query(ctx, `
-        SELECT qty, COALESCE(NULLIF(discount_general_manual, 0), NULLIF(discount_general, 0))
-        FROM product_stock
-        WHERE product_id = $1`,
+        WITH ban AS (
+            SELECT MIN(best_before) AS ban_from
+            FROM product_stock
+            WHERE product_id = $1
+              AND (discount_general_manual = 0 OR discount_telegram_manual = 0)
+        )
+        SELECT ps.qty,
+               CASE WHEN b.ban_from IS NOT NULL AND ps.best_before >= b.ban_from THEN 0
+                    ELSE COALESCE(ps.discount_general_manual, NULLIF(ps.discount_general, 0)) END
+        FROM product_stock ps
+        CROSS JOIN ban b
+        WHERE ps.product_id = $1`,
 		productID,
 	)
 	if err != nil {

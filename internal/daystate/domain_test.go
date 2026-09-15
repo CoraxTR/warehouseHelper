@@ -24,12 +24,12 @@ func TestDiscountFromLots(t *testing.T) {
 			{Qty: 1, EffectiveGeneral: i16(20)},
 			{Qty: 1},
 		}, i16(20)},
-		{"ноль — скидки нет (0 = NULL)", []LotState{{Qty: 1, EffectiveGeneral: i16(0)}}, nil},
+		{"ноль — скидка 0 % (ручной запрет)", []LotState{{Qty: 1, EffectiveGeneral: i16(0)}}, i16(0)},
 		{"ноль у одного лота не мешает другому", []LotState{
 			{Qty: 1, EffectiveGeneral: i16(0)},
 			{Qty: 1, EffectiveGeneral: i16(40)},
 		}, i16(40)},
-		{"все нули — скидки нет", []LotState{{Qty: 1, EffectiveGeneral: i16(0)}, {Qty: 2, EffectiveGeneral: i16(0)}}, nil},
+		{"все нули — скидка 0 %", []LotState{{Qty: 1, EffectiveGeneral: i16(0)}, {Qty: 2, EffectiveGeneral: i16(0)}}, i16(0)},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -41,19 +41,21 @@ func TestDiscountFromLots(t *testing.T) {
 	}
 }
 
-// Правило «0 = NULL»: effective = COALESCE(NULLIF(manual,0), NULLIF(plain,0)).
+// Effective-скидка: COALESCE(manual, NULLIF(plain,0)) — ручная (в том числе
+// заданный 0 — «скидка 0 %», запрет расчёта) перекрывает plain как есть;
+// ноль в plain-колонке — legacy-«скидки нет» (решение владельца, сентябрь 2026).
 func TestEffectiveDiscount(t *testing.T) {
 	tests := []struct {
 		name          string
 		manual, plain *int16
 		want          *int16
 	}{
-		{"ручная ноль, «просто» 40 — берётся 40", i16(0), i16(40), i16(40)},
+		{"ручная ноль перекрывает «просто» 40", i16(0), i16(40), i16(0)},
 		{"«просто» ноль, ручной нет — скидки нет", nil, i16(0), nil},
 		{"обе незаданы — скидки нет", nil, nil, nil},
-		{"обе нули — скидки нет", i16(0), i16(0), nil},
+		{"обе нули — 0 % от ручной", i16(0), i16(0), i16(0)},
 		{"ручная важнее «просто»", i16(7), i16(40), i16(7)},
-		{"ручная ноль не перекрывает «просто» 40", i16(0), i16(40), i16(40)},
+		{"ручная 12 перекрывает «просто» 40", i16(12), i16(40), i16(12)},
 		{"ручная есть, «просто» нет", i16(20), nil, i16(20)},
 		{"ручной нет — берётся «просто»", nil, i16(15), i16(15)},
 	}
@@ -153,13 +155,13 @@ func TestApplyStockChange_Discounts(t *testing.T) {
 		t.Errorf("increases = %v, want [7]", next.DiscountIncreases)
 	}
 
-	// Ноль у лота — скидки нет (0 = NULL): колонка NULL, increases не растёт.
+	// Ноль у лота — скидка 0 % (ручной запрет): колонка 0, increases не растёт.
 	cur = baseDay()
 	cur.InStock = b(true)
 	cur.Discount = i16(10)
 	next, _, _ = ApplyStockChange(cur, []LotState{{Qty: 1, EffectiveGeneral: i16(0)}})
-	if next.Discount != nil {
-		t.Errorf("discount = %v, want nil (0 = скидки нет)", next.Discount)
+	if next.Discount == nil || *next.Discount != 0 {
+		t.Errorf("discount = %v, want 0 (скидка 0 %%)", next.Discount)
 	}
 	if len(next.DiscountIncreases) != 0 {
 		t.Errorf("increases = %v, want пусто (ноль не повышение)", next.DiscountIncreases)
