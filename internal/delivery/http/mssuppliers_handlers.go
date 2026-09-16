@@ -219,7 +219,7 @@ func (h *Handler) SupplierSave(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/ms/suppliers", http.StatusSeeOther)
 	case errors.Is(err, domain.ErrSupplierExists):
 		// Пользователь добавил ссылку на уже заведённого поставщика — открываем его.
-		http.Redirect(w, r, "/ms/suppliers/edit?id="+s.ID, http.StatusSeeOther)
+		http.Redirect(w, r, "/ms/suppliers/edit?id="+url.QueryEscape(s.ID), http.StatusSeeOther)
 	case errors.Is(err, msu.ErrCounterpartyNameFetch):
 		h.renderSupplierForm(w, buildSupplierFormData(s, isEdit, rawID,
 			"не удалось получить имя контрагента из МойСклад — нажмите «Сохранить» ещё раз"))

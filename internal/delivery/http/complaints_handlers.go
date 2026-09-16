@@ -495,7 +495,7 @@ func (h *Handler) ComplaintSave(w http.ResponseWriter, r *http.Request) {
 		h.complaintFormErr(w, r, id, res.in, complaintSaveError(err))
 		return
 	}
-	http.Redirect(w, r, fmt.Sprintf("/complaint?id=%d&msg=%s", id, url.QueryEscape("Сохранено")), http.StatusSeeOther)
+	http.Redirect(w, r, "/complaint?id="+strconv.FormatInt(id, 10)+"&msg="+url.QueryEscape("Сохранено"), http.StatusSeeOther)
 }
 
 // complaintFormErr перерисовывает карточку с ошибкой без потери ввода:
@@ -726,19 +726,19 @@ func (h *Handler) ComplaintPhotoAdd(w http.ResponseWriter, r *http.Request) {
 	// Файлы читаются синхронно в AddPhotos ниже — один defer после разбора.
 	defer closeComplaintFiles(res.opened)
 	if firstErr != nil {
-		http.Redirect(w, r, fmt.Sprintf("/complaint?id=%d&msg=%s", id, url.QueryEscape(complaintSaveError(firstErr))), http.StatusSeeOther)
+		http.Redirect(w, r, "/complaint?id="+strconv.FormatInt(id, 10)+"&msg="+url.QueryEscape(complaintSaveError(firstErr)), http.StatusSeeOther)
 		return
 	}
 	if len(res.uploads) == 0 {
-		http.Redirect(w, r, fmt.Sprintf("/complaint?id=%d&msg=%s", id, url.QueryEscape("Выберите фотографии")), http.StatusSeeOther)
+		http.Redirect(w, r, "/complaint?id="+strconv.FormatInt(id, 10)+"&msg="+url.QueryEscape("Выберите фотографии"), http.StatusSeeOther)
 		return
 	}
 	if err := h.complaintsUC.AddPhotos(r.Context(), id, res.uploads); err != nil {
 		slog.Info("complaints: add photos", "id", id, "err", err)
-		http.Redirect(w, r, fmt.Sprintf("/complaint?id=%d&msg=%s", id, url.QueryEscape("Фото не сохранились")), http.StatusSeeOther)
+		http.Redirect(w, r, "/complaint?id="+strconv.FormatInt(id, 10)+"&msg="+url.QueryEscape("Фото не сохранились"), http.StatusSeeOther)
 		return
 	}
-	http.Redirect(w, r, fmt.Sprintf("/complaint?id=%d", id), http.StatusSeeOther)
+	http.Redirect(w, r, "/complaint?id="+strconv.FormatInt(id, 10), http.StatusSeeOther)
 }
 
 // ComplaintPhotoDelete — удаление фото обращения, POST.
@@ -761,7 +761,7 @@ func (h *Handler) ComplaintPhotoDelete(w http.ResponseWriter, r *http.Request) {
 	if err := h.complaintsUC.DeletePhoto(r.Context(), id, name); err != nil {
 		slog.Info("complaints: delete photo", "name", name, "id", id, "err", err)
 	}
-	http.Redirect(w, r, fmt.Sprintf("/complaint?id=%d", id), http.StatusSeeOther)
+	http.Redirect(w, r, "/complaint?id="+strconv.FormatInt(id, 10), http.StatusSeeOther)
 }
 
 // ComplaintPhotoFile раздаёт фото обращения (GET). Имя фото валидируется
