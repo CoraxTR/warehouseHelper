@@ -36,11 +36,6 @@ func banFixtures() banFixture {
 	return banFixture{today: today, bb: bb, input: input}
 }
 
-// banPercent — указатель на процент для полей входа.
-//
-//go:fix inline
-func banPercent(v int16) *int16 { return new(v) }
-
 // Запрет менеджера: ручная 0 блокирует все сроки дальше того, на который
 // поставлена (решение владельца, 15.09.2026): накрытая пара и все пары товара
 // с более далёким сроком из автоматических скидок выпадают, ближние живут.
@@ -55,8 +50,8 @@ func TestEvaluateBanCascade(t *testing.T) {
 		{
 			name: "запрет на ближней паре накрывает все",
 			inputs: []discounts.Input{
-				f.input(f.bb(10), banPercent(0), nil),
-				f.input(f.bb(20), nil, banPercent(40)),
+				f.input(f.bb(10), new(int16(0)), nil),
+				f.input(f.bb(20), nil, new(int16(40))),
 				f.input(f.bb(30), nil, nil),
 			},
 			wantBan: []bool{true, true, true},
@@ -64,17 +59,17 @@ func TestEvaluateBanCascade(t *testing.T) {
 		{
 			name: "запрет на средней паре не трогает ближнюю",
 			inputs: []discounts.Input{
-				f.input(f.bb(10), nil, banPercent(40)),
-				f.input(f.bb(20), banPercent(0), nil),
-				f.input(f.bb(30), nil, banPercent(10)),
+				f.input(f.bb(10), nil, new(int16(40))),
+				f.input(f.bb(20), new(int16(0)), nil),
+				f.input(f.bb(30), nil, new(int16(10))),
 			},
 			wantBan: []bool{false, true, true},
 		},
 		{
 			name: "без запрета пары живут",
 			inputs: []discounts.Input{
-				f.input(f.bb(10), nil, banPercent(40)),
-				f.input(f.bb(20), banPercent(30), nil),
+				f.input(f.bb(10), nil, new(int16(40))),
+				f.input(f.bb(20), new(int16(30)), nil),
 			},
 			wantBan: []bool{false, false},
 		},
@@ -102,8 +97,8 @@ func TestBlockedPairHasNoDesired(t *testing.T) {
 	f := banFixtures()
 
 	pairs := Evaluate([]discounts.Input{
-		f.input(f.bb(10), banPercent(0), nil),
-		f.input(f.bb(20), nil, banPercent(40)),
+		f.input(f.bb(10), new(int16(0)), nil),
+		f.input(f.bb(20), nil, new(int16(40))),
 	}, nil, f.today)
 
 	pct, src := pairs[1].Desired()
@@ -123,9 +118,9 @@ func TestBanWritesClearBlockedPlain(t *testing.T) {
 	f := banFixtures()
 
 	pairs := Evaluate([]discounts.Input{
-		f.input(f.bb(10), nil, banPercent(40)),           // ближняя: не накрыта, скидку не снимаем
-		f.input(f.bb(20), banPercent(0), banPercent(20)), // запрет: пара со своей ступенью
-		f.input(f.bb(30), nil, banPercent(10)),           // накрыта каскадом — снять
+		f.input(f.bb(10), nil, new(int16(40))),           // ближняя: не накрыта, скидку не снимаем
+		f.input(f.bb(20), new(int16(0)), new(int16(20))), // запрет: пара со своей ступенью
+		f.input(f.bb(30), nil, new(int16(10))),           // накрыта каскадом — снять
 		f.input(f.bb(40), nil, nil),                      // накрыта, но снимать нечего
 	}, nil, f.today)
 

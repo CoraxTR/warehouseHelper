@@ -10,9 +10,6 @@ import (
 	"warehouseHelper/internal/daystate"
 )
 
-//go:fix inline
-func i16(v int16) *int16 { return new(v) }
-
 func day(d int) time.Time {
 	return time.Date(2026, time.September, d, 0, 0, 0, 0, time.UTC)
 }
@@ -259,7 +256,7 @@ func newTestUC(repo Repository, catalog CatalogProvider, soldOut SoldOutNotifier
 func TestOnStockChanged_CreatesRowAndUpdates(t *testing.T) {
 	today := day(1)
 	repo := &fakeRepo{days: map[string]*daystate.DayState{}, lots: map[string][]daystate.LotState{
-		"p1": {{Qty: 5, EffectiveGeneral: i16(7)}},
+		"p1": {{Qty: 5, EffectiveGeneral: new(int16(7))}},
 	}}
 	soldOut := &fakeSoldOut{}
 	uc := newTestUC(repo, &fakeCatalog{}, soldOut, &fakeUnavailable{}, &fakeRollback{}, &fakeStockStatus{}, today)
@@ -302,7 +299,7 @@ func TestOnStockChanged_SoldOutTransition(t *testing.T) {
 	today := day(1)
 	repo := &fakeRepo{
 		days: map[string]*daystate.DayState{
-			key("p1", today): {ProductID: "p1", Date: today, InStock: new(true), Discount: i16(5), Orderable: true},
+			key("p1", today): {ProductID: "p1", Date: today, InStock: new(true), Discount: new(int16(5)), Orderable: true},
 		},
 		lots: map[string][]daystate.LotState{"p1": {{Qty: 0}}},
 	}
@@ -351,9 +348,9 @@ func TestOnStockChanged_DiscountIncreaseAppends(t *testing.T) {
 	today := day(1)
 	repo := &fakeRepo{
 		days: map[string]*daystate.DayState{
-			key("p1", today): {ProductID: "p1", Date: today, InStock: new(true), Discount: i16(5), DiscountIncreases: []int16{5}, Orderable: true},
+			key("p1", today): {ProductID: "p1", Date: today, InStock: new(true), Discount: new(int16(5)), DiscountIncreases: []int16{5}, Orderable: true},
 		},
-		lots: map[string][]daystate.LotState{"p1": {{Qty: 1, EffectiveGeneral: i16(15)}}},
+		lots: map[string][]daystate.LotState{"p1": {{Qty: 1, EffectiveGeneral: new(int16(15))}}},
 	}
 	uc := newTestUC(repo, &fakeCatalog{}, &fakeSoldOut{}, &fakeUnavailable{}, &fakeRollback{}, &fakeStockStatus{}, today)
 
@@ -578,7 +575,7 @@ func TestAvailability(t *testing.T) {
 func TestStockReport(t *testing.T) {
 	now := day(15) // середина месяца: дни 1..2 уже прошли
 	repo := &fakeRepo{days: map[string]*daystate.DayState{
-		key("p1", day(1)): {ProductID: "p1", Date: day(1), InStock: new(true), Discount: i16(15), Orderable: true},
+		key("p1", day(1)): {ProductID: "p1", Date: day(1), InStock: new(true), Discount: new(int16(15)), Orderable: true},
 		key("p1", day(2)): {ProductID: "p1", Date: day(2), InStock: new(false), Orderable: true},
 	}}
 	catalog := &fakeCatalog{products: []daystate.CatalogProduct{
@@ -776,7 +773,7 @@ func runBackInStockCase(t *testing.T, c backInStockCase, today time.Time) {
 	t.Helper()
 
 	// Свежие фейки на каждый подтест — состояние не переиспользуется.
-	lots := []daystate.LotState{{Qty: 5, EffectiveGeneral: i16(0)}}
+	lots := []daystate.LotState{{Qty: 5, EffectiveGeneral: new(int16(0))}}
 	if c.emptyLots {
 		lots = nil
 	}

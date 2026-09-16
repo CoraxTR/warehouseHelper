@@ -9,11 +9,6 @@ import (
 	"time"
 )
 
-// pp — процент как указатель: удобно писать пары (было, стало) в таблицах.
-//
-//go:fix inline
-func pp(v int16) *int16 { return new(v) }
-
 // notifyDate — срок из golden-строк (22.06).
 func notifyDate() time.Time {
 	return time.Date(2026, time.June, 22, 0, 0, 0, 0, time.UTC)
@@ -27,10 +22,10 @@ func TestNotifyTextGolden(t *testing.T) {
 		prev, next *int16
 		want       string
 	}{
-		{"поставить", nil, pp(20), "Творог (до 22.06): Необходимо поставить скидку 20%"},
-		{"поднять", pp(20), pp(30), "Творог (до 22.06): Необходимо поднять скидку до 30%"},
-		{"понизить", pp(20), pp(10), "Творог (до 22.06): Необходимо понизить скидку до 10%"},
-		{"убрать", pp(20), nil, "Творог (до 22.06): Необходимо убрать скидку"},
+		{"поставить", nil, new(int16(20)), "Творог (до 22.06): Необходимо поставить скидку 20%"},
+		{"поднять", new(int16(20)), new(int16(30)), "Творог (до 22.06): Необходимо поднять скидку до 30%"},
+		{"понизить", new(int16(20)), new(int16(10)), "Творог (до 22.06): Необходимо понизить скидку до 10%"},
+		{"убрать", new(int16(20)), nil, "Творог (до 22.06): Необходимо убрать скидку"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.title, func(t *testing.T) {
@@ -55,32 +50,32 @@ func TestNotifyTextTransitions(t *testing.T) {
 		ok         bool
 	}{
 		// было 0/NULL → стало >0: «поставить»
-		{"нет → есть", nil, pp(20), "Плов (до 22.06): Необходимо поставить скидку 20%", true},
-		{"ноль → есть", pp(0), pp(20), "Плов (до 22.06): Необходимо поставить скидку 20%", true},
+		{"нет → есть", nil, new(int16(20)), "Плов (до 22.06): Необходимо поставить скидку 20%", true},
+		{"ноль → есть", new(int16(0)), new(int16(20)), "Плов (до 22.06): Необходимо поставить скидку 20%", true},
 
 		// было >0 → стало больше: «поднять»
-		{"10 → 20", pp(10), pp(20), "Плов (до 22.06): Необходимо поднять скидку до 20%", true},
-		{"10 → 50", pp(10), pp(50), "Плов (до 22.06): Необходимо поднять скидку до 50%", true},
+		{"10 → 20", new(int16(10)), new(int16(20)), "Плов (до 22.06): Необходимо поднять скидку до 20%", true},
+		{"10 → 50", new(int16(10)), new(int16(50)), "Плов (до 22.06): Необходимо поднять скидку до 50%", true},
 
 		// было >0 → стало меньше, но >0: «понизить»
-		{"50 → 20", pp(50), pp(20), "Плов (до 22.06): Необходимо понизить скидку до 20%", true},
-		{"30 → 10", pp(30), pp(10), "Плов (до 22.06): Необходимо понизить скидку до 10%", true},
+		{"50 → 20", new(int16(50)), new(int16(20)), "Плов (до 22.06): Необходимо понизить скидку до 20%", true},
+		{"30 → 10", new(int16(30)), new(int16(10)), "Плов (до 22.06): Необходимо понизить скидку до 10%", true},
 
 		// было >0 → стало 0/NULL: «убрать»
-		{"есть → нет", pp(20), nil, "Плов (до 22.06): Необходимо убрать скидку", true},
-		{"есть → ноль", pp(20), pp(0), "Плов (до 22.06): Необходимо убрать скидку", true},
+		{"есть → нет", new(int16(20)), nil, "Плов (до 22.06): Необходимо убрать скидку", true},
+		{"есть → ноль", new(int16(20)), new(int16(0)), "Плов (до 22.06): Необходимо убрать скидку", true},
 
 		// значение не изменилось — уведомлять нечего
 		{"нет → нет", nil, nil, "", false},
-		{"нет → нет (ноль)", nil, pp(0), "", false},
-		{"ноль → ноль", pp(0), pp(0), "", false},
-		{"20 → 20", pp(20), pp(20), "", false},
-		{"50 → 50", pp(50), pp(50), "", false},
+		{"нет → нет (ноль)", nil, new(int16(0)), "", false},
+		{"ноль → ноль", new(int16(0)), new(int16(0)), "", false},
+		{"20 → 20", new(int16(20)), new(int16(20)), "", false},
+		{"50 → 50", new(int16(50)), new(int16(50)), "", false},
 
 		// краевые: отрицательное значение из БД — тоже «нет»
-		{"минус → нет", pp(-5), pp(0), "", false},
-		{"нет → минус", nil, pp(-5), "", false},
-		{"минус → есть", pp(-5), pp(20), "Плов (до 22.06): Необходимо поставить скидку 20%", true},
+		{"минус → нет", new(int16(-5)), new(int16(0)), "", false},
+		{"нет → минус", nil, new(int16(-5)), "", false},
+		{"минус → есть", new(int16(-5)), new(int16(20)), "Плов (до 22.06): Необходимо поставить скидку 20%", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.title, func(t *testing.T) {
@@ -97,7 +92,7 @@ func TestNotifyTextTransitions(t *testing.T) {
 
 // Пустое имя товара не паникует и не портит шаблон.
 func TestNotifyTextEmptyName(t *testing.T) {
-	got, ok := NotifyText("", notifyDate(), nil, pp(20))
+	got, ok := NotifyText("", notifyDate(), nil, new(int16(20)))
 	if !ok {
 		t.Fatal("ok=false, want true")
 	}
@@ -117,11 +112,11 @@ func TestNotifyChangesSendsTransitions(t *testing.T) {
 	uc := NewUseCase(nil, nil, nil, common, nil, nil)
 
 	uc.notifyChanges(context.Background(), []Change{
-		{Name: "Творог", BestBefore: notifyDate(), Prev: nil, Next: pp(20)},
-		{Name: "Плов", BestBefore: notifyDate(), Prev: pp(20), Next: pp(30)},
-		{Name: "Сыр", BestBefore: notifyDate(), Prev: pp(20), Next: pp(10)},
-		{Name: "Хлеб", BestBefore: notifyDate(), Prev: pp(20), Next: nil},
-		{Name: "Кефир", BestBefore: notifyDate(), Prev: pp(20), Next: pp(20)},
+		{Name: "Творог", BestBefore: notifyDate(), Prev: nil, Next: new(int16(20))},
+		{Name: "Плов", BestBefore: notifyDate(), Prev: new(int16(20)), Next: new(int16(30))},
+		{Name: "Сыр", BestBefore: notifyDate(), Prev: new(int16(20)), Next: new(int16(10))},
+		{Name: "Хлеб", BestBefore: notifyDate(), Prev: new(int16(20)), Next: nil},
+		{Name: "Кефир", BestBefore: notifyDate(), Prev: new(int16(20)), Next: new(int16(20))},
 	})
 
 	want := []string{
@@ -145,8 +140,8 @@ func TestNotifyChangesNotifierError(t *testing.T) {
 	uc := NewUseCase(nil, nil, nil, common, nil, nil)
 
 	uc.notifyChanges(context.Background(), []Change{
-		{Name: "Творог", BestBefore: notifyDate(), Prev: nil, Next: pp(20)},
-		{Name: "Плов", BestBefore: notifyDate(), Prev: nil, Next: pp(30)},
+		{Name: "Творог", BestBefore: notifyDate(), Prev: nil, Next: new(int16(20))},
+		{Name: "Плов", BestBefore: notifyDate(), Prev: nil, Next: new(int16(30))},
 	})
 
 	if len(common.texts) != 0 {
@@ -163,6 +158,6 @@ func TestNotifyChangesNilNotifier(_ *testing.T) {
 	uc := NewUseCase(nil, nil, nil, nil, nil, nil)
 
 	uc.notifyChanges(context.Background(), []Change{
-		{Name: "Творог", BestBefore: notifyDate(), Prev: nil, Next: pp(20)},
+		{Name: "Творог", BestBefore: notifyDate(), Prev: nil, Next: new(int16(20))},
 	})
 }

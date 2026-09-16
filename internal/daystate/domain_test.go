@@ -6,9 +6,6 @@ import (
 	"time"
 )
 
-//go:fix inline
-func i16(v int16) *int16 { return new(v) }
-
 func TestDiscountFromLots(t *testing.T) {
 	tests := []struct {
 		name string
@@ -17,18 +14,18 @@ func TestDiscountFromLots(t *testing.T) {
 	}{
 		{"пусто — скидки нет", nil, nil},
 		{"все без скидки", []LotState{{Qty: 1}, {Qty: 2}}, nil},
-		{"один лот со скидкой", []LotState{{Qty: 1, EffectiveGeneral: i16(5)}}, i16(5)},
+		{"один лот со скидкой", []LotState{{Qty: 1, EffectiveGeneral: new(int16(5))}}, new(int16(5))},
 		{"берётся максимум", []LotState{
-			{Qty: 1, EffectiveGeneral: i16(5)},
-			{Qty: 1, EffectiveGeneral: i16(20)},
+			{Qty: 1, EffectiveGeneral: new(int16(5))},
+			{Qty: 1, EffectiveGeneral: new(int16(20))},
 			{Qty: 1},
-		}, i16(20)},
-		{"ноль — скидка 0 % (ручной запрет)", []LotState{{Qty: 1, EffectiveGeneral: i16(0)}}, i16(0)},
+		}, new(int16(20))},
+		{"ноль — скидка 0 % (ручной запрет)", []LotState{{Qty: 1, EffectiveGeneral: new(int16(0))}}, new(int16(0))},
 		{"ноль у одного лота не мешает другому", []LotState{
-			{Qty: 1, EffectiveGeneral: i16(0)},
-			{Qty: 1, EffectiveGeneral: i16(40)},
-		}, i16(40)},
-		{"все нули — скидка 0 %", []LotState{{Qty: 1, EffectiveGeneral: i16(0)}, {Qty: 2, EffectiveGeneral: i16(0)}}, i16(0)},
+			{Qty: 1, EffectiveGeneral: new(int16(0))},
+			{Qty: 1, EffectiveGeneral: new(int16(40))},
+		}, new(int16(40))},
+		{"все нули — скидка 0 %", []LotState{{Qty: 1, EffectiveGeneral: new(int16(0))}, {Qty: 2, EffectiveGeneral: new(int16(0))}}, new(int16(0))},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -49,14 +46,14 @@ func TestEffectiveDiscount(t *testing.T) {
 		manual, plain *int16
 		want          *int16
 	}{
-		{"ручная ноль перекрывает «просто» 40", i16(0), i16(40), i16(0)},
-		{"«просто» ноль, ручной нет — скидки нет", nil, i16(0), nil},
+		{"ручная ноль перекрывает «просто» 40", new(int16(0)), new(int16(40)), new(int16(0))},
+		{"«просто» ноль, ручной нет — скидки нет", nil, new(int16(0)), nil},
 		{"обе незаданы — скидки нет", nil, nil, nil},
-		{"обе нули — 0 % от ручной", i16(0), i16(0), i16(0)},
-		{"ручная важнее «просто»", i16(7), i16(40), i16(7)},
-		{"ручная 12 перекрывает «просто» 40", i16(12), i16(40), i16(12)},
-		{"ручная есть, «просто» нет", i16(20), nil, i16(20)},
-		{"ручной нет — берётся «просто»", nil, i16(15), i16(15)},
+		{"обе нули — 0 % от ручной", new(int16(0)), new(int16(0)), new(int16(0))},
+		{"ручная важнее «просто»", new(int16(7)), new(int16(40)), new(int16(7))},
+		{"ручная 12 перекрывает «просто» 40", new(int16(12)), new(int16(40)), new(int16(12))},
+		{"ручная есть, «просто» нет", new(int16(20)), nil, new(int16(20))},
+		{"ручной нет — берётся «просто»", nil, new(int16(15)), new(int16(15))},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -136,9 +133,9 @@ func TestApplyStockChange_Discounts(t *testing.T) {
 	// Повышение скидки: 5 → 10, append в increases.
 	cur := baseDay()
 	cur.InStock = new(true)
-	cur.Discount = i16(5)
+	cur.Discount = new(int16(5))
 	cur.DiscountIncreases = []int16{7}
-	next, _, _ := ApplyStockChange(cur, []LotState{{Qty: 1, EffectiveGeneral: i16(10)}})
+	next, _, _ := ApplyStockChange(cur, []LotState{{Qty: 1, EffectiveGeneral: new(int16(10))}})
 	if next.Discount == nil || *next.Discount != 10 {
 		t.Errorf("discount = %v, want 10", next.Discount)
 	}
@@ -149,7 +146,7 @@ func TestApplyStockChange_Discounts(t *testing.T) {
 	// Скидка появилась (NULL → 7): повышение.
 	cur = baseDay()
 	cur.InStock = new(true)
-	next, _, _ = ApplyStockChange(cur, []LotState{{Qty: 1, EffectiveGeneral: i16(7)}})
+	next, _, _ = ApplyStockChange(cur, []LotState{{Qty: 1, EffectiveGeneral: new(int16(7))}})
 	if !reflect.DeepEqual(next.DiscountIncreases, []int16{7}) {
 		t.Errorf("increases = %v, want [7]", next.DiscountIncreases)
 	}
@@ -157,8 +154,8 @@ func TestApplyStockChange_Discounts(t *testing.T) {
 	// Ноль у лота — скидка 0 % (ручной запрет): колонка 0, increases не растёт.
 	cur = baseDay()
 	cur.InStock = new(true)
-	cur.Discount = i16(10)
-	next, _, _ = ApplyStockChange(cur, []LotState{{Qty: 1, EffectiveGeneral: i16(0)}})
+	cur.Discount = new(int16(10))
+	next, _, _ = ApplyStockChange(cur, []LotState{{Qty: 1, EffectiveGeneral: new(int16(0))}})
 	if next.Discount == nil || *next.Discount != 0 {
 		t.Errorf("discount = %v, want 0 (скидка 0 %%)", next.Discount)
 	}
@@ -169,9 +166,9 @@ func TestApplyStockChange_Discounts(t *testing.T) {
 	// Понижение 10 → 5: колонка меняется, increases не растёт.
 	cur = baseDay()
 	cur.InStock = new(true)
-	cur.Discount = i16(10)
+	cur.Discount = new(int16(10))
 	cur.DiscountIncreases = []int16{10}
-	next, _, _ = ApplyStockChange(cur, []LotState{{Qty: 1, EffectiveGeneral: i16(5)}})
+	next, _, _ = ApplyStockChange(cur, []LotState{{Qty: 1, EffectiveGeneral: new(int16(5))}})
 	if next.Discount == nil || *next.Discount != 5 {
 		t.Errorf("discount = %v, want 5", next.Discount)
 	}
@@ -182,7 +179,7 @@ func TestApplyStockChange_Discounts(t *testing.T) {
 	// Снятие скидки 10 → NULL: колонка NULL, increases не растёт.
 	cur = baseDay()
 	cur.InStock = new(true)
-	cur.Discount = i16(10)
+	cur.Discount = new(int16(10))
 	next, _, _ = ApplyStockChange(cur, []LotState{{Qty: 1}})
 	if next.Discount != nil {
 		t.Errorf("discount = %v, want nil", next.Discount)
@@ -213,8 +210,8 @@ func TestCellFor(t *testing.T) {
 		{"недоступна — серая", &DayState{Date: today, InStock: new(true), Orderable: false}, today, CellGray, "0%"},
 		{"закончилась — красная x", &DayState{Date: today, InStock: new(false), Orderable: true}, today, CellRed, "x"},
 		{"в наличии — белая", &DayState{Date: today, InStock: new(true), Orderable: true}, today, CellPlain, "0%"},
-		{"в наличии + скидка — жёлтая", &DayState{Date: today, InStock: new(true), Discount: i16(15), Orderable: true}, today, CellYellow, "15%"},
-		{"sold_out + скидка — жёлтая с красным шрифтом", &DayState{Date: today, InStock: new(true), Discount: i16(15), SoldOutToday: true, Orderable: true}, today, CellYellowRed, "15%"},
+		{"в наличии + скидка — жёлтая", &DayState{Date: today, InStock: new(true), Discount: new(int16(15)), Orderable: true}, today, CellYellow, "15%"},
+		{"sold_out + скидка — жёлтая с красным шрифтом", &DayState{Date: today, InStock: new(true), Discount: new(int16(15)), SoldOutToday: true, Orderable: true}, today, CellYellowRed, "15%"},
 		{"sold_out — красная", &DayState{Date: today, InStock: new(true), SoldOutToday: true, Orderable: true}, today, CellRed, "0%"},
 		{"серая выигрывает у sold_out", &DayState{Date: today, InStock: new(true), SoldOutToday: true, Orderable: false}, today, CellGray, "0%"},
 	}
@@ -236,10 +233,10 @@ func TestTextFor(t *testing.T) {
 		want string
 	}{
 		{"скидки нет — 0%", &DayState{InStock: new(true)}, "0%"},
-		{"старт без изменений", &DayState{InStock: new(true), DiscountStart: i16(10), Discount: i16(10)}, "10%"},
-		{"цепочка повышений", &DayState{InStock: new(true), DiscountStart: i16(10), DiscountIncreases: []int16{15, 20}, Discount: i16(20)}, "10% → 15% → 20%"},
-		{"понижение — финал отличается", &DayState{InStock: new(true), DiscountStart: i16(10), Discount: i16(5)}, "10% → 5%"},
-		{"закончилась — финал x", &DayState{InStock: new(false), DiscountStart: i16(10), DiscountIncreases: []int16{15}, Discount: i16(15)}, "10% → 15% → x"},
+		{"старт без изменений", &DayState{InStock: new(true), DiscountStart: new(int16(10)), Discount: new(int16(10))}, "10%"},
+		{"цепочка повышений", &DayState{InStock: new(true), DiscountStart: new(int16(10)), DiscountIncreases: []int16{15, 20}, Discount: new(int16(20))}, "10% → 15% → 20%"},
+		{"понижение — финал отличается", &DayState{InStock: new(true), DiscountStart: new(int16(10)), Discount: new(int16(5))}, "10% → 5%"},
+		{"закончилась — финал x", &DayState{InStock: new(false), DiscountStart: new(int16(10)), DiscountIncreases: []int16{15}, Discount: new(int16(15))}, "10% → 15% → x"},
 		{"сразу закончилась — просто x", &DayState{InStock: new(false)}, "x"},
 	}
 	for _, tc := range tests {

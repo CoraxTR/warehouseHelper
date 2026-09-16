@@ -142,9 +142,6 @@ func (m *mockNotifier) NotifyWarehouse(text string) error {
 	return nil
 }
 
-//go:fix inline
-func i16(v int16) *int16 { return new(v) }
-
 func d(year int, month time.Month, day int) time.Time {
 	return time.Date(year, month, day, 0, 0, 0, 0, time.UTC)
 }
@@ -156,8 +153,8 @@ func testStock() []stock.Product {
 		{
 			ID: "p1", InternalCode: "10100001", Name: "Хлеб бородинский", GroupName: "Хлебобулочные", ShortList: true,
 			Lots: []stock.Lot{
-				{BestBefore: d(2026, 9, 1), Qty: 2, General: i16(5)},
-				{BestBefore: d(2026, 9, 5), Qty: 5, Telegram: i16(20)},
+				{BestBefore: d(2026, 9, 1), Qty: 2, General: new(int16(5))},
+				{BestBefore: d(2026, 9, 5), Qty: 5, Telegram: new(int16(20))},
 				{BestBefore: d(2026, 9, 10), Qty: 10, ProducedOn: &produced},
 			},
 		},
@@ -319,7 +316,7 @@ func TestSetManualDiscount(t *testing.T) {
 		t.Fatalf("WarmUp: %v", err)
 	}
 
-	err := uc.SetManualDiscount(context.Background(), "p1", d(2026, 9, 1), i16(7), i16(0))
+	err := uc.SetManualDiscount(context.Background(), "p1", d(2026, 9, 1), new(int16(7)), new(int16(0)))
 	if err != nil {
 		t.Fatalf("SetManualDiscount: %v", err)
 	}
@@ -389,8 +386,8 @@ func TestSetManualDiscountValidation(t *testing.T) {
 		gen  *int16
 		tg   *int16
 	}{
-		{"генерал больше 100", i16(101), nil},
-		{"телеграм меньше 0", nil, i16(-1)},
+		{"генерал больше 100", new(int16(101)), nil},
+		{"телеграм меньше 0", nil, new(int16(-1))},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -410,7 +407,7 @@ func TestSetManualDiscountProductNotFound(t *testing.T) {
 		t.Fatalf("WarmUp: %v", err)
 	}
 
-	if err := uc.SetManualDiscount(context.Background(), "nope", d(2026, 9, 1), i16(5), nil); !errors.Is(err, stock.ErrProductNotFound) {
+	if err := uc.SetManualDiscount(context.Background(), "nope", d(2026, 9, 1), new(int16(5)), nil); !errors.Is(err, stock.ErrProductNotFound) {
 		t.Fatalf("want ErrProductNotFound, got %v", err)
 	}
 }
@@ -421,7 +418,7 @@ func TestSetManualDiscountLotNotFound(t *testing.T) {
 		t.Fatalf("WarmUp: %v", err)
 	}
 
-	if err := uc.SetManualDiscount(context.Background(), "p1", d(2030, 1, 1), i16(5), nil); !errors.Is(err, stock.ErrLotNotFound) {
+	if err := uc.SetManualDiscount(context.Background(), "p1", d(2030, 1, 1), new(int16(5)), nil); !errors.Is(err, stock.ErrLotNotFound) {
 		t.Fatalf("want ErrLotNotFound, got %v", err)
 	}
 }
@@ -434,7 +431,7 @@ func TestSetManualDiscountRepoError(t *testing.T) {
 		t.Fatalf("WarmUp: %v", err)
 	}
 
-	err := uc.SetManualDiscount(context.Background(), "p1", d(2026, 9, 1), i16(5), nil)
+	err := uc.SetManualDiscount(context.Background(), "p1", d(2026, 9, 1), new(int16(5)), nil)
 	if err == nil {
 		t.Fatal("want repo error, got nil")
 	}
@@ -472,8 +469,8 @@ func replaceRepo() *mockRepo {
 			{
 				ID: "p1", InternalCode: "10100001", Name: "Хлеб", GroupName: "Хлебобулочные",
 				Lots: []stock.Lot{
-					{BestBefore: day(1), Qty: 2, General: i16(5), GeneralManual: i16(3), TelegramManual: i16(7)},
-					{BestBefore: day(5), Qty: 5, Telegram: i16(20)},
+					{BestBefore: day(1), Qty: 2, General: new(int16(5)), GeneralManual: new(int16(3)), TelegramManual: new(int16(7))},
+					{BestBefore: day(5), Qty: 5, Telegram: new(int16(20))},
 					{BestBefore: day(10), Qty: 10, ProducedOn: &prod},
 				},
 			},
@@ -580,7 +577,7 @@ func TestReplaceStockExpiredClearsManual(t *testing.T) {
 	repo := replaceRepo()
 	// Истёкший лот (вчера) с ручной скидкой — в сканах: скидка должна сброситься.
 	repo.products[0].Lots = append(repo.products[0].Lots,
-		stock.Lot{BestBefore: day(-1), Qty: 3, GeneralManual: i16(50), TelegramManual: i16(50)})
+		stock.Lot{BestBefore: day(-1), Qty: 3, GeneralManual: new(int16(50)), TelegramManual: new(int16(50))})
 	uc := newTestUC(repo, &mockPub{})
 	if err := uc.WarmUp(context.Background()); err != nil {
 		t.Fatalf("WarmUp: %v", err)
@@ -1056,11 +1053,6 @@ func TestAcceptStock_RepoError(t *testing.T) {
 	}
 }
 
-//go:fix inline
-func ptrTime(v time.Time) *time.Time {
-	return new(v)
-}
-
 // mockDayState — наблюдатель-заглушка состояния по дням: запоминает товары,
 // может отдавать ошибку.
 type mockDayState struct {
@@ -1101,7 +1093,7 @@ func TestDayStateRecorder(t *testing.T) {
 
 	// Ручная скидка.
 	ds.calls = nil
-	if err := uc.SetManualDiscount(context.Background(), "p1", d(2026, 9, 1), i16(10), nil); err != nil {
+	if err := uc.SetManualDiscount(context.Background(), "p1", d(2026, 9, 1), new(int16(10)), nil); err != nil {
 		t.Fatalf("SetManualDiscount: %v", err)
 	}
 	if len(ds.calls) != 1 || ds.calls[0] != "p1" {
@@ -1431,8 +1423,8 @@ func TestSetDiscountsWritesDBThenCacheThenEvent(t *testing.T) {
 		{
 			ProductID:  "p1",
 			BestBefore: d(2026, 9, 1),
-			General:    i16(40),
-			Telegram:   i16(10),
+			General:    new(int16(40)),
+			Telegram:   new(int16(10)),
 		},
 	})
 	if err != nil {
@@ -1496,11 +1488,11 @@ func TestSetDiscountsValidation(t *testing.T) {
 		name  string
 		write stock.DiscountWrite
 	}{
-		{"скидка сайта 101", stock.DiscountWrite{ProductID: "p1", BestBefore: d(2026, 9, 1), General: i16(101)}},
-		{"скидка ТГ -1", stock.DiscountWrite{ProductID: "p1", BestBefore: d(2026, 9, 1), Telegram: i16(-1)}},
-		{"без товара", stock.DiscountWrite{BestBefore: d(2026, 9, 1), General: i16(10)}},
-		{"без срока", stock.DiscountWrite{ProductID: "p1", General: i16(10)}},
-		{"неизвестная метка источника", stock.DiscountWrite{ProductID: "p1", BestBefore: d(2026, 9, 1), General: i16(10), Source: "expiryy"}},
+		{"скидка сайта 101", stock.DiscountWrite{ProductID: "p1", BestBefore: d(2026, 9, 1), General: new(int16(101))}},
+		{"скидка ТГ -1", stock.DiscountWrite{ProductID: "p1", BestBefore: d(2026, 9, 1), Telegram: new(int16(-1))}},
+		{"без товара", stock.DiscountWrite{BestBefore: d(2026, 9, 1), General: new(int16(10))}},
+		{"без срока", stock.DiscountWrite{ProductID: "p1", General: new(int16(10))}},
+		{"неизвестная метка источника", stock.DiscountWrite{ProductID: "p1", BestBefore: d(2026, 9, 1), General: new(int16(10)), Source: "expiryy"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -1543,7 +1535,7 @@ func TestSetDiscountsRepoErrorKeepsCache(t *testing.T) {
 	err := uc.SetDiscounts(context.Background(), []stock.DiscountWrite{{
 		ProductID:  "p1",
 		BestBefore: d(2026, 9, 1),
-		General:    i16(40),
+		General:    new(int16(40)),
 	}})
 	if err == nil {
 		t.Fatal("ожидалась ошибка БД")
@@ -1569,7 +1561,7 @@ func TestSetDiscountsProductOutsideCache(t *testing.T) {
 	if err := uc.SetDiscounts(context.Background(), []stock.DiscountWrite{{
 		ProductID:  "p9",
 		BestBefore: d(2026, 9, 2),
-		General:    i16(15),
+		General:    new(int16(15)),
 	}}); err != nil {
 		t.Fatalf("SetDiscounts: %v", err)
 	}
@@ -1595,7 +1587,7 @@ func TestSetDiscountsSourceReachesCacheAndEvent(t *testing.T) {
 	err := uc.SetDiscounts(context.Background(), []stock.DiscountWrite{{
 		ProductID:  "p1",
 		BestBefore: d(2026, 9, 1),
-		General:    i16(20),
+		General:    new(int16(20)),
 		Source:     stock.DiscountSourceExpiry,
 	}})
 	if err != nil {
@@ -1629,7 +1621,7 @@ func TestSetDiscountsEmptySourceClearsLabel(t *testing.T) {
 	if err := uc.SetDiscounts(context.Background(), []stock.DiscountWrite{{
 		ProductID:  "p1",
 		BestBefore: d(2026, 9, 10),
-		General:    i16(10),
+		General:    new(int16(10)),
 		Source:     stock.DiscountSourceSurplus,
 	}}); err != nil {
 		t.Fatalf("SetDiscounts(избыток): %v", err)
@@ -1665,13 +1657,13 @@ func TestSetDiscountsSourceKeepsManual(t *testing.T) {
 	repo := &mockRepo{products: testStock()}
 	uc := newDiscountsUC(t, repo, &mockPub{})
 
-	if err := uc.SetManualDiscount(context.Background(), "p1", d(2026, 9, 1), i16(7), i16(3)); err != nil {
+	if err := uc.SetManualDiscount(context.Background(), "p1", d(2026, 9, 1), new(int16(7)), new(int16(3))); err != nil {
 		t.Fatalf("SetManualDiscount: %v", err)
 	}
 	if err := uc.SetDiscounts(context.Background(), []stock.DiscountWrite{{
 		ProductID:  "p1",
 		BestBefore: d(2026, 9, 1),
-		General:    i16(20),
+		General:    new(int16(20)),
 		Source:     stock.DiscountSourceExpiry,
 	}}); err != nil {
 		t.Fatalf("SetDiscounts: %v", err)
@@ -1693,7 +1685,7 @@ func TestSetManualDiscountKeepsSource(t *testing.T) {
 	repo.products[0].Lots[0].DiscountSource = stock.DiscountSourceSurplus
 	uc := newDiscountsUC(t, repo, &mockPub{})
 
-	if err := uc.SetManualDiscount(context.Background(), "p1", d(2026, 9, 1), i16(15), nil); err != nil {
+	if err := uc.SetManualDiscount(context.Background(), "p1", d(2026, 9, 1), new(int16(15)), nil); err != nil {
 		t.Fatalf("SetManualDiscount: %v", err)
 	}
 
@@ -1747,13 +1739,13 @@ func TestSetLotChangeListenerSeam(t *testing.T) {
 		t.Fatalf("PickStock: %v", err)
 	}
 	// 3. Ручная скидка из UI.
-	if err := uc.SetManualDiscount(context.Background(), "p1", d(2026, 9, 10), i16(10), nil); err != nil {
+	if err := uc.SetManualDiscount(context.Background(), "p1", d(2026, 9, 10), new(int16(10)), nil); err != nil {
 		t.Fatalf("SetManualDiscount: %v", err)
 	}
 	// 4. «Просто»-скидки по двум товарам.
 	if err := uc.SetDiscounts(context.Background(), []stock.DiscountWrite{
-		{ProductID: "p1", BestBefore: d(2026, 9, 1), General: i16(30)},
-		{ProductID: "p2", BestBefore: d(2026, 9, 3), General: i16(30)},
+		{ProductID: "p1", BestBefore: d(2026, 9, 1), General: new(int16(30))},
+		{ProductID: "p2", BestBefore: d(2026, 9, 3), General: new(int16(30))},
 	}); err != nil {
 		t.Fatalf("SetDiscounts: %v", err)
 	}
@@ -1796,7 +1788,7 @@ func TestLotChangeListenerErrorDoesNotBreakWrites(t *testing.T) {
 	}
 
 	if err := uc.SetDiscounts(context.Background(), []stock.DiscountWrite{
-		{ProductID: "p2", BestBefore: d(2026, 9, 3), Telegram: i16(25)},
+		{ProductID: "p2", BestBefore: d(2026, 9, 3), Telegram: new(int16(25))},
 	}); err != nil {
 		t.Fatalf("SetDiscounts при ошибке слушателя: %v", err)
 	}
