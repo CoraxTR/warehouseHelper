@@ -283,6 +283,22 @@ linters:
             - path: _test\.go
               linters:
                   - goconst
+            # G120 (gosec): «неограниченный разбор multipart-форм». В gosec
+            # v2.29 у правила form_parsing_limits список сантайзеров пуст —
+            # MaxBytesReader до разбора, а ParseMultipartForm(32<<20) спуливает
+            # лишнее на диск; r.MultipartReader() — смена контракта разбора
+            # (FormValue перестаёт работать), поэтому исключение по правилу
+            # (решение владельца, 16.09.2026).
+            - linters:
+                  - gosec
+              text: "G120:"
+            # G703 в config.go/logging.go: путь из .env, его задаёт оператор, а не
+            # HTTP-запрос; filepath.Base отрезал бы каталог — логи уехали бы в CWD
+            # (решение владельца, 16.09.2026).
+            - linters:
+                  - gosec
+              path: "(internal/config/config|internal/logging/logging)\\.go"
+              text: "G703:"
 
 formatters:
     enable:

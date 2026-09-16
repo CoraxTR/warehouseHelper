@@ -480,8 +480,12 @@ func (h *Handler) PrintForm(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", "attachment; filename=order_form.pdf")
 	w.Header().Set("Content-Type", "application/pdf")
 
-	slog.Info("order form pdf", "path", filePath)
-	http.ServeFile(w, r, filePath)
+	// Бланк лежит во временном каталоге (pdfexport пишет туда): собираем путь
+	// из каталога и имени файла (gosec G703 — путь пришёл из запроса, filepath.Base
+	// его обезвреживает).
+	safePath := filepath.Join(tempdir.Dir, filepath.Base(filePath))
+	slog.Info("order form pdf", "path", safePath)
+	http.ServeFile(w, r, safePath)
 }
 
 func (h *Handler) PrintMultipleForms(w http.ResponseWriter, r *http.Request) {

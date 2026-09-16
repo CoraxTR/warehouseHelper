@@ -3,6 +3,7 @@
 package http
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -420,7 +421,24 @@ func (h *Handler) WikiPhoto(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Белый список MIME (gosec G705): отдаём только изображения, всё прочее —
+	// как поток байтов, чтобы браузер не интерпретировал содержимое как
+	// разметку. Фото вики — jpg/png/webp/gif (см. wikiUC.GetPhoto).
+	if !imageMIME(contentType) {
+		contentType = "application/octet-stream"
+	}
+
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	_, _ = w.Write(data)
+	_, _ = io.Copy(w, bytes.NewReader(data))
+}
+
+// imageMIME — Content-Type изображения из белого списка вики.
+func imageMIME(contentType string) bool {
+	switch contentType {
+	case "image/jpeg", "image/png", "image/webp", "image/gif":
+		return true
+	default:
+		return false
+	}
 }

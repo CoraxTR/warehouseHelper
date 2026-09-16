@@ -480,7 +480,9 @@ func (h *Handler) ComplaintSave(w http.ResponseWriter, r *http.Request) {
 	}
 	// Карточка шлёт обычную urlencoded-форму (без фото) — multipart тут
 	// не нужен; безусловный ParseMultipartForm ронял каждое сохранение
-	// с 400 «Не удалось прочитать отправленные данные».
+	// с 400 «Не удалось прочитать отправленные данные». Тело всё равно
+	// ограничиваем до разбора (gosec G120, предохранитель от раздутого тела).
+	r.Body = http.MaxBytesReader(w, r.Body, complaintMaxBodyBytes)
 	if err := parseComplaintForm(r); err != nil {
 		http.Error(w, "Не удалось прочитать отправленные данные.", http.StatusBadRequest)
 		return

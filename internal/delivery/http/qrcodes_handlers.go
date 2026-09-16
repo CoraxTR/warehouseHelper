@@ -235,9 +235,11 @@ func qrPhotosHandler(dir string) http.Handler {
 			}
 		} else if m := qrPhotoPathRe.FindStringSubmatch(rel); m != nil {
 			// Оригинал новой схемы <id>.<ext>, затем старой <id>/photo.<ext>.
-			path = filepath.Join(dir, rel)
+			// Имена приходят из URL: filepath.Base обезвреживает путь
+			// (gosec G703), каталог — наш собственный (dir).
+			path = filepath.Join(dir, filepath.Base(rel))
 			if _, err := os.Stat(path); err != nil {
-				path = filepath.Join(dir, m[1], "photo."+m[2])
+				path = filepath.Join(dir, filepath.Base(m[1]), "photo."+filepath.Base(m[2]))
 			}
 		}
 
@@ -249,7 +251,7 @@ func qrPhotosHandler(dir string) http.Handler {
 
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Cache-Control", qrPhotoCacheControl)
-		http.ServeFile(w, r, path)
+		http.ServeFile(w, r, filepath.Join(dir, filepath.Base(path)))
 	})
 }
 
