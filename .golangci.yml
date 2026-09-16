@@ -207,6 +207,11 @@ linters:
                   disabled: true
                 - name: argument-limit
                   disabled: true
+                # Пакет internal/delivery/http назван http (конфликт с net/http по
+                # мнению линтера). Переименование — шумный рефактор по всему
+                # проекту ради нуля пользы (решение владельца, 15.09.2026).
+                - name: package-naming
+                  disabled: true
                 - name: cognitive-complexity
                   disabled: true
                 - name: cyclomatic
@@ -271,6 +276,13 @@ linters:
         presets:
             - comments
             - common-false-positives
+        rules:
+            # goconst в тестах: повторяющиеся литералы («jpg», «@sklad»,
+            # «Хлебобулочные») — читаемость фикстур, а не дефект. В проде правило
+            # работает (решение владельца, 15.09.2026).
+            - path: _test\.go
+              linters:
+                  - goconst
 
 formatters:
     enable:
