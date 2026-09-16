@@ -84,37 +84,46 @@ func (s *Service) GetOrderPDF(ctx context.Context, id string) (string, error) {
 // удалось (они пропущены в файле, провалы в логе). Ошибка — только если не
 // скачалось НИЧЕГО (сливать нечего) либо упало слияние/запись.
 func (s *Service) GetMultipleOrdersPDF(ctx context.Context, ids []string) (path string, skipped []string, err error) {
-	data := make([][]byte, len(ids))
-	failed := make([]bool, len(ids))
+	// Результаты складываем в одну срез-структуру: индексация по трём срезам
+	// (data/failed/ids) — ложное срабатывание анализатора диапазонов (gosec
+	// G602), порядок ids (= порядок страниц) при этом сохраняется.
+	type orderForm struct {
+		id   string
+		data []byte
+		ok   bool
+	}
+
+	forms := make([]orderForm, len(ids))
 	skipped = make([]string, 0)
 	var wg sync.WaitGroup
 
 	for i, id := range ids {
+		forms[i] = orderForm{id: id}
+
 		wg.Go(func() {
 			got, err := s.orderPDF(ctx, id)
 			if err != nil {
 				slog.Error("бланк заказа пропущен в слитом файле", "order_id", id, "err", err)
-				failed[i] = true
 
 				return
 			}
 
-			data[i] = got
+			forms[i] = orderForm{id: id, data: got, ok: true}
 		})
 	}
 
 	wg.Wait()
 
 	// Сжимаем выборку: пропущенные бланки уезжают вызывающему отдельным списком.
-	merged := make([][]byte, 0, len(data))
-	for i, d := range data {
-		if failed[i] {
-			skipped = append(skipped, ids[i])
+	merged := make([][]byte, 0, len(forms))
+	for _, f := range forms {
+		if !f.ok {
+			skipped = append(skipped, f.id)
 
 			continue
 		}
 
-		merged = append(merged, d)
+		merged = append(merged, f.data)
 	}
 
 	if len(merged) == 0 {

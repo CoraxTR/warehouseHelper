@@ -5,11 +5,12 @@
 package usecase
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -140,15 +141,15 @@ func fullFolderPath(f client.MSProductFolder) string {
 // sortNodes сортирует узлы по имени без учёта регистра (стабильно —
 // при равных именах порядок не меняется между выгрузками).
 func sortNodes(nodes []*FolderNode) {
-	sort.SliceStable(nodes, func(i, j int) bool {
-		return strings.ToLower(nodes[i].Name) < strings.ToLower(nodes[j].Name)
+	slices.SortStableFunc(nodes, func(a, b *FolderNode) int {
+		return cmp.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name))
 	})
 }
 
 // sortProductNodes сортирует товары узла по имени без учёта регистра.
 func sortProductNodes(products []ProductNode) {
-	sort.SliceStable(products, func(i, j int) bool {
-		return strings.ToLower(products[i].Name) < strings.ToLower(products[j].Name)
+	slices.SortStableFunc(products, func(a, b ProductNode) int {
+		return cmp.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name))
 	})
 }
 
@@ -358,7 +359,7 @@ func (uc *GoodsUseCase) ExportProducts(ctx context.Context, items []ExportItem) 
 	for p := range byPath {
 		paths = append(paths, p)
 	}
-	sort.Strings(paths)
+	slices.Sort(paths)
 
 	uomCache := make(map[string]string) // href → название
 	var exportErrs []ProductExportError

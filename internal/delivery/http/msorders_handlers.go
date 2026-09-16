@@ -62,7 +62,7 @@ func (h *Handler) MSOrdersPickForm(w http.ResponseWriter, r *http.Request) {
 	d.Searched = true
 	rows, err := h.msOrdersUC.Search(r.Context(), name)
 	if err != nil {
-		slog.Info(fmt.Sprintf("search ms orders %q: %v", name, err))
+		slog.Info("search ms orders", "name", name, "err", err)
 		d.Error = "не удалось выполнить поиск"
 	} else {
 		d.Rows = rows
@@ -117,7 +117,7 @@ func (h *Handler) MSOrderSubmit(w http.ResponseWriter, r *http.Request) {
 
 	res, err := h.msOrdersUC.Submit(r.Context(), id, req)
 	if err != nil {
-		slog.Info(fmt.Sprintf("ms order submit %q: %v", id, err))
+		slog.Info("ms order submit", "id", id, "err", err)
 		var apiErr *client.MSAPIError
 		switch {
 		case isSubmitValidationErr(err):
@@ -132,7 +132,7 @@ func (h *Handler) MSOrderSubmit(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(res); err != nil {
-		slog.Info(fmt.Sprintf("ms order submit %q: encode: %v", id, err))
+		slog.Info("ms order submit: encode", "id", id, "err", err)
 	}
 }
 
@@ -157,7 +157,7 @@ func (h *Handler) MSOrderSubmitManual(w http.ResponseWriter, r *http.Request) {
 
 	res, err := h.msOrdersUC.SubmitManual(r.Context(), id, req)
 	if err != nil {
-		slog.Info(fmt.Sprintf("ms order submit-manual %q: %v", id, err))
+		slog.Info("ms order submit-manual", "id", id, "err", err)
 		var apiErr *client.MSAPIError
 		switch {
 		case isSubmitValidationErr(err):
@@ -173,7 +173,7 @@ func (h *Handler) MSOrderSubmitManual(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(res); err != nil {
-		slog.Info(fmt.Sprintf("ms order submit-manual %q: encode: %v", id, err))
+		slog.Info("ms order submit-manual: encode", "id", id, "err", err)
 	}
 }
 
@@ -274,7 +274,7 @@ func (h *Handler) MSOrderReturnClose(w http.ResponseWriter, r *http.Request) {
 // валидация — 400 с текстом для оператора, ошибка МС — 502, остальное — 500
 // (детали в лог, клиенту общее сообщение).
 func (h *Handler) writeMSOrderReturnErr(w http.ResponseWriter, action, id string, err error) {
-	slog.Info(fmt.Sprintf("ms order %s %q: %v", action, id, err))
+	slog.Info("ms order", "action", action, "id", id, "err", err)
 
 	var (
 		apiErr *client.MSAPIError
@@ -304,7 +304,7 @@ func (h *Handler) MSOrderDetailPage(w http.ResponseWriter, r *http.Request) {
 	} else {
 		order, err := h.msOrdersUC.Detail(r.Context(), id)
 		if err != nil {
-			slog.Info(fmt.Sprintf("ms order detail %q: %v", id, err))
+			slog.Info("ms order detail", "id", id, "err", err)
 			d.Error = "не удалось загрузить заказ (МойСклад недоступен или заказ удалён)"
 		} else {
 			d.Order = order
@@ -348,7 +348,7 @@ func (h *Handler) MSOrdersFormsForm(w http.ResponseWriter, r *http.Request) {
 
 	rows, err := h.msFormsUC.FormsByDate(r.Context(), day)
 	if err != nil {
-		slog.Info(fmt.Sprintf("ms orders forms %q: %v", date, err))
+		slog.Info("ms orders forms", "date", date, "err", err)
 		d.Error = "не удалось получить заказы из МойСклад"
 	} else {
 		d.Rows = rows

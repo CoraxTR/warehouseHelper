@@ -147,7 +147,7 @@ func (h *Handler) returnsEventCard(w http.ResponseWriter, r *http.Request, event
 
 			return
 		}
-		slog.Error(fmt.Sprintf("returns event page %s: %v", eventID, err))
+		slog.Error("returns event page", "event_id", eventID, "err", err)
 		http.Error(w, "не удалось загрузить событие — попробуйте позже", http.StatusInternalServerError)
 
 		return

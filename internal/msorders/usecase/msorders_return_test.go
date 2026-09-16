@@ -105,8 +105,7 @@ func TestSavePickReturnWeightedWeightMismatch(t *testing.T) {
 		t.Fatal("ожидался отказ сверки")
 	}
 
-	var verr *scanmatch.ValidationError
-	if !errors.As(err, &verr) {
+	if _, ok := errors.AsType[*scanmatch.ValidationError](err); !ok {
 		t.Fatalf("ошибка %v (%T), want *scanmatch.ValidationError", err, err)
 	}
 	if acceptor.calls != 0 {

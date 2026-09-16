@@ -23,7 +23,7 @@ func TestScanProductNullableText(t *testing.T) {
 				int16(14), int16(6), "Копейка", true, false},
 			want: domain.Product{
 				ID: "p-1", Name: "Молоко", UOM: "шт",
-				ShelfLife: ptr[int16](14), PackSize: ptr[int16](6),
+				ShelfLife: new(int16(14)), PackSize: new(int16(6)),
 				InventoryType: "Копейка", ShortList: true,
 			},
 		},
@@ -34,7 +34,7 @@ func TestScanProductNullableText(t *testing.T) {
 			want: domain.Product{
 				ID: "p-2", InternalCode: "00001234", Name: "Сыр", UOM: "кг",
 				GroupName: "Молочка/Сыры", FolderID: "folder-7",
-				AverageWeight: ptr(0.35), InventoryType: "Копейка", TrackWeekly: true,
+				AverageWeight: new(0.35), InventoryType: "Копейка", TrackWeekly: true,
 			},
 		},
 	}

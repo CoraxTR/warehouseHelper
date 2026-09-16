@@ -259,7 +259,7 @@ func (uc *UseCase) createDayRow(ctx context.Context, productID string, today tim
 	if err != nil {
 		return nil, err
 	}
-	seed := boolPtr(daystate.InStockFromLots(lots))
+	seed := new(daystate.InStockFromLots(lots))
 	if prior != nil {
 		seed = prior
 	}
@@ -369,9 +369,4 @@ func uniqueDates(dates []time.Time) []time.Time {
 		out = append(out, d)
 	}
 	return out
-}
-
-// boolPtr копирует значение в указатель.
-func boolPtr(v bool) *bool {
-	return &v
 }

@@ -8,7 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -162,14 +162,19 @@ func orDash(s string) string {
 // сравнение совпадает с хронологическим. Заказы без даты — в конец; равные
 // моменты сохраняют порядок МС (стабильная сортировка).
 func sortByMomentDesc(orders []client.MSOrder) {
-	sort.SliceStable(orders, func(i, j int) bool {
-		a, b := orders[i].Moment, orders[j].Moment
-		if a == "" || a == b {
-			return false // без даты — в конец; равные — без перестановки
+	slices.SortStableFunc(orders, func(a, b client.MSOrder) int {
+		x, y := a.Moment, b.Moment
+		switch {
+		case x == y:
+			return 0 // равные — без перестановки
+		case x == "":
+			return 1 // без даты — в конец
+		case y == "":
+			return -1
+		case x > y:
+			return -1
+		default:
+			return 1
 		}
-		if b == "" {
-			return true
-		}
-		return a > b
 	})
 }

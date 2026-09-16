@@ -32,7 +32,7 @@ func TestNormalizePath(t *testing.T) {
 }
 
 func TestHandlerServesGoMetrics(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/metrics", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/metrics", http.NoBody)
 	rec := httptest.NewRecorder()
 
 	Handler().ServeHTTP(rec, req)
@@ -116,7 +116,7 @@ func TestMiddlewareCountsRequests(t *testing.T) {
 	})
 	mux := Middleware(inner)
 
-	req := httptest.NewRequest(http.MethodGet, "/some/page", http.NoBody)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/some/page", http.NoBody)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 

@@ -74,6 +74,9 @@ func SetTableSizes(sizes map[string]int64) {
 	}
 }
 
+// labelEndpoint — имя метки MS-метрик: нормализованный эндпоинт запроса.
+const labelEndpoint = "endpoint"
+
 // msRequestsTotal — исходящие запросы к МойСклад (по нормализованному
 // эндпоинту и статусу; статус "network_error" — запрос не ушёл: таймаут,
 // соединение отказано и т.п.).
@@ -82,7 +85,7 @@ var msRequestsTotal = promauto.NewCounterVec(
 		Name: "ms_requests_total",
 		Help: "Исходящие запросы к API МойСклад (эндпоинт, статус ответа или network_error).",
 	},
-	[]string{"endpoint", "status"},
+	[]string{labelEndpoint, "status"},
 )
 
 // msRequestDuration — длительность исходящих запросов к МойСклад.
@@ -92,7 +95,7 @@ var msRequestDuration = promauto.NewHistogramVec(
 		Help:    "Длительность запросов к API МойСклад в секундах.",
 		Buckets: prometheus.DefBuckets,
 	},
-	[]string{"endpoint"},
+	[]string{labelEndpoint},
 )
 
 // msURLPrefix — префикс пути API МойСклад, который отрезается в лейбле
@@ -116,7 +119,7 @@ var msRateLimitedTotal = promauto.NewCounterVec(
 		Name: "ms_rate_limited_total",
 		Help: "Ответы МойСклад 429 (превышен лимит запросов) — риск бана API.",
 	},
-	[]string{"endpoint"},
+	[]string{labelEndpoint},
 )
 
 // ObserveMSRateLimited учитывает один ответ 429 от МС.

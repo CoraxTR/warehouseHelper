@@ -106,7 +106,7 @@ func (h *Handler) SupplierEdit(w http.ResponseWriter, r *http.Request) {
 	id := r.URL.Query().Get("id")
 	s, err := h.msUC.Get(r.Context(), id)
 	if err != nil {
-		slog.Info(fmt.Sprintf("get supplier %s: %v", id, err))
+		slog.Info("get supplier", "id", id, "err", err)
 		h.renderSupplierForm(w, buildSupplierFormData(nil, true, "", "не удалось загрузить поставщика"))
 		return
 	}
@@ -130,7 +130,7 @@ func (h *Handler) SupplierEdit(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) loadSupplierBarcodes(r *http.Request, supplierID string) []receiving.BarcodeRef {
 	barcodes, err := h.msUC.ListBarcodes(r.Context(), supplierID)
 	if err != nil {
-		slog.Info(fmt.Sprintf("list supplier barcodes %s: %v", supplierID, err))
+		slog.Info("list supplier barcodes", "supplier_id", supplierID, "err", err)
 
 		return nil
 	}
@@ -162,7 +162,7 @@ func (h *Handler) SupplierSave(w http.ResponseWriter, r *http.Request) {
 		// Текущее имя — только для показа в форме; при сохранении перезапросится из МС.
 		existing, err := h.msUC.Get(r.Context(), id)
 		if err != nil {
-			slog.Info(fmt.Sprintf("get supplier %s: %v", id, err))
+			slog.Info("get supplier", "id", id, "err", err)
 			h.renderSupplierForm(w, buildSupplierFormData(nil, true, "", "не удалось загрузить поставщика"))
 			return
 		}
@@ -219,7 +219,7 @@ func (h *Handler) SupplierSave(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/ms/suppliers", http.StatusSeeOther)
 	case errors.Is(err, domain.ErrSupplierExists):
 		// Пользователь добавил ссылку на уже заведённого поставщика — открываем его.
-		http.Redirect(w, r, "/ms/suppliers/edit?id="+s.ID, http.StatusSeeOther)
+		http.Redirect(w, r, "/ms/suppliers/edit?id="+url.QueryEscape(s.ID), http.StatusSeeOther)
 	case errors.Is(err, msu.ErrCounterpartyNameFetch):
 		h.renderSupplierForm(w, buildSupplierFormData(s, isEdit, rawID,
 			"не удалось получить имя контрагента из МойСклад — нажмите «Сохранить» ещё раз"))
@@ -241,7 +241,7 @@ func (h *Handler) SupplierDelete(w http.ResponseWriter, r *http.Request) {
 
 	id := r.FormValue("id")
 	if err := h.msUC.Delete(r.Context(), id); err != nil {
-		slog.Info(fmt.Sprintf("delete supplier %s: %v", id, err))
+		slog.Info("delete supplier", "id", id, "err", err)
 		http.Redirect(w, r, "/ms/suppliers?err="+url.QueryEscape("не удалось удалить поставщика: "+err.Error()), http.StatusSeeOther)
 		return
 	}

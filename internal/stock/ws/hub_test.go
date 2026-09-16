@@ -13,8 +13,6 @@ import (
 	"warehouseHelper/internal/stock"
 )
 
-func i16(v int16) *int16 { return &v }
-
 // TestHubSnapshotThenDelta — клиент получает снапшот при подключении,
 // затем дельту после PublishStockChange (порядок гарантирован регистрацией
 // под мутексом: дельта не может прийти раньше снапшота).
@@ -61,7 +59,7 @@ func TestHubSnapshotThenDelta(t *testing.T) {
 	hub.PublishStockChange(stock.Event{
 		Kind:      stock.EventLotUpsert,
 		ProductID: "p1",
-		Lot:       &stock.Lot{BestBefore: time.Date(2026, time.September, 1, 0, 0, 0, 0, time.UTC), Qty: 3, GeneralManual: i16(7)},
+		Lot:       &stock.Lot{BestBefore: time.Date(2026, time.September, 1, 0, 0, 0, 0, time.UTC), Qty: 3, GeneralManual: new(int16(7))},
 	})
 	_, data, err = conn.ReadMessage()
 	if err != nil {

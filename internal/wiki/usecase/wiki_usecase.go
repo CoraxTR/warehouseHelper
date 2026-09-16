@@ -6,7 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -514,7 +514,7 @@ func normalizeDays(days []int) ([]int, error) {
 		seen[d] = struct{}{}
 		out = append(out, d)
 	}
-	sort.Ints(out)
+	slices.Sort(out)
 	return out, nil
 }
 

@@ -440,8 +440,7 @@ func TestMatchScans_StrictWeightNoTolerance(t *testing.T) {
 	expected := []returns.Expected{{ProductID: prodA, InternalCode: codeA, Name: "Чак ролл", Weighted: true, ExpectedQty: 657}}
 
 	_, err := matchScans([]string{etiketa(codeA, 654)}, expected)
-	var ve *ValidationError
-	if !errors.As(err, &ve) {
+	if _, ok := errors.AsType[*ValidationError](err); !ok {
 		t.Fatalf("want ValidationError, got %v", err)
 	}
 }

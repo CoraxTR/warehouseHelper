@@ -207,6 +207,11 @@ linters:
                   disabled: true
                 - name: argument-limit
                   disabled: true
+                # Пакет internal/delivery/http назван http (конфликт с net/http по
+                # мнению линтера). Переименование — шумный рефактор по всему
+                # проекту ради нуля пользы (решение владельца, 15.09.2026).
+                - name: package-naming
+                  disabled: true
                 - name: cognitive-complexity
                   disabled: true
                 - name: cyclomatic
@@ -271,6 +276,29 @@ linters:
         presets:
             - comments
             - common-false-positives
+        rules:
+            # goconst в тестах: повторяющиеся литералы («jpg», «@sklad»,
+            # «Хлебобулочные») — читаемость фикстур, а не дефект. В проде правило
+            # работает (решение владельца, 15.09.2026).
+            - path: _test\.go
+              linters:
+                  - goconst
+            # G120 (gosec): «неограниченный разбор multipart-форм». В gosec
+            # v2.29 у правила form_parsing_limits список сантайзеров пуст —
+            # MaxBytesReader до разбора, а ParseMultipartForm(32<<20) спуливает
+            # лишнее на диск; r.MultipartReader() — смена контракта разбора
+            # (FormValue перестаёт работать), поэтому исключение по правилу
+            # (решение владельца, 16.09.2026).
+            - linters:
+                  - gosec
+              text: "G120:"
+            # G703 в config.go/logging.go: путь из .env, его задаёт оператор, а не
+            # HTTP-запрос; filepath.Base отрезал бы каталог — логи уехали бы в CWD
+            # (решение владельца, 16.09.2026).
+            - linters:
+                  - gosec
+              path: "(internal/config/config|internal/logging/logging)\\.go"
+              text: "G703:"
 
 formatters:
     enable:

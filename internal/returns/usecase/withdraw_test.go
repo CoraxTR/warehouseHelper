@@ -115,8 +115,7 @@ func TestWithdrawFromSale_BoxRejected(t *testing.T) {
 	uc, stockS := env.uc, env.stock
 
 	_, err := uc.WithdrawFromSale(context.Background(), []string{boxCode(codeA)})
-	var ve *ValidationError
-	if !errors.As(err, &ve) {
+	if _, ok := errors.AsType[*ValidationError](err); !ok {
 		t.Fatalf("want ValidationError про коробку, got %v", err)
 	}
 	if len(stockS.picked) != 0 {
@@ -134,8 +133,7 @@ func TestWithdrawFromSale_UnknownCodeRejectedWholeBatch(t *testing.T) {
 		etiketa(codeA, 657),
 		etiketa("00219999", 500),
 	})
-	var ve *ValidationError
-	if !errors.As(err, &ve) {
+	if _, ok := errors.AsType[*ValidationError](err); !ok {
 		t.Fatalf("want ValidationError про неизвестный код, got %v", err)
 	}
 	if len(stockS.picked) != 0 {
@@ -148,8 +146,7 @@ func TestWithdrawFromSale_InvalidScanRejected(t *testing.T) {
 	uc, stockS := env.uc, env.stock
 
 	_, err := uc.WithdrawFromSale(context.Background(), []string{"123"})
-	var ve *ValidationError
-	if !errors.As(err, &ve) {
+	if _, ok := errors.AsType[*ValidationError](err); !ok {
 		t.Fatalf("want ValidationError, got %v", err)
 	}
 	if len(stockS.picked) != 0 {
@@ -162,8 +159,7 @@ func TestWithdrawFromSale_EmptyRejected(t *testing.T) {
 	uc, stockS := env.uc, env.stock
 
 	_, err := uc.WithdrawFromSale(context.Background(), nil)
-	var ve *ValidationError
-	if !errors.As(err, &ve) {
+	if _, ok := errors.AsType[*ValidationError](err); !ok {
 		t.Fatalf("want ValidationError про пустой батч, got %v", err)
 	}
 	if len(stockS.picked) != 0 {
@@ -208,8 +204,7 @@ func TestWithdrawFromSale_StockErrorPropagates(t *testing.T) {
 	if err == nil {
 		t.Fatal("ошибка PickStock должна вернуться наружу, got nil")
 	}
-	var ve *ValidationError
-	if errors.As(err, &ve) {
+	if _, ok := errors.AsType[*ValidationError](err); ok {
 		t.Fatalf("сбой остатков не должен выглядеть как ValidationError (400): %v", err)
 	}
 	if !errors.Is(err, env.stock.err) {

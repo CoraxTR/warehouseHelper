@@ -7,7 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -112,8 +112,8 @@ func (uc *ReceivingUseCase) GetCache(ctx context.Context, supplierID string) (*r
 			Weighted:     b.Weighted,
 		})
 	}
-	sort.Slice(cache.Products, func(i, j int) bool {
-		return strings.ToLower(cache.Products[i].Name) < strings.ToLower(cache.Products[j].Name)
+	slices.SortFunc(cache.Products, func(a, b receiving.ProductRef) int {
+		return strings.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name))
 	})
 
 	return cache, nil

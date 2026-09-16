@@ -3,10 +3,11 @@
 package usecase
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -167,16 +168,16 @@ func cleanIDs(ids []string) []string {
 // sortFormsByNumber упорядочивает строки по номеру заказа: числовые номера — по
 // возрастанию числа («9» перед «10»), нечисловые — лексикографически.
 func sortFormsByNumber(rows []FormRow) {
-	sort.SliceStable(rows, func(i, j int) bool {
-		a, b := rows[i].Name, rows[j].Name
+	slices.SortStableFunc(rows, func(a, b FormRow) int {
+		x, y := a.Name, b.Name
 
-		numA, errA := strconv.Atoi(a)
-		numB, errB := strconv.Atoi(b)
+		numX, errX := strconv.Atoi(x)
+		numY, errY := strconv.Atoi(y)
 
-		if errA == nil && errB == nil {
-			return numA < numB
+		if errX == nil && errY == nil {
+			return cmp.Compare(numX, numY)
 		}
 
-		return a < b
+		return cmp.Compare(x, y)
 	})
 }

@@ -12,15 +12,13 @@ import (
 	"warehouseHelper/internal/returns"
 )
 
-func strptr(s string) *string { return &s }
-
 func auditRow(source string) client.AuditRow {
 	return client.AuditRow{
 		ID:         auditID,
 		Moment:     "2026-09-08 23:11:52.918",
 		EntityType: "customerorder",
 		EventType:  "update",
-		Source:     strptr(source),
+		Source:     new(source),
 		UID:        "sklad@steakhome",
 	}
 }
@@ -273,8 +271,7 @@ func TestAcceptReturn_ValidationRejected(t *testing.T) {
 	audit.positions[orderID] = []client.MSPosition{pos(prodA, "Чак ролл", 0.657, 0.657)}
 
 	_, err := uc.AcceptReturn(context.Background(), auditID, []string{etiketa(codeA, 654)})
-	var ve *ValidationError
-	if !errors.As(err, &ve) {
+	if _, ok := errors.AsType[*ValidationError](err); !ok {
 		t.Fatalf("want ValidationError, got %v", err)
 	}
 	if len(stockS.accepted) != 0 {
@@ -354,7 +351,7 @@ func TestTick_DeepWindowNotLost(t *testing.T) {
 			Moment:     base.Add(-time.Duration(i) * time.Second).Format("2006-01-02 15:04:05.000"),
 			EntityType: "product", // шум журнала: нецелевые сущности
 			EventType:  "update",
-			Source:     strptr("app"),
+			Source:     new("app"),
 		})
 	}
 	rows[45] = auditRowAt("app", "2026-09-09 10:16:15.000") // целевое: глубже первой страницы

@@ -253,10 +253,10 @@ func TestRegistryReplaceTransitions(t *testing.T) {
 		regPair("D", "Без изменений", day(10), expiryOpt(), appliedOpt(15)),
 	}
 	want := []Change{
-		{ProductID: "A", Name: "Нет скидки", BestBefore: day(7), Next: pp(10)},
-		{ProductID: "B", Name: "Десять", BestBefore: day(8), Prev: pp(10), Next: pp(20)},
-		{ProductID: "C", Name: "Двадцать", BestBefore: day(9), Prev: pp(20)},
-		{ProductID: "E", Name: "Удалили", BestBefore: day(11), Prev: pp(10)},
+		{ProductID: "A", Name: "Нет скидки", BestBefore: day(7), Next: new(int16(10))},
+		{ProductID: "B", Name: "Десять", BestBefore: day(8), Prev: new(int16(10)), Next: new(int16(20))},
+		{ProductID: "C", Name: "Двадцать", BestBefore: day(9), Prev: new(int16(20))},
+		{ProductID: "E", Name: "Удалили", BestBefore: day(11), Prev: new(int16(10))},
 	}
 	got := r.Replace(second)
 	if !reflect.DeepEqual(got, want) {

@@ -21,9 +21,6 @@ import (
 // (sql.NullString и т.п.). Подделка Scan пропускает NULL под него, как pgx.
 var scannerType = reflect.TypeFor[sql.Scanner]()
 
-// ptr — указатель на значение (NULL-колонки в снапшотах — *T).
-func ptr[T any](v T) *T { return &v }
-
 // fakeRow — подделка pgx.Row для проверки scan-хелперов без БД: Scan
 // раскладывает заранее заданные значения по указателям (nil — SQL NULL).
 // Остальные методы интерфейса хелперу не нужны — берутся у встроенного

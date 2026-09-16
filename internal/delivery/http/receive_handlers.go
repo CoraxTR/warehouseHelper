@@ -53,7 +53,7 @@ func (h *Handler) ReceiveBarcodesAdd(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if err := h.receiveUC.Add(r.Context(), supplierID, row.ExternalCode, row.ProductID); err != nil {
-			slog.Info(fmt.Sprintf("receive: добавить код %q поставщику %s: %v", row.ExternalCode, supplierID, err))
+			slog.Info("receive: добавить код", "external_code", row.ExternalCode, "supplier_id", supplierID, "err", err)
 			problems = append(problems, fmt.Sprintf("строка %d (код %q): %v", row.Row, row.ExternalCode, err))
 
 			continue
@@ -63,8 +63,8 @@ func (h *Handler) ReceiveBarcodesAdd(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Агрегат — в лог: сколько строк батча записано, сколько отклонено.
-	slog.Info(fmt.Sprintf("receive: батч внешних кодов поставщика %s: добавлено %d, с ошибкой %d",
-		supplierID, added, len(problems)))
+	slog.Info("receive: батч внешних кодов поставщика",
+		"supplier_id", supplierID, "added", added, "failed", len(problems))
 
 	msg := fmt.Sprintf("Добавлено кодов: %d", added)
 	errMsg := ""
@@ -105,7 +105,7 @@ func (h *Handler) ReceiveBarcodesDelete(w http.ResponseWriter, r *http.Request) 
 	externalCode := strings.TrimSpace(r.FormValue("external_code"))
 
 	if err := h.receiveUC.Remove(r.Context(), supplierID, externalCode); err != nil {
-		slog.Info(fmt.Sprintf("receive: удалить код %q: %v", externalCode, err))
+		slog.Info("receive: удалить код", "external_code", externalCode, "err", err)
 		http.Redirect(w, r, supplierBarcodesRedirect(supplierID, "", err.Error()), http.StatusSeeOther)
 
 		return

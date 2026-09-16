@@ -39,9 +39,9 @@ func TestScanDiscountInput(t *testing.T) {
 				int16(20), nil, nil, int16(15), "expiry"},
 			want: discounts.Input{
 				ProductID: "p-week", Name: "Молоко 3,2%", GroupName: "Молочка",
-				ShelfLife: ptr[int16](14), TrackWeekly: true, BestBefore: bb, Qty: 24,
+				ShelfLife: new(int16(14)), TrackWeekly: true, BestBefore: bb, Qty: 24,
 				PeriodDays:   7,
-				GeneralPlain: ptr[int16](20), TelegramManual: ptr[int16](15), DiscountSource: "expiry",
+				GeneralPlain: new(int16(20)), TelegramManual: new(int16(15)), DiscountSource: "expiry",
 			},
 		},
 		{
@@ -50,9 +50,9 @@ func TestScanDiscountInput(t *testing.T) {
 				nil, int16(10), int16(30), nil, ""},
 			want: discounts.Input{
 				ProductID: "p-month", Name: "Сыр", GroupName: "Молочка", ShortList: true,
-				ShelfLife: ptr[int16](90), BestBefore: bb, Qty: 8,
+				ShelfLife: new(int16(90)), BestBefore: bb, Qty: 8,
 				PeriodDays:    30,
-				TelegramPlain: ptr[int16](10), GeneralManual: ptr[int16](30),
+				TelegramPlain: new(int16(10)), GeneralManual: new(int16(30)),
 			},
 		},
 		{
@@ -61,7 +61,7 @@ func TestScanDiscountInput(t *testing.T) {
 				nil, nil, nil, nil, nil},
 			want: discounts.Input{
 				ProductID: "p-new", Name: "Новинка", GroupName: "Разное",
-				ShelfLife: ptr[int16](30), TrackWeekly: true, BestBefore: bb, Qty: 5,
+				ShelfLife: new(int16(30)), TrackWeekly: true, BestBefore: bb, Qty: 5,
 				PeriodDays: 7,
 			},
 		},
@@ -80,9 +80,9 @@ func TestScanDiscountInput(t *testing.T) {
 				int16(0), nil, int16(0), nil, "surplus"},
 			want: discounts.Input{
 				ProductID: "p-zero", Name: "Йогурт", GroupName: "Молочка",
-				ShelfLife: ptr[int16](5), BestBefore: bb, Qty: 4,
+				ShelfLife: new(int16(5)), BestBefore: bb, Qty: 4,
 				PeriodDays:   30,
-				GeneralPlain: ptr[int16](0), GeneralManual: ptr[int16](0), DiscountSource: "surplus",
+				GeneralPlain: new(int16(0)), GeneralManual: new(int16(0)), DiscountSource: "surplus",
 			},
 		},
 		{
@@ -96,9 +96,9 @@ func TestScanDiscountInput(t *testing.T) {
 				nil, int16(15), nil, nil, nil},
 			want: discounts.Input{
 				ProductID: "p-nogroup", Name: "Без группы", GroupName: "",
-				ShelfLife: ptr[int16](20), TrackWeekly: true, BestBefore: bb, Qty: 7,
+				ShelfLife: new(int16(20)), TrackWeekly: true, BestBefore: bb, Qty: 7,
 				PeriodDays:    7,
-				TelegramPlain: ptr[int16](15), DiscountSource: "",
+				TelegramPlain: new(int16(15)), DiscountSource: "",
 			},
 		},
 	}

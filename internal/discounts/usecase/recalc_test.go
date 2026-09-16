@@ -410,7 +410,7 @@ func TestRecalcExpiryKeepsHigherApplied(t *testing.T) {
 	}{
 		{
 			title: "пусто → ступень 40: пишем",
-			want:  true, expect: pp(40),
+			want:  true, expect: new(int16(40)),
 		},
 		{
 			title: "применено 50, ступень 40: тишина",
@@ -427,12 +427,12 @@ func TestRecalcExpiryKeepsHigherApplied(t *testing.T) {
 		{
 			title: "ручная 30 ниже ступени 40: пишем колонку движка",
 			opts:  []func(*discounts.Input){manualInput(30)},
-			want:  true, expect: pp(40),
+			want:  true, expect: new(int16(40)),
 		},
 		{
 			title: "plain 10 и ручная 30, ступень 40: пишем",
 			opts:  []func(*discounts.Input){plainInput(10), manualInput(30)},
-			want:  true, expect: pp(40),
+			want:  true, expect: new(int16(40)),
 		},
 	}
 	for _, tt := range tests {
