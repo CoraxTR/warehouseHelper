@@ -23,7 +23,10 @@ func Setup() *slog.Logger {
 	if path := os.Getenv("APP_LOG_FILE"); path != "" {
 		f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 		if err != nil {
-			log.Printf("logging: не удалось открыть %s, пишу в stdout: %v", path, err)
+			// Путь из .env чистим от переводов строк: иначе значение
+			// подделало бы соседние записи лога (gosec G706).
+			safePath := strings.ReplaceAll(strings.ReplaceAll(path, "\r", ""), "\n", "")
+			log.Printf("logging: не удалось открыть %s, пишу в stdout: %v", safePath, err)
 		} else {
 			w = f
 		}

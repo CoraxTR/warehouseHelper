@@ -480,7 +480,7 @@ func (h *Handler) PrintForm(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", "attachment; filename=order_form.pdf")
 	w.Header().Set("Content-Type", "application/pdf")
 
-	slog.Info(fmt.Sprintln(filePath))
+	slog.Info("order form pdf", "path", filePath)
 	http.ServeFile(w, r, filePath)
 }
 

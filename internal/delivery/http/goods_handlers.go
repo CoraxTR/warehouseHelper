@@ -133,7 +133,7 @@ func (h *Handler) GoodsEditPage(w http.ResponseWriter, r *http.Request) {
 	id := r.URL.Query().Get("id")
 	product, err := h.goodsUC.GetProduct(r.Context(), id)
 	if err != nil {
-		slog.Error(fmt.Sprintf("goods: не удалось получить позицию %s: %v", id, err))
+		slog.Error("goods: не удалось получить позицию", "id", id, "err", err)
 		http.Redirect(w, r, "/goods?err="+url.QueryEscape("позиция не найдена в каталоге"), http.StatusSeeOther)
 
 		return
@@ -172,7 +172,7 @@ func (h *Handler) GoodsEditSave(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.goodsUC.SaveProduct(r.Context(), p); err != nil {
-		slog.Error(fmt.Sprintf("goods: не удалось сохранить позицию %s: %v", p.ID, err))
+		slog.Error("goods: не удалось сохранить позицию", "id", p.ID, "err", err)
 		http.Redirect(w, r, "/goods/edit?id="+url.QueryEscape(p.ID)+"&err="+url.QueryEscape("не удалось сохранить: "+err.Error()), http.StatusSeeOther)
 
 		return
@@ -193,7 +193,7 @@ func (h *Handler) GoodsResync(w http.ResponseWriter, r *http.Request) {
 
 	_, err := h.goodsUC.ResyncProduct(r.Context(), id)
 	if err != nil {
-		slog.Error(fmt.Sprintf("goods: не удалось ресинкнуть позицию %s: %v", id, err))
+		slog.Error("goods: не удалось ресинкнуть позицию", "id", id, "err", err)
 		http.Redirect(w, r, "/goods/edit?id="+url.QueryEscape(id)+"&err="+url.QueryEscape("не удалось обновить из МС: "+err.Error()), http.StatusSeeOther)
 
 		return

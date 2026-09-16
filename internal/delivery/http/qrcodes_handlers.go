@@ -147,7 +147,7 @@ func (h *Handler) saveQRPhotos(w http.ResponseWriter, r *http.Request) {
 	saved, err := h.qrUC.SavePhotos(r.Context(), orderNumber, uploads)
 	closeOpened()
 	if err != nil {
-		slog.Info(fmt.Sprintf("qrcodes: save photos for order %q: %v", orderNumber, err))
+		slog.Info("qrcodes: save photos", "order_number", orderNumber, "err", err)
 		msg := "Фото не сохранилось. Переснимите фотографии и попробуйте ещё раз."
 		if errors.Is(err, qucase.ErrEmptyOrderNumber) {
 			msg = "Введите номер заказа."
