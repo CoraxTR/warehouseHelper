@@ -12,7 +12,8 @@
 package usecase
 
 import (
-	"sort"
+	"cmp"
+	"slices"
 	"sync"
 	"time"
 
@@ -218,11 +219,11 @@ func beyondWindow(rows []discounts.Row, n int) []discounts.Row {
 
 // sortChanges — стабильный порядок изменений: товар, затем срок.
 func sortChanges(changes []Change) {
-	sort.SliceStable(changes, func(i, j int) bool {
-		if changes[i].ProductID != changes[j].ProductID {
-			return changes[i].ProductID < changes[j].ProductID
+	slices.SortStableFunc(changes, func(a, b Change) int {
+		if c := cmp.Compare(a.ProductID, b.ProductID); c != 0 {
+			return c
 		}
-		return changes[i].BestBefore.Before(changes[j].BestBefore)
+		return a.BestBefore.Compare(b.BestBefore)
 	})
 }
 

@@ -76,7 +76,7 @@ func (msac *MSAPIClient) ClearOrderReserves(parentctx context.Context, orderID s
 // В GET positions приходит объектом {rows:[...]}, в PUT уходит массивом строк —
 // возвращаемое тело уже в PUT-формате (как в подборе msorders). changed=false,
 // если менять нечего (нет positions / ни одного резерва > 0) — PUT не нужен.
-func zeroOrderReserves(raw json.RawMessage) (json.RawMessage, bool, error) {
+func zeroOrderReserves(raw json.RawMessage) (out json.RawMessage, changed bool, err error) {
 	var body map[string]any
 	if err := json.Unmarshal(raw, &body); err != nil {
 		return nil, false, fmt.Errorf("unmarshal order raw: %w", err)
@@ -91,7 +91,6 @@ func zeroOrderReserves(raw json.RawMessage) (json.RawMessage, bool, error) {
 		return nil, false, nil
 	}
 
-	changed := false
 	for _, r := range rows {
 		row, ok := r.(map[string]any)
 		if !ok {
@@ -108,7 +107,7 @@ func zeroOrderReserves(raw json.RawMessage) (json.RawMessage, bool, error) {
 	}
 
 	body["positions"] = rows
-	out, err := json.Marshal(body)
+	out, err = json.Marshal(body)
 	if err != nil {
 		return nil, false, fmt.Errorf("marshal order body: %w", err)
 	}

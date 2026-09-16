@@ -10,7 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -135,15 +135,22 @@ func (u *QRUseCase) ListOrders(ctx context.Context) ([]domain.QROrder, error) {
 	if err != nil {
 		return nil, fmt.Errorf("qrcodes: список заказов: %w", err)
 	}
-	sort.Slice(orders, func(i, j int) bool {
-		a, b := orders[i].OrderNumber, orders[j].OrderNumber
-		if a == "" {
-			return false // пустые строки — в конец
+	slices.SortFunc(orders, func(a, b domain.QROrder) int {
+		x, y := a.OrderNumber, b.OrderNumber
+		switch {
+		case x == y:
+			return 0
+		case x == "":
+			return 1 // пустые строки — в конец
+		case y == "":
+			return -1
+		case naturalLess(y, x): // по убыванию
+			return -1
+		case naturalLess(x, y):
+			return 1
+		default:
+			return 0
 		}
-		if b == "" {
-			return true
-		}
-		return naturalLess(b, a) // по убыванию
 	})
 	return orders, nil
 }

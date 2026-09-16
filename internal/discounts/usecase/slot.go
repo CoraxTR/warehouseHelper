@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"sort"
+	"slices"
 	"time"
 
 	"warehouseHelper/internal/discounts"
@@ -353,8 +353,8 @@ func sortSlot(slot []slotPosition) {
 	for i := range order {
 		order[i] = i
 	}
-	sort.SliceStable(order, func(a, b int) bool {
-		return discounts.Less(rows[order[a]], rows[order[b]])
+	slices.SortStableFunc(order, func(a, b int) int {
+		return discounts.Compare(rows[order[a]], rows[order[b]])
 	})
 	sorted := make([]slotPosition, len(slot))
 	for i, idx := range order {

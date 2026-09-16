@@ -27,6 +27,11 @@ const (
 	// больше — слать документом (до 50 МБ).
 	telegramPhotoMaxBytes = 10 << 20
 	telegramDocMaxBytes   = 50 << 20
+
+	// Имена полей payload'ов Bot API — повторяются в каждом методе нотифаера
+	// (goconst: вынесены в константы, 16.09.2026).
+	fieldChatID = "chat_id"
+	fieldText   = "text"
 )
 
 // Notifier отправляет сообщения в чаты Telegram. Если токен бота или
@@ -94,12 +99,12 @@ func (n *Notifier) NotifyCommonStatus(ctx context.Context, textHTML, callbackDat
 	}
 
 	payload := map[string]any{
-		"chat_id":    n.commonChatID,
-		"text":       textHTML,
+		fieldChatID:  n.commonChatID,
+		fieldText:    textHTML,
 		"parse_mode": "HTML",
 		"reply_markup": map[string]any{
 			"inline_keyboard": [][]map[string]string{{
-				{"text": "Получить подробности", "callback_data": callbackData},
+				{fieldText: "Получить подробности", "callback_data": callbackData},
 			}},
 		},
 	}
@@ -127,11 +132,11 @@ func (n *Notifier) SendWarehouseButton(ctx context.Context, text, buttonText, bu
 	}
 
 	payload := map[string]any{
-		"chat_id": n.warehouseChatID,
-		"text":    text,
+		fieldChatID: n.warehouseChatID,
+		fieldText:   text,
 		"reply_markup": map[string]any{
 			"inline_keyboard": [][]map[string]string{{
-				{"text": buttonText, "url": buttonURL},
+				{fieldText: buttonText, "url": buttonURL},
 			}},
 		},
 	}
@@ -149,7 +154,7 @@ func (n *Notifier) DeleteWarehouseMessage(ctx context.Context, messageID int64) 
 		return nil
 	}
 	return n.postJSON(ctx, "deleteMessage", map[string]any{
-		"chat_id":    n.warehouseChatID,
+		fieldChatID:  n.warehouseChatID,
 		"message_id": messageID,
 	})
 }
@@ -162,7 +167,7 @@ func (n *Notifier) DeleteMessage(ctx context.Context, chatID, messageID int64) e
 		return nil
 	}
 	return n.postJSON(ctx, "deleteMessage", map[string]any{
-		"chat_id":    chatID,
+		fieldChatID:  chatID,
 		"message_id": messageID,
 	})
 }
@@ -214,7 +219,7 @@ func (n *Notifier) sendMediaGroup(ctx context.Context, chatID int64, photos []do
 	var body bytes.Buffer
 	mw := multipart.NewWriter(&body)
 
-	if err := mw.WriteField("chat_id", fmt.Sprintf("%d", chatID)); err != nil {
+	if err := mw.WriteField(fieldChatID, fmt.Sprintf("%d", chatID)); err != nil {
 		return fmt.Errorf("multipart chat_id: %w", err)
 	}
 
@@ -302,8 +307,8 @@ func photoKind(p domain.ComplaintTGPhoto) (kind string, ok bool) {
 
 func (n *Notifier) sendMessage(ctx context.Context, chatID int64, text string) error {
 	return n.postJSON(ctx, "sendMessage", map[string]any{
-		"chat_id": chatID,
-		"text":    text,
+		fieldChatID: chatID,
+		fieldText:   text,
 	})
 }
 

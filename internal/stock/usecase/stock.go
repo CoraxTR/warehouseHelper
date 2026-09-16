@@ -9,10 +9,12 @@
 package usecase
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -247,13 +249,13 @@ func (uc *StockUseCase) Snapshot() []stock.Product {
 	}
 	uc.mu.RUnlock()
 
-	sort.Slice(out, func(i, j int) bool {
-		g := strings.ToLower(out[i].GroupName)
-		h := strings.ToLower(out[j].GroupName)
+	slices.SortFunc(out, func(a, b stock.Product) int {
+		g := strings.ToLower(a.GroupName)
+		h := strings.ToLower(b.GroupName)
 		if g != h {
-			return g < h
+			return cmp.Compare(g, h)
 		}
-		return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
+		return cmp.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name))
 	})
 
 	return out
@@ -579,7 +581,7 @@ func deletedLots(existing map[time.Time]stock.Lot, batch map[time.Time]*agg) []t
 			deletes = append(deletes, bb)
 		}
 	}
-	sort.Slice(deletes, func(a, b int) bool { return deletes[a].Before(deletes[b]) })
+	slices.SortFunc(deletes, func(a, b time.Time) int { return a.Compare(b) })
 	return deletes
 }
 
@@ -589,7 +591,7 @@ func sortedDates(batch map[time.Time]*agg) []time.Time {
 	for bb := range batch {
 		bbs = append(bbs, bb)
 	}
-	sort.Slice(bbs, func(a, b int) bool { return bbs[a].Before(bbs[b]) })
+	slices.SortFunc(bbs, func(a, b time.Time) int { return a.Compare(b) })
 	return bbs
 }
 
@@ -679,7 +681,7 @@ func mergeLots(lots []stock.Lot, pl *replacePlan) []stock.Lot {
 			out = append(out, lot)
 		}
 	}
-	sort.Slice(out, func(a, b int) bool { return out[a].BestBefore.Before(out[b].BestBefore) })
+	slices.SortFunc(out, func(a, b stock.Lot) int { return a.BestBefore.Compare(b.BestBefore) })
 	if out == nil {
 		// Пустой результат — пустой МАССИВ, не nil: lots в JSON обязан быть
 		// [], клиент итерирует p.lots.length (null — TypeError).
@@ -880,7 +882,7 @@ func (uc *StockUseCase) applyAcceptCacheLocked(lots []stock.LotIn, byID map[stri
 				Qty:        l.Qty,
 				ProducedOn: l.ProducedOn,
 			})
-			sort.Slice(cur.Lots, func(i, j int) bool { return cur.Lots[i].BestBefore.Before(cur.Lots[j].BestBefore) })
+			slices.SortFunc(cur.Lots, func(a, b stock.Lot) int { return a.BestBefore.Compare(b.BestBefore) })
 			idx = sort.Search(len(cur.Lots), func(j int) bool { return !cur.Lots[j].BestBefore.Before(l.BestBefore) })
 		}
 		lot := cur.Lots[idx]

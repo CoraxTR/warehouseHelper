@@ -4,7 +4,7 @@
 package usecase
 
 import (
-	"sort"
+	"slices"
 	"time"
 
 	"warehouseHelper/internal/discounts"
@@ -247,8 +247,8 @@ func groupByProduct(inputs []discounts.Input) map[string][]discounts.Input {
 	}
 	for pid := range out {
 		lots := out[pid]
-		sort.SliceStable(lots, func(i, j int) bool {
-			return lots[i].BestBefore.Before(lots[j].BestBefore)
+		slices.SortStableFunc(lots, func(a, b discounts.Input) int {
+			return a.BestBefore.Compare(b.BestBefore)
 		})
 		out[pid] = lots
 	}

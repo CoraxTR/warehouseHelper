@@ -501,7 +501,7 @@ func (uc *UseCase) notificationText(id int64, status domain.ComplaintStatus, tag
 		sb.WriteString(" ")
 	}
 	link := fmt.Sprintf("%s/complaint?id=%d", uc.baseURL, id)
-	sb.WriteString(fmt.Sprintf("<a href=%q>Обращение %d</a>: %s", link, id, statusMessage(status)))
+	fmt.Fprintf(&sb, "<a href=%q>Обращение %d</a>: %s", link, id, statusMessage(status))
 	sb.WriteString("\nСсылка открывается только в локальной сети")
 	return sb.String()
 }

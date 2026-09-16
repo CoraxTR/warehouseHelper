@@ -425,7 +425,8 @@ func applyCovered(ref *coveredRef) ([]any, []stock.PickLotIn, error) {
 func stubPieceRow(meta *submitRowMeta) []any {
 	units := max(1, int(math.Round(meta.quantity)))
 	setQtyReserve(meta.m, stubQty, 0)
-	out := []any{meta.m}
+	out := make([]any, 0, units)
+	out = append(out, meta.m)
 	for i := 1; i < units; i++ {
 		out = append(out, createStub(meta.m, stubQty))
 	}

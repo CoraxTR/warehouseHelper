@@ -157,7 +157,7 @@ func TestRuleAgainstRealBarcode(t *testing.T) {
 		t.Fatalf("длина штрих-кода %d != длина правила %d", len(raw), r.Length)
 	}
 	// Поля, собранные конкатенацией, должны дать исходный код целиком.
-	parts := []string{}
+	parts := make([]string, 0, len(r.Fields))
 	for i := range r.Fields {
 		v, ok := r.Slice(raw, i)
 		if !ok {

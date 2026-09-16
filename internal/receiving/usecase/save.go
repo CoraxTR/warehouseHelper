@@ -1,10 +1,11 @@
 package usecase
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -271,11 +272,11 @@ func buildReport(units []receiving.Unit) []receiving.ReportRow {
 	for _, k := range order {
 		rows = append(rows, *agg[k])
 	}
-	sort.Slice(rows, func(i, j int) bool {
-		if rows[i].ProductName != rows[j].ProductName {
-			return strings.ToLower(rows[i].ProductName) < strings.ToLower(rows[j].ProductName)
+	slices.SortFunc(rows, func(a, b receiving.ReportRow) int {
+		if a.ProductName != b.ProductName {
+			return cmp.Compare(strings.ToLower(a.ProductName), strings.ToLower(b.ProductName))
 		}
-		return rows[i].BestBefore < rows[j].BestBefore
+		return cmp.Compare(a.BestBefore, b.BestBefore)
 	})
 	return rows
 }

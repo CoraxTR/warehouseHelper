@@ -2,7 +2,7 @@ package discounts
 
 import (
 	"fmt"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -51,9 +51,7 @@ func sortRank(s Source) int {
 // Сортировка устойчивая: строки с равным ключом сохраняют исходный порядок
 // (порядок выборки из репозитория, а внутри лота — порядок срока).
 func Sort(rows []Row) {
-	sort.SliceStable(rows, func(i, j int) bool {
-		return Less(rows[i], rows[j])
-	})
+	slices.SortStableFunc(rows, Compare)
 }
 
 // Less — сравнение строк отчёта: то же правило, что у Sort (ранг источника,
@@ -69,6 +67,19 @@ func Less(a, b Row) bool {
 		return a.Coeff > b.Coeff
 	}
 	return a.BestBefore.Before(b.BestBefore)
+}
+
+// Compare — Less в форме компаратора для slices.SortFunc/SortStableFunc:
+// −1/0/+1. Тот же порядок, что у Sort: ранг источника, срок ↑ или коэф ↓.
+func Compare(a, b Row) int {
+	switch {
+	case Less(a, b):
+		return -1
+	case Less(b, a):
+		return 1
+	default:
+		return 0
+	}
 }
 
 // BuildDigest — разложить строки в две секции отчёта: «Позиции в скидках»

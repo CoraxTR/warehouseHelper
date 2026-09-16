@@ -6,11 +6,12 @@
 package usecase
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -374,18 +375,20 @@ func groupQtyText(it OrderItem) string {
 // (internal_code, цена), строки без кода — в конце в исходном порядке
 // (стабильная сортировка).
 func sortItems(items []OrderItem) {
-	sort.SliceStable(items, func(i, j int) bool {
-		a, b := items[i], items[j]
+	slices.SortStableFunc(items, func(a, b OrderItem) int {
 		if a.HasCode != b.HasCode {
-			return a.HasCode
+			if a.HasCode {
+				return -1
+			}
+			return 1
 		}
 		if !a.HasCode {
-			return false
+			return 0
 		}
-		if a.Code != b.Code {
-			return a.Code < b.Code
+		if c := cmp.Compare(a.Code, b.Code); c != 0 {
+			return c
 		}
-		return moneyInt(a.Price) < moneyInt(b.Price)
+		return cmp.Compare(moneyInt(a.Price), moneyInt(b.Price))
 	})
 }
 

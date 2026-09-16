@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -122,7 +121,16 @@ func (uc *RefGoCheckAgainstUseCase) Check(ctx context.Context, dateFrom, dateTo 
 	for refgoNumber := range dbOrders {
 		leftoverNumbers = append(leftoverNumbers, refgoNumber)
 	}
-	sort.Slice(leftoverNumbers, func(i, j int) bool { return refgoNumberLess(leftoverNumbers[i], leftoverNumbers[j]) })
+	slices.SortFunc(leftoverNumbers, func(a, b string) int {
+		switch {
+		case refgoNumberLess(a, b):
+			return -1
+		case refgoNumberLess(b, a):
+			return 1
+		default:
+			return 0
+		}
+	})
 
 	for _, refgoNumber := range leftoverNumbers {
 		errorsList = append(errorsList, fmt.Sprintf("Заказ %s не обнаружен в сверке", refgoNumber))
