@@ -362,30 +362,30 @@
             return d.getFullYear() + '-' + (m < 10 ? '0' + m : m) + '-' + (day < 10 ? '0' + day : day);
         }
 
-        // Значение скидки: 0 = «скидки нет» (правило «0 = NULL», владелец 14.09.2026),
-        // поэтому ноль и отсутствие поля равнозначны — оба дают null.
+        // Значение колонки «просто»: ноль — legacy-«скидки нет» (правило «0 = NULL»
+        // для plain-колонок), поэтому ноль и отсутствие поля равнозначны — оба null.
         function discountValue(v) {
             return (v == null || v === 0) ? null : v;
         }
 
-        // Жёлтая подсветка: у пары есть активная скидка — ручная или сроковая.
-        // Метка источника (discount_source: expiry | surplus | manual) приходит
-        // с лотом; избыток — младшая ступень, у него своя, розовая подсветка.
-        // 10 % и 20 % не различаем: подсветка говорит «скидка есть», не «сколько».
+        // Значение РУЧНОЙ скидки: заданный ноль — это скидка 0 % и запрет расчёта
+        // по этой и более дальним парам (решение владельца, сентябрь 2026),
+        // поэтому null отдаёт только отсутствие поля.
+        function manualValue(v) {
+            return (v == null) ? null : v;
+        }
+
+        // Жёлтая подсветка: у пары есть скидка-значение (больше нуля) — ручная или
+        // расчётная. Ручная 0 % (запрет менеджера) подсветки не даёт: скидки нет.
+        // Пара, накрытая каскадным запретом, приходит без значения в колонке «просто»
+        // (движок её снимает), поэтому отдельной логики запрета на клиенте нет.
         function hasDiscount(lot) {
-            if (hasManualDiscount(lot)) {
+            var gen = effectiveDiscount(lot, 'general');
+            if (gen != null && gen > 0) {
                 return true;
             }
-            var src = lot.discount_source || '';
-            if (src === 'surplus') {
-                return false;
-            }
-            if (src === 'expiry' || src === 'manual') {
-                return true;
-            }
-            // Лот без метки (данные старого кода): значение движка считаем скидкой.
-            return discountValue(lot.discount_general) != null ||
-                discountValue(lot.discount_telegram) != null;
+            var tg = effectiveDiscount(lot, 'telegram');
+            return tg != null && tg > 0;
         }
 
         // Нежно-розовая подсветка: у пары ТОЛЬКО избыток — метка «surplus» и
@@ -395,18 +395,19 @@
             return (lot.discount_source || '') === 'surplus' && !hasManualDiscount(lot);
         }
 
-        // Ручная скидка UI: заданное значение в manual-колонке (0 = скидки нет).
+        // Ручная скидка UI: заданное значение в manual-колонке; ноль — тоже
+        // заданное (скидка 0 %, запрет), а не «пусто».
         function hasManualDiscount(lot) {
-            return discountValue(lot.discount_general_manual) != null ||
-                discountValue(lot.discount_telegram_manual) != null;
+            return manualValue(lot.discount_general_manual) != null ||
+                manualValue(lot.discount_telegram_manual) != null;
         }
 
-        // Effective канала = COALESCE(NULLIF(manual,0), NULLIF(plain,0)): ручная
-        // скидка важнее «просто», но ноль не перекрывает вторую колонку.
+        // Effective канала = COALESCE(manual, NULLIF(plain,0)): ручная важнее
+        // «просто» и перекрывает её как есть, включая заданный ноль (0 %).
         function effectiveDiscount(lot, channel) {
             var manual = (channel === 'general') ? lot.discount_general_manual : lot.discount_telegram_manual;
             var plain = (channel === 'general') ? lot.discount_general : lot.discount_telegram;
-            var m = discountValue(manual);
+            var m = manualValue(manual);
             return (m != null) ? m : discountValue(plain);
         }
 
@@ -509,9 +510,10 @@
 
             var genFact = fmtDiscount(effectiveDiscount(lot, 'general'));
             var tgFact = fmtDiscount(effectiveDiscount(lot, 'telegram'));
-            // 0 = NULL: сохранённый ноль (старые данные) показываем как пустое поле.
-            var genManual = discountValue(lot.discount_general_manual);
-            var tgManual = discountValue(lot.discount_telegram_manual);
+            // Ручные колонки: 0 — это скидка 0 % (запрет), показываем как есть;
+            // пустое поле — ручного применения нет.
+            var genManual = manualValue(lot.discount_general_manual);
+            var tgManual = manualValue(lot.discount_telegram_manual);
             var genVal = (genManual != null) ? genManual : '';
             var tgVal = (tgManual != null) ? tgManual : '';
 
@@ -523,7 +525,7 @@
             html += '<td><input type="number" id="d-gen" min="0" max="100" value="' + genVal + '"></td>';
             html += '<td><input type="number" id="d-tg" min="0" max="100" value="' + tgVal + '"></td></tr>';
             html += '</table>';
-            html += '<div class="modal-hint">Пустое поле = сброс ручной скидки</div>';
+            html += '<div class="modal-hint">Пустое поле = сброс ручной скидки. 0 = скидки нет: блокирует этот срок и все более дальние сроки товара</div>';
             html += '<div class="modal-actions">';
             html += '<button type="button" onclick="closeModal()">Отмена</button>';
             html += '<button type="button" onclick="saveDiscount()">Сохранить</button>';

@@ -36,11 +36,12 @@ func TestResolve(t *testing.T) {
 		wantSource  Source
 	}{
 		{"ручная 30 + срок 40 → ручная", i16(30), i16(40), nil, i16(30), SourceManual},
-		{"ручная 0 + срок 40 → срок (0 = NULL)", i16(0), i16(40), nil, i16(40), SourceExpiry},
+		{"ручная 0 + срок 40 → ручная 0 % (запрет)", i16(0), i16(40), nil, i16(0), SourceManual},
 		{"срок 0 + избыток 10 → избыток", nil, i16(0), i16(10), i16(10), SourceSurplus},
-		{"ручная 0 + срок 0 + избыток 10 → избыток", i16(0), i16(0), i16(10), i16(10), SourceSurplus},
+		{"ручная 0 + срок 0 + избыток 10 → ручная 0 %", i16(0), i16(0), i16(10), i16(0), SourceManual},
 		{"всё пусто → нет скидки", nil, nil, nil, nil, SourceNone},
-		{"все нули → нет скидки", i16(0), i16(0), i16(0), nil, SourceNone},
+		{"нули у расчётных источников без ручной → нет скидки", nil, i16(0), i16(0), nil, SourceNone},
+		{"все нули: ручная 0 % побеждает", i16(0), i16(0), i16(0), i16(0), SourceManual},
 		{"только ручная", i16(15), nil, nil, i16(15), SourceManual},
 		{"только срок", nil, i16(20), nil, i16(20), SourceExpiry},
 		{"только избыток", nil, nil, i16(10), i16(10), SourceSurplus},
