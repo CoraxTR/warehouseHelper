@@ -117,6 +117,11 @@ func (uc *ExportToExcelUseCase) ExportOrders(ctx context.Context) (summary *Expo
 	// не должна ждать обхода всех заказов в МС. Фон учитывается в wg и
 	// закрывается Stop: иначе процесс уйдёт посреди пометок, и часть
 	// заказов останется помеченной в базе, но не в МС.
+	//
+	// Вызов обязателен: без него экспорт создаёт файл-таблицу, а заказы в МС
+	// не помечаются и отгрузки не создаются (регрессия #100 — фон был написан,
+	// но не стартовал; ловится тестом TestExportOrdersStartsShipmentProcessing).
+	uc.startShipmentsProcessing(ctx, orders)
 
 	return summary, nil
 }
@@ -150,10 +155,11 @@ func (uc *ExportToExcelUseCase) processOrdersShipments(ctx context.Context, orde
 }
 
 // startShipmentsProcessing запускает обработку отгрузок в фоне: страница с
-// итогами не должна ждать обхода заказов в МС. Контекст запроса тут не годится
-// (отменяется вместе с ответом), поэтому фон идёт от context.Background() — а
-// закрывается он не таймаутом, а Stop.
-func (uc *ExportToExcelUseCase) startShipmentsProcessing(orders []*domain.InternalOrder) {
+// итогами не должна ждать обхода всех заказов в МС. Контекст запроса для работы
+// фона не годится (отменяется вместе с ответом), поэтому берём его копию без
+// отмены — context.WithoutCancel: значения сохраняются, отмена корневого ctx при
+// Shutdown фон НЕ гасит, закрывает его только Stop.
+func (uc *ExportToExcelUseCase) startShipmentsProcessing(ctx context.Context, orders []*domain.InternalOrder) {
 	uc.mu.Lock()
 	defer uc.mu.Unlock()
 
@@ -161,11 +167,14 @@ func (uc *ExportToExcelUseCase) startShipmentsProcessing(orders []*domain.Intern
 		return
 	}
 
-	// Регистрация горутины — под тем же мутексом, что и стоп-флаг: иначе Stop
-	// успел бы вернуться (счётчик wg нулевой), а фон стартовал бы после него.
+	// Контекст готовим до регистрации горутины: под мутексом только регистрация —
+	// иначе Stop успел бы вернуться (счётчик wg нулевой), а фон стартовал бы
+	// после него.
+	bg := context.WithoutCancel(ctx)
+
+	// Регистрация горутины — под тем же мутексом, что и стоп-флаг.
 	uc.wg.Go(func() {
-		// Контекст запроса тут не годится: он отменён вместе с ответом.
-		uc.processOrdersShipments(context.Background(), orders)
+		uc.processOrdersShipments(bg, orders)
 	})
 }
 

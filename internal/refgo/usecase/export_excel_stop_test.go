@@ -58,7 +58,7 @@ func TestStopWaitsForShipmentProcessing(t *testing.T) {
 	shipper := &fakeShipper{started: make(chan struct{}), release: make(chan struct{})}
 	uc := &ExportToExcelUseCase{shipper: shipper}
 
-	uc.startShipmentsProcessing([]*domain.InternalOrder{stopOrder()})
+	uc.startShipmentsProcessing(context.Background(), []*domain.InternalOrder{stopOrder()})
 
 	<-shipper.started // фон дошёл до запроса в МС
 
@@ -91,7 +91,7 @@ func TestStartShipmentsProcessingAfterStopIsNoop(t *testing.T) {
 	uc := &ExportToExcelUseCase{shipper: shipper}
 
 	uc.Stop()
-	uc.startShipmentsProcessing([]*domain.InternalOrder{stopOrder()})
+	uc.startShipmentsProcessing(context.Background(), []*domain.InternalOrder{stopOrder()})
 
 	// Даём возможной горутине шанс дойти до пометки.
 	time.Sleep(50 * time.Millisecond)
