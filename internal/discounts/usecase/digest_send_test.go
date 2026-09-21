@@ -146,7 +146,7 @@ func TestSendDigestFlagCheckError(t *testing.T) {
 	}
 }
 
-// Команда /скидки: тот же отчёт в чат отправителя, сколько угодно раз, маркер
+// Команда /discounts: тот же отчёт в чат отправителя, сколько угодно раз, маркер
 // дня не трогается (стоящий маркер команде не мешает), общий канал не задет.
 func TestReplyDigestSendsToChatAndIgnoresDayFlag(t *testing.T) {
 	now := digestNow()

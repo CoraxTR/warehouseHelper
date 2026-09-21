@@ -75,10 +75,10 @@ type WarehouseNotifier interface {
 }
 
 // CommonNotifier — уведомления об изменениях скидок и дайджест в общий канал,
-// плюс ответ боту в чат отправителя (команда /скидки). Один шов: обе отправки
+// плюс ответ боту в чат отправителя (команда /discounts). Один шов: обе отправки
 // делает один телеграм-уведомитель.
 type CommonNotifier interface {
 	NotifyCommon(ctx context.Context, text string) error
-	// SendDetails — обычный текст в конкретный чат (ответ на /скидки).
+	// SendDetails — обычный текст в конкретный чат (ответ на /discounts).
 	SendDetails(ctx context.Context, chatID int64, text string) error
 }

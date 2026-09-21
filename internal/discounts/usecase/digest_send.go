@@ -1,5 +1,5 @@
 // Отправка дайджеста наружу: утренняя рассылка в общий канал (09:00) и ответ
-// бота на команду /скидки в чат отправителя.
+// бота на команду /discounts в чат отправителя.
 //
 // Строитель отчёта один — Registry.Digest (реестр активных пар); различаются
 // только выводы: рассылка дня (маркер дня discounts.FlagDigestSent) и ответ на
@@ -18,7 +18,7 @@ import (
 	"warehouseHelper/internal/discounts"
 )
 
-// noDataText — ответ на /скидки, когда реестр пуст (расчёта ещё не было).
+// noDataText — ответ на /discounts, когда реестр пуст (расчёта ещё не было).
 // Своего расчёта у метода нет — ни часов, ни выборки в БД, — поэтому вместо
 // отчёта уходит короткий текст.
 const noDataText = "Данных о скидках пока нет"
@@ -57,7 +57,7 @@ func (uc *UseCase) SendDigest(ctx context.Context, now time.Time) error {
 	return nil
 }
 
-// ReplyDigest — тот же отчёт по команде /скидки в чат отправителя.
+// ReplyDigest — тот же отчёт по команде /discounts в чат отправителя.
 //
 // Маркер дня не трогается: команда не зависит от рассылки 09:00. Прав не
 // проверяем — команду принимает бот, любой участник вправе увидеть отчёт.
@@ -69,11 +69,11 @@ func (uc *UseCase) ReplyDigest(ctx context.Context, chatID int64) error {
 	}
 
 	if uc.common == nil {
-		slog.Info(fmt.Sprintf("discounts: ответ на /скидки в чат %d (канал не подключён): %s", chatID, text))
+		slog.Info(fmt.Sprintf("discounts: ответ на /discounts в чат %d (канал не подключён): %s", chatID, text))
 		return nil
 	}
 	if err := uc.common.SendDetails(ctx, chatID, text); err != nil {
-		return fmt.Errorf("ответ на /скидки в чат %d: %w", chatID, err)
+		return fmt.Errorf("ответ на /discounts в чат %d: %w", chatID, err)
 	}
 	return nil
 }

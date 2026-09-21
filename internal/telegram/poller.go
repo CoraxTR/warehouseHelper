@@ -27,7 +27,7 @@ type CallbackQuery struct {
 type CallbackHandler func(ctx context.Context, cb CallbackQuery) error
 
 // Message — текстовое сообщение, пришедшее боту (бот-команда, например
-// /скидки). ChatID — чат отправителя: ответ на команду идёт в него же.
+// /discounts). ChatID — чат отправителя: ответ на команду идёт в него же.
 type Message struct {
 	ChatID int64
 	Text   string
@@ -144,7 +144,7 @@ func (p *Poller) Run(ctx context.Context) error {
 }
 
 // SetMessageHandler подключает шов «текстовое сообщение боту» (бот-команды,
-// например /скидки): связка — в di.go, как у остальных швов. Ни один шов не
+// например /discounts): связка — в di.go, как у остальных швов. Ни один шов не
 // выставляется на ходу, поэтому поле пишется на сборке, а не в работающем
 // цикле поллера. nil — команды не подключены, сообщения игнорируются.
 func (p *Poller) SetMessageHandler(h MessageHandler) {
