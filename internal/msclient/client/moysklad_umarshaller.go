@@ -2,7 +2,6 @@ package client
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 )
@@ -27,6 +26,20 @@ func unmarshalMSFetchOrdersResponse(body []byte) (*MSFetchOrdersResponse, error)
 	return &response, nil
 }
 
+// unmarshalMSOrderAttributes раскладывает атрибуты строки заказа в
+// AttributesMap: string — плоская строка, customentity/employee — name объекта
+// справочника.
+//
+// Атрибут НЕИЗВЕСТНОГО типа пропускается (WARN: заказ, имя, тип), а не роняет
+// разбор. В базе МС у заказа живут типы long/text/time («Бонусы», «Кол-во
+// гостей», «Дата МК», «Скидки по бонусам», «Стоимость яндекс доставки» —
+// проверено по /entity/customerorder/metadata/attributes 21.09.2026), и раньше
+// один заполненный такой атрибут убивал разбор ВСЕЙ страницы: слепли
+// reservewatch и импорт заказов (FetchDeliverableOrders), хотя ни одному
+// потребителю эти атрибуты не нужны.
+//
+// Битое значение у ЗНАКОМОГО типа — по-прежнему ошибка: ломается формат того,
+// что модули читают (регион, интервал, коробки), и терять это поле молча нельзя.
 func unmarshalMSOrderAttributes(o *MSOrder) error {
 	o.AttributesMap = make(map[string]any)
 	for _, attribute := range o.Attributes {
@@ -68,7 +81,12 @@ func unmarshalMSOrderAttributes(o *MSOrder) error {
 
 			value = emp.Name
 		default:
-			return errors.New("error unmarshalling attribute")
+			// Тип, которого нет в разборе: атрибут не наш, отдаём его в лог и
+			// идём дальше — из-за него страница заказов падать не должна.
+			slog.Warn("msclient: атрибут заказа с неподдерживаемым типом пропущен",
+				"заказ", o.Name, "атрибут", attribute.Name, "тип", attribute.Type)
+
+			continue
 		}
 
 		o.AttributesMap[attribute.Name] = value
