@@ -30,8 +30,9 @@ const (
 
 	// Имена полей payload'ов Bot API — повторяются в каждом методе нотифаера
 	// (goconst: вынесены в константы, 16.09.2026).
-	fieldChatID = "chat_id"
-	fieldText   = "text"
+	fieldChatID   = "chat_id"
+	fieldText     = "text"
+	fieldCommands = "commands"
 )
 
 // Notifier отправляет сообщения в чаты Telegram. Если токен бота или
@@ -191,6 +192,32 @@ func (n *Notifier) AnswerCallback(ctx context.Context, callbackQueryID string) e
 	return n.postJSON(ctx, "answerCallbackQuery", map[string]any{
 		"callback_query_id": callbackQueryID,
 	})
+}
+
+// BotCommand — команда бота для меню «/» в клиентах Telegram.
+//
+// Command — имя БЕЗ слэша: Telegram принимает там только строчные латинские
+// буквы, цифры и подчёркивание (до 32 символов). Кириллицу в имени клиент не
+// примет: команду не подсветит, в меню не покажет и тапом не наберёт, — поэтому
+// русское название команды живёт в Description (свободный текст до 256 символов).
+type BotCommand struct {
+	Command     string `json:"command"`
+	Description string `json:"description"`
+}
+
+// SetCommands задаёт меню команд бота (setMyCommands) — тот список, который
+// клиенты Telegram показывают по нажатию «/».
+//
+// Вызов ЗАМЕЩАЕТ список целиком, в том числе заданный в BotFather: список
+// должен быть полным перечнем команд бота, а не «добавкой» одной команды.
+// Без токена или с пустым списком — no-op (меню уже настроенного бота не
+// трогаем, чтобы не стереть его пустотой).
+func (n *Notifier) SetCommands(ctx context.Context, cmds []BotCommand) error {
+	if n.botToken == "" || len(cmds) == 0 {
+		return nil
+	}
+
+	return n.postJSON(ctx, "setMyCommands", map[string]any{fieldCommands: cmds})
 }
 
 // SendPhotos отправляет фотографии в указанный чат media-группами

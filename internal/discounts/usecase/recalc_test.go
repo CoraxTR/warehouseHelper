@@ -221,7 +221,7 @@ func (w *fakeDiscountWriter) SetDiscounts(_ context.Context, writes []discounts.
 
 // fakeCommonNotifier — общий канал теста: тексты уведомлений по порядку
 // (texts — отправленные, tries — все попытки) и, по желанию теста, ошибка
-// отправки. chats — ответы в конкретный чат (команда /скидки), errDetails —
+// отправки. chats — ответы в конкретный чат (команда /discounts), errDetails —
 // ошибка такого ответа.
 type fakeCommonNotifier struct {
 	texts      []string

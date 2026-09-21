@@ -263,11 +263,15 @@ func (a *App) initComplaints() {
 }
 
 // initBotPoller запускает поллер бота: нажатия кнопок карточек жалоб и
-// текстовые команды (сейчас /скидки — отчёт модуля скидок в чат отправителя).
+// текстовые команды (сейчас /discounts — отчёт модуля скидок в чат отправителя).
 //
 // Поллер живёт здесь, а не внутри модуля жалоб: он ОДИН на токен (второй
 // getUpdates получит 409 Conflict), а команды принадлежат разным модулям —
 // иначе без жалоб не работала бы и команда скидок.
+//
+// Здесь же — регистрация меню команд («/» в клиентах): отдельной фоновой
+// задачей, потому что поллеру ждать её незачем, а неудача меню приёму команд
+// не мешает (набранный руками текст приходит и без регистрации).
 func (a *App) initBotPoller() {
 	token := a.di.Config().BotToken
 	if token == "" {
@@ -284,6 +288,17 @@ func (a *App) initBotPoller() {
 		return complaintsUC.HandleDetailsButton(ctx, cb.ID, cb.ChatID, id)
 	})
 	poller.SetMessageHandler(a.botMessageHandler())
+
+	// Нотифаер собирается ЗДЕСЬ, как и юзкейс команд: за геттером стоит
+	// создание пула БД, а такая цепочка из ctx-функции не проходит линт
+	// (contextcheck).
+	notifier := a.di.TelegramNotifier()
+	a.background("бот: меню команд", func() {
+		if err := notifier.SetCommands(a.ctx, botCommands()); err != nil {
+			slog.Info(fmt.Sprintf("бот: меню команд не задано: %v", err))
+		}
+	})
+
 	a.background("бот: поллер апдейтов", func() {
 		if err := poller.Run(a.ctx); err != nil {
 			slog.Info(fmt.Sprintf("бот: поллер завершился: %v", err))
@@ -291,7 +306,27 @@ func (a *App) initBotPoller() {
 	})
 }
 
-// botMessageHandler — обработчик текстовых команд бота. Сейчас одна: /скидки —
+// discountsCommand — имя бот-команды отчёта по скидкам. Telegram принимает в
+// именах команд только строчные латинские буквы, цифры и подчёркивание: на
+// кириллице команда не подсвечивается, в меню «/» не показывается и тапом не
+// набирается (прежнее «/скидки» именно поэтому не работало), так что имя
+// латиницей, а русское название — в описании.
+const discountsCommand = "discounts"
+
+// botCommands — меню команд бота (кнопка «/» в клиентах Telegram).
+//
+// setMyCommands замещает список ЦЕЛИКОМ, поэтому здесь лежит полный перечень
+// команд всех модулей (не «добавка» одной), и он же — источник имён для разбора
+// сообщений: имя в меню и в isDiscountsCommand обязаны совпадать, иначе команда
+// будет видна, но не отвечает (проверка — TestBotCommandsMatchParser).
+func botCommands() []telegram.BotCommand {
+	return []telegram.BotCommand{{
+		Command:     discountsCommand,
+		Description: "Актуальный отчёт по скидкам",
+	}}
+}
+
+// botMessageHandler — обработчик текстовых команд бота. Сейчас одна: /discounts —
 // отчёт по скидкам (тот же текст, что в дайджест 09:00) в чат отправителя.
 // Чужие сообщения игнорируются: отвечать на них — дело других модулей.
 //
@@ -311,18 +346,31 @@ func (a *App) botMessageHandler() func(context.Context, telegram.Message) error 
 	}
 }
 
-// isDiscountsCommand — «/скидки» с необязательным адресом бота и хвостом
-// («/скидки@warehouse_bot», «/скидки ?»): сравнение по первому слову, регистр
-// не важен.
+// isDiscountsCommand — «/discounts» с необязательным адресом бота и хвостом
+// («/discounts@warehouse_bot», «/discounts ?»).
 func isDiscountsCommand(text string) bool {
-	cmd := strings.ToLower(strings.TrimSpace(text))
-	if i := strings.IndexAny(cmd, " \n\t"); i >= 0 {
-		cmd = cmd[:i]
+	return commandOf(text) == discountsCommand
+}
+
+// commandOf — имя бот-команды из текста сообщения: первое слово, приведённое к
+// нижнему регистру, без ведущего слэша и без адреса бота. Без слэша — пустая
+// строка: «discounts» обычным словом в чате командой не считается, иначе бот
+// отвечал бы отчётом на любое упоминание слова.
+func commandOf(text string) string {
+	word := strings.ToLower(strings.TrimSpace(text))
+	if i := strings.IndexAny(word, " \n	"); i >= 0 {
+		word = word[:i]
 	}
-	if i := strings.Index(cmd, "@"); i >= 0 {
-		cmd = cmd[:i]
+
+	word, ok := strings.CutPrefix(word, "/")
+	if !ok {
+		return ""
 	}
-	return cmd == "/скидки"
+	if i := strings.Index(word, "@"); i >= 0 {
+		word = word[:i]
+	}
+
+	return word
 }
 
 // initReturns запускает наблюдатель журнала действий МС (модуль returns:
