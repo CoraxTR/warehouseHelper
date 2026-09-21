@@ -276,7 +276,7 @@ func (pg *PGClient) MarkGeneralRaised(ctx context.Context, pairs []discounts.Lot
 		if _, err := tx.Exec(ctx, `
             UPDATE discount_telegram_digest_item
             SET general_raised_at = $4
-            WHERE digest_id = $1 AND product_id = $2 AND best_before = $3
+            WHERE digest_id = $1 AND product_id = $2 AND best_before = $3::date
               AND general_raised_at IS NULL`,
 			digestID, p.ProductID, p.BestBefore, at,
 		); err != nil {
