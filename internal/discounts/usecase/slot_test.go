@@ -189,7 +189,7 @@ func TestRunSlotPlanPublishesLadderAndManual(t *testing.T) {
 	h := newSlotHarness(recalcNow(1),
 		lotInput("p1", "Колбаса", day(9), 100, shelfLifeInput(26)),             // D=8 → 20 %
 		lotInput("p2", "Сыр", day(9), 50, shelfLifeInput(26), manualInput(30)), // ручная 30 %
-		lotInput("p3", "Хлеб", day(12), 40, shelfLifeInput(40)),                // D=11 → 10 % (не в слоте)
+		lotInput("p3", "Хлеб", day(13), 40, shelfLifeInput(40)),                // D=12 → 10 % (не в слоте)
 	)
 
 	if err := h.uc.RunSlotPlan(context.Background(), h.now, 4); err != nil {
@@ -266,8 +266,8 @@ func TestRunSlotPlanSkipsPreviousDigestLots(t *testing.T) {
 func TestRunSlotPlanDoborFillsByTenPercent(t *testing.T) {
 	h := newSlotHarness(recalcNow(1),
 		lotInput("p1", "Колбаса", day(9), 100, shelfLifeInput(26)), // 20 %
-		lotInput("p2", "Хлеб", day(12), 40, shelfLifeInput(40)),    // 10 % → добор до 20 %
-		lotInput("p3", "Сыр", day(12), 40, shelfLifeInput(40)),     // 10 % → добор
+		lotInput("p2", "Хлеб", day(13), 40, shelfLifeInput(40)),    // 10 % → добор до 20 %
+		lotInput("p3", "Сыр", day(13), 40, shelfLifeInput(40)),     // 10 % → добор
 	)
 
 	if err := h.uc.RunSlotPlan(context.Background(), h.now, 4); err != nil {
