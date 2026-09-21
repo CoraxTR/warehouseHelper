@@ -158,6 +158,14 @@
             reindex();
         }
 
+        // Дата лота для СРАВНЕНИЙ — только YYYY-MM-DD (первые 10 символов):
+        // сервер шлёт даты в разных формах (RFC3339 в снапшоте и lot_upsert,
+        // DateOnly в старом lot_delete), сравнивать их строками «как есть»
+        // нельзя — удаление молча промахивалось и старые лоты оставались.
+        function lotDate(v) {
+            return String(v).slice(0, 10);
+        }
+
         // Дельта для известного товара; неизвестный игнорируем —
         // снапшот всегда приходит первым, новых товаров эта версия не добавляет.
         function applyLotUpsert(msg) {
@@ -166,8 +174,9 @@
                 return;
             }
             var lot = msg.lot;
+            var bb = lotDate(lot.best_before);
             for (var i = 0; i < p.lots.length; i++) {
-                if (p.lots[i].best_before === lot.best_before) {
+                if (lotDate(p.lots[i].best_before) === bb) {
                     p.lots[i] = lot;
                     return;
                 }
@@ -183,8 +192,9 @@
             if (!p) {
                 return;
             }
+            var bb = lotDate(msg.best_before);
             for (var i = 0; i < p.lots.length; i++) {
-                if (p.lots[i].best_before === msg.best_before) {
+                if (lotDate(p.lots[i].best_before) === bb) {
                     p.lots.splice(i, 1);
                     return;
                 }
