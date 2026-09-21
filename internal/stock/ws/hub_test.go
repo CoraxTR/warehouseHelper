@@ -76,6 +76,41 @@ func TestHubSnapshotThenDelta(t *testing.T) {
 	}
 }
 
+// TestStockChangeMessageDateFormats — дата лота в дельте lot_delete обязана быть
+// в ТОМ ЖЕ формате, что Lot.BestBefore у снапшота и lot_upsert (RFC3339): клиент
+// сравнивает даты строками (`best_before === best_before`). Пока здесь стоял
+// time.DateOnly, удаление на клиенте молча терялось — после «Обновить сроки»
+// отсканированные лоты добавлялись, а старые оставались на месте.
+func TestStockChangeMessageDateFormats(t *testing.T) {
+	bb := time.Date(2026, time.September, 1, 0, 0, 0, 0, time.UTC)
+
+	lotJSON, err := json.Marshal(stock.Lot{BestBefore: bb, Qty: 3})
+	if err != nil {
+		t.Fatalf("marshal lot: %v", err)
+	}
+	var snapshotDate struct {
+		BestBefore string `json:"best_before"`
+	}
+	if err := json.Unmarshal(lotJSON, &snapshotDate); err != nil {
+		t.Fatalf("unmarshal lot: %v", err)
+	}
+
+	del := stockChangeMessage(stock.Event{Kind: stock.EventLotDelete, ProductID: "p1", BestBefore: bb})
+	if del.BestBefore != snapshotDate.BestBefore {
+		t.Errorf("дата в lot_delete %q ≠ дата лота в снапшоте %q — клиент сравнивает строки и потеряет удаление",
+			del.BestBefore, snapshotDate.BestBefore)
+	}
+
+	up := stockChangeMessage(stock.Event{
+		Kind:      stock.EventLotUpsert,
+		ProductID: "p1",
+		Lot:       &stock.Lot{BestBefore: bb, Qty: 3},
+	})
+	if up.Lot == nil || up.Lot.BestBefore.Format(time.RFC3339) != snapshotDate.BestBefore {
+		t.Errorf("дата в lot_upsert %+v ≠ дата лота в снапшоте %q", up.Lot, snapshotDate.BestBefore)
+	}
+}
+
 // TestHubUnregister — закрытие соединения клиентом не роняет хаб.
 func TestHubUnregister(t *testing.T) {
 	hub := NewHub()

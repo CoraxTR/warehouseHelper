@@ -19,6 +19,15 @@ const stockProductColumns = `
     ps.discount_general_manual, ps.discount_telegram_manual,
     ps.discount_source`
 
+// Даты в SQL: сравнение DATE-колонки с параметром-временем ОБЯЗАНО идти через
+// явный каст (`best_before = $N::date`). Без каста PostgreSQL выводит для
+// параметра тип timestamptz (preferred в категории datetime) и сравнивает
+// best_before::timestamptz = <инстант> в таймзоне СЕССИИ: при Europe/Moscow
+// (прод) UTC-полночь никогда не совпадает с полночью по Москве — DELETE/UPDATE
+// молча меняют 0 строк. Инцидент 21.09.2026: «Обновить сроки» не удалял старые
+// лоты в БД (в кэше удалял), в проде `SELECT count(*) … matched` дал 0 из 55.
+// Образец этого каста — daystate_repo/turnover_repo/discounts_repo.
+//
 // LoadAllStock возвращает все товары каталога с их лотами остатков,
 // отсортированные по (group_name, name, best_before). Товар без остатков
 // (нет строк в product_stock) приходит с пустым Lots — страницы «Сроки»
@@ -118,7 +127,7 @@ func (pg *PGClient) SetManualDiscount(ctx context.Context, productID string, bes
 	tag, err := pg.Pool.Exec(ctx, `
         UPDATE product_stock
         SET discount_general_manual = $3, discount_telegram_manual = $4
-        WHERE product_id = $1 AND best_before = $2`,
+        WHERE product_id = $1 AND best_before = $2::date`,
 		productID, bestBefore, generalManual, telegramManual,
 	)
 	if err != nil {
@@ -151,7 +160,7 @@ func (pg *PGClient) SetDiscounts(ctx context.Context, writes []stock.DiscountWri
                 UPDATE product_stock
                 SET discount_general = $3, discount_telegram = $4,
                     discount_source = NULLIF($5, '')
-                WHERE product_id = $1 AND best_before = $2`,
+                WHERE product_id = $1 AND best_before = $2::date`,
 			w.ProductID, w.BestBefore, w.General, w.Telegram, w.Source,
 		)
 		if err != nil {
@@ -274,7 +283,7 @@ func (pg *PGClient) ReplaceStockLots(ctx context.Context, writes []stock.Product
 		for _, bb := range w.Deletes {
 			if _, err := tx.Exec(ctx, `
                 DELETE FROM product_stock
-                WHERE product_id = $1 AND best_before = $2`,
+                WHERE product_id = $1 AND best_before = $2::date`,
 				w.ProductID, bb,
 			); err != nil {
 				return fmt.Errorf("replace stock delete (%s, %s): %w", w.ProductID, bb.Format(time.DateOnly), err)
@@ -349,7 +358,7 @@ func (pg *PGClient) PickStockLots(ctx context.Context, lots []stock.PickLotIn) e
 		var newQty int64
 		err := tx.QueryRow(ctx, `
             UPDATE product_stock SET qty = GREATEST(qty - $3, 0)
-            WHERE product_id = $1 AND best_before = $2
+            WHERE product_id = $1 AND best_before = $2::date
             RETURNING qty`,
 			l.ProductID, l.BestBefore, l.Qty,
 		).Scan(&newQty)
@@ -362,7 +371,7 @@ func (pg *PGClient) PickStockLots(ctx context.Context, lots []stock.PickLotIn) e
 		if newQty <= 0 {
 			if _, err := tx.Exec(ctx, `
                 DELETE FROM product_stock
-                WHERE product_id = $1 AND best_before = $2`,
+                WHERE product_id = $1 AND best_before = $2::date`,
 				l.ProductID, l.BestBefore,
 			); err != nil {
 				return fmt.Errorf("pick stock delete (%s, %s): %w", l.ProductID, l.BestBefore.Format(time.DateOnly), err)

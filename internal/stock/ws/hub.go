@@ -37,7 +37,7 @@ type Message struct {
 	Type       string          `json:"type"`
 	Rows       []stock.Product `json:"rows,omitempty"`        // snapshot
 	ProductID  string          `json:"product_id,omitempty"`  // дельты
-	BestBefore string          `json:"best_before,omitempty"` // lot_delete: YYYY-MM-DD
+	BestBefore string          `json:"best_before,omitempty"` // lot_delete: RFC3339 (как Lot.BestBefore)
 	Lot        *stock.Lot      `json:"lot,omitempty"`         // lot_upsert
 }
 
@@ -90,13 +90,21 @@ func (h *Hub) Unregister(c *Client) {
 	}
 }
 
-// PublishStockChange — реализация usecase.Publisher: рассылает дельту.
-func (h *Hub) PublishStockChange(e stock.Event) {
+// stockChangeMessage собирает дельту события. Дата удаления обязана быть в том
+// же формате, что Lot.BestBefore у снапшота и lot_upsert (RFC3339): клиент
+// сравнивает даты СТРОКАМИ (best_before === best_before) и DateOnly здесь
+// молча терял удаление — старые лоты оставались на «Сроках» после замены.
+func stockChangeMessage(e stock.Event) Message {
 	m := Message{Type: e.Kind, ProductID: e.ProductID, Lot: e.Lot}
 	if e.Kind == stock.EventLotDelete {
-		m.BestBefore = e.BestBefore.Format(time.DateOnly)
+		m.BestBefore = e.BestBefore.Format(time.RFC3339)
 	}
-	msg, err := json.Marshal(m)
+	return m
+}
+
+// PublishStockChange — реализация usecase.Publisher: рассылает дельту.
+func (h *Hub) PublishStockChange(e stock.Event) {
+	msg, err := json.Marshal(stockChangeMessage(e))
 	if err != nil {
 		slog.Error(fmt.Sprintf("ws: marshal event %s: %v", e.Kind, err))
 		return

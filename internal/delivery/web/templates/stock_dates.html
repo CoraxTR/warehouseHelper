@@ -86,6 +86,20 @@
                     t = t.parentNode;
                 }
             });
+            // pageshow с persisted — страница восстановлена из bfcache (вернулись
+            // со страницы сканирования или из другой вкладки): соединение и данные
+            // могли отстать. visibilitychange — ПК вышел из сна/вернулись на вкладку,
+            // а сокет уже закрыт: не ждём 3 секунды таймера, синхронизируемся сразу.
+            window.addEventListener('pageshow', function (ev) {
+                if (ev.persisted) {
+                    resync();
+                }
+            });
+            document.addEventListener('visibilitychange', function () {
+                if (!document.hidden && (!STOCK.ws || STOCK.ws.readyState !== 1)) {
+                    resync();
+                }
+            });
             connect();
         }
 
@@ -127,6 +141,24 @@
             }, 3000);
         }
 
+        // Пересинхронизация: возврат на страницу из истории (в т.ч. bfcache) или
+        // из сна ПК — соединение могло умереть, а дельты потеряться, и страница
+        // осталась бы в устаревшем состоянии до F5. Сервер на КАЖДОЕ подключение
+        // отдаёт полный снапшот, поэтому переподключение = «догнать реальность».
+        function resync() {
+            if (STOCK.reconnTimer) {
+                clearTimeout(STOCK.reconnTimer);
+                STOCK.reconnTimer = null;
+            }
+            if (STOCK.ws) {
+                STOCK.ws.onclose = null; // старый сокет не должен звать переподключение
+                try {
+                    STOCK.ws.close();
+                } catch (e) { /* noop */ }
+            }
+            connect();
+        }
+
         function setStatus(text, cls) {
             var el = document.getElementById('ws-status');
             el.textContent = text;
@@ -158,6 +190,14 @@
             reindex();
         }
 
+        // Дата лота для СРАВНЕНИЙ — только YYYY-MM-DD (первые 10 символов):
+        // сервер шлёт даты в разных формах (RFC3339 в снапшоте и lot_upsert,
+        // DateOnly в старом lot_delete), сравнивать их строками «как есть»
+        // нельзя — удаление молча промахивалось и старые лоты оставались.
+        function lotDate(v) {
+            return String(v).slice(0, 10);
+        }
+
         // Дельта для известного товара; неизвестный игнорируем —
         // снапшот всегда приходит первым, новых товаров эта версия не добавляет.
         function applyLotUpsert(msg) {
@@ -166,8 +206,9 @@
                 return;
             }
             var lot = msg.lot;
+            var bb = lotDate(lot.best_before);
             for (var i = 0; i < p.lots.length; i++) {
-                if (p.lots[i].best_before === lot.best_before) {
+                if (lotDate(p.lots[i].best_before) === bb) {
                     p.lots[i] = lot;
                     return;
                 }
@@ -183,8 +224,9 @@
             if (!p) {
                 return;
             }
+            var bb = lotDate(msg.best_before);
             for (var i = 0; i < p.lots.length; i++) {
-                if (p.lots[i].best_before === msg.best_before) {
+                if (lotDate(p.lots[i].best_before) === bb) {
                     p.lots.splice(i, 1);
                     return;
                 }
