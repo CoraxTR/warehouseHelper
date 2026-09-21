@@ -86,6 +86,20 @@
                     t = t.parentNode;
                 }
             });
+            // pageshow с persisted — страница восстановлена из bfcache (вернулись
+            // со страницы сканирования или из другой вкладки): соединение и данные
+            // могли отстать. visibilitychange — ПК вышел из сна/вернулись на вкладку,
+            // а сокет уже закрыт: не ждём 3 секунды таймера, синхронизируемся сразу.
+            window.addEventListener('pageshow', function (ev) {
+                if (ev.persisted) {
+                    resync();
+                }
+            });
+            document.addEventListener('visibilitychange', function () {
+                if (!document.hidden && (!STOCK.ws || STOCK.ws.readyState !== 1)) {
+                    resync();
+                }
+            });
             connect();
         }
 
@@ -125,6 +139,24 @@
                 STOCK.reconnTimer = null;
                 connect();
             }, 3000);
+        }
+
+        // Пересинхронизация: возврат на страницу из истории (в т.ч. bfcache) или
+        // из сна ПК — соединение могло умереть, а дельты потеряться, и страница
+        // осталась бы в устаревшем состоянии до F5. Сервер на КАЖДОЕ подключение
+        // отдаёт полный снапшот, поэтому переподключение = «догнать реальность».
+        function resync() {
+            if (STOCK.reconnTimer) {
+                clearTimeout(STOCK.reconnTimer);
+                STOCK.reconnTimer = null;
+            }
+            if (STOCK.ws) {
+                STOCK.ws.onclose = null; // старый сокет не должен звать переподключение
+                try {
+                    STOCK.ws.close();
+                } catch (e) { /* noop */ }
+            }
+            connect();
         }
 
         function setStatus(text, cls) {
