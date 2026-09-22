@@ -392,8 +392,11 @@
             } else {
                 scan.needs_product = true; // правило не вычитывает код товара
             }
+            // Вес — только весовым товарам (uom кг/г/т): у штучного поле веса
+            // правила не вычитывается вовсе, поэтому порядок правил одной длины
+            // на приёмку не влияет.
             var w = sliceRule(rule, raw, 1);
-            if (w) { scan.weight_g = parseInt(w, 10); scan._w_code = true; }
+            if (w && scan.weighted === true) { scan.weight_g = parseInt(w, 10); scan._w_code = true; }
             var pd = sliceRule(rule, raw, 2);
             if (pd) { scan.produced_on = parseDate(pd); scan._pd_code = true; }
             var bd = sliceRule(rule, raw, kind === 'box' ? 4 : 3);
@@ -401,7 +404,7 @@
             if (kind === 'box') {
                 var q = sliceRule(rule, raw, 2);
                 if (q) { scan.qty = parseInt(q, 10); scan.declared_qty = scan.qty; }
-                scan.declared_weight_g = scan.weight_g;
+                if (scan.weight_g) { scan.declared_weight_g = scan.weight_g; }
             }
             return scan;
         }
@@ -415,11 +418,13 @@
                 res = {
                     kind: 'item', raw: raw, internal: true, product_id: prod.product_id, internal_code: code,
                     name: prod.name, weighted: prod.weighted,
-                    weight_g: parseInt(raw.substr(8, 5), 10),
                     produced_on: parseDate(raw.substr(13, 8)),
                     best_before: parseDate(raw.substr(21, 8))
                 };
-                res._prod_code = true; res._w_code = true; res._pd_code = true; res._bb_code = true;
+                res._prod_code = true; res._pd_code = true; res._bb_code = true;
+                // Вес ярлыка — только весовому товару: у штучного в 29-значном
+                // коде стоит заглушка 1 г (она нужна лишь полю кода).
+                if (prod.weighted) { res.weight_g = parseInt(raw.substr(8, 5), 10); res._w_code = true; }
                 return res;
             }
             if (raw.length === 33) {
@@ -429,14 +434,18 @@
                 res = {
                     kind: 'box', raw: raw, internal: true, product_id: prod.product_id, internal_code: code,
                     name: prod.name, weighted: prod.weighted,
-                    weight_g: parseInt(raw.substr(8, 6), 10),
                     qty: parseInt(raw.substr(14, 3), 10),
-                    declared_qty: parseInt(raw.substr(14, 3), 10),
-                    declared_weight_g: parseInt(raw.substr(8, 6), 10),
                     produced_on: parseDate(raw.substr(17, 8)),
                     best_before: parseDate(raw.substr(25, 8))
                 };
-                res._prod_code = true; res._w_code = true; res._pd_code = true; res._bb_code = true;
+                res.declared_qty = res.qty;
+                res._prod_code = true; res._pd_code = true; res._bb_code = true;
+                // Заявленный вес коробки — только весовым: у штучных веса нет.
+                if (prod.weighted) {
+                    res.weight_g = parseInt(raw.substr(8, 6), 10);
+                    res.declared_weight_g = res.weight_g;
+                    res._w_code = true;
+                }
                 return res;
             }
             var i, r;

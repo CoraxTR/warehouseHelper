@@ -169,6 +169,8 @@ func parseRules(rules []string, parse func(string) (decoderules.Rule, error)) ([
 
 // Resolve распознаёт скан: внутренний формат (29/33) или правило поставщика.
 // Ручные поля (товар, вес, даты) применяются, если поле не вычитывается.
+// Вес попадает в скан только весовым товарам (uom кг/г/т): у штучного он
+// гасится, поэтому порядок правил одной длины на приёмку не влияет.
 func (uc *ReceivingUseCase) Resolve(ctx context.Context, cache *receiving.Cache, e receiving.ScanEntry) (*receiving.DecodedScan, error) {
 	done := metrics.Track(trackPkg, "Resolve")
 	defer done()
@@ -232,7 +234,9 @@ func (uc *ReceivingUseCase) resolveInternal(ctx context.Context, cache *receivin
 		ProductName:  ref.Name,
 		Weighted:     ref.Weighted,
 	}
-	if code.WeightG > 0 {
+	// Вес — только весовым товарам: у штучного в 29-значном коде этикетки
+	// стоит sentinel 1 г (ExportLabels), в данные приёмки он попадать не должен.
+	if code.WeightG > 0 && ref.Weighted {
 		w := int64(code.WeightG)
 		scan.WeightG = &w
 	}
@@ -246,10 +250,14 @@ func (uc *ReceivingUseCase) resolveInternal(ctx context.Context, cache *receivin
 	}
 	if scan.Kind == receiving.KindBox {
 		q := int64(code.Qty)
-		w := int64(code.WeightG)
 		scan.Qty = int64(code.Qty)
 		scan.DeclaredQty = &q
-		scan.DeclaredWeightG = &w
+		// Заявленный вес коробки — только весовым: у штучных сверять нечего
+		// (веса у вложений нет), см. resolveBox.
+		if ref.Weighted {
+			w := int64(code.WeightG)
+			scan.DeclaredWeightG = &w
+		}
 	} else {
 		scan.Qty = 1
 	}
@@ -275,15 +283,21 @@ func (uc *ReceivingUseCase) resolveByRule(cache *receiving.Cache, rule receiving
 	}
 	scan.ProductID, scan.InternalCode, scan.ProductName = pr.productID, pr.internalCode, pr.name
 	scan.Weighted = pr.weighted
-	if w, ok := sliceRule(rule, raw, 1); ok {
-		g, err := strconv.ParseInt(w, 10, 64)
-		if err != nil || g <= 0 {
-			return nil, fmt.Errorf("вес %q из штрих-кода не число", w)
+	// Вес — только весовым товарам (uom кг/г/т). У штучного поле веса правила
+	// не вычитывается вовсе: иначе «вес» из цифр кода всплыл бы в карточке и на
+	// этикетке, а сама приёмка зависела бы от порядка правил одной длины
+	// (первое правило по длине решает, есть вес или нет).
+	if pr.weighted {
+		if w, ok := sliceRule(rule, raw, 1); ok {
+			g, err := strconv.ParseInt(w, 10, 64)
+			if err != nil || g <= 0 {
+				return nil, fmt.Errorf("вес %q из штрих-кода не число", w)
+			}
+			scan.WeightG = &g
 		}
-		scan.WeightG = &g
-	}
-	if e.ManualWeightG != nil {
-		scan.WeightG = e.ManualWeightG
+		if e.ManualWeightG != nil {
+			scan.WeightG = e.ManualWeightG
+		}
 	}
 
 	// Даты: выработка и срок (ДДММГГГГ) — правило или ручной ввод.
@@ -362,17 +376,21 @@ func resolveManual(cache *receiving.Cache, e receiving.ScanEntry) (*receiving.De
 	if !ok {
 		return nil, fmt.Errorf("товар %q не найден в позициях поставщика", e.ManualProductID)
 	}
-	return &receiving.DecodedScan{
+	scan := &receiving.DecodedScan{
 		Kind:         receiving.KindItem,
 		ProductID:    ref.ProductID,
 		InternalCode: ref.InternalCode,
 		ProductName:  ref.Name,
 		Weighted:     ref.Weighted,
 		Qty:          1,
-		WeightG:      e.ManualWeightG,
 		ProducedOn:   e.ManualProducedOn,
 		BestBefore:   e.ManualBestBefore,
-	}, nil
+	}
+	// Вес — только весовым товарам: у штучного ручной вес гасится.
+	if ref.Weighted {
+		scan.WeightG = e.ManualWeightG
+	}
+	return scan, nil
 }
 
 // resolveProductByRule определяет товар скана: внешний код из правила через
