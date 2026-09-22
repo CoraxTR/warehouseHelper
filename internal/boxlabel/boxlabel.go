@@ -255,6 +255,70 @@ func formatKg(weightG int64) string {
 	return strings.Replace(kg, ".", ",", 1)
 }
 
+// breakCode — спец-код окончания коробки: приёмка перехватывает его в JS до
+// резолва (666), поэтому на наклейке достаточно штрих-кода Code128 с цифрами —
+// закрывать коробку сканом, а не вводом с клавиатуры.
+const breakCode = "666"
+
+// ExportBreakMarker формирует xlsx с наклейкой спец-кода «666»: штрих-код той же
+// геометрией, что на наклейке коробки (72 × 15 мм), ниже — цифры кода. Печатают
+// на лист 75 мм (одна наклейка = одна страница) и клеят у сканера.
+func ExportBreakMarker() (string, error) {
+	f, err := newBreakWorkbook()
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = f.Close() }()
+
+	name := fmt.Sprintf("box_break_%s_%s.xlsx", breakCode, time.Now().Format("20060102_150405"))
+	path := filepath.Join(tempdir.Dir, name)
+	if err := f.SaveAs(path); err != nil {
+		return "", fmt.Errorf("сохранить файл наклейки %s: %w", breakCode, err)
+	}
+	return path, nil
+}
+
+// newBreakWorkbook собирает книгу наклейки спец-кода: строка штрих-кода и
+// строка цифр — высоты берутся из раскладки наклейки коробки (rowHeightPt).
+func newBreakWorkbook() (*excelize.File, error) {
+	f := excelize.NewFile()
+	sheet := f.GetSheetName(0)
+
+	styles, err := newStyles(f)
+	if err != nil {
+		return nil, err
+	}
+	pngBytes, err := generateBarcodePNG(breakCode, barcodeW, barcodeH)
+	if err != nil {
+		return nil, fmt.Errorf("штрих-код %s: %w", breakCode, err)
+	}
+
+	_ = f.AddPictureFromBytes(sheet, "B1", &excelize.Picture{
+		Extension: ".png",
+		File:      pngBytes,
+		Format: &excelize.GraphicOptions{
+			ScaleX:      1.0,
+			ScaleY:      1.0,
+			OffsetX:     imgOffsetX,
+			OffsetY:     imgOffsetY,
+			Positioning: "oneCell",
+		},
+	})
+	setRow(f, sheet, styles.plain, 1, "")
+	setRow(f, sheet, styles.digits, 2, breakCode)
+
+	_ = f.SetColWidth(sheet, "B", "B", colWidthChars)
+	_ = f.SetPageMargins(sheet, zeroMargins())
+	_ = f.SetDefinedName(&excelize.DefinedName{
+		Name:     "_xlnm.Print_Area",
+		RefersTo: sheet + "!$B$1:$B$2",
+		Scope:    sheet,
+	})
+	// Разрыв после наклейки: следующая начинается с новой страницы.
+	_ = f.InsertPageBreak(sheet, "B3")
+	return f, nil
+}
+
 // zeroMargins — нулевые поля страницы: образец владельца печатается без
 // отступов от края листа (умолчания Excel — 0,75″/0,7″ — сдвигали бы наклейку).
 func zeroMargins() *excelize.PageLayoutMarginsOptions {
