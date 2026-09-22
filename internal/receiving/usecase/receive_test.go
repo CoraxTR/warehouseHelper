@@ -563,6 +563,136 @@ func TestSaveBoxDifferentProducts(t *testing.T) {
 	}
 }
 
+// Ручная коробка (кнопка «Добавить коробку»): кода нет, товар и даты выбраны на
+// карточке коробки, факт считается по вложениям. Заявленных кол-ва и веса у
+// такой коробки нет — сверять не с чем, расхождения не будет.
+func TestSaveManualBox(t *testing.T) {
+	uc, stock := newTestReceive()
+	pd, bb := d(8, 28), d(9, 5)
+
+	res, err := uc.Save(context.Background(), receiving.SaveRequest{
+		SupplierID: "sup-1",
+		Scans: []receiving.ScanEntry{
+			{
+				ManualProductID:  "p1",
+				ManualProducedOn: &pd,
+				ManualBestBefore: &bb,
+				Children: []receiving.ScanEntry{
+					{Raw: itemBarcode},
+					{Raw: itemBarcode},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if len(res.Boxes) != 1 {
+		t.Fatalf("коробок: %d, want 1", len(res.Boxes))
+	}
+	b := res.Boxes[0]
+	if b.Mismatch {
+		t.Fatalf("расхождений у ручной коробки быть не должно: %+v", b)
+	}
+	if b.ProductID != "p1" || b.Qty != 2 || b.WeightG != 500 {
+		t.Fatalf("факт коробки: %+v", b)
+	}
+	if !b.Weighted {
+		t.Fatal("весовому товару нужна пометка weighted — на наклейку идёт вес")
+	}
+	if b.DeclaredQty != nil || b.DeclaredWeightG != nil {
+		t.Fatalf("заявленных значений у ручной коробки нет: %+v", b)
+	}
+	if b.ProducedOn == nil || !b.ProducedOn.Equal(pd) || b.BestBefore == nil || !b.BestBefore.Equal(bb) {
+		t.Fatalf("даты коробки — из карточки: %+v", b)
+	}
+	if len(res.Units) != 2 || !res.Units[0].InBox || res.Units[0].BoxMismatch {
+		t.Fatalf("куски коробки: %+v", res.Units)
+	}
+	if len(stock.lots) != 1 || stock.lots[0].Qty != 2 {
+		t.Fatalf("лоты: %+v", stock.lots)
+	}
+}
+
+// Товар ручной коробки выбран на карточке — он обязан совпасть с товаром
+// вложений, иначе наклейка ушла бы на другую позицию.
+func TestSaveManualBoxOtherProduct(t *testing.T) {
+	uc, _ := newTestReceive()
+	repo, ok := uc.repo.(*stubReceiveRepo)
+	if !ok {
+		t.Fatal("ожидался stubReceiveRepo")
+	}
+	addPieceProduct(repo)
+	pd, bb := d(8, 28), d(9, 5)
+
+	_, err := uc.Save(context.Background(), receiving.SaveRequest{
+		SupplierID: "sup-1",
+		Scans: []receiving.ScanEntry{
+			{
+				ManualProductID:  "p2", // в карточке штучный товар, вложения — p1
+				ManualProducedOn: &pd,
+				ManualBestBefore: &bb,
+				Children:         []receiving.ScanEntry{{Raw: itemBarcode}},
+			},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "не совпадает с товаром вложений") {
+		t.Fatalf("ожидалась ошибка о разных товарах, получил: %v", err)
+	}
+}
+
+// Коробку без вложений принять нечем: Save отклоняет её (страница такое
+// сохранение не отправляет, но запрос мог прийти откуда угодно). Оба пути
+// распознавания коробки — правило поставщика и внутренний ярлык.
+func TestSaveBoxWithoutChildren(t *testing.T) {
+	uc, _ := newTestReceive()
+	const wantErr = "в коробке нет отсканированных товаров"
+
+	_, err := uc.Save(context.Background(), receiving.SaveRequest{
+		SupplierID: "sup-1",
+		Scans:      []receiving.ScanEntry{{Raw: supBoxBarcode}},
+	})
+	if err == nil || !strings.Contains(err.Error(), wantErr) {
+		t.Fatalf("коробка по правилу: ожидалась ошибка о пустой коробке, получил: %v", err)
+	}
+
+	uc2, _ := newTestReceive()
+	repo, ok := uc2.repo.(*stubReceiveRepo)
+	if !ok {
+		t.Fatal("ожидался stubReceiveRepo")
+	}
+	// Внутренний 33-значный ярлык читается, когда правила такой длины нет.
+	repo.supplier.BoxDecodeRules = nil
+	_, err = uc2.Save(context.Background(), receiving.SaveRequest{
+		SupplierID: "sup-1",
+		Scans:      []receiving.ScanEntry{{Raw: boxBarcode}},
+	})
+	if err == nil || !strings.Contains(err.Error(), wantErr) {
+		t.Fatalf("внутренний ярлык: ожидалась ошибка о пустой коробке, получил: %v", err)
+	}
+}
+
+// Наклейки коробок: коробка без срока годности в файл не попадает (33-значный
+// код без дат не собрать), весовость, вес и число вложений переносятся как есть.
+func TestToLabelBoxes(t *testing.T) {
+	pd, bb := d(8, 28), d(9, 5)
+
+	out := toLabelBoxes([]receiving.Box{
+		{InternalCode: intCode, ProductName: "Говядина охл.", Weighted: true, WeightG: 500, Qty: 2, ProducedOn: &pd, BestBefore: &bb},
+		{InternalCode: intCode, ProductName: "Говядина охл.", Weighted: true, WeightG: 250, Qty: 1, ProducedOn: &pd},
+	})
+	if len(out) != 1 {
+		t.Fatalf("наклеек: %d, want 1 (коробка без срока пропускается)", len(out))
+	}
+	got := out[0]
+	if got.InternalCode != intCode || got.WeightG != 500 || got.Qty != 2 || !got.Weighted {
+		t.Fatalf("наклейка: %+v", got)
+	}
+	if !got.BestBefore.Equal(bb) || !got.ProducedOn.Equal(pd) {
+		t.Fatalf("даты наклейки: %+v", got)
+	}
+}
+
 func TestSaveMissingBestBefore(t *testing.T) {
 	uc, _ := newTestReceive()
 

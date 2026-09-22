@@ -141,6 +141,13 @@ func (uc *ReceivingUseCase) resolveBox(ctx context.Context, cache *receiving.Cac
 		units = append(units, unitOf(c, true, false))
 	}
 
+	// Коробка, добавленная оператором руками, кода не имеет (Raw пуст), товар
+	// берёт с карточки: он должен совпасть с товаром вложений, иначе на наклейке
+	// окажется не та позиция.
+	if box.Raw == "" && box.InternalCode != firstCode {
+		return nil, nil, fmt.Errorf("товар коробки (%s) не совпадает с товаром вложений (%s)", box.InternalCode, firstCode)
+	}
+
 	var totalWeight int64
 	for _, u := range units {
 		totalWeight += u.WeightG
@@ -166,6 +173,7 @@ func (uc *ReceivingUseCase) resolveBox(ctx context.Context, cache *receiving.Cac
 		ProductID:       box.ProductID,
 		InternalCode:    box.InternalCode,
 		ProductName:     box.ProductName,
+		Weighted:        weightedChildren,
 		WeightG:         totalWeight,
 		Qty:             actualQty,
 		ProducedOn:      box.ProducedOn,

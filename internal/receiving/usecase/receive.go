@@ -377,9 +377,11 @@ func findProduct(cache *receiving.Cache, productID string) (receiving.ProductRef
 }
 
 // resolveManual собирает скан из ручных полей, когда кода нет вовсе: строка
-// блока ручного ввода (код не распознан полностью) или строка, добавленная
-// оператором руками. Товар берётся из позиций поставщика, вес и даты — из
-// полей строки (полноту проверяет Save: срок обязателен всем, вес — весовым).
+// блока ручного ввода (код не распознан полностью), строка, добавленная
+// оператором руками, или коробка, добавленная кнопкой «Добавить коробку» (у неё
+// к полям строки добавлен подсписок вложений). Товар берётся из позиций
+// поставщика, вес и даты — из полей строки (полноту проверяет Save: срок
+// обязателен всем, вес — весовым).
 func resolveManual(cache *receiving.Cache, e receiving.ScanEntry) (*receiving.DecodedScan, error) {
 	if e.ManualProductID == "" {
 		return nil, errors.New("пустой штрих-код без выбранного товара")
@@ -389,15 +391,23 @@ func resolveManual(cache *receiving.Cache, e receiving.ScanEntry) (*receiving.De
 		return nil, fmt.Errorf("товар %q не найден в позициях поставщика", e.ManualProductID)
 	}
 	scan := &receiving.DecodedScan{
-		Kind:         receiving.KindItem,
 		ProductID:    ref.ProductID,
 		InternalCode: ref.InternalCode,
 		ProductName:  ref.Name,
 		Weighted:     ref.Weighted,
-		Qty:          1,
 		ProducedOn:   e.ManualProducedOn,
 		BestBefore:   e.ManualBestBefore,
 	}
+	// Непустой подсписок делает запись коробкой: кода у такой коробки нет,
+	// заявленных кол-ва и веса тоже — сверять не с чем, факт (вложения и Σ вес)
+	// считает resolveBox. Запись без вложений — ручной кусок, как и раньше.
+	if len(e.Children) > 0 {
+		scan.Kind = receiving.KindBox
+		scan.Qty = int64(len(e.Children))
+		return scan, nil
+	}
+	scan.Kind = receiving.KindItem
+	scan.Qty = 1
 	// Вес — только весовым товарам: у штучного ручной вес гасится.
 	if ref.Weighted {
 		scan.WeightG = e.ManualWeightG

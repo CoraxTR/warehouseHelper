@@ -43,9 +43,11 @@
         <div id="scanner" style="{{if .Error}}display:none;{{end}}">
             <div id="party-row">
                 <button type="button" class="small" id="add-party-btn" onclick="addParty()">+ Партия</button>
+                <button type="button" class="small" id="add-box-btn" onclick="addBox()">Добавить коробку</button>
                 <span class="hint">Партия — это даты (выработка + срок) и строки товара. Товар и вес берутся из кода,
                     даты — из кода, если в партии не заполнены. Сканы идут в активную партию (Партия 1 по умолчанию):
-                    чтобы сменить партию, нажмите на её название.</span>
+                    чтобы сменить партию, нажмите на её название. Коробка без кода — кнопка «Добавить коробку»:
+                    товар и даты выбираются на её карточке, вложения сканируются в коробку, закрытие — 666.</span>
             </div>
             <div id="party-hint" class="hint" style="display:none;"></div>
             <label>Скан (товары и коробки — вперемешку)</label>
@@ -62,6 +64,7 @@
 
             <div id="add-party-bottom">
                 <button type="button" class="small" onclick="addParty()">+ Партия</button>
+                <button type="button" class="small" onclick="addBox()">Добавить коробку</button>
                 <span class="hint">Новая партия сразу становится активной: свои даты и свой список строк.</span>
             </div>
 
@@ -78,6 +81,7 @@
         var activeParty = null;   // партия, в которую идут сканы (Партия 1 создаётся при инициализации)
         var boxMode = false;      // идёт сбор содержимого коробки
         var lastUnits = [];       // принятые куски из ответа Save — для этикеток
+        var lastBoxes = [];       // принятые коробки из ответа Save — для наклеек коробок
         var partySeq = 0;         // нумерация партий
 
         var scanInput = document.getElementById('scan-input');
@@ -397,7 +401,9 @@
             // на приёмку не влияет.
             var w = sliceRule(rule, raw, 1);
             if (w && scan.weighted === true) { scan.weight_g = parseInt(w, 10); scan._w_code = true; }
-            var pd = sliceRule(rule, raw, 2);
+            // Выработка — поле 3 у коробки (2-е — кол-во вложений) и поле 2 у
+            // куска: сдвиг индекса читал бы у коробки кол-во как дату.
+            var pd = sliceRule(rule, raw, kind === 'box' ? 3 : 2);
             if (pd) { scan.produced_on = parseDate(pd); scan._pd_code = true; }
             var bd = sliceRule(rule, raw, kind === 'box' ? 4 : 3);
             if (bd) { scan.best_before = parseDate(bd); scan._bb_code = true; }
@@ -409,8 +415,23 @@
             return scan;
         }
 
+        // resolveScan — зеркало серверного диспетчера Resolve: правила
+        // поставщика раньше внутреннего формата (код поставщика бывает 29/33
+        // знаков, и по длине он разбирался как наш ярлык — товар по первым 8
+        // цифрам, вес и даты из чужих полей, на проде это падало на дате или
+        // принимало мусор). Внутренний формат — запасной путь, когда правила
+        // такой длины у поставщика нет.
         function resolveScan(raw) {
             var code, prod, res;
+            var i, r;
+            for (i = 0; i < CACHE.box_rules.length; i++) {
+                r = CACHE.box_rules[i];
+                if (r.length === raw.length) { return resolveByRule(r, raw, 'box'); }
+            }
+            for (i = 0; i < CACHE.item_rules.length; i++) {
+                r = CACHE.item_rules[i];
+                if (r.length === raw.length) { return resolveByRule(r, raw, 'item'); }
+            }
             if (raw.length === 29) {
                 code = raw.substr(0, 8);
                 prod = CACHE.by_code[code];
@@ -447,15 +468,6 @@
                     res._w_code = true;
                 }
                 return res;
-            }
-            var i, r;
-            for (i = 0; i < CACHE.box_rules.length; i++) {
-                r = CACHE.box_rules[i];
-                if (r.length === raw.length) { return resolveByRule(r, raw, 'box'); }
-            }
-            for (i = 0; i < CACHE.item_rules.length; i++) {
-                r = CACHE.item_rules[i];
-                if (r.length === raw.length) { return resolveByRule(r, raw, 'item'); }
             }
             return {error: 'Штрих-код не распознан: нет правила поставщика и это не внутренний формат'};
         }
@@ -556,6 +568,12 @@
                             '<div class="hint">Внешний код ' + esc(s._code_unknown || '') +
                             ' не заведён у поставщика: добавьте его на карточке поставщика и нажмите «Обновить данные поставщика».</div>';
                     }
+                } else if (s.kind === 'box' && !s.raw) {
+                    // Коробка, добавленная кнопкой «Добавить коробку»: кода нет,
+                    // товар выбирают на карточке. Выбор остаётся видимым и после
+                    // выбора — ошибочную позицию можно исправить.
+                    fixes += '<div class="fix">Товар коробки: ' +
+                        productSelect(m.product_id || '', 'fix-product', 'cardField(this)') + '</div>';
                 }
                 if (s.kind === 'item' && isWeighted(it, null) && !s.weight_g) {
                     cls += ' missing';
@@ -574,7 +592,9 @@
                         esc(m.best_before || '') + '" data-kind="bb" onchange="cardField(this)">' +
                         ' <span class="date-echo" style="color:#66645C;">' + fmtDateRu(m.best_before) + '</span></div>';
                 }
-                if (!s._pd_code && s.kind === 'item') {
+                // Выработка есть у куска и у ручной коробки (у сканной коробки
+                // код несёт только срок: выработку коробки берут из вложений).
+                if (!s._pd_code && (s.kind === 'item' || !s.raw)) {
                     fixes += '<div class="fix">Выработка (необязательно): <input type="date" class="fix-pd" value="' +
                         esc(m.produced_on || '') + '" data-kind="pd" onchange="cardField(this)">' +
                         ' <span class="date-echo" style="color:#66645C;">' + fmtDateRu(m.produced_on) + '</span></div>';
@@ -922,6 +942,20 @@
             return b;
         }
 
+        // addBox — коробка БЕЗ скана: кода у неё нет, товар и даты оператор
+        // выбирает на карточке коробки (как в строке ручного ввода), затем
+        // сканирует вложения и закрывает коробку кодом 666. Ручных полей карточки
+        // (it.manual) у коробки хватает: товар, выработка, срок. Количество
+        // вложений и вес считаются по факту — заявленного у такой коробки нет.
+        function addBox() {
+            var it = {scan: {kind: 'box', raw: ''}, manual: {}, children: [], mismatch: false};
+            items.push(it);
+            boxMode = true;
+            focusTarget = 'keep';
+            render();
+            return it;
+        }
+
         function boxTotalWeight(it) {
             var total = 0;
             var i;
@@ -1090,6 +1124,12 @@
                 if (it.scan.error) { problems.push(it.scan.error); continue; }
 
                 if (it.scan.kind === 'box') {
+                    // Коробка без кода (кнопка «Добавить коробку») товар берёт
+                    // только с карточки: без него не собрать 33-значный код наклейки.
+                    if (!it.scan.product_id) {
+                        problems.push('Коробка ' + (it.scan.raw || 'без кода') + ': не выбран товар — выберите позицию на карточке коробки');
+                        continue;
+                    }
                     if (it.children.length === 0) { problems.push('Коробка без товаров'); continue; }
                     var kids = [];
                     var firstCode = null;
@@ -1146,6 +1186,7 @@
 
         function showReport(resp) {
             lastUnits = resp.units || [];
+            lastBoxes = resp.boxes || [];
             var html = '<h1 style="margin-top:20px;">Принято</h1>';
             if (!resp.rows || !resp.rows.length) {
                 html += '<div class="error">Ничего не принято</div>';
@@ -1164,8 +1205,8 @@
 
             var mismatch = 0;
             var i;
-            for (i = 0; i < resp.boxes.length; i++) {
-                if (resp.boxes[i].mismatch) { mismatch++; }
+            for (i = 0; i < lastBoxes.length; i++) {
+                if (lastBoxes[i].mismatch) { mismatch++; }
             }
             if (mismatch) {
                 html += '<div class="error" style="margin-top:10px;">Расхождение в ' + mismatch + ' коробке(ах): принято как есть, проверьте комплектацию.</div>';
@@ -1183,8 +1224,24 @@
                 html += '<div class="hint" style="margin-top:10px;color:#856404;background:#fff3cd;border:1px solid #ffeeba;padding:8px 10px;">Кусков без даты выработки: ' + noPd + ' — для них этикетка не сформируется (без выработки не собрать полный внутренний код).</div>';
             }
 
+            // Наклейка коробки собирается только из полных данных: коробка без
+            // срока годности в файл не попадёт (33-значный код без даты не собрать).
+            var noBoxBb = 0;
+            for (i = 0; i < lastBoxes.length; i++) {
+                if (!lastBoxes[i].best_before) { noBoxBb++; }
+            }
+            if (noBoxBb > 0) {
+                html += '<div class="hint" style="margin-top:10px;color:#856404;background:#fff3cd;border:1px solid #ffeeba;padding:8px 10px;">Коробок без срока годности: ' + noBoxBb + ' — наклейка из них не сформируется (без срока не собрать полный внутренний код).</div>';
+            }
+
             html += '<button onclick="downloadLabels()">Скачать этикетки (xlsx)</button>';
+            if (lastBoxes.length) {
+                html += ' <button onclick="downloadBoxLabels()">Скачать наклейки на коробки (xlsx)</button>';
+            }
             html += '<p class="hint">Этикетка — на каждый принятый кусок (включая куски из коробок): штрих-код 29 цифр «код + вес + выработка + срок», скан пойдёт в заказы и расформирования.</p>';
+            if (lastBoxes.length) {
+                html += '<p class="hint">Наклейка коробки — на каждую принятую коробку: штрих-код 33 цифры «код + вес + вложения + выработка + срок».</p>';
+            }
             html += '<p><a href="/ms/receive?id={{.Supplier.ID}}">→ Новая приёмка у этого поставщика</a></p>';
             reportBox.innerHTML = html;
             document.getElementById('scanner').style.display = 'none';
@@ -1224,6 +1281,43 @@
                 window.URL.revokeObjectURL(url);
             };
             xhr.send(JSON.stringify({units: lastUnits}));
+        }
+
+        // Скачивание xlsx-наклеек коробок: коробки шлём из ответа Save (сервер их
+        // уже провалидировал), файл формируется на сервере и отдаётся как blob.
+        // Наклейка — на коробку: 33-значный код, вес, вложения, выработка, срок.
+        function downloadBoxLabels() {
+            if (!lastBoxes || !lastBoxes.length) { return; }
+            var xhr = new XMLHttpRequest();
+            xhr.open('POST', '/ms/receive/box-labels', true);
+            xhr.setRequestHeader('Content-Type', 'application/json');
+            xhr.responseType = 'blob';
+            xhr.onreadystatechange = function () {
+                if (xhr.readyState !== 4) { return; }
+                if (xhr.status !== 200) {
+                    var msg = 'Ошибка формирования наклеек коробок (HTTP ' + xhr.status + ')';
+                    var errBlob = xhr.response;
+                    if (errBlob) {
+                        var rd = new FileReader();
+                        rd.onloadend = function () {
+                            alert(rd.result ? msg + ':\n' + rd.result : msg);
+                        };
+                        rd.readAsText(errBlob);
+                    } else {
+                        alert(msg);
+                    }
+                    return;
+                }
+                var url = window.URL.createObjectURL(xhr.response);
+                var a = document.createElement('a');
+                a.href = url;
+                a.download = 'nakleyki-korobok.xlsx';
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                window.URL.revokeObjectURL(url);
+            };
+            xhr.send(JSON.stringify({boxes: lastBoxes}));
         }
 
         scanInput.addEventListener('keydown', function (e) {
