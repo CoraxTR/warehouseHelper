@@ -21,7 +21,7 @@
     </div>
 
     <div class="scan-block">
-        <div class="constraint hint">Коробка — физическая группировка кусков одного товара с одним сроком: в остатки и МойСклад ничего не пишется, результат — файл наклейки. Сканируйте только штрих-коды кусков (29 цифр): один товар и один срок на коробку, коробка (33) не принимается. Повторный скан — отдельный кусок (не дедуплицируется). Наклейку печатать на лист 75×120 мм — одна наклейка на лист.</div>
+        <div class="constraint hint">Содержимое коробки задаёт первый скан: он определяет товар и сроки (выработку и срок годности), остальные сканы обязаны совпадать с ним по товару и срокам. Коробка — физическая группировка: в остатки и МойСклад ничего не пишется, результат — файл наклейки. Сканируйте только штрих-коды кусков (29 цифр): коробка (33) не принимается. Повторный скан — отдельный кусок (не дедуплицируется). Наклейку печатать на лист 75×120 мм — одна наклейка на лист.</div>
         <input id="scan-input" type="text" autocomplete="off" placeholder="Отсканируйте этикетку куска…">
         <div id="scan-error" class="error" style="display:none;"></div>
         <div id="ok-banner" class="banner ok" style="display:none;"></div>
@@ -201,7 +201,6 @@
                     }
                     return;
                 }
-                var warnings = xhr.getResponseHeader('X-Box-Warnings');
                 var name = fileNameFromXhr(xhr);
                 var url = window.URL.createObjectURL(xhr.response);
                 var a = document.createElement('a');
@@ -216,9 +215,6 @@
                 BOX.scans = [];
                 renderAll();
                 var ok = 'Коробка собрана: вложений ' + qty + '. Наклейка скачана (' + name + ') — печатайте на лист 75×120 мм.';
-                if (warnings) {
-                    ok += '<br>' + decodeURIComponent(warnings);
-                }
                 showOk(ok);
                 el('scan-input').focus();
             };

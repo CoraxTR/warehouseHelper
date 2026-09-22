@@ -72,17 +72,17 @@ func ensureTempDir(t *testing.T) {
 	}
 }
 
-// buildBox — сборка коробки стабами модуля: путь к наклейке и предупреждения.
+// buildBox — сборка коробки стабами модуля: путь к наклейке.
 // Ошибка — фатально: отказы проверяет TestCreateBox_Rejects.
-func buildBox(t *testing.T, scans []string) (path string, warnings []string) {
+func buildBox(t *testing.T, scans []string) string {
 	t.Helper()
 	ensureTempDir(t)
-	path, warnings, err := newTestEnv(newStubRepo()).uc.CreateBox(context.Background(), scans)
+	path, err := newTestEnv(newStubRepo()).uc.CreateBox(context.Background(), scans)
 	if err != nil {
 		t.Fatalf("CreateBox: %v", err)
 	}
 	t.Cleanup(func() { _ = os.Remove(path) })
-	return path, warnings
+	return path
 }
 
 // readLabel открывает файл наклейки и читает подписи блока: строку 3 (отступ,
@@ -149,6 +149,14 @@ func labelCases() []boxCase {
 			wantProd:   ruProdLate,
 			wantName:   nameD,
 		},
+		{
+			name:       "даты задаёт первый скан — они же уходят в код наклейки",
+			scans:      []string{etiketaDates(codeA, 250, prodEarly, expMain), etiketaDates(codeA, 250, prodEarly, expMain)},
+			wantQty:    2,
+			wantWeight: 500,
+			wantProd:   ruProdEarly,
+			wantName:   nameA,
+		},
 	}
 }
 
@@ -164,6 +172,11 @@ func rejectCases() []boxCase {
 			name:    "разные сроки годности — отказ",
 			scans:   []string{etiketa(codeA, 500), etiketaDates(codeA, 300, prodLate, expOther)},
 			wantErr: "разные сроки годности",
+		},
+		{
+			name:    "разные даты выработки — отказ",
+			scans:   []string{etiketa(codeD, 1), etiketaDates(codeD, 1, prodEarly, expMain)},
+			wantErr: "разные даты выработки",
 		},
 		{
 			name:    "этикетка коробки (33 цифры) — отказ",
@@ -201,11 +214,8 @@ func rejectCases() []boxCase {
 func TestCreateBox(t *testing.T) {
 	for _, tt := range labelCases() {
 		t.Run(tt.name, func(t *testing.T) {
-			path, warnings := buildBox(t, tt.scans)
+			path := buildBox(t, tt.scans)
 
-			if len(warnings) != 0 {
-				t.Errorf("успешная сборка без предупреждений, got %+v", warnings)
-			}
 			if filepath.Ext(path) != ".xlsx" || !strings.Contains(filepath.Base(path), "box_labels_") {
 				t.Fatalf("путь файла наклейки: %q", path)
 			}
@@ -246,7 +256,7 @@ func TestCreateBox_Rejects(t *testing.T) {
 	for _, tt := range rejectCases() {
 		t.Run(tt.name, func(t *testing.T) {
 			ensureTempDir(t)
-			path, _, err := newTestEnv(newStubRepo()).uc.CreateBox(context.Background(), tt.scans)
+			path, err := newTestEnv(newStubRepo()).uc.CreateBox(context.Background(), tt.scans)
 
 			var ve *ValidationError
 			if !errors.As(err, &ve) {
@@ -262,33 +272,34 @@ func TestCreateBox_Rejects(t *testing.T) {
 	}
 }
 
-// Расхождение выработки не блокирует коробку: в код идёт самая ранняя дата, а
-// оператор получает предупреждение (сколько кусков с другой выработкой).
-func TestCreateBox_ProdDateMismatchWarns(t *testing.T) {
-	path, warnings := buildBox(t, []string{
-		etiketa(codeA, 500), // выработка 01.09.2026
+// Расхождение выработки с первым сканом — ОТКАЗ, а не предупреждение: первый
+// скан задаёт содержимое коробки (товар и обе даты), остальные куски обязаны
+// совпадать с ним. Поведение «выработка — самая ранняя, оператору
+// предупреждение» отменено владельцем 22.09.2026.
+func TestCreateBox_ProdDateMismatchRejects(t *testing.T) {
+	scans := []string{
+		etiketa(codeA, 500), // задаёт коробку: выработка 01.09.2026
 		etiketaDates(codeA, 250, prodEarly, expMain),
 		etiketaDates(codeA, 250, prodEarly, expMain),
-	})
-
-	if len(warnings) != 1 {
-		t.Fatalf("want 1 предупреждение, got %+v", warnings)
-	}
-	if !strings.Contains(warnings[0], "самая ранняя") || !strings.Contains(warnings[0], ruProdEarly) {
-		t.Errorf("предупреждение = %q, want «самая ранняя (%s)»", warnings[0], ruProdEarly)
-	}
-	if !strings.Contains(warnings[0], "1 кусок") {
-		t.Errorf("предупреждение = %q, want счёт кусков с другой выработкой (1 кусок)", warnings[0])
 	}
 
-	code, productName := readLabel(t, path)
-	if code.ProdDate.Format(ruDate) != ruProdEarly {
-		t.Errorf("в код коробки идёт самая ранняя выработка, got %s", code.ProdDate.Format(ruDate))
+	ensureTempDir(t)
+	path, err := newTestEnv(newStubRepo()).uc.CreateBox(context.Background(), scans)
+
+	var ve *ValidationError
+	if !errors.As(err, &ve) {
+		t.Fatalf("want ValidationError, got %v", err)
 	}
-	if code.Qty != 3 || code.WeightG != 1000 {
-		t.Errorf("наклейка: вложений %d / вес %d г, want 3 / 1000 г", code.Qty, code.WeightG)
+	if !strings.Contains(ve.Reason, "разные даты выработки") {
+		t.Errorf("текст отказа = %q, want про разные даты выработки", ve.Reason)
 	}
-	if productName != nameA {
-		t.Errorf("наименование на наклейке = %q, want %q", productName, nameA)
+	// Текст называет обе даты: заданную первым сканом и полученную от второго.
+	for _, want := range []string{ruProdLate, ruProdEarly} {
+		if !strings.Contains(ve.Reason, want) {
+			t.Errorf("текст отказа = %q, want с датой %s", ve.Reason, want)
+		}
+	}
+	if path != "" {
+		t.Errorf("при отказе файл наклейки не создаётся, got %q", path)
 	}
 }

@@ -25,8 +25,8 @@ const (
 )
 
 // boxData — состав коробки, собранный из сканов и каталога: опорный товар
-// (он же подпись наклейки), число вложений, общий вес и даты. Срок у всех
-// сканов коробки общий, поэтому берётся у первого.
+// (он же подпись наклейки), число вложений, общий вес и даты. Товар и обе
+// даты задаёт первый скан, поэтому они берутся у него.
 type boxData struct {
 	product    returns.CatalogProduct
 	qty        int
@@ -38,30 +38,30 @@ type boxData struct {
 // CreateBox — собрать коробку из отсканированных ярлыков кусков (29 цифр) и
 // отдать файл наклейки. Состав не сохраняется: коробка — физическая
 // группировка, в БД уходят только куски (их не трогаем вовсе).
-// Возвращает путь к xlsx-файлу наклейки и предупреждения (батч принят, но
-// оператору стоит знать: например, выработка кусков разошлась).
+// Возвращает путь к xlsx-файлу наклейки.
 //
-// Батч валидируется целиком: ошибка любой строки отклоняет все сканы
-// (ValidationError, на странице — 400 с текстом). Дубликаты сканов — разные
-// куски (этикетки штучных товаров с одним сроком идентичны, повтор неотличим
-// от второго куска), дедупликации нет.
-func (uc *UseCase) CreateBox(ctx context.Context, scans []string) (path string, warnings []string, err error) {
+// Содержимое коробки задаёт первый скан: товар и обе даты (выработка и срок).
+// Каждый следующий скан обязан совпадать с ним — расхождение отклоняет батч
+// целиком (ValidationError, на странице — 400 с текстом). Дубликаты сканов —
+// разные куски (этикетки штучных товаров с одним сроком идентичны, повтор
+// неотличим от второго куска), дедупликации нет.
+func (uc *UseCase) CreateBox(ctx context.Context, scans []string) (path string, err error) {
 	parsed, codes, err := parseBoxScans(scans)
 	if err != nil {
-		return "", nil, err
+		return "", err
 	}
 
 	products, err := uc.catalog.ProductsByInternalCodes(ctx, codes)
 	if err != nil {
-		return "", nil, err
+		return "", err
 	}
 
 	box, err := collectBox(parsed, products)
 	if err != nil {
-		return "", nil, err
+		return "", err
 	}
 	if err := checkBoxLimits(box); err != nil {
-		return "", nil, err
+		return "", err
 	}
 
 	weight := box.weightG
@@ -81,10 +81,10 @@ func (uc *UseCase) CreateBox(ctx context.Context, scans []string) (path string, 
 		BestBefore:   box.bestBefore,
 	}})
 	if err != nil {
-		return "", nil, fmt.Errorf("наклейка коробки: %w", err)
+		return "", fmt.Errorf("наклейка коробки: %w", err)
 	}
 
-	return path, boxWarnings(parsed, box.producedOn), nil
+	return path, nil
 }
 
 // parseBoxScans — разбор и проверка сканов батча: в коробку идут только куски
@@ -115,10 +115,10 @@ func parseBoxScans(scans []string) ([]innercode.Code, []string, error) {
 	return parsed, codes, nil
 }
 
-// collectBox — состав коробки по сканам и каталогу: опорный товар задаёт первый
-// скан (у коробки одна позиция и один срок), выработка — самая ранняя из
-// сканов. Расхождение (чужой товар, другой срок, товар вне каталога) —
-// ValidationError: коробку из таких сканов не собрать.
+// collectBox — состав коробки по сканам и каталогу: товар и обе даты задаёт
+// первый скан (у коробки одна позиция, одна выработка и один срок). Каждый
+// следующий скан обязан совпадать с ним: расхождение (чужой товар, другие
+// даты, товар вне каталога) отклоняет батч — ValidationError.
 func collectBox(parsed []innercode.Code, products map[string]returns.CatalogProduct) (boxData, error) {
 	first := parsed[0]
 	firstProduct, err := catalogProduct(products, first.InternalCode)
@@ -139,8 +139,9 @@ func collectBox(parsed []innercode.Code, products map[string]returns.CatalogProd
 			return boxData{}, &ValidationError{Reason: fmt.Sprintf("в коробке разные сроки годности (%s и %s) — коробка собирается с одним сроком",
 				hintDate(first.ExpDate), hintDate(code.ExpDate))}
 		}
-		if code.ProdDate.Before(box.producedOn) {
-			box.producedOn = code.ProdDate
+		if !code.ProdDate.Equal(first.ProdDate) {
+			return boxData{}, &ValidationError{Reason: fmt.Sprintf("в коробке разные даты выработки (%s и %s) — первый скан задаёт даты коробки",
+				hintDate(first.ProdDate), hintDate(code.ProdDate))}
 		}
 		box.qty++
 		box.weightG += int64(code.WeightG)
@@ -173,43 +174,7 @@ func checkBoxLimits(box boxData) error {
 	return nil
 }
 
-// boxWarnings — предупреждения оператору по принятому батчу: расхождение
-// выработки не отказ (коробку собирают физически, а в код идёт самая ранняя
-// выработка) — сообщаем, у скольких кусков выработка другая.
-func boxWarnings(parsed []innercode.Code, producedOn time.Time) []string {
-	other := countOtherProduced(parsed, producedOn)
-	if other == 0 {
-		return nil
-	}
-	return []string{fmt.Sprintf("выработка взята самая ранняя (%s): у %d %s выработка другая",
-		hintDate(producedOn), other, kuskWord(other))}
-}
-
-// countOtherProduced — сколько сканов пришло с выработкой, отличной от взятой
-// в коробку (самой ранней).
-func countOtherProduced(parsed []innercode.Code, producedOn time.Time) int {
-	other := 0
-	for _, code := range parsed {
-		if !code.ProdDate.Equal(producedOn) {
-			other++
-		}
-	}
-	return other
-}
-
 // hintDate — дата в текстах страницы: 29.08.2026.
 func hintDate(t time.Time) string {
 	return t.Format("02.01.2006")
-}
-
-// kuskWord — слово «кусок» в нужной форме: 1 кусок, 2 куска, 5 кусков.
-func kuskWord(n int) string {
-	switch {
-	case n%10 == 1 && n%100 != 11:
-		return "кусок"
-	case n%10 >= 2 && n%10 <= 4 && (n%100 < 12 || n%100 > 14):
-		return "куска"
-	default:
-		return "кусков"
-	}
 }

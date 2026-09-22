@@ -7,9 +7,7 @@ import (
 	"html/template"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"path/filepath"
-	"strings"
 
 	retucase "warehouseHelper/internal/returns/usecase"
 )
@@ -31,8 +29,8 @@ func (h *Handler) GoodsBoxPage(w http.ResponseWriter, _ *http.Request) {
 
 // GoodsBoxSave — POST /goods/box/save: собрать коробку по сканам. body:
 // {"scans":[...]}. 200 — xlsx-наклейка как attachment; 400 — батч отклонён
-// целиком (текст причины); 500 — сбой. Предупреждения (расхождение
-// выработки) уходят заголовком X-Box-Warnings: тело ответа занято файлом.
+// целиком (текст причины: например, скан не совпал с первым по товару или
+// датам); 500 — сбой.
 func (h *Handler) GoodsBoxSave(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Scans []string `json:"scans"`
@@ -43,7 +41,7 @@ func (h *Handler) GoodsBoxSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	path, warnings, err := h.returnsUC.CreateBox(r.Context(), req.Scans)
+	path, err := h.returnsUC.CreateBox(r.Context(), req.Scans)
 	if err != nil {
 		var ve *retucase.ValidationError
 		switch {
@@ -57,9 +55,6 @@ func (h *Handler) GoodsBoxSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if len(warnings) > 0 {
-		w.Header().Set("X-Box-Warnings", url.QueryEscape(strings.Join(warnings, "; ")))
-	}
 	w.Header().Set("Content-Disposition", "attachment; filename="+filepath.Base(path))
 	w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 	http.ServeFile(w, r, path)
