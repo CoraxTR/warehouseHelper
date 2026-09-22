@@ -18,8 +18,8 @@ import (
 )
 
 // d — дата 2026 года: в фикстурах наклеек других лет нет.
-func d(m time.Month, day int) time.Time {
-	return time.Date(2026, m, day, 0, 0, 0, 0, time.UTC)
+func d(m time.Month) time.Time {
+	return time.Date(2026, m, 29, 0, 0, 0, 0, time.UTC)
 }
 
 // weightBox — весовая коробка: 10 вложений по 250 г, код товара 00210003.
@@ -30,8 +30,8 @@ func weightBox() Box {
 		Weighted:     true,
 		WeightG:      2500,
 		Qty:          10,
-		ProducedOn:   d(time.August, 29),
-		BestBefore:   d(time.September, 29),
+		ProducedOn:   d(time.August),
+		BestBefore:   d(time.September),
 	}
 }
 
@@ -42,8 +42,8 @@ func pieceBox() Box {
 		ProductName:  "Хлеб Бородинский",
 		Weighted:     false,
 		Qty:          6,
-		ProducedOn:   d(time.August, 29),
-		BestBefore:   d(time.September, 29),
+		ProducedOn:   d(time.August),
+		BestBefore:   d(time.September),
 	}
 }
 
@@ -67,8 +67,8 @@ func sheetXML(t *testing.T, f *excelize.File) string {
 		if err != nil {
 			t.Fatalf("open sheet1.xml: %v", err)
 		}
-		defer func() { _ = rc.Close() }()
 		data, err := io.ReadAll(rc)
+		_ = rc.Close()
 		if err != nil {
 			t.Fatalf("read sheet1.xml: %v", err)
 		}
@@ -151,7 +151,7 @@ func TestNewWorkbookWeightBox(t *testing.T) {
 	// Разрыв после первой наклейки: строка 8 в Excel = id 7 в XML (нумерация с нуля).
 	xml := sheetXML(t, f)
 	if !strings.Contains(xml, "<brk id=\"7\"") {
-		t.Errorf("нет разрыва страницы после первой наклейки (строка 8)")
+		t.Error("нет разрыва страницы после первой наклейки (строка 8)")
 	}
 }
 
@@ -218,7 +218,7 @@ func TestNewWorkbookSkipsBoxWithoutDates(t *testing.T) {
 // Export пишет файл в tempdir и возвращает путь к нему.
 func TestExportWritesFile(t *testing.T) {
 	// temp/ — рабочая директория приложения; в тесте её может не быть.
-	if err := os.MkdirAll(tempdir.Dir, 0o755); err != nil {
+	if err := os.MkdirAll(tempdir.Dir, 0o750); err != nil {
 		t.Fatalf("MkdirAll(%s): %v", tempdir.Dir, err)
 	}
 	path, err := Export([]Box{weightBox()})

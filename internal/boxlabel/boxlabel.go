@@ -127,7 +127,7 @@ func newWorkbook(boxes []Box) (*excelize.File, int, error) {
 		}
 
 		// Строка 1 блока — отступ, чтобы наклейка не прилипала к краю листа.
-		setRow(f, sheet, styles.plain, row, "", true)
+		setRow(f, sheet, styles.plain, row, "")
 		row++
 
 		// Строка 2: штрих-код.
@@ -143,28 +143,28 @@ func newWorkbook(boxes []Box) (*excelize.File, int, error) {
 				Positioning: "oneCell",
 			},
 		})
-		setRow(f, sheet, styles.plain, row, "", true)
+		setRow(f, sheet, styles.plain, row, "")
 		row++
 
 		// Строка 3: цифры кода (ручной ввод, если сканер не читает).
-		setRow(f, sheet, styles.digits, row, code, true)
+		setRow(f, sheet, styles.digits, row, code)
 		row++
 
 		// Строка 4: наименование товара.
-		setRow(f, sheet, styles.name, row, b.ProductName, true)
+		setRow(f, sheet, styles.name, row, b.ProductName)
 		row++
 
 		// Строка 5: вес и число вложений.
-		setRow(f, sheet, styles.amount, row, caption(b), true)
+		setRow(f, sheet, styles.amount, row, caption(b))
 		row++
 
 		// Строка 6: даты — выработка и срок, по строке на дату (две даты одной
 		// строкой в 75 мм не влезают при шрифте 14).
-		setRow(f, sheet, styles.name, row, dateCaption(b), true)
+		setRow(f, sheet, styles.name, row, dateCaption(b))
 		row++
 
 		// Строка 7: нижний отступ.
-		setRow(f, sheet, styles.plain, row, "", true)
+		setRow(f, sheet, styles.plain, row, "")
 		row++
 
 		labels++
@@ -226,14 +226,13 @@ func newStyles(f *excelize.File) (labelStyles, error) {
 
 // setRow пишет значение в колонку B заданной строки, ставит стиль и высоту
 // строки по лейауту (heightIdx — индекс строки внутри блока наклейки).
-func setRow(f *excelize.File, sheet string, style, row int, value string, withHeight bool) {
+// setRow пишет значение в колонку B заданной строки, ставит стиль и высоту
+// строки по раскладке наклейки (rowHeightMM).
+func setRow(f *excelize.File, sheet string, style, row int, value string) {
 	axis := fmt.Sprintf("B%d", row)
 	_ = f.SetCellValue(sheet, axis, value)
 	_ = f.SetCellStyle(sheet, axis, axis, style)
-	if withHeight {
-		idx := (row - 1) % len(rowHeightMM)
-		_ = f.SetRowHeight(sheet, row, rowHeightMM[idx]*mmToPt)
-	}
+	_ = f.SetRowHeight(sheet, row, rowHeightMM[(row-1)%len(rowHeightMM)]*mmToPt)
 }
 
 // caption — строка под штрих-кодом: вес и число вложений. У штучного товара
