@@ -540,7 +540,7 @@
         }
 
         // productSelect: data-kind="product" обязателен — иначе диспетчер полей
-        // (cardField/partyField) молча ничего не делает. dataR — индекс строки.
+        // (partyField/boxField) молча ничего не делает. dataR — индекс строки.
         function productSelect(selectedId, cls, handler, dataR, attrs) {
             var html = '<select class="' + (cls || 'fix-product') + '"' +
                 (handler ? ' data-kind="product" onchange="' + handler + '"' : '') +
@@ -586,102 +586,6 @@
                 out.bb = bb;
             }
             return out;
-        }
-
-        function scanCard(it) {
-            var s = it.scan;
-            var m = it.manual || {};
-            var cls = 'scan-card';
-            var meta = '';
-            var fixes = '';
-            var e = effDates(it, null);
-
-            if (s.error) {
-                cls += ' error-card';
-                meta = 'НЕ РАСПОЗНАНО';
-            } else {
-                if (s.kind === 'box') { cls += ' box'; }
-                if (!s.product_id) { cls += ' missing'; }
-                var declared = '';
-                if (s.kind === 'box' && s.declared_qty) {
-                    declared = 'заявлено: ' + s.declared_qty + ' шт, ' + fmtWeight(s.declared_weight_g) + ' — ';
-                }
-                meta = declared + (s.weight_g ? 'вес ' + fmtWeight(s.weight_g) + ', ' : '') +
-                    (e.pd ? 'выработка ' + e.pd + ', ' : '') +
-                    (e.bb ? 'срок ' + e.bb : '');
-
-                if (s.needs_product) {
-                    cls += ' missing';
-                    if (s.kind === 'box') {
-                        fixes += '<div class="fix">Товар коробки не определён: ' +
-                            productSelect(m.product_id || '', 'fix-product', 'cardField(this)') + '</div>';
-                    } else {
-                        fixes += '<div class="fix">Код не заведён — выберите позицию: ' +
-                            productSelect(m.product_id || '', 'fix-product', 'cardField(this)') + '</div>' +
-                            '<div class="hint">Внешний код ' + esc(s._code_unknown || '') +
-                            ' не заведён у поставщика: добавьте его на карточке поставщика и нажмите «Обновить данные поставщика».</div>';
-                    }
-                } else if (s.kind === 'box' && !s.raw) {
-                    // Коробка, добавленная кнопкой «Добавить коробку»: кода нет,
-                    // товар выбирают на карточке. Выбор остаётся видимым и после
-                    // выбора — ошибочную позицию можно исправить.
-                    fixes += '<div class="fix">Товар коробки: ' +
-                        productSelect(m.product_id || '', 'fix-product', 'cardField(this)') + '</div>';
-                }
-                if (s.kind === 'item' && isWeighted(it, null) && !s.weight_g) {
-                    cls += ' missing';
-                    fixes += '<div class="fix">Вес не в коде (граммы): ' +
-                        '<input type="number" class="fix-weight" min="1" placeholder="граммы" value="' + esc(m.weight_g || '') +
-                        '" data-kind="weight" onchange="cardField(this)"> г</div>';
-                }
-                if (!e.bb) {
-                    cls += ' missing';
-                }
-                // Поля дат показываем всегда, когда код их не дал, — чтобы эхо
-                // «дд.мм.гггг» оставалось видимым и перестановку день/месяц было
-                // видно сразу, а не только в момент ввода.
-                if (!s._bb_code) {
-                    fixes += '<div class="fix">Срок не в коде: <input type="date" class="fix-bb" value="' +
-                        esc(m.best_before || '') + '" data-kind="bb" onchange="cardField(this)">' +
-                        ' <span class="date-echo" style="color:#66645C;">' + fmtDateRu(m.best_before) + '</span></div>';
-                }
-                // Выработка есть у куска и у ручной коробки (у сканной коробки
-                // код несёт только срок: выработку коробки берут из вложений).
-                if (!s._pd_code && (s.kind === 'item' || !s.raw)) {
-                    fixes += '<div class="fix">Выработка (необязательно): <input type="date" class="fix-pd" value="' +
-                        esc(m.produced_on || '') + '" data-kind="pd" onchange="cardField(this)">' +
-                        ' <span class="date-echo" style="color:#66645C;">' + fmtDateRu(m.produced_on) + '</span></div>';
-                }
-            }
-
-            var html = '<div class="' + cls + '">';
-            html += '<button type="button" class="small danger remove" onclick="removeItem(this)">✕</button>';
-            if (s.error) {
-                html += '<div class="name">' + esc(s.error) + '</div><div class="meta">' + esc(s.raw) + '</div>';
-            } else {
-                html += '<div class="name">' + esc(s.name || '???') + (s.kind === 'box' ? ' — коробка' : '') + '</div>';
-                html += '<div class="meta">' + (meta || 'данные не вычитываются') +
-                    ' <span class="mismatch" style="display:' + (it.mismatch || e.conflict ? 'inline' : 'none') + '">' +
-                    (e.conflict ? 'даты ≠ партии' : 'расхождение!') + '</span></div>';
-            }
-            html += fixes;
-
-            if (s.kind === 'box') {
-                html += '<div class="children">';
-                var i, c;
-                for (i = 0; i < it.children.length; i++) {
-                    c = it.children[i];
-                    html += '<div class="child-row">' +
-                        '<span class="cname">' + esc(c.scan.name || c.scan.error || '???') + '</span>' +
-                        '<span class="cmeta">' + fmtWeight(c.scan.weight_g) + ' · ' + esc(c.scan.best_before || '—') + '</span>' +
-                        '<button type="button" class="small danger" data-r="' + i + '" onclick="removeChild(this)">✕</button>' +
-                        '</div>';
-                }
-                html += '<div class="hint">в коробке: ' + it.children.length + ' шт, ' + fmtWeight(boxTotalWeight(it)) + '</div>';
-                html += '</div>';
-            }
-            html += '</div>';
-            return html;
         }
 
         // partyCard — партия: только даты (выработка + срок) и строки. Товар и
@@ -788,8 +692,9 @@
             focusTarget = null;
             var html = '';
             var i;
+            // items держит только партии: коробки живут внутри партии (party.boxes).
             for (i = 0; i < items.length; i++) {
-                html += items[i].kind === 'party' ? partyCard(items[i]) : scanCard(items[i]);
+                html += partyCard(items[i]);
             }
             scansBox.innerHTML = html;
             boxHint.style.display = boxMode ? 'block' : 'none';
@@ -845,47 +750,11 @@
             render();
         }
 
-        function removeChild(btn) {
-            var idx = itemIndexFromDom(btn);
-            var r = parseInt(btn.getAttribute('data-r'), 10);
-            if (idx < 0) { return; }
-            items[idx].children.splice(r, 1);
-            render();
-        }
-
         function removeRow(btn) {
             var idx = itemIndexFromDom(btn);
             var r = parseInt(btn.getAttribute('data-r'), 10);
             if (idx < 0) { return; }
             items[idx].rows.splice(r, 1);
-            render();
-        }
-
-        // cardField — ручные поля карточки (вес, даты, товар коробки).
-        function cardField(el) {
-            var idx = itemIndexFromDom(el);
-            if (idx < 0) { return; }
-            var it = items[idx];
-            it.manual = it.manual || {};
-            var kind = el.getAttribute('data-kind');
-            var v = el.value;
-            if (isDateInput(el) && v && !inDateBounds(v)) {
-                // Пришло мимо цифровой проверки (нативный календарь, автозаполнение):
-                // принимаем только даты в допуске «сегодня ±5 лет» (жалоба 14.09).
-                el.value = '';
-                statusLine.textContent = 'Дата ' + fmtDateRu(v) + ' вне допуска: принимаются ' + boundsText() +
-                    ' (сегодня ±5 лет)';
-                applyIsoDate(el, '');
-                return;
-            }
-            if (kind === 'weight') { it.manual.weight_g = v ? parseInt(v, 10) : null; }
-            else if (kind === 'pd') { it.manual.produced_on = v || null; }
-            else if (kind === 'bb') { it.manual.best_before = v || null; }
-            else if (kind === 'product') {
-                it.manual.product_id = v || null;
-                applyProductToScan(it.scan, v || '');
-            }
-            focusTarget = focusSpec(el);
             render();
         }
 
@@ -1428,18 +1297,6 @@
                     continue;
                 }
 
-                if (it.scan.error) { problems.push(it.scan.error); continue; }
-
-                if (!it.scan.product_id) {
-                    problems.push('Не определён товар: ' + (it.scan.raw || 'без кода'));
-                    continue;
-                }
-                var ce = effDates(it, null);
-                if (isWeighted(it, null) && !it.scan.weight_g && !(it.manual && it.manual.weight_g)) {
-                    problems.push('Не указан вес в граммах для ' + it.scan.raw); continue;
-                }
-                if (!ce.bb) { problems.push('Не указан срок для ' + it.scan.raw); continue; }
-                scans.push(collectItem(it, null));
             }
 
             if (problems.length) {
