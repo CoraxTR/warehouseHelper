@@ -22,7 +22,7 @@ import (
 // идентичны, повтор неотличим от второго куска. Возвращает число кусков.
 func (uc *UseCase) ManualReturn(ctx context.Context, scans []string) (int, error) {
 	if len(scans) == 0 {
-		return 0, &ValidationError{Reason: "нет сканов"}
+		return 0, &ValidationError{Reason: noScansReason}
 	}
 
 	parsed := make([]innercode.Code, 0, len(scans))

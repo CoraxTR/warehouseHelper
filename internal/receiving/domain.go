@@ -144,6 +144,7 @@ type Box struct {
 	ProductID       string     `json:"product_id"`
 	InternalCode    string     `json:"internal_code"`
 	ProductName     string     `json:"name"`
+	Weighted        bool       `json:"weighted"` // весовой товар: на наклейку идёт вес, штучному — только вложения
 	WeightG         int64      `json:"weight_g"` // Σ весов кусков
 	Qty             int64      `json:"qty"`
 	ProducedOn      *time.Time `json:"produced_on"`

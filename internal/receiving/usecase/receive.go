@@ -181,12 +181,12 @@ func (uc *ReceivingUseCase) Resolve(ctx context.Context, cache *receiving.Cache,
 		return resolveManual(cache, e)
 	}
 
-	// Внутренний формат склада: кусок 29 / коробка 33.
-	if len(raw) == 29 || len(raw) == 33 {
-		return uc.resolveInternal(ctx, cache, raw, e)
-	}
-
-	// Внешние коды поставщика: сначала коробки (по длине), затем куски.
+	// Внешние коды поставщика идут раньше внутреннего формата: вид скана решает
+	// подходящее правило, а не длина строки. Код поставщика бывает любой длины —
+	// в том числе 29/33, как наши внутренние форматы, — и по длине он разбирался
+	// бы как внутренний (товар «по первым восьми цифрам», вес и даты из чужих
+	// полей). Поэтому режим коробки включает скан по правилу коробки, а не
+	// 33-значная длина. Сначала коробки (по длине), затем куски.
 	for _, rule := range cache.BoxRules {
 		if rule.Length != len(raw) {
 			continue
@@ -198,6 +198,13 @@ func (uc *ReceivingUseCase) Resolve(ctx context.Context, cache *receiving.Cache,
 			continue
 		}
 		return uc.resolveByRule(cache, rule, raw, e, receiving.KindItem)
+	}
+
+	// Внутренний формат склада: кусок 29 / коробка 33 — запасной путь, когда ни
+	// одно правило поставщика такой длины не заявило (например, скан своей
+	// этикетки).
+	if len(raw) == 29 || len(raw) == 33 {
+		return uc.resolveInternal(ctx, cache, raw, e)
 	}
 
 	return nil, receiving.ErrScanUnknown
@@ -300,12 +307,17 @@ func (uc *ReceivingUseCase) resolveByRule(cache *receiving.Cache, rule receiving
 		}
 	}
 
-	// Даты: выработка и срок (ДДММГГГГ) — правило или ручной ввод.
-	dateField := 3
+	// Даты: выработка и срок (ДДММГГГГ) — правило или ручной ввод. В правиле
+	// коробки между весом и датами стоит кол-во вложений, поэтому у коробки
+	// выработка — четвёртое поле (BoxProducedOn), а не третье: чтение её из
+	// поля кол-ва ломало приёмку коробок (поле «010» — не дата).
+	producedField := decoderules.FieldProducedOn
+	bestBeforeField := decoderules.FieldBestBefore
 	if kind == receiving.KindBox {
-		dateField = 4
+		producedField = decoderules.BoxProducedOn
+		bestBeforeField = decoderules.BoxBestBefore
 	}
-	producedOn, hasProduced, err := resolveRuleDate(rule, raw, 2, "дата выработки")
+	producedOn, hasProduced, err := resolveRuleDate(rule, raw, producedField, "дата выработки")
 	if err != nil {
 		return nil, err
 	}
@@ -315,7 +327,7 @@ func (uc *ReceivingUseCase) resolveByRule(cache *receiving.Cache, rule receiving
 	if e.ManualProducedOn != nil {
 		scan.ProducedOn = e.ManualProducedOn
 	}
-	bestBefore, hasBestBefore, err := resolveRuleDate(rule, raw, dateField, "срок годности")
+	bestBefore, hasBestBefore, err := resolveRuleDate(rule, raw, bestBeforeField, "срок годности")
 	if err != nil {
 		return nil, err
 	}
@@ -327,7 +339,7 @@ func (uc *ReceivingUseCase) resolveByRule(cache *receiving.Cache, rule receiving
 	}
 
 	if kind == receiving.KindBox {
-		if q, ok := sliceRule(rule, raw, 2); ok {
+		if q, ok := sliceRule(rule, raw, decoderules.BoxQty); ok {
 			qty, err := strconv.ParseInt(q, 10, 64)
 			if err != nil || qty <= 0 {
 				return nil, fmt.Errorf("кол-во вложений %q из штрих-кода не число", q)
@@ -365,9 +377,11 @@ func findProduct(cache *receiving.Cache, productID string) (receiving.ProductRef
 }
 
 // resolveManual собирает скан из ручных полей, когда кода нет вовсе: строка
-// блока ручного ввода (код не распознан полностью) или строка, добавленная
-// оператором руками. Товар берётся из позиций поставщика, вес и даты — из
-// полей строки (полноту проверяет Save: срок обязателен всем, вес — весовым).
+// блока ручного ввода (код не распознан полностью), строка, добавленная
+// оператором руками, или коробка, добавленная кнопкой «Добавить коробку» (у неё
+// к полям строки добавлен подсписок вложений). Товар берётся из позиций
+// поставщика, вес и даты — из полей строки (полноту проверяет Save: срок
+// обязателен всем, вес — весовым).
 func resolveManual(cache *receiving.Cache, e receiving.ScanEntry) (*receiving.DecodedScan, error) {
 	if e.ManualProductID == "" {
 		return nil, errors.New("пустой штрих-код без выбранного товара")
@@ -377,15 +391,23 @@ func resolveManual(cache *receiving.Cache, e receiving.ScanEntry) (*receiving.De
 		return nil, fmt.Errorf("товар %q не найден в позициях поставщика", e.ManualProductID)
 	}
 	scan := &receiving.DecodedScan{
-		Kind:         receiving.KindItem,
 		ProductID:    ref.ProductID,
 		InternalCode: ref.InternalCode,
 		ProductName:  ref.Name,
 		Weighted:     ref.Weighted,
-		Qty:          1,
 		ProducedOn:   e.ManualProducedOn,
 		BestBefore:   e.ManualBestBefore,
 	}
+	// Непустой подсписок делает запись коробкой: кода у такой коробки нет,
+	// заявленных кол-ва и веса тоже — сверять не с чем, факт (вложения и Σ вес)
+	// считает resolveBox. Запись без вложений — ручной кусок, как и раньше.
+	if len(e.Children) > 0 {
+		scan.Kind = receiving.KindBox
+		scan.Qty = int64(len(e.Children))
+		return scan, nil
+	}
+	scan.Kind = receiving.KindItem
+	scan.Qty = 1
 	// Вес — только весовым товарам: у штучного ручной вес гасится.
 	if ref.Weighted {
 		scan.WeightG = e.ManualWeightG

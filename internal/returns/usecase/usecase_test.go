@@ -228,6 +228,8 @@ const testCancelledID = "8737d8a5-c0b9-11e3-ac8e-002590a28eca"
 const (
 	codeA      = "00210003" // Чак ролл, весовой
 	codeD      = "10080001" // Соус, штучный
+	nameA      = "Чак ролл" // название товара codeA (products.name) — подпись наклейки коробки
+	nameD      = "Соус"     // название товара codeD
 	prodA      = "a02a9121-7ef5-11e5-7a40-e897001b4cc6"
 	prodD      = "d00d9121-7ef5-11e5-7a40-e897001b4cc6"
 	prodNoCode = "n0c09121-7ef5-11e5-7a40-e897001b4cc6"
@@ -237,9 +239,9 @@ const (
 
 func testCatalog() stubCatalog {
 	return stubCatalog{
-		prodA:      {ProductID: prodA, InternalCode: codeA, Weighted: true},
-		prodD:      {ProductID: prodD, InternalCode: codeD, Weighted: false},
-		prodNoCode: {ProductID: prodNoCode, InternalCode: "", Weighted: true},
+		prodA:      {ProductID: prodA, InternalCode: codeA, Name: nameA, Weighted: true},
+		prodD:      {ProductID: prodD, InternalCode: codeD, Name: nameD, Weighted: false},
+		prodNoCode: {ProductID: prodNoCode, InternalCode: "", Name: "Без кода", Weighted: true},
 	}
 }
 

@@ -229,3 +229,67 @@ func TestEncodeItem(t *testing.T) {
 		}
 	})
 }
+
+func TestEncodeBox(t *testing.T) {
+	prod := time.Date(2026, time.August, 29, 0, 0, 0, 0, time.UTC)
+	exp := time.Date(2026, time.September, 29, 0, 0, 0, 0, time.UTC)
+
+	t.Run("roundtrip user example", func(t *testing.T) {
+		raw, err := EncodeBox("00210003", 2500, 10, prod, exp)
+		if err != nil {
+			t.Fatalf("EncodeBox error: %v", err)
+		}
+		if raw != boxBarcode {
+			t.Errorf("EncodeBox = %q, want %q", raw, boxBarcode)
+		}
+		// Напечатанная наклейка обязана сканироваться как внутренний код коробки.
+		code, err := Parse(raw)
+		if err != nil {
+			t.Fatalf("Parse(EncodeBox) error: %v", err)
+		}
+		if code.Kind != KindBox || code.WeightG != 2500 || code.Qty != 10 ||
+			code.ProdDate != prod || code.ExpDate != exp {
+			t.Errorf("Parse(EncodeBox) = %+v, want box 2500 g × 10, prod %v exp %v", code, prod, exp)
+		}
+	})
+
+	t.Run("weight and qty zero padded", func(t *testing.T) {
+		raw, err := EncodeBox("00210003", 1, 1, prod, exp)
+		if err != nil {
+			t.Fatalf("EncodeBox error: %v", err)
+		}
+		want := "002100030000010012908202629092026"
+		if raw != want {
+			t.Errorf("EncodeBox = %q, want %q", raw, want)
+		}
+	})
+
+	t.Run("errors", func(t *testing.T) {
+		tests := []struct {
+			name     string
+			code     string
+			weightG  int64
+			qty      int
+			prodDate time.Time
+			expDate  time.Time
+		}{
+			{name: "internal code mode 3", code: "30210003", weightG: 2500, qty: 10, prodDate: prod, expDate: exp},
+			{name: "zero weight", code: "00210003", weightG: 0, qty: 10, prodDate: prod, expDate: exp},
+			{name: "weight too large for 6 digits", code: "00210003", weightG: 1000000, qty: 10, prodDate: prod, expDate: exp},
+			{name: "zero qty", code: "00210003", weightG: 2500, qty: 0, prodDate: prod, expDate: exp},
+			{name: "qty too large for 3 digits", code: "00210003", weightG: 2500, qty: 1000, prodDate: prod, expDate: exp},
+			{name: "missing prod date", code: "00210003", weightG: 2500, qty: 10, prodDate: time.Time{}, expDate: exp},
+			{name: "missing exp date", code: "00210003", weightG: 2500, qty: 10, prodDate: prod, expDate: time.Time{}},
+			{name: "exp before prod", code: "00210003", weightG: 2500, qty: 10, prodDate: exp, expDate: prod},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				_, err := EncodeBox(tt.code, tt.weightG, tt.qty, tt.prodDate, tt.expDate)
+				if !errors.Is(err, ErrInvalid) {
+					t.Errorf("EncodeBox(%q, %d, %d, %v, %v) error = %v, want ErrInvalid",
+						tt.code, tt.weightG, tt.qty, tt.prodDate, tt.expDate, err)
+				}
+			})
+		}
+	})
+}

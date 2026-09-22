@@ -54,6 +54,8 @@ func NewRouter(h *Handler) *http.ServeMux {
 	// со сроков (остатков), документ МС не создаётся.
 	mux.HandleFunc("GET /goods/withdraw", h.GoodsWithdrawPage)       // вывод из продажи: страница
 	mux.HandleFunc("POST /goods/withdraw/save", h.GoodsWithdrawSave) // вывод из продажи: списать сканы
+	mux.HandleFunc("GET /goods/box", h.GoodsBoxPage)                 // «Создать коробку»: страница сканирования кусков
+	mux.HandleFunc("POST /goods/box/save", h.GoodsBoxSave)           // «Создать коробку»: наклейка коробки (xlsx)
 	mux.HandleFunc("/qrcodes", h.QRPage)                             // GET — модуль «Честный знак»
 	mux.HandleFunc("/qrcodes/add", h.QRAdd)                          // GET — форма, POST — сохранение фото
 	mux.HandleFunc("/qrcodes/list", h.QRList)                        // GET — таблица заказов с фото
@@ -108,10 +110,12 @@ func NewRouter(h *Handler) *http.ServeMux {
 	// Приёмка: виджет «Внешние коды» на карточке поставщика.
 	mux.HandleFunc("POST /ms/receive/barcodes/add", h.ReceiveBarcodesAdd)
 	mux.HandleFunc("POST /ms/receive/barcodes/delete", h.ReceiveBarcodesDelete)
-	mux.HandleFunc("GET /ms/receive", h.ReceivePage)           // страница приёмки (выбор поставщика / сканирование)
-	mux.HandleFunc("GET /ms/receive/cache", h.ReceiveCache)    // кеш приёмки (JSON для резолва на клиенте)
-	mux.HandleFunc("POST /ms/receive/save", h.ReceiveSave)     // сохранить приёмку (JSON) → отчёт
-	mux.HandleFunc("POST /ms/receive/labels", h.ReceiveLabels) // этикетки принятых кусков (xlsx)
+	mux.HandleFunc("GET /ms/receive", h.ReceivePage)                   // страница приёмки (выбор поставщика / сканирование)
+	mux.HandleFunc("GET /ms/receive/cache", h.ReceiveCache)            // кеш приёмки (JSON для резолва на клиенте)
+	mux.HandleFunc("POST /ms/receive/save", h.ReceiveSave)             // сохранить приёмку (JSON) → отчёт
+	mux.HandleFunc("POST /ms/receive/labels", h.ReceiveLabels)         // этикетки принятых кусков (xlsx)
+	mux.HandleFunc("POST /ms/receive/box-labels", h.ReceiveBoxLabels)  // наклейки принятых коробок (xlsx)
+	mux.HandleFunc("GET /ms/receive/break-label", h.ReceiveBreakLabel) // наклейка спец-кода 666 (xlsx)
 
 	// Модуль «Сроки» (остатки по срокам годности).
 	mux.HandleFunc("GET /ms/dates", h.StockDatesPage)               // страница «Сроки»

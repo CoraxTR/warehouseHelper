@@ -89,9 +89,25 @@ func (uc *UseCase) buildExpected(ctx context.Context, ev *returns.ReturnEvent) (
 		return nil, err
 	}
 
-	expected := scanmatch.BuildExpected(cands, products)
+	expected := scanmatch.BuildExpected(cands, scanmatchProducts(products))
 	if len(expected) == 0 {
 		return nil, returns.ErrNothingToReturn
 	}
 	return expected, nil
+}
+
+// scanmatchProducts — каталог возвратов в форме ядра сверки: BuildExpected
+// читает только код склада и тип учёта (название строки приходит из кандидата —
+// позиции заказа или диффа), поэтому returns.CatalogProduct с названием для
+// подписей наклеек сводится к scanmatch.CatalogProduct.
+func scanmatchProducts(products map[string]returns.CatalogProduct) map[string]scanmatch.CatalogProduct {
+	out := make(map[string]scanmatch.CatalogProduct, len(products))
+	for id, p := range products {
+		out[id] = scanmatch.CatalogProduct{
+			ProductID:    p.ProductID,
+			InternalCode: p.InternalCode,
+			Weighted:     p.Weighted,
+		}
+	}
+	return out
 }

@@ -116,6 +116,33 @@ func EncodeItem(internalCode string, weightG int64, prodDate, expDate time.Time)
 	return raw, nil
 }
 
+// EncodeBox собирает внутренний штрих-код коробки (33 цифры): internal_code(8) +
+// общий вес в граммах (6, ведущие нули) + кол-во вложений (3) + выработка +
+// срок (ДДММГГГГ). Используется при печати наклеек коробок: код проходит те же
+// проверки, что Parse, — напечатанная наклейка распознается при последующем
+// сканировании. Общий вес и число вложений обязаны влезать в свои поля
+// (1..999999 г и 1..999), даты — обе ненулевые: Parse такие коды отвергает.
+func EncodeBox(internalCode string, weightG int64, qty int, prodDate, expDate time.Time) (string, error) {
+	if _, err := parseInternalCode(internalCode); err != nil {
+		return "", err
+	}
+	if weightG <= 0 || weightG > 999999 {
+		return "", fmt.Errorf("%w: weight %d: out of range 1..999999", ErrInvalid, weightG)
+	}
+	if qty <= 0 || qty > maxQty {
+		return "", fmt.Errorf("%w: qty %d: out of range 1..%d", ErrInvalid, qty, maxQty)
+	}
+	if prodDate.IsZero() || expDate.IsZero() {
+		return "", fmt.Errorf("%w: dates: prod and exp dates are required", ErrInvalid)
+	}
+	raw := internalCode + fmt.Sprintf("%06d", weightG) + fmt.Sprintf("%03d", qty) +
+		prodDate.Format("02012006") + expDate.Format("02012006")
+	if _, err := parseBox(raw); err != nil {
+		return "", err
+	}
+	return raw, nil
+}
+
 func parseItem(raw string) (Code, error) {
 	c := Code{Kind: KindItem, Qty: 1}
 
