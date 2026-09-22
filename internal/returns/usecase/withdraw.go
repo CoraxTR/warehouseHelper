@@ -28,7 +28,7 @@ import (
 // не бывает. Возвращает число списанных (отсканированных) кусков.
 func (uc *UseCase) WithdrawFromSale(ctx context.Context, scans []string) (int, error) {
 	if len(scans) == 0 {
-		return 0, &ValidationError{Reason: "нет сканов"}
+		return 0, &ValidationError{Reason: noScansReason}
 	}
 
 	parsed := make([]innercode.Code, 0, len(scans))

@@ -81,6 +81,10 @@ type Config struct {
 // машины) хвост догоняется следующими тиками, курсор двигается постранично.
 const tickBudget = 40 * time.Second
 
+// noScansReason — отказ страниц, собирающих операцию из сканов («Создать
+// коробку», «Ручной возврат», «Вывод из продажи»): пустой батч — нечего делать.
+const noScansReason = "нет сканов"
+
 type UseCase struct {
 	cfg     Config
 	audit   AuditAPI
