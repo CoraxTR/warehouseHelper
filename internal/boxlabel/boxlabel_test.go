@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"errors"
+	"image/png"
 	"io"
 	"math"
 	"os"
@@ -78,6 +79,37 @@ func sheetXML(t *testing.T, f *excelize.File) string {
 	return ""
 }
 
+// imageSize отдаёт размер PNG штрих-кода в пикселях: высота картинки — это
+// высота штрих-кода на наклейке (15 мм = 57 px образца).
+func imageSize(t *testing.T, f *excelize.File) (width, height int) {
+	t.Helper()
+	buf, err := f.WriteToBuffer()
+	if err != nil {
+		t.Fatalf("WriteToBuffer: %v", err)
+	}
+	zr, err := zip.NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatalf("zip.NewReader: %v", err)
+	}
+	for _, file := range zr.File {
+		if !strings.HasPrefix(file.Name, "xl/media/") {
+			continue
+		}
+		rc, err := file.Open()
+		if err != nil {
+			t.Fatalf("open %s: %v", file.Name, err)
+		}
+		cfg, err := png.DecodeConfig(rc)
+		_ = rc.Close()
+		if err != nil {
+			t.Fatalf("DecodeConfig(%s): %v", file.Name, err)
+		}
+		return cfg.Width, cfg.Height
+	}
+	t.Fatal("картинка штрих-кода не найдена в книге")
+	return 0, 0
+}
+
 func printArea(t *testing.T, f *excelize.File) string {
 	t.Helper()
 	for _, n := range f.GetDefinedName() {
@@ -100,43 +132,58 @@ func TestNewWorkbookWeightBox(t *testing.T) {
 	sheet := f.GetSheetName(0)
 
 	// Цифры кода — тот же 33-значный код, что кодируется в штрих-код.
-	if got, _ := f.GetCellValue(sheet, "B3"); got != "002100030025000102908202629092026" {
+	if got, _ := f.GetCellValue(sheet, "B2"); got != "002100030025000102908202629092026" {
 		t.Errorf("цифры кода = %q", got)
 	}
-	if got, _ := f.GetCellValue(sheet, "B4"); got != "Говядина охл." {
+	if got, _ := f.GetCellValue(sheet, "B3"); got != "Говядина охл." {
 		t.Errorf("наименование = %q", got)
 	}
-	if got, _ := f.GetCellValue(sheet, "B5"); got != "вес: 2,5 кг   вложений: 10" {
+	if got, _ := f.GetCellValue(sheet, "B4"); got != "вес: 2,5 кг   вложений: 10" {
 		t.Errorf("строка веса = %q", got)
 	}
-	// Дата — строкой, срок — второй строкой ячейки (перенос).
-	if got, _ := f.GetCellValue(sheet, "B6"); got != "выработка 29.08.2026\nсрок 29.09.2026" {
-		t.Errorf("строка дат = %q", got)
+	// Даты — по строке на дату: выработка «от», срок «до».
+	if got, _ := f.GetCellValue(sheet, "B5"); got != "от 29.08.2026" {
+		t.Errorf("строка выработки = %q", got)
+	}
+	if got, _ := f.GetCellValue(sheet, "B6"); got != "до 29.09.2026" {
+		t.Errorf("строка срока = %q", got)
 	}
 
-	// Штрих-код — картинка в строке 2.
+	// Штрих-код — картинка в первой строке блока, 72 × 15 мм.
 	pics, err := f.GetPictureCells(sheet)
 	if err != nil {
 		t.Fatalf("GetPictureCells: %v", err)
 	}
-	if len(pics) != 1 || pics[0] != "B2" {
-		t.Errorf("картинки = %v, want [B2]", pics)
+	if len(pics) != 1 || pics[0] != "B1" {
+		t.Errorf("картинки = %v, want [B1]", pics)
+	}
+	if w, h := imageSize(t, f); w != barcodeW || h != barcodeH {
+		t.Errorf("размер штрих-кода = %d×%d px, want %d×%d", w, h, barcodeW, barcodeH)
 	}
 
-	// Высоты строк — лейаут наклейки (мм → pt), сумма = высота листа 120 мм.
-	var totalMM float64
-	for i, hMM := range rowHeightMM {
+	assertLabelLayout(t, f)
+}
+
+// assertLabelLayout проверяет геометрию печати одной наклейки: высоты строк,
+// ширину колонки, область печати и разрыв страницы после блока.
+func assertLabelLayout(t *testing.T, f *excelize.File) {
+	t.Helper()
+	sheet := f.GetSheetName(0)
+
+	// Высоты строк — лейаут наклейки (pt), блок = 48,75 + 5 × 15,75 pt.
+	var totalPt float64
+	for i, wantPt := range rowHeightPt {
 		got, err := f.GetRowHeight(sheet, i+1)
 		if err != nil {
 			t.Fatalf("GetRowHeight(%d): %v", i+1, err)
 		}
-		totalMM += hMM
-		if math.Abs(got-hMM*mmToPt) > 0.01 {
-			t.Errorf("высота строки %d = %.2f pt, want %.2f pt", i+1, got, hMM*mmToPt)
+		totalPt += wantPt
+		if math.Abs(got-wantPt) > 0.01 {
+			t.Errorf("высота строки %d = %.2f pt, want %.2f pt", i+1, got, wantPt)
 		}
 	}
-	if totalMM != 120 {
-		t.Errorf("сумма высот блока = %.1f мм, want 120", totalMM)
+	if totalPt != 127.5 {
+		t.Errorf("сумма высот блока = %.2f pt, want 127,5", totalPt)
 	}
 
 	// Ширина колонки — 75 мм в «символах».
@@ -145,13 +192,13 @@ func TestNewWorkbookWeightBox(t *testing.T) {
 	}
 
 	// Печать: область — блок наклейки, разрыв страницы после каждой наклейки.
-	if area := printArea(t, f); !strings.HasSuffix(area, "$B$1:$B$7") {
-		t.Errorf("область печати = %q, want …$B$1:$B$7", area)
+	if area := printArea(t, f); !strings.HasSuffix(area, "$B$1:$B$6") {
+		t.Errorf("область печати = %q, want …$B$1:$B$6", area)
 	}
-	// Разрыв после первой наклейки: строка 8 в Excel = id 7 в XML (нумерация с нуля).
+	// Разрыв после первой наклейки: строка 7 в Excel = id 6 в XML (нумерация с нуля).
 	xml := sheetXML(t, f)
-	if !strings.Contains(xml, "<brk id=\"7\"") {
-		t.Error("нет разрыва страницы после первой наклейки (строка 8)")
+	if !strings.Contains(xml, "<brk id=\"6\"") {
+		t.Error("нет разрыва страницы после первой наклейки (строка 7)")
 	}
 }
 
@@ -167,11 +214,11 @@ func TestNewWorkbookPieceBoxSentinelWeight(t *testing.T) {
 	sheet := f.GetSheetName(0)
 
 	// Штучному в поле веса идёт заглушка 1 г: 00210010 + 000001 + 006 + даты.
-	if got, _ := f.GetCellValue(sheet, "B3"); got != "002100100000010062908202629092026" {
+	if got, _ := f.GetCellValue(sheet, "B2"); got != "002100100000010062908202629092026" {
 		t.Errorf("цифры кода штучной коробки = %q", got)
 	}
 	// Веса в подписи нет — только число вложений.
-	if got, _ := f.GetCellValue(sheet, "B5"); got != "вложений: 6" {
+	if got, _ := f.GetCellValue(sheet, "B4"); got != "вложений: 6" {
 		t.Errorf("строка штучной коробки = %q", got)
 	}
 }
@@ -186,12 +233,12 @@ func TestNewWorkbookTwoBoxesBreakPages(t *testing.T) {
 		t.Fatalf("наклеек: %d, want 2", labels)
 	}
 
-	if area := printArea(t, f); !strings.HasSuffix(area, "$B$1:$B$14") {
-		t.Errorf("область печати = %q, want …$B$1:$B$14", area)
+	if area := printArea(t, f); !strings.HasSuffix(area, "$B$1:$B$12") {
+		t.Errorf("область печати = %q, want …$B$1:$B$12", area)
 	}
 	xml := sheetXML(t, f)
-	// Строки 8 и 15 в Excel = id 7 и 14 в XML.
-	for _, brk := range []string{"7", "14"} {
+	// Строки 7 и 13 в Excel = id 6 и 12 в XML.
+	for _, brk := range []string{"6", "12"} {
 		if !strings.Contains(xml, "<brk id=\""+brk+"\"") {
 			t.Errorf("нет разрыва страницы (id %s)", brk)
 		}

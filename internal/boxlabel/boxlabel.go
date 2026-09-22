@@ -1,8 +1,9 @@
 // Package boxlabel печатает наклейки коробок (xlsx): 33-значный внутренний код
-// коробки в Code128, ниже его цифры, наименование товара, вес и число вложений.
-// Лист 75 × 120 мм, одна наклейка = одна страница. Пакет — нижний слой: его
-// вызывают и приёмка (наклейки принятых коробок), и страница «Создать коробку»
-// в «Продукции» — геометрия печати живёт в одном месте.
+// коробки в Code128, ниже его цифры, наименование товара, вес с числом вложений
+// и даты — выработка и срок. Лист 75 мм шириной, одна наклейка = одна страница.
+// Пакет — нижний слой: его вызывают и приёмка (наклейки принятых коробок), и
+// страница «Создать коробку» в «Продукции» — геометрия печати живёт в одном
+// месте.
 package boxlabel
 
 import (
@@ -23,26 +24,23 @@ import (
 	"github.com/xuri/excelize/v2"
 )
 
-// Геометрия наклейки: лист 75 мм шириной и 120 мм высотой, одна наклейка на
-// страницу. Блок занимает лист целиком: отступ, штрих-код, цифры кода,
-// наименование, вес с числом вложений, нижний отступ.
-//
-// Переводы (единственная арифметика): 1 мм = 2,8346 pt для высот строк, для
-// картинок px = мм × 3,7795 (96 dpi), ширина колонки в «символах» ≈ (px − 5) / 7
-// (метрика рендера Excel, не excelize-конвертер).
+// Геометрия наклейки — числа образца, принятого владельцем (22.09.2026):
+// колонка B шириной 75 мм, блок из шести строк (штрих-код 48,75 pt и пять строк
+// подписей по 15,75 pt — высота строки шрифта 12), картинка штрих-кода
+// 272 × 113 px (72 × 30 мм) со смещением 5 × 3 px внутри ячейки, поля листа
+// нулевые. Ширина колонки в «символах» ≈ (px − 5) / 7 — метрика рендера Excel,
+// не конвертер excelize: 75 мм ≈ 283 px ≈ 39,855 символа.
 const (
-	// Ширина колонки B: 75 мм ≈ 283 px ≈ 39,79 символа.
-	colWidthChars = 39.79
+	colWidthChars = 39.85546875
 
-	// Штрих-код: 33 цифры Code128 дают минимум 233 px, растягиваем до 72 мм —
+	// Штрих-код: 33 цифры Code128 дают минимум 233 px, растягиваем до 72 × 15 мм —
 	// модуль шире, читаемость лучше. 272 px < 283 px колонки.
 	barcodeW = 272
-	barcodeH = 113
+	barcodeH = 57
 
-	// Шрифты: 33 цифры при 10 pt ≈ 64,7 мм — влезают в 75 мм без обрезки.
-	fontDigits = 10
-	fontName   = 14
-	fontAmount = 16
+	// fontSize — шрифт строк подписей: цифры кода, наименование, вес с числом
+	// вложений, даты.
+	fontSize = 12
 
 	// Смещение картинки внутри ячейки (px): по центру колонки и от верха.
 	imgOffsetX = 5
@@ -54,10 +52,11 @@ const (
 	sentinelWeightG int64 = 1
 )
 
-// rowHeightMM — высоты строк одной наклейки: отступ, штрих-код, цифры,
-// наименование, вес с вложениями, даты, нижний отступ. Сумма — ровно высота
-// листа (120 мм), поэтому наклейка печатается 1:1 без масштабирования.
-var rowHeightMM = []float64{6, 32, 10, 22, 18, 17, 15}
+// rowHeightPt — высоты строк одной наклейки: штрих-код, цифры кода,
+// наименование, вес с числом вложений, выработка, срок. 48,75 pt = 65 px —
+// строка под картинку штрих-кода (15 мм + смещение 3 px), 15,75 pt — строка
+// шрифта 12.
+var rowHeightPt = []float64{48.75, 15.75, 15.75, 15.75, 15.75, 15.75}
 
 // Box — данные наклейки коробки. Достаточно для 33-значного кода и подписей:
 // товар, вес (у штучных — ноль), число вложений и обе даты (без них код не
@@ -126,11 +125,7 @@ func newWorkbook(boxes []Box) (*excelize.File, int, error) {
 			return nil, 0, fmt.Errorf("штрих-код %s: %w", code, err)
 		}
 
-		// Строка 1 блока — отступ, чтобы наклейка не прилипала к краю листа.
-		setRow(f, sheet, styles.plain, row, "")
-		row++
-
-		// Строка 2: штрих-код.
+		// Строка 1: штрих-код.
 		axis := fmt.Sprintf("B%d", row)
 		_ = f.AddPictureFromBytes(sheet, axis, &excelize.Picture{
 			Extension: ".png",
@@ -146,31 +141,30 @@ func newWorkbook(boxes []Box) (*excelize.File, int, error) {
 		setRow(f, sheet, styles.plain, row, "")
 		row++
 
-		// Строка 3: цифры кода (ручной ввод, если сканер не читает).
+		// Строка 2: цифры кода (ручной ввод, если сканер не читает).
 		setRow(f, sheet, styles.digits, row, code)
 		row++
 
-		// Строка 4: наименование товара.
-		setRow(f, sheet, styles.name, row, b.ProductName)
+		// Строка 3: наименование товара.
+		setRow(f, sheet, styles.text, row, b.ProductName)
 		row++
 
-		// Строка 5: вес и число вложений.
+		// Строка 4: вес и число вложений.
 		setRow(f, sheet, styles.amount, row, caption(b))
 		row++
 
-		// Строка 6: даты — выработка и срок, по строке на дату (две даты одной
-		// строкой в 75 мм не влезают при шрифте 14).
-		setRow(f, sheet, styles.name, row, dateCaption(b))
+		// Строки 5-6: даты — выработка («от») и срок годности («до»).
+		setRow(f, sheet, styles.text, row, producedCaption(b))
 		row++
-
-		// Строка 7: нижний отступ.
-		setRow(f, sheet, styles.plain, row, "")
+		setRow(f, sheet, styles.text, row, bestBeforeCaption(b))
 		row++
 
 		labels++
 	}
 
 	_ = f.SetColWidth(sheet, "B", "B", colWidthChars)
+	// Поля листа — нулевые (числа образца): наклейка печатается от края листа.
+	_ = f.SetPageMargins(sheet, zeroMargins())
 	if labels > 0 {
 		printArea := fmt.Sprintf("%s!$B$1:$B$%d", sheet, row-1)
 		_ = f.SetDefinedName(&excelize.DefinedName{
@@ -178,8 +172,8 @@ func newWorkbook(boxes []Box) (*excelize.File, int, error) {
 			RefersTo: printArea,
 			Scope:    sheet,
 		})
-		// Разрыв страницы после каждой наклейки: блоки по 6 строк.
-		for r := len(rowHeightMM) + 1; r <= row; r += len(rowHeightMM) {
+		// Разрыв страницы после каждой наклейки: блоки по шесть строк.
+		for r := len(rowHeightPt) + 1; r <= row; r += len(rowHeightPt) {
 			_ = f.InsertPageBreak(sheet, fmt.Sprintf("B%d", r))
 		}
 	}
@@ -188,18 +182,17 @@ func newWorkbook(boxes []Box) (*excelize.File, int, error) {
 
 // labelStyles — стили строк наклейки (все — с выравниванием по центру).
 type labelStyles struct {
-	plain  int
-	digits int
-	name   int
-	amount int
+	plain  int // строки без значения: под картинку штрих-кода
+	digits int // цифры кода: без переноса, чтобы код читался одной строкой
+	text   int // наименование и даты: с переносом длинных значений
+	amount int // вес с числом вложений: без переноса
 }
 
-// newStyles заводит стили наклейки: общий (отступы), цифры кода, наименование
-// (с переносом длинных названий) и строка веса с числом вложений.
+// newStyles заводит стили наклейки: один шрифт, различие — перенос значений.
 func newStyles(f *excelize.File) (labelStyles, error) {
-	newStyle := func(font float64, wrap bool) (int, error) {
+	newStyle := func(wrap bool) (int, error) {
 		return f.NewStyle(&excelize.Style{
-			Font: &excelize.Font{Size: font},
+			Font: &excelize.Font{Size: fontSize},
 			Alignment: &excelize.Alignment{
 				Horizontal: "center",
 				Vertical:   "center",
@@ -209,33 +202,31 @@ func newStyles(f *excelize.File) (labelStyles, error) {
 	}
 	var s labelStyles
 	var err error
-	if s.plain, err = newStyle(fontName, false); err != nil {
+	if s.plain, err = newStyle(false); err != nil {
 		return labelStyles{}, err
 	}
-	if s.digits, err = newStyle(fontDigits, false); err != nil {
+	if s.digits, err = newStyle(false); err != nil {
 		return labelStyles{}, err
 	}
-	if s.name, err = newStyle(fontName, true); err != nil {
+	if s.text, err = newStyle(true); err != nil {
 		return labelStyles{}, err
 	}
-	if s.amount, err = newStyle(fontAmount, false); err != nil {
+	if s.amount, err = newStyle(false); err != nil {
 		return labelStyles{}, err
 	}
 	return s, nil
 }
 
 // setRow пишет значение в колонку B заданной строки, ставит стиль и высоту
-// строки по лейауту (heightIdx — индекс строки внутри блока наклейки).
-// setRow пишет значение в колонку B заданной строки, ставит стиль и высоту
-// строки по раскладке наклейки (rowHeightMM).
+// строки по раскладке наклейки (rowHeightPt).
 func setRow(f *excelize.File, sheet string, style, row int, value string) {
 	axis := fmt.Sprintf("B%d", row)
 	_ = f.SetCellValue(sheet, axis, value)
 	_ = f.SetCellStyle(sheet, axis, axis, style)
-	_ = f.SetRowHeight(sheet, row, rowHeightMM[(row-1)%len(rowHeightMM)]*mmToPt)
+	_ = f.SetRowHeight(sheet, row, rowHeightPt[(row-1)%len(rowHeightPt)])
 }
 
-// caption — строка под штрих-кодом: вес и число вложений. У штучного товара
+// caption — строка под наименованием: вес и число вложений. У штучного товара
 // веса нет (в коде стоит заглушка 1 г) — печатается только число вложений.
 func caption(b Box) string {
 	qty := "вложений: " + strconv.Itoa(b.Qty)
@@ -245,10 +236,14 @@ func caption(b Box) string {
 	return "вес: " + formatKg(b.WeightG) + " кг   " + qty
 }
 
-// dateCaption — даты коробки: выработка и срок годности, каждая с новой строки.
-func dateCaption(b Box) string {
-	return "выработка " + b.ProducedOn.Format("02.01.2006") +
-		"\nсрок " + b.BestBefore.Format("02.01.2006")
+// producedCaption — дата выработки коробки строкой «от ДД.ММ.ГГГГ».
+func producedCaption(b Box) string {
+	return "от " + b.ProducedOn.Format("02.01.2006")
+}
+
+// bestBeforeCaption — срок годности коробки строкой «до ДД.ММ.ГГГГ».
+func bestBeforeCaption(b Box) string {
+	return "до " + b.BestBefore.Format("02.01.2006")
 }
 
 // formatKg переводит граммы в килограммы с запятой и без хвостовых нулей:
@@ -258,6 +253,15 @@ func formatKg(weightG int64) string {
 	kg = strings.TrimRight(kg, "0")
 	kg = strings.TrimRight(kg, ".")
 	return strings.Replace(kg, ".", ",", 1)
+}
+
+// zeroMargins — нулевые поля страницы: образец владельца печатается без
+// отступов от края листа (умолчания Excel — 0,75″/0,7″ — сдвигали бы наклейку).
+func zeroMargins() *excelize.PageLayoutMarginsOptions {
+	zero := func() *float64 { v := 0.0; return &v }
+	return &excelize.PageLayoutMarginsOptions{
+		Bottom: zero(), Footer: zero(), Header: zero(), Left: zero(), Right: zero(), Top: zero(),
+	}
 }
 
 // generateBarcodePNG создаёт PNG-байты штрих-кода Code128.
@@ -276,6 +280,3 @@ func generateBarcodePNG(data string, width, height int) ([]byte, error) {
 	}
 	return buf.Bytes(), nil
 }
-
-// mmToPt — миллиметры в пункты: высоты строк в xlsx задаются в pt.
-const mmToPt = 2.834646
