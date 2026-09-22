@@ -87,6 +87,11 @@ type DecodedScan struct {
 	BestBefore      *time.Time
 	DeclaredQty     *int64 // коробка: заявленное кол-во вложений из кода
 	DeclaredWeightG *int64 // коробка: заявленный общий вес из кода
+	// Даты, вычитанные КОДОМ коробки (до применения ручных дат партии): по ним
+	// Save сверяет даты вложений — код коробки задаёт партию целиком, вложение
+	// из другой партии — отказ. nil — поле кода не задано (сверять нечего).
+	DeclaredProducedOn *time.Time
+	DeclaredBestBefore *time.Time
 	// Фактические значения коробки (Σ детей) — заполняет Save:
 	ActualQty     int64
 	ActualWeightG int64

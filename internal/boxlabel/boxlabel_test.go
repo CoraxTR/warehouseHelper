@@ -295,51 +295,61 @@ func TestFormatKg(t *testing.T) {
 	}
 }
 
-// Наклейка спец-кода «666»: тот же штрих-код, что на наклейке коробки, и цифры
-// под ним — печатают, чтобы закрывать коробку сканом.
-func TestBreakMarker(t *testing.T) {
-	f, err := newBreakWorkbook()
-	if err != nil {
-		t.Fatalf("newBreakWorkbook: %v", err)
-	}
-	defer func() { _ = f.Close() }()
-	sheet := f.GetSheetName(0)
+// Наклейки спец-кодов: 555 открывает карточку коробки, 666 закрывает её —
+// скан заменяет кнопки страницы, поэтому печатают обе наклейки.
+func TestMarkerWorkbook(t *testing.T) {
+	for _, code := range []string{openBoxCode, breakCode} {
+		f, err := newMarkerWorkbook(code)
+		if err != nil {
+			t.Fatalf("newMarkerWorkbook(%s): %v", code, err)
+		}
+		sheet := f.GetSheetName(0)
 
-	if got, _ := f.GetCellValue(sheet, "B2"); got != breakCode {
-		t.Errorf("цифры кода = %q, want %q", got, breakCode)
-	}
-	pics, err := f.GetPictureCells(sheet)
-	if err != nil {
-		t.Fatalf("GetPictureCells: %v", err)
-	}
-	if len(pics) != 1 || pics[0] != "B1" {
-		t.Errorf("картинки = %v, want [B1]", pics)
-	}
-	if w, h := imageSize(t, f); w != barcodeW || h != barcodeH {
-		t.Errorf("размер штрих-кода = %d×%d px, want %d×%d", w, h, barcodeW, barcodeH)
-	}
-	if got, err := f.GetRowHeight(sheet, 1); err != nil || math.Abs(got-rowHeightPt[0]) > 0.01 {
-		t.Errorf("высота строки штрих-кода = %v (err %v), want %.2f", got, err, rowHeightPt[0])
-	}
-	if area := printArea(t, f); !strings.HasSuffix(area, "$B$1:$B$2") {
-		t.Errorf("область печати = %q, want …$B$1:$B$2", area)
-	}
-	if xml := sheetXML(t, f); !strings.Contains(xml, "<brk id=\"2\"") {
-		t.Error("нет разрыва страницы после наклейки (строка 3)")
+		if got, _ := f.GetCellValue(sheet, "B2"); got != code {
+			t.Errorf("%s: цифры кода = %q", code, got)
+		}
+		pics, err := f.GetPictureCells(sheet)
+		if err != nil {
+			t.Fatalf("%s: GetPictureCells: %v", code, err)
+		}
+		if len(pics) != 1 || pics[0] != "B1" {
+			t.Errorf("%s: картинки = %v, want [B1]", code, pics)
+		}
+		if w, h := imageSize(t, f); w != barcodeW || h != barcodeH {
+			t.Errorf("%s: размер штрих-кода = %d×%d px, want %d×%d", code, w, h, barcodeW, barcodeH)
+		}
+		if got, err := f.GetRowHeight(sheet, 1); err != nil || math.Abs(got-rowHeightPt[0]) > 0.01 {
+			t.Errorf("%s: высота строки штрих-кода = %v (err %v), want %.2f", code, got, err, rowHeightPt[0])
+		}
+		if area := printArea(t, f); !strings.HasSuffix(area, "$B$1:$B$2") {
+			t.Errorf("%s: область печати = %q, want …$B$1:$B$2", code, area)
+		}
+		if xml := sheetXML(t, f); !strings.Contains(xml, "<brk id=\"2\"") {
+			t.Errorf("%s: нет разрыва страницы после наклейки (строка 3)", code)
+		}
+		_ = f.Close()
 	}
 }
 
-// ExportBreakMarker пишет файл в tempdir: наклейку печатают и клеят у сканера.
-func TestExportBreakMarkerWritesFile(t *testing.T) {
+// Обе наклейки спец-кодов пишутся в tempdir: их печатают и клеят у сканера.
+func TestExportMarkersWriteFiles(t *testing.T) {
 	if err := os.MkdirAll(tempdir.Dir, 0o750); err != nil {
 		t.Fatalf("MkdirAll(%s): %v", tempdir.Dir, err)
 	}
-	path, err := ExportBreakMarker()
-	if err != nil {
-		t.Fatalf("ExportBreakMarker: %v", err)
-	}
-	t.Cleanup(func() { _ = os.Remove(path) })
-	if !strings.Contains(filepath.Base(path), "box_break_666_") {
-		t.Fatalf("имя файла наклейки: %q", filepath.Base(path))
+	for _, tt := range []struct {
+		what   string
+		export func() (string, error)
+	}{
+		{"box_cmd_555_", ExportOpenBoxMarker},
+		{"box_cmd_666_", ExportBreakMarker},
+	} {
+		path, err := tt.export()
+		if err != nil {
+			t.Fatalf("%s: %v", tt.what, err)
+		}
+		t.Cleanup(func() { _ = os.Remove(path) })
+		if !strings.Contains(filepath.Base(path), tt.what) {
+			t.Errorf("имя файла наклейки = %q, want …%s…", filepath.Base(path), tt.what)
+		}
 	}
 }

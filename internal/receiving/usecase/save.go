@@ -112,7 +112,9 @@ func translateWeightWarnings(warnings []string, units []receiving.Unit) []string
 }
 
 // resolveBox резолвит коробку и её подсписок: дети должны быть кусками
-// ОДНОГО товара; факт (кол-во, Σ вес) сверяется с заявленным из кода.
+// ОДНОГО товара, и он должен совпадать с товаром кода коробки; даты вложений обязаны
+// совпадать с датами, вычитанными кодом коробки (расхождение — отказ, решение
+// владельца 22.09); факт (кол-во, Σ вес) сверяется с заявленным из кода.
 func (uc *ReceivingUseCase) resolveBox(ctx context.Context, cache *receiving.Cache, box *receiving.DecodedScan, e receiving.ScanEntry) (*receiving.Box, []receiving.Unit, error) {
 	if len(e.Children) == 0 {
 		return nil, nil, errors.New("в коробке нет отсканированных товаров")
@@ -133,6 +135,9 @@ func (uc *ReceivingUseCase) resolveBox(ctx context.Context, cache *receiving.Cac
 		if err := validateUnitScan(c); err != nil {
 			return nil, nil, err
 		}
+		if err := checkChildDates(c, box); err != nil {
+			return nil, nil, err
+		}
 		if firstCode == "" {
 			firstCode = c.InternalCode
 		} else if c.InternalCode != firstCode {
@@ -141,10 +146,9 @@ func (uc *ReceivingUseCase) resolveBox(ctx context.Context, cache *receiving.Cac
 		units = append(units, unitOf(c, true, false))
 	}
 
-	// Коробка, добавленная оператором руками, кода не имеет (Raw пуст), товар
-	// берёт с карточки: он должен совпасть с товаром вложений, иначе на наклейке
-	// окажется не та позиция.
-	if box.Raw == "" && box.InternalCode != firstCode {
+	// Товар коробки (из кода) должен совпасть с товаром вложений, иначе на
+	// наклейке окажется не та позиция.
+	if box.InternalCode != "" && box.InternalCode != firstCode {
 		return nil, nil, fmt.Errorf("товар коробки (%s) не совпадает с товаром вложений (%s)", box.InternalCode, firstCode)
 	}
 
@@ -182,6 +186,31 @@ func (uc *ReceivingUseCase) resolveBox(ctx context.Context, cache *receiving.Cac
 		DeclaredWeightG: box.DeclaredWeightG,
 		Mismatch:        box.Mismatch,
 	}, units, nil
+}
+
+// checkChildDates сверяет даты вложения с датами, вычитанными КОДОМ коробки:
+// код коробки задаёт партию целиком, вложение из другой партии — отказ (в
+// отличие от расхождения кол-ва/веса, которое лишь помечается). Даты, которых
+// код не нёс (nil), не сверяются; ручные даты партии в сверке не участвуют.
+func checkChildDates(child, box *receiving.DecodedScan) error {
+	name := child.ProductName
+	if name == "" {
+		name = child.InternalCode
+	}
+	if box.DeclaredProducedOn != nil && child.ProducedOn != nil && !child.ProducedOn.Equal(*box.DeclaredProducedOn) {
+		return fmt.Errorf("вложение %s: выработка %s не совпадает с выработкой из кода коробки %s — скан не принят",
+			name, ruDate(*child.ProducedOn), ruDate(*box.DeclaredProducedOn))
+	}
+	if box.DeclaredBestBefore != nil && child.BestBefore != nil && !child.BestBefore.Equal(*box.DeclaredBestBefore) {
+		return fmt.Errorf("вложение %s: срок годности %s не совпадает со сроком из кода коробки %s — скан не принят",
+			name, ruDate(*child.BestBefore), ruDate(*box.DeclaredBestBefore))
+	}
+	return nil
+}
+
+// ruDate — дата в виде «29.09.2026» для текстов ошибок (как показывает страница).
+func ruDate(t time.Time) string {
+	return t.Format("02.01.2006")
 }
 
 // validateUnitScan проверяет обязательные поля куска: товар, срок годности

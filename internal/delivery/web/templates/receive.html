@@ -5,6 +5,29 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Приёмка</title>
 <link rel="stylesheet" href="/static/raven-guard.css">
+<style>
+    /* Приёмка: коробка живёт внутри партии. Открытая коробка — янтарная рамка
+       (сюда идут вложения), расхождение с кодом коробки или ошибка — красное
+       «око» (яркое выделение, решение владельца 22.09.2026). Палитра — токены
+       raven-guard.css, без своих цветов. */
+    .box-card {
+        background: #101014;
+        border: 1px solid #26262E;
+        border-left: 4px solid #7E93A6;
+        border-radius: 2px;
+        padding: 10px 12px;
+        margin: 8px 0 8px 18px;
+        position: relative;
+    }
+    .box-card.open { border-left-color: #C8A65C; background: #16161C; }
+    .box-card.bad { border-left-color: #C9323C; box-shadow: 0 0 0 1px #C02832; background: #24090C; }
+    .box-card .box-head { display: flex; justify-content: space-between; align-items: baseline; }
+    .box-card .bname { font-weight: 700; color: #F4F1E9; font-size: 14.5px; }
+    .box-card .box-meta { color: #66645C; font-size: 13px; margin-top: 2px; }
+    .box-card .box-bad { color: #E0877E; font-weight: 700; margin-top: 4px; }
+    .box-card .fix { margin-top: 6px; font-size: 13px; }
+    .box-card .fix select, .box-card .fix input { width: auto; font-size: 13px; padding: 4px 6px; }
+</style>
 </head>
 <body>
     <header class="brandbar">
@@ -43,29 +66,31 @@
         <div id="scanner" style="{{if .Error}}display:none;{{end}}">
             <div id="party-row">
                 <button type="button" class="small" id="add-party-btn" onclick="addParty()">+ Партия</button>
-                <button type="button" class="small" id="add-box-btn" onclick="addBox()">Добавить коробку</button>
+                <button type="button" class="small" id="add-box-btn" onclick="openBox()">+ Коробка</button>
+                <a href="/ms/receive/open-box-label"><button type="button" class="small">Наклейка «555» (xlsx)</button></a>
                 <a href="/ms/receive/break-label"><button type="button" class="small">Наклейка «666» (xlsx)</button></a>
-                <span class="hint">Партия — это даты (выработка + срок) и строки товара. Товар и вес берутся из кода,
-                    даты — из кода, если в партии не заполнены. Сканы идут в активную партию (Партия 1 по умолчанию):
-                    чтобы сменить партию, нажмите на её название. Коробка без кода — кнопка «Добавить коробку»:
-                    товар и даты выбираются на её карточке, вложения сканируются в коробку, закрытие — 666.</span>
+                <span class="hint">Партия — это даты (выработка + срок), строки россыпи и коробки. Верхний сканер
+                    принимает только товар (код коробки он не открывает). Коробка — кнопкой «+ Коробка» или наклейкой
+                    555: первым сканом идёт штрих-код коробки, затем вложения, закрытие — 666. Сканы россыпи идут
+                    в активную партию (Партия 1 по умолчанию): чтобы сменить партию, нажмите на её название.</span>
             </div>
             <div id="party-hint" class="hint" style="display:none;"></div>
-            <label>Скан (товары и коробки — вперемешку)</label>
+            <label>Скан (товар; коробка — «+ Коробка» или 555)</label>
             <input type="text" id="scan-input" class="scan-input" autocomplete="off" autofocus
                    placeholder="штрих-код товара или коробки...">
             <div id="box-hint" style="display:none;" class="hint">
-                Идёт сбор коробки: сканируйте товары внутри. Введите <b>666</b>, когда коробка укомплектована.
+                Коробка открыта: отсканируйте <b>штрих-код коробки</b>, затем вложения. Введите <b>666</b>,
+                когда коробка укомплектована.
             </div>
             <div id="status-line" class="hint"></div>
-            <audio id="beep" preload="auto" src="data:audio/wav;base64,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"></audio>
+            <audio id="beep" preload="auto" src="data:audio/wav;base64,UklGRmQLAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YUALAAAAAGBJ/3C8ZEoqh9wln0WOlbHQ+D1DuW5dZ5swouPHo0+OBa2+8eg8CWyLaaY2w+q5qM6O2KjS6mo282hGa2U84/H0rb+PEqUR5Mkve2WObNVB+vhysyCRtaGE3QwppmFibe5GAAAtue+SxZ4v1zwiel3Dba9L8AYevyeVQZwZ0V4b/FizbRJQwg09xcWXLZpHy3wUMlQybRRUbxSEy8aah5i/xZwNIU9DbLJX8Rrs0SSeUpeFwMUG0EnoaupaQSFu2NuhjJaeu///RkQjabpdWScC3+elNZYOt0/5iD75ZiBgNC2h5UGqS5bYsr3ynjhtZBxizTJE7OSuzpYBr1DsjjKCYatjHTjl8sqzu5eKqw3mXyw9Xs9kIj18+e24EJl2qPvfGSajWodl1kECAEi+y5rHpR/awR+4VtRlNkZxBtPD55x+o3/UYBmCUrdlPkrDDIfJYZ+coSDP+xIHTjJl603xEmDPNqIjoAfKmgxLSUdkOlH1GFXVYqURnzfFQwZVRPhiKlTJHmHb36hnnrbA/v8rP0dhuFZoJHzhqawknoe8zvnTOTlf5FjNKaDnurBHnqy4vfNTNNFcrFrzLsbtD7XOniq1zu2yLhFaEFzVM+fzoLm3nwKyCej2KP9WD11vOP75aL4AoTavc+ImI6BTq12+PAMAYsOnosmsEN1HHfZP5F29QPIFh8inpLqq5tdhFwlMu11qRMML0s3+pgyp+tJ6EdxHMl3BR3IRPNOnqb6nT86YC3VDS1zCSvkWvtifrNCm6snBBds+CFtpTVEcVN7ir0Omz8X8/xE6a1m2T3gh9uNqsxSmAMJO+h41eVenUWYmnuk0t0Omgb689AkwNFU8UxkrRu85u86mU7tN79cqoVJ0VI0v6fR1v7OnergG6o0lwk9QVbwzgPrjw/Co97Xr5DMgnUzQVaU3BAB8yIKqy7MB4M4aNUn0VUQ7cgU8zWes97FN22MVkEW/VZU+xAoc0pqufLDT1vkPskEyVZhB8w8X1xixWa+Y0pYKoD1PVEpE/BQn3N2zkK6dzkAFYDkYU6lG2RlG4eW2Hq7nyvz/9zSQUbRIhx5v5iy6A655x876ajC5T2tK/yKc6629P65VxLz1vyuZTcxLQCfH8GTBzq59wczw+yYwS9lMRCvq9UvFr6/yvgLsJSKFSJFNCS8B+13J4LC4vGPnQB2aRfRNjDIFAJbNXrLNuvLiVBhzQgVOyjXyBPDRJrQ0ubTeZRMWP8NNwTjECWbWNbbst63aeQ6HOzJNbzt0DvLaiLj1tuDWlQnLN1NM0T0AE5DfGrtPtlDTvgTmMyhL6D9hFznk6L36tQDQ+//dL7RJskGVG+no7cDztfPMTvu2K/pHLkOYH5rtJsQ7tinKvPZ1J/1FXURmI0fyjsfOtqbHS/IgI8BDPUX7Juz2IMurt2vF/+28HkdB0UVWKoL72M7QuHjD2+lOGpc+GUZzLQUAsNI6us/B5OXbFbI7FUZRMHIEpNbmu3DAHOJnEZ04yEXsMsQIsNrRvVu/iN75DF01MkVFNfUMzd74v5C+KduUCPUxV0RZNwMR+OJXwg++BNg9BGsuOEMnOekUK+frxNW9GdX6/8Mq2EGvOqQYYuuvx+O9bNLO+wInOkDxOzAcmO+fyja+/s+99ywjYT7tPIsfx/O4zc6+0M3L80UfUDyiPbIi7ff10Ke/5Mv871QbCjoSPqIlA/xS1MDAOcpU7FwXlDc9PlooBgDK1xbC0sjV6GIT8TQlPtcq8gNY26bDrceE5WoPJDLMPRgtwwf53m3FzMZi4nkLMy8yPRsvdguo4mjHLMZy35MHICxbPOAwBg9g5pTJzsW33LwD8ShIO2YycBId6u3LscUz2vr/q... [truncated]
 
 
             <div id="scans"></div>
 
             <div id="add-party-bottom">
                 <button type="button" class="small" onclick="addParty()">+ Партия</button>
-                <button type="button" class="small" onclick="addBox()">Добавить коробку</button>
+                <button type="button" class="small" onclick="openBox()">+ Коробка</button>
                 <span class="hint">Новая партия сразу становится активной: свои даты и свой список строк.</span>
             </div>
 
@@ -78,9 +103,10 @@
     <script>
         var CACHE = null;         // кеш приёмки: грузится JSON-запросом ниже
         var SUPPLIER_ID = {{if .Supplier}}'{{.Supplier.ID}}'{{else}}''{{end}};
-        var items = [];           // элементы страницы по порядку: карточки, коробки, партии
+        var items = [];           // элементы страницы по порядку: партии (в партии — россыпь и коробки)
         var activeParty = null;   // партия, в которую идут сканы (Партия 1 создаётся при инициализации)
-        var boxMode = false;      // идёт сбор содержимого коробки
+        var openBoxRef = null;    // открытая карточка коробки (сбор вложений); null — коробки не открыто
+        var boxMode = false;      // всегда boxMode === !!openBoxRef: идёт сбор содержимого коробки
         var lastUnits = [];       // принятые куски из ответа Save — для этикеток
         var lastBoxes = [];       // принятые коробки из ответа Save — для наклеек коробок
         var partySeq = 0;         // нумерация партий
@@ -122,6 +148,12 @@
             if (v === null || v === undefined) { return ''; }
             return String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;')
                 .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        }
+
+        // attrOf — значение атрибута строкой (null, если атрибута нет).
+        function attrOf(el, name) {
+            if (!el || !el.getAttribute) { return null; }
+            return el.getAttribute(name);
         }
 
         function parseDate(s) {
@@ -416,19 +448,22 @@
             return scan;
         }
 
-        // resolveScan — зеркало серверного диспетчера Resolve: правила
-        // поставщика раньше внутреннего формата (код поставщика бывает 29/33
-        // знаков, и по длине он разбирался как наш ярлык — товар по первым 8
-        // цифрам, вес и даты из чужих полей, на проде это падало на дате или
-        // принимало мусор). Внутренний формат — запасной путь, когда правила
-        // такой длины у поставщика нет.
+        // hasBoxRule — есть ли правило коробок такой длины (нужно для подсказки).
+        function hasBoxRule(length) {
+            var i;
+            for (i = 0; i < CACHE.box_rules.length; i++) {
+                if (CACHE.box_rules[i].length === length) { return true; }
+            }
+            return false;
+        }
+
+        // resolveScan — ВЕРХНЕУРОВНЕВЫЙ скан: проверяется только товар — правила
+        // товаров, затем внутренний ярлык куска (29). Правила коробок здесь не
+        // участвуют вовсе: коробка открывается кнопкой «+ Коробка» (или сканом
+        // 555), иначе правила товаров и коробок одной длины пересекались бы.
         function resolveScan(raw) {
             var code, prod, res;
             var i, r;
-            for (i = 0; i < CACHE.box_rules.length; i++) {
-                r = CACHE.box_rules[i];
-                if (r.length === raw.length) { return resolveByRule(r, raw, 'box'); }
-            }
             for (i = 0; i < CACHE.item_rules.length; i++) {
                 r = CACHE.item_rules[i];
                 if (r.length === raw.length) { return resolveByRule(r, raw, 'item'); }
@@ -448,6 +483,22 @@
                 // коде стоит заглушка 1 г (она нужна лишь полю кода).
                 if (prod.weighted) { res.weight_g = parseInt(raw.substr(8, 5), 10); res._w_code = true; }
                 return res;
+            }
+            if (raw.length === 33 || hasBoxRule(raw.length)) {
+                return {error: 'Код коробки — нажмите «+ Коробка»', box_hint: true};
+            }
+            return {error: 'Штрих-код не распознан: нет правила поставщика и это не внутренний формат'};
+        }
+
+        // resolveBoxScan — скан КОДА КОРОБКИ в её карточке: проверяется только
+        // правилами коробок, иначе нашим 33-значным ярлыком коробки. Ничего не
+        // подошло — отказ скана: правило коробок не заведено или код не вычитан.
+        function resolveBoxScan(raw) {
+            var code, prod, res;
+            var i, r;
+            for (i = 0; i < CACHE.box_rules.length; i++) {
+                r = CACHE.box_rules[i];
+                if (r.length === raw.length) { return resolveByRule(r, raw, 'box'); }
             }
             if (raw.length === 33) {
                 code = raw.substr(0, 8);
@@ -470,7 +521,7 @@
                 }
                 return res;
             }
-            return {error: 'Штрих-код не распознан: нет правила поставщика и это не внутренний формат'};
+            return {error: 'Код коробки не распознан: нет правила коробок такой длины — заведите правило на карточке поставщика'};
         }
 
         function fmtWeight(g) {
@@ -489,11 +540,12 @@
         }
 
         // productSelect: data-kind="product" обязателен — иначе диспетчер полей
-        // (cardField/partyField) молча ничего не делает. dataR — индекс строки.
-        function productSelect(selectedId, cls, handler, dataR) {
+        // (partyField/boxField) молча ничего не делает. dataR — индекс строки.
+        function productSelect(selectedId, cls, handler, dataR, attrs) {
             var html = '<select class="' + (cls || 'fix-product') + '"' +
                 (handler ? ' data-kind="product" onchange="' + handler + '"' : '') +
-                (dataR === 0 || dataR ? ' data-r="' + dataR + '"' : '') + '>';
+                (dataR === 0 || dataR ? ' data-r="' + dataR + '"' : '') +
+                (attrs || '') + '>';
             html += '<option value="">— выберите позицию —</option>';
             var i, p;
             for (i = 0; i < CACHE.products.length; i++) {
@@ -536,102 +588,6 @@
             return out;
         }
 
-        function scanCard(it) {
-            var s = it.scan;
-            var m = it.manual || {};
-            var cls = 'scan-card';
-            var meta = '';
-            var fixes = '';
-            var e = effDates(it, null);
-
-            if (s.error) {
-                cls += ' error-card';
-                meta = 'НЕ РАСПОЗНАНО';
-            } else {
-                if (s.kind === 'box') { cls += ' box'; }
-                if (!s.product_id) { cls += ' missing'; }
-                var declared = '';
-                if (s.kind === 'box' && s.declared_qty) {
-                    declared = 'заявлено: ' + s.declared_qty + ' шт, ' + fmtWeight(s.declared_weight_g) + ' — ';
-                }
-                meta = declared + (s.weight_g ? 'вес ' + fmtWeight(s.weight_g) + ', ' : '') +
-                    (e.pd ? 'выработка ' + e.pd + ', ' : '') +
-                    (e.bb ? 'срок ' + e.bb : '');
-
-                if (s.needs_product) {
-                    cls += ' missing';
-                    if (s.kind === 'box') {
-                        fixes += '<div class="fix">Товар коробки не определён: ' +
-                            productSelect(m.product_id || '', 'fix-product', 'cardField(this)') + '</div>';
-                    } else {
-                        fixes += '<div class="fix">Код не заведён — выберите позицию: ' +
-                            productSelect(m.product_id || '', 'fix-product', 'cardField(this)') + '</div>' +
-                            '<div class="hint">Внешний код ' + esc(s._code_unknown || '') +
-                            ' не заведён у поставщика: добавьте его на карточке поставщика и нажмите «Обновить данные поставщика».</div>';
-                    }
-                } else if (s.kind === 'box' && !s.raw) {
-                    // Коробка, добавленная кнопкой «Добавить коробку»: кода нет,
-                    // товар выбирают на карточке. Выбор остаётся видимым и после
-                    // выбора — ошибочную позицию можно исправить.
-                    fixes += '<div class="fix">Товар коробки: ' +
-                        productSelect(m.product_id || '', 'fix-product', 'cardField(this)') + '</div>';
-                }
-                if (s.kind === 'item' && isWeighted(it, null) && !s.weight_g) {
-                    cls += ' missing';
-                    fixes += '<div class="fix">Вес не в коде (граммы): ' +
-                        '<input type="number" class="fix-weight" min="1" placeholder="граммы" value="' + esc(m.weight_g || '') +
-                        '" data-kind="weight" onchange="cardField(this)"> г</div>';
-                }
-                if (!e.bb) {
-                    cls += ' missing';
-                }
-                // Поля дат показываем всегда, когда код их не дал, — чтобы эхо
-                // «дд.мм.гггг» оставалось видимым и перестановку день/месяц было
-                // видно сразу, а не только в момент ввода.
-                if (!s._bb_code) {
-                    fixes += '<div class="fix">Срок не в коде: <input type="date" class="fix-bb" value="' +
-                        esc(m.best_before || '') + '" data-kind="bb" onchange="cardField(this)">' +
-                        ' <span class="date-echo" style="color:#66645C;">' + fmtDateRu(m.best_before) + '</span></div>';
-                }
-                // Выработка есть у куска и у ручной коробки (у сканной коробки
-                // код несёт только срок: выработку коробки берут из вложений).
-                if (!s._pd_code && (s.kind === 'item' || !s.raw)) {
-                    fixes += '<div class="fix">Выработка (необязательно): <input type="date" class="fix-pd" value="' +
-                        esc(m.produced_on || '') + '" data-kind="pd" onchange="cardField(this)">' +
-                        ' <span class="date-echo" style="color:#66645C;">' + fmtDateRu(m.produced_on) + '</span></div>';
-                }
-            }
-
-            var html = '<div class="' + cls + '">';
-            html += '<button type="button" class="small danger remove" onclick="removeItem(this)">✕</button>';
-            if (s.error) {
-                html += '<div class="name">' + esc(s.error) + '</div><div class="meta">' + esc(s.raw) + '</div>';
-            } else {
-                html += '<div class="name">' + esc(s.name || '???') + (s.kind === 'box' ? ' — коробка' : '') + '</div>';
-                html += '<div class="meta">' + (meta || 'данные не вычитываются') +
-                    ' <span class="mismatch" style="display:' + (it.mismatch || e.conflict ? 'inline' : 'none') + '">' +
-                    (e.conflict ? 'даты ≠ партии' : 'расхождение!') + '</span></div>';
-            }
-            html += fixes;
-
-            if (s.kind === 'box') {
-                html += '<div class="children">';
-                var i, c;
-                for (i = 0; i < it.children.length; i++) {
-                    c = it.children[i];
-                    html += '<div class="child-row">' +
-                        '<span class="cname">' + esc(c.scan.name || c.scan.error || '???') + '</span>' +
-                        '<span class="cmeta">' + fmtWeight(c.scan.weight_g) + ' · ' + esc(c.scan.best_before || '—') + '</span>' +
-                        '<button type="button" class="small danger" data-r="' + i + '" onclick="removeChild(this)">✕</button>' +
-                        '</div>';
-                }
-                html += '<div class="hint">в коробке: ' + it.children.length + ' шт, ' + fmtWeight(boxTotalWeight(it)) + '</div>';
-                html += '</div>';
-            }
-            html += '</div>';
-            return html;
-        }
-
         // partyCard — партия: только даты (выработка + срок) и строки. Товар и
         // вес берутся из кода, для строк без кода — из select ПО СТРОКЕ.
         function partyCard(b) {
@@ -650,7 +606,9 @@
             html += '<div class="hint">Пусто — даты берутся из кода (заполняются обе даты или ни одной). ' +
                 'Введённые даты партии перекрывают код (расхождение подсветится). В партию сканируются любые ' +
                 'товары поставщика: товар и вес — из кода, для строк без кода — товар выбирается в строке. ' +
-                'Если в партии товар задан руками (код не несёт ни товара, ни сроков), скан другого товара не принимается.</div>';
+                'Если в партии товар задан руками (код не несёт ни товара, ни сроков), скан другого товара не принимается. ' +
+                'Коробка — кнопка «+ Коробка» (или скан 555): сканируйте код коробки (проверяется правилом коробок), ' +
+                'затем вложения, закрытие — 666.</div>';
 
             var i, row, s, e, rpid, mp;
             for (i = 0; i < b.rows.length; i++) {
@@ -675,6 +633,10 @@
                         '" data-kind="weight" data-r="' + i + '" onchange="partyField(this)">';
                 }
                 html += '<button type="button" class="small danger" data-r="' + i + '" onclick="removeRow(this)">✕</button></div>';
+            }
+            // Коробки этой партии: открытая — янтарём, расхождение — ярко.
+            for (i = 0; i < b.boxes.length; i++) {
+                html += boxRow(b.boxes[i], b.id, i);
             }
             html += '<div class="fix">';
             html += '<button type="button" class="small" onclick="addRowToParty(this)">+ строка</button> ';
@@ -730,8 +692,9 @@
             focusTarget = null;
             var html = '';
             var i;
+            // items держит только партии: коробки живут внутри партии (party.boxes).
             for (i = 0; i < items.length; i++) {
-                html += items[i].kind === 'party' ? partyCard(items[i]) : scanCard(items[i]);
+                html += partyCard(items[i]);
             }
             scansBox.innerHTML = html;
             boxHint.style.display = boxMode ? 'block' : 'none';
@@ -783,15 +746,7 @@
                     return;
                 }
             }
-            if (boxMode && items.length === 0) { boxMode = false; }
-            render();
-        }
-
-        function removeChild(btn) {
-            var idx = itemIndexFromDom(btn);
-            var r = parseInt(btn.getAttribute('data-r'), 10);
-            if (idx < 0) { return; }
-            items[idx].children.splice(r, 1);
+            if (boxMode && !openBoxRef) { boxMode = false; }
             render();
         }
 
@@ -800,34 +755,6 @@
             var r = parseInt(btn.getAttribute('data-r'), 10);
             if (idx < 0) { return; }
             items[idx].rows.splice(r, 1);
-            render();
-        }
-
-        // cardField — ручные поля карточки (вес, даты, товар коробки).
-        function cardField(el) {
-            var idx = itemIndexFromDom(el);
-            if (idx < 0) { return; }
-            var it = items[idx];
-            it.manual = it.manual || {};
-            var kind = el.getAttribute('data-kind');
-            var v = el.value;
-            if (isDateInput(el) && v && !inDateBounds(v)) {
-                // Пришло мимо цифровой проверки (нативный календарь, автозаполнение):
-                // принимаем только даты в допуске «сегодня ±5 лет» (жалоба 14.09).
-                el.value = '';
-                statusLine.textContent = 'Дата ' + fmtDateRu(v) + ' вне допуска: принимаются ' + boundsText() +
-                    ' (сегодня ±5 лет)';
-                applyIsoDate(el, '');
-                return;
-            }
-            if (kind === 'weight') { it.manual.weight_g = v ? parseInt(v, 10) : null; }
-            else if (kind === 'pd') { it.manual.produced_on = v || null; }
-            else if (kind === 'bb') { it.manual.best_before = v || null; }
-            else if (kind === 'product') {
-                it.manual.product_id = v || null;
-                applyProductToScan(it.scan, v || '');
-            }
-            focusTarget = focusSpec(el);
             render();
         }
 
@@ -934,7 +861,7 @@
 
         // Партия — только даты и строки; товар берётся из кода или из строки.
         function addParty() {
-            var b = {kind: 'party', id: ++partySeq, pd: '', bb: '', rows: []};
+            var b = {kind: 'party', id: ++partySeq, pd: '', bb: '', rows: [], boxes: []};
             items.push(b);
             activeParty = b;
             // Фокус — в дату новой партии: работа идёт здесь, а не у сканера.
@@ -943,18 +870,201 @@
             return b;
         }
 
-        // addBox — коробка БЕЗ скана: кода у неё нет, товар и даты оператор
-        // выбирает на карточке коробки (как в строке ручного ввода), затем
-        // сканирует вложения и закрывает коробку кодом 666. Ручных полей карточки
-        // (it.manual) у коробки хватает: товар, выработка, срок. Количество
-        // вложений и вес считаются по факту — заявленного у такой коробки нет.
-        function addBox() {
-            var it = {scan: {kind: 'box', raw: ''}, manual: {}, children: [], mismatch: false};
-            items.push(it);
+        // openBox — открыть карточку коробки В АКТИВНОЙ ПАРТИИ: то же, что скан
+        // спец-кода 555. Первый скан в карточке — штрих-код коробки (проверяется
+        // правилом коробок), дальше вложения, закрытие — 666. Коробки без кода
+        // нет: товар и даты коробки берутся из кода.
+        function openBox() {
+            var party = activeParty || addParty();
+            var box = {scan: {kind: 'box', raw: ''}, manual: {}, children: [], mismatch: false, error: ''};
+            party.boxes.push(box);
+            openBoxRef = box;
             boxMode = true;
             focusTarget = 'keep';
             render();
-            return it;
+            return box;
+        }
+
+        // closeBox — закрытие коробки сканом 666: заявленные кодом вес и число
+        // вложений сверяются с фактом, расхождение помечает коробку и бипает.
+        function closeBox(box) {
+            box.mismatch = false;
+            box.error = '';
+            if (box.scan.declared_qty && box.children.length !== box.scan.declared_qty) { box.mismatch = true; }
+            if (box.scan.declared_weight_g && boxTotalWeight(box) !== box.scan.declared_weight_g) { box.mismatch = true; }
+            openBoxRef = null;
+            boxMode = false;
+            if (box.mismatch) {
+                var declared = [];
+                if (box.scan.declared_weight_g) { declared.push(fmtWeight(box.scan.declared_weight_g)); }
+                if (box.scan.declared_qty) { declared.push(box.scan.declared_qty + ' шт'); }
+                beep();
+                statusLine.textContent = 'Коробка закрыта с расхождением: заявлено ' + declared.join(' / ') +
+                    ', в коробке ' + fmtWeight(boxTotalWeight(box)) + ' / ' + box.children.length + ' шт';
+            }
+            render();
+        }
+
+        // findParty — партия по id (обработчики внутри партии берут id из атрибута).
+        function findParty(id) {
+            var i;
+            for (i = 0; i < items.length; i++) {
+                if (items[i].kind === 'party' && items[i].id === id) { return items[i]; }
+            }
+            return null;
+        }
+
+        // boxAt — коробка по data-party/data-box (её держит партия).
+        function boxAt(el) {
+            var party = findParty(parseInt(attrOf(el, 'data-party'), 10));
+            if (!party || !party.boxes) { return null; }
+            var idx = parseInt(attrOf(el, 'data-box'), 10);
+            if (isNaN(idx) || !party.boxes[idx]) { return null; }
+            return party.boxes[idx];
+        }
+
+        // boxField — правка карточки коробки: товар, если код его не определил.
+        function boxField(el) {
+            var box = boxAt(el);
+            if (!box) { return; }
+            box.manual = box.manual || {};
+            if (attrOf(el, 'data-kind') === 'product') { box.manual.product_id = el.value; }
+            focusTarget = 'keep';
+            render();
+        }
+
+        // removeBox / removeBoxChild — убрать коробку из партии или одно вложение.
+        function removeBox(el) {
+            var box = boxAt(el);
+            if (!box) { return; }
+            var i, j, p;
+            for (i = 0; i < items.length; i++) {
+                p = items[i];
+                if (!p.boxes) { continue; }
+                for (j = 0; j < p.boxes.length; j++) {
+                    if (p.boxes[j] !== box) { continue; }
+                    p.boxes.splice(j, 1);
+                    if (openBoxRef === box) { openBoxRef = null; boxMode = false; }
+                    focusTarget = 'keep';
+                    render();
+                    return;
+                }
+            }
+        }
+
+        function removeBoxChild(el) {
+            var box = boxAt(el);
+            if (!box) { return; }
+            var idx = parseInt(attrOf(el, 'data-child'), 10);
+            if (isNaN(idx)) { return; }
+            box.children.splice(idx, 1);
+            focusTarget = 'keep';
+            render();
+        }
+
+        // addBoxChild — скан ВЛОЖЕНИЯ в открытую коробку: один товар, даты — как
+        // в коде коробки (если правило их вычитало). Расхождение — отказ скана.
+        function addBoxChild(box, raw) {
+            var child = resolveScan(raw);
+            if (child.box_hint) {
+                beep();
+                statusLine.textContent = 'В коробке не может быть другая коробка';
+                return;
+            }
+            if (child.error) {
+                box.children.push({scan: child});
+                beep();
+                return;
+            }
+            if (child.kind !== 'item') {
+                beep();
+                statusLine.textContent = 'В коробке не может быть другая коробка';
+                return;
+            }
+            var first = box.children.length ? box.children[0].scan : null;
+            if (first && first.internal_code && child.internal_code && first.internal_code !== child.internal_code) {
+                beep();
+                statusLine.textContent = 'В коробке другой товар: ' + (child.name || child.internal_code) +
+                    ' — в коробке уже «' + (first.name || first.internal_code) + '», скан не принят';
+                return;
+            }
+            var bad = boxChildDateConflict(box, child);
+            if (bad) {
+                beep();
+                statusLine.textContent = bad + ' — скан не принят';
+                return;
+            }
+            if (child.needs_product) { beep(); }
+            box.children.push({scan: child});
+        }
+
+        // boxChildDateConflict — даты вложения против дат, вычитанных кодом
+        // коробки: код коробки задаёт даты и вложениям. У внутренних ярлыков даты
+        // свои (ручные даты партии их не перекрывают — как в effDates).
+        // Возвращает текст отказа или '' (сверяем, только когда дата есть с обеих
+        // сторон).
+        function boxChildDateConflict(box, child) {
+            var bs = box.scan;
+            var party = activeParty;
+            var pd = child.produced_on || (child.internal ? null : (party && party.pd)) || null;
+            var bb = child.best_before || (child.internal ? null : (party && party.bb)) || null;
+            if (bs.produced_on && pd && bs.produced_on !== pd) {
+                return 'Выработка вложения ' + pd + ' не совпадает с кодом коробки ' + bs.produced_on;
+            }
+            if (bs.best_before && bb && bs.best_before !== bb) {
+                return 'Срок годности вложения ' + bb + ' не совпадает с кодом коробки ' + bs.best_before;
+            }
+            return '';
+        }
+
+        // boxRow — коробка внутри партии: код, заявленное и факт, вложения.
+        // Открытая — янтарём, расхождение или ошибка — ярким выделением.
+        function boxRow(box, partyId, index) {
+            var s = box.scan || {};
+            var cls = 'box-card';
+            if (box === openBoxRef) { cls += ' open'; }
+            if (box.mismatch || box.error || s.error) { cls += ' bad'; }
+            var html = '<div class="' + cls + '">';
+            html += '<button type="button" class="small danger remove" data-party="' + partyId +
+                '" data-box="' + index + '" onclick="removeBox(this)">✕</button>';
+            if (box.error) {
+                html += '<div class="bname">Коробка: ' + esc(box.error) + '</div>';
+            } else if (!s.raw) {
+                html += '<div class="bname">Коробка — отсканируйте её штрих-код</div>';
+            } else {
+                html += '<div class="bname">' + esc(s.name || '???') + ' — коробка</div>';
+                var declared = '';
+                if (s.declared_qty) {
+                    declared = 'заявлено: ' + s.declared_qty + ' шт, ' + fmtWeight(s.declared_weight_g) + '; ';
+                }
+                html += '<div class="box-meta">' + declared +
+                    (s.weight_g ? 'вес ' + fmtWeight(s.weight_g) + ', ' : '') +
+                    (s.produced_on ? 'выработка ' + s.produced_on + ', ' : '') +
+                    (s.best_before ? 'срок ' + s.best_before : '') + '</div>';
+                if (s.needs_product) {
+                    html += '<div class="fix">Товар коробки не определён: ' +
+                        productSelect((box.manual && box.manual.product_id) || '', 'fix-product', 'boxField(this)', null,
+                            ' data-party="' + partyId + '" data-box="' + index + '"') + '</div>';
+                }
+            }
+            html += '<div class="children">';
+            var i, c;
+            for (i = 0; i < box.children.length; i++) {
+                c = box.children[i];
+                html += '<div class="child-row">' +
+                    '<span class="cname">' + esc(c.scan.name || c.scan.error || '???') + '</span>' +
+                    '<span class="cmeta">' + fmtWeight(c.scan.weight_g) + ' · ' + esc(c.scan.best_before || '—') + '</span>' +
+                    '<button type="button" class="small danger" data-party="' + partyId + '" data-box="' + index +
+                    '" data-child="' + i + '" onclick="removeBoxChild(this)">✕</button>' +
+                    '</div>';
+            }
+            html += '<div class="hint">в коробке: ' + box.children.length + ' шт, ' + fmtWeight(boxTotalWeight(box)) + '</div>';
+            html += '</div>';
+            if (box.mismatch) {
+                html += '<div class="box-bad">расхождение с заявленным в коде коробки</div>';
+            }
+            html += '</div>';
+            return html;
         }
 
         function boxTotalWeight(it) {
@@ -966,60 +1076,82 @@
             return total;
         }
 
-        function finishBox(it) {
-            boxMode = false;
-            if (it.scan.declared_qty && it.children.length !== it.scan.declared_qty) { it.mismatch = true; }
-            if (it.scan.declared_weight_g && boxTotalWeight(it) !== it.scan.declared_weight_g) { it.mismatch = true; }
-            render();
-        }
-
         function handleScan(raw) {
+            var box = openBoxRef;
+
+            // 666 — закрыть открытую коробку, 555 — открыть новую (то же, что
+            // кнопка «+ Коробка»). Оба спец-кода приходят со сканера наклейками.
             if (raw === '666') {
-                if (boxMode && items.length) {
-                    var last = items[items.length - 1];
-                    if (last.scan && last.scan.kind === 'box' && last.children.length === 0) {
-                        last.error = 'В коробке нет отсканированных товаров';
-                        boxMode = false;
-                    } else if (last.scan && last.scan.kind === 'box') {
-                        finishBox(last);
+                if (!box) {
+                    beep();
+                    statusLine.textContent = 'Коробка не открыта — нажмите «+ Коробка» (или сканируйте наклейку 555)';
+                    render();
+                    return;
+                }
+                if (!box.scan.raw || box.scan.error) {
+                    box.error = 'Коробка без кода: отсканируйте штрих-код коробки';
+                    beep();
+                    render();
+                    return;
+                }
+                if (!box.children.length) {
+                    box.error = 'В коробке нет отсканированных товаров';
+                    beep();
+                    render();
+                    return;
+                }
+                closeBox(box);
+                return;
+            }
+            if (raw === '555') {
+                if (box) {
+                    beep();
+                    statusLine.textContent = 'Коробка уже открыта — закройте её сканом 666';
+                    render();
+                    return;
+                }
+                openBox();
+                return;
+            }
+
+            if (box) {
+                // Первый скан в карточке — КОД КОРОБКИ: проверяется только
+                // правилами коробок (в этом смысл: правила товаров и коробок
+                // одной длины не пересекаются). Не подошёл — отказ скана,
+                // карточка остаётся открытой и ждёт код.
+                if (!box.scan.raw) {
+                    var boxResolved = resolveBoxScan(raw);
+                    if (!boxResolved || boxResolved.error) {
+                        box.error = boxResolved ? boxResolved.error : 'Код коробки не распознан';
+                        beep();
+                        statusLine.textContent = box.error;
+                        render();
                         return;
                     }
+                    box.error = '';
+                    box.scan = boxResolved;
+                    if (boxResolved.needs_product) {
+                        beep();
+                        statusLine.textContent = 'Код коробки не заведён у поставщика — выберите товар на карточке коробки';
+                    }
+                    render();
+                    return;
                 }
+                box.error = '';
+                addBoxChild(box, raw);
                 render();
                 return;
             }
 
             var resolved = resolveScan(raw);
 
-            if (boxMode) {
-                var boxItem = items[items.length - 1];
-                if (resolved.error) {
-                    boxItem.children.push({scan: resolved});
-                    beep();
-                } else if (resolved.kind === 'item') {
-                    if (resolved.needs_product) { beep(); }
-                    if (boxItem.children.length && boxItem.children[0].scan.internal_code !== resolved.internal_code) {
-                        boxItem.children.push({scan: {error: 'Разные товары в коробке: ' + resolved.name}});
-                    } else {
-                        boxItem.children.push({scan: resolved});
-                    }
-                } else {
-                    boxItem.children.push({scan: {error: 'В коробке не может быть другая коробка'}});
-                    beep();
-                }
-                render();
-                return;
-            }
-
-            // Коробка — обычная карточка (в партию коробку не кладём, отказ снят).
-            if (!resolved.error && resolved.kind === 'box') {
-                if (resolved.needs_product) {
-                    beep();
-                    statusLine.textContent = 'Код коробки не заведён у поставщика — выберите товар на карточке коробки ' +
-                        'или добавьте код на карточке поставщика';
-                }
-                items.push({scan: resolved, children: [], mismatch: false});
-                boxMode = true;
+            // Код коробки мимо карточки коробки: коробка открывается кнопкой
+            // «+ Коробка» (или сканом 555) — иначе правила товаров и коробок
+            // одной длины пересекались бы.
+            if (resolved.box_hint) {
+                beep();
+                statusLine.textContent = 'Это код коробки — нажмите «+ Коробка» (или сканируйте наклейку 555) ' +
+                    'и сканируйте код в карточку коробки';
                 render();
                 return;
             }
@@ -1098,7 +1230,9 @@
                     if ((it.pd && !it.bb) || (!it.pd && it.bb)) {
                         problems.push('Партия ' + it.id + ': заполните обе даты — выработку и срок годности'); continue;
                     }
-                    if (!it.rows.length) { problems.push('Партия ' + it.id + ': нет строк'); continue; }
+                    if (!it.rows.length && !(it.boxes && it.boxes.length)) {
+                        problems.push('Партия ' + it.id + ': нет строк'); continue;
+                    }
                     var ok = true;
                     for (j = 0; j < it.rows.length && ok; j++) {
                         var row = it.rows[j];
@@ -1119,47 +1253,50 @@
                         }
                         scans.push(collectItem(row, it));
                     }
-                    continue;
-                }
 
-                if (it.scan.error) { problems.push(it.scan.error); continue; }
-
-                if (it.scan.kind === 'box') {
-                    // Коробка без кода (кнопка «Добавить коробку») товар берёт
-                    // только с карточки: без него не собрать 33-значный код наклейки.
-                    if (!it.scan.product_id) {
-                        problems.push('Коробка ' + (it.scan.raw || 'без кода') + ': не выбран товар — выберите позицию на карточке коробки');
-                        continue;
+                    // Коробки партии: вложения наследуют ручные даты партии (как
+                    // строки россыпи) — иначе сервер отвергнет их без срока.
+                    var boxList = it.boxes || [];
+                    for (j = 0; j < boxList.length && ok; j++) {
+                        var bx = boxList[j];
+                        if (!bx.scan.raw) {
+                            problems.push('Партия ' + it.id + ': у коробки не отсканирован её штрих-код');
+                            ok = false; break;
+                        }
+                        if (!bx.children.length) {
+                            problems.push('Партия ' + it.id + ': в коробке нет товаров'); ok = false; break;
+                        }
+                        if (!bx.scan.product_id && !(bx.manual && bx.manual.product_id)) {
+                            problems.push('Партия ' + it.id + ': у коробки не выбран товар'); ok = false; break;
+                        }
+                        var boxOut = collectItem(bx, it);
+                        boxOut.children = [];
+                        var k, kid, kre;
+                        for (k = 0; k < bx.children.length; k++) {
+                            kid = bx.children[k];
+                            if (kid.scan.error) { problems.push(kid.scan.error); ok = false; break; }
+                            if (!kid.scan.product_id && !(kid.manual && kid.manual.product_id)) {
+                                problems.push('Партия ' + it.id + ': в коробке не выбран товар вложения');
+                                ok = false; break;
+                            }
+                            kre = effDates(kid, it);
+                            if (!kre.bb) {
+                                problems.push('Партия ' + it.id + ': у вложения в коробке не указан срок годности');
+                                ok = false; break;
+                            }
+                            if (isWeighted(kid, it) && !kid.scan.weight_g && !(kid.manual && kid.manual.weight_g)) {
+                                problems.push('Партия ' + it.id + ': у вложения в коробке не указан вес в граммах');
+                                ok = false; break;
+                            }
+                            boxOut.children.push(collectItem(kid, it));
+                        }
+                        if (!ok) { break; }
+                        scans.push(boxOut);
                     }
-                    if (it.children.length === 0) { problems.push('Коробка без товаров'); continue; }
-                    var kids = [];
-                    var firstCode = null;
-                    var bok = true;
-                    for (j = 0; j < it.children.length; j++) {
-                        var c = it.children[j];
-                        if (c.scan.error) { problems.push(c.scan.error); bok = false; break; }
-                        if (firstCode === null) { firstCode = c.scan.internal_code; }
-                        else if (c.scan.internal_code !== firstCode) { problems.push('Разные товары в коробке'); bok = false; break; }
-                        kids.push(collectItem(c, null));
-                    }
-                    if (!bok) { continue; }
-                    // Коробка: её собственные ручные поля (товар, даты) + подсписок.
-                    var boxOut = collectItem(it, null);
-                    boxOut.children = kids;
-                    scans.push(boxOut);
+                    if (!ok) { continue; }
                     continue;
                 }
 
-                if (!it.scan.product_id) {
-                    problems.push('Не определён товар: ' + (it.scan.raw || 'без кода'));
-                    continue;
-                }
-                var ce = effDates(it, null);
-                if (isWeighted(it, null) && !it.scan.weight_g && !(it.manual && it.manual.weight_g)) {
-                    problems.push('Не указан вес в граммах для ' + it.scan.raw); continue;
-                }
-                if (!ce.bb) { problems.push('Не указан срок для ' + it.scan.raw); continue; }
-                scans.push(collectItem(it, null));
             }
 
             if (problems.length) {

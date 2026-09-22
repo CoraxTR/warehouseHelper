@@ -235,13 +235,16 @@ func TestResolveInternalItem(t *testing.T) {
 	}
 }
 
-// Коробка поставщика разбирается правилом коробки, а не 33-значной длиной:
-// скан включает режим коробки, товар/вес/кол-во/даты берутся из полей правила.
+// Коробка поставщика разбирается правилом коробки только внутри карточки
+// коробки (запись с вложениями): верхний уровень коробку не открывает.
 func TestResolveSupplierBoxByRule(t *testing.T) {
 	uc, _ := newTestReceive()
 	cache, _ := uc.GetCache(context.Background(), "sup-1")
 
-	s, err := uc.Resolve(context.Background(), cache, receiving.ScanEntry{Raw: supBoxBarcode})
+	s, err := uc.Resolve(context.Background(), cache, receiving.ScanEntry{
+		Raw:      supBoxBarcode,
+		Children: []receiving.ScanEntry{{Raw: itemBarcode}},
+	})
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -263,6 +266,37 @@ func TestResolveSupplierBoxByRule(t *testing.T) {
 	}
 	if s.BestBefore == nil || !s.BestBefore.Equal(d(9, 29)) {
 		t.Fatalf("срок из правила: %v", s.BestBefore)
+	}
+	// Даты, вычитанные кодом коробки, — заявленные: по ним Save сверяет вложения.
+	if s.DeclaredProducedOn == nil || !s.DeclaredProducedOn.Equal(d(8, 29)) ||
+		s.DeclaredBestBefore == nil || !s.DeclaredBestBefore.Equal(d(9, 29)) {
+		t.Fatalf("заявленные даты коробки: %+v", s)
+	}
+}
+
+// Верхний уровень коробку не открывает: код коробки (по правилу коробок или наш
+// 33-значный ярлык) отвечает отказом-подсказкой «нажмите „+ Коробка“».
+func TestResolveBoxCodeOnTopLevelRefused(t *testing.T) {
+	uc, _ := newTestReceive()
+	cache, _ := uc.GetCache(context.Background(), "sup-1")
+
+	if _, err := uc.Resolve(context.Background(), cache, receiving.ScanEntry{Raw: supBoxBarcode}); !errors.Is(err, errBoxNeedsButton) {
+		t.Fatalf("правило коробок: ожидался отказ «нажмите + Коробка», получил %v", err)
+	}
+
+	// Тот же отказ у нашего 33-значного ярлыка, когда правила коробок нет.
+	repo, ok := uc.repo.(*stubReceiveRepo)
+	if !ok {
+		t.Fatal("ожидался stubReceiveRepo")
+	}
+	repo.supplier.BoxDecodeRules = nil
+	uc2 := NewReceivingUseCase(repo, &stubStockAccepter{}, &stubWeightRecorder{})
+	cache2, err := uc2.GetCache(context.Background(), "sup-1")
+	if err != nil {
+		t.Fatalf("GetCache: %v", err)
+	}
+	if _, err := uc2.Resolve(context.Background(), cache2, receiving.ScanEntry{Raw: boxBarcode}); !errors.Is(err, errBoxNeedsButton) {
+		t.Fatalf("внутренний ярлык: ожидался отказ «нажмите + Коробка», получил %v", err)
 	}
 }
 
@@ -296,9 +330,9 @@ func TestResolveSupplierItemWithInternalLength(t *testing.T) {
 	}
 }
 
-// Внутренний 33-значный ярлык коробки читается, когда правило поставщика такой
-// длины не заявлено (запасной путь диспетчера).
-func TestResolveInternalBoxWithoutRules(t *testing.T) {
+// Внутренний 33-значный ярлык коробки читается внутри карточки коробки, когда
+// правило коробок такой длины не заявлено.
+func TestResolveInternalBoxInCard(t *testing.T) {
 	uc, _ := newTestReceive()
 	repo, ok := uc.repo.(*stubReceiveRepo)
 	if !ok {
@@ -310,7 +344,10 @@ func TestResolveInternalBoxWithoutRules(t *testing.T) {
 		t.Fatalf("GetCache: %v", err)
 	}
 
-	s, err := uc.Resolve(context.Background(), cache, receiving.ScanEntry{Raw: boxBarcode})
+	s, err := uc.Resolve(context.Background(), cache, receiving.ScanEntry{
+		Raw:      boxBarcode,
+		Children: []receiving.ScanEntry{{Raw: itemBarcode}},
+	})
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -322,6 +359,11 @@ func TestResolveInternalBoxWithoutRules(t *testing.T) {
 	}
 	if s.DeclaredWeightG == nil || *s.DeclaredWeightG != 25000 {
 		t.Fatalf("вес коробки: %v", s.DeclaredWeightG)
+	}
+	// Даты ярлыка — заявленные коробки (по ним Save сверяет даты вложений).
+	if s.DeclaredProducedOn == nil || !s.DeclaredProducedOn.Equal(d(8, 29)) ||
+		s.DeclaredBestBefore == nil || !s.DeclaredBestBefore.Equal(d(9, 29)) {
+		t.Fatalf("заявленные даты ярлыка: %+v", s)
 	}
 }
 
@@ -563,77 +605,44 @@ func TestSaveBoxDifferentProducts(t *testing.T) {
 	}
 }
 
-// Ручная коробка (кнопка «Добавить коробку»): кода нет, товар и даты выбраны на
-// карточке коробки, факт считается по вложениям. Заявленных кол-ва и веса у
-// такой коробки нет — сверять не с чем, расхождения не будет.
-func TestSaveManualBox(t *testing.T) {
-	uc, stock := newTestReceive()
-	pd, bb := d(8, 28), d(9, 5)
-
-	res, err := uc.Save(context.Background(), receiving.SaveRequest{
-		SupplierID: "sup-1",
-		Scans: []receiving.ScanEntry{
-			{
-				ManualProductID:  "p1",
-				ManualProducedOn: &pd,
-				ManualBestBefore: &bb,
-				Children: []receiving.ScanEntry{
-					{Raw: itemBarcode},
-					{Raw: itemBarcode},
-				},
-			},
-		},
-	})
-	if err != nil {
-		t.Fatalf("Save: %v", err)
-	}
-	if len(res.Boxes) != 1 {
-		t.Fatalf("коробок: %d, want 1", len(res.Boxes))
-	}
-	b := res.Boxes[0]
-	if b.Mismatch {
-		t.Fatalf("расхождений у ручной коробки быть не должно: %+v", b)
-	}
-	if b.ProductID != "p1" || b.Qty != 2 || b.WeightG != 500 {
-		t.Fatalf("факт коробки: %+v", b)
-	}
-	if !b.Weighted {
-		t.Fatal("весовому товару нужна пометка weighted — на наклейку идёт вес")
-	}
-	if b.DeclaredQty != nil || b.DeclaredWeightG != nil {
-		t.Fatalf("заявленных значений у ручной коробки нет: %+v", b)
-	}
-	if b.ProducedOn == nil || !b.ProducedOn.Equal(pd) || b.BestBefore == nil || !b.BestBefore.Equal(bb) {
-		t.Fatalf("даты коробки — из карточки: %+v", b)
-	}
-	if len(res.Units) != 2 || !res.Units[0].InBox || res.Units[0].BoxMismatch {
-		t.Fatalf("куски коробки: %+v", res.Units)
-	}
-	if len(stock.lots) != 1 || stock.lots[0].Qty != 2 {
-		t.Fatalf("лоты: %+v", stock.lots)
-	}
-}
-
-// Товар ручной коробки выбран на карточке — он обязан совпасть с товаром
-// вложений, иначе наклейка ушла бы на другую позицию.
-func TestSaveManualBoxOtherProduct(t *testing.T) {
+// Ручной коробки без кода больше нет: запись с вложениями и пустым Raw — отказ
+// (коробка всегда открывается сканом своего штрих-кода — решение владельца).
+func TestSaveBoxWithoutCodeRefused(t *testing.T) {
 	uc, _ := newTestReceive()
-	repo, ok := uc.repo.(*stubReceiveRepo)
-	if !ok {
-		t.Fatal("ожидался stubReceiveRepo")
-	}
-	addPieceProduct(repo)
 	pd, bb := d(8, 28), d(9, 5)
 
 	_, err := uc.Save(context.Background(), receiving.SaveRequest{
 		SupplierID: "sup-1",
 		Scans: []receiving.ScanEntry{
 			{
-				ManualProductID:  "p2", // в карточке штучный товар, вложения — p1
+				ManualProductID:  "p1",
 				ManualProducedOn: &pd,
 				ManualBestBefore: &bb,
 				Children:         []receiving.ScanEntry{{Raw: itemBarcode}},
 			},
+		},
+	})
+	if !errors.Is(err, errBoxNoCode) {
+		t.Fatalf("ожидался отказ «коробка без кода», получил: %v", err)
+	}
+}
+
+// Товар коробки (из кода) обязан совпасть с товаром вложений, иначе наклейка
+// ушла бы на другую позицию.
+func TestSaveBoxProductDiffersFromChildren(t *testing.T) {
+	uc, _ := newTestReceive()
+	repo, ok := uc.repo.(*stubReceiveRepo)
+	if !ok {
+		t.Fatal("ожидался stubReceiveRepo")
+	}
+	addPieceProduct(repo)
+	// Код коробки заявлен штучным товаром (777777), внутри — весовой кусок p1.
+	raw := pieceExtCode + "000250" + "002" + "29082026" + "29092026" + "77"
+
+	_, err := uc.Save(context.Background(), receiving.SaveRequest{
+		SupplierID: "sup-1",
+		Scans: []receiving.ScanEntry{
+			{Raw: raw, Children: []receiving.ScanEntry{{Raw: itemBarcode}}},
 		},
 	})
 	if err == nil || !strings.Contains(err.Error(), "не совпадает с товаром вложений") {
@@ -641,34 +650,65 @@ func TestSaveManualBoxOtherProduct(t *testing.T) {
 	}
 }
 
-// Коробку без вложений принять нечем: Save отклоняет её (страница такое
-// сохранение не отправляет, но запрос мог прийти откуда угодно). Оба пути
-// распознавания коробки — правило поставщика и внутренний ярлык.
+// Даты вложения обязаны совпадать с датами, вычитанными КОДОМ коробки: это
+// отказ (в отличие от расхождения кол-ва/веса, которое лишь помечается).
+func TestSaveBoxChildDateMismatch(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  string // внутренний 29-значный ярлык куска
+		want string
+	}{
+		{
+			name: "срок вложения",
+			raw:  intCode + "00250" + "29082026" + "05102026",
+			want: "срок годности 05.10.2026 не совпадает со сроком из кода коробки 29.09.2026",
+		},
+		{
+			name: "выработка вложения",
+			raw:  intCode + "00250" + "01082026" + "29092026",
+			want: "выработка 01.08.2026 не совпадает с выработкой из кода коробки 29.08.2026",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			uc, _ := newTestReceive()
+
+			_, err := uc.Save(context.Background(), receiving.SaveRequest{
+				SupplierID: "sup-1",
+				Scans: []receiving.ScanEntry{
+					{Raw: supBoxBarcode, Children: []receiving.ScanEntry{{Raw: tc.raw}}},
+				},
+			})
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("ожидалась ошибка %q, получил: %v", tc.want, err)
+			}
+		})
+	}
+}
+
+// Код коробки на верхнем уровне — не коробка: страница держит карточку коробки
+// открытой и ждёт вложения, а запрос мимо страницы отбивается подсказкой.
+// Сторож «в коробке нет вложений» остаётся в resolveBox для таких запросов.
 func TestSaveBoxWithoutChildren(t *testing.T) {
 	uc, _ := newTestReceive()
-	const wantErr = "в коробке нет отсканированных товаров"
 
 	_, err := uc.Save(context.Background(), receiving.SaveRequest{
 		SupplierID: "sup-1",
 		Scans:      []receiving.ScanEntry{{Raw: supBoxBarcode}},
 	})
-	if err == nil || !strings.Contains(err.Error(), wantErr) {
-		t.Fatalf("коробка по правилу: ожидалась ошибка о пустой коробке, получил: %v", err)
+	if !errors.Is(err, errBoxNeedsButton) {
+		t.Fatalf("ожидался отказ «нажмите + Коробка», получил: %v", err)
 	}
 
-	uc2, _ := newTestReceive()
-	repo, ok := uc2.repo.(*stubReceiveRepo)
-	if !ok {
-		t.Fatal("ожидался stubReceiveRepo")
+	cache, err := uc.GetCache(context.Background(), "sup-1")
+	if err != nil {
+		t.Fatalf("GetCache: %v", err)
 	}
-	// Внутренний 33-значный ярлык читается, когда правила такой длины нет.
-	repo.supplier.BoxDecodeRules = nil
-	_, err = uc2.Save(context.Background(), receiving.SaveRequest{
-		SupplierID: "sup-1",
-		Scans:      []receiving.ScanEntry{{Raw: boxBarcode}},
-	})
-	if err == nil || !strings.Contains(err.Error(), wantErr) {
-		t.Fatalf("внутренний ярлык: ожидалась ошибка о пустой коробке, получил: %v", err)
+	_, _, err = uc.resolveBox(context.Background(), cache,
+		&receiving.DecodedScan{Kind: receiving.KindBox, Raw: supBoxBarcode},
+		receiving.ScanEntry{Raw: supBoxBarcode})
+	if err == nil || !strings.Contains(err.Error(), "в коробке нет отсканированных товаров") {
+		t.Fatalf("сторож пустой коробки: %v", err)
 	}
 }
 

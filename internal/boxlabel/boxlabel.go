@@ -255,32 +255,46 @@ func formatKg(weightG int64) string {
 	return strings.Replace(kg, ".", ",", 1)
 }
 
-// breakCode — спец-код окончания коробки: приёмка перехватывает его в JS до
-// резолва (666), поэтому на наклейке достаточно штрих-кода Code128 с цифрами —
-// закрывать коробку сканом, а не вводом с клавиатуры.
-const breakCode = "666"
+// Спец-коды приёмки: их перехватывает страница (JS) до резолва, поэтому на
+// наклейке достаточно штрих-кода Code128 с цифрами — операция выполняется
+// сканом вместо нажатия кнопки.
+const (
+	breakCode   = "666" // закрытие коробки
+	openBoxCode = "555" // открытие карточки коробки (кнопка «+ Коробка»)
+)
 
-// ExportBreakMarker формирует xlsx с наклейкой спец-кода «666»: штрих-код той же
-// геометрией, что на наклейке коробки (72 × 15 мм), ниже — цифры кода. Печатают
-// на лист 75 мм (одна наклейка = одна страница) и клеят у сканера.
+// ExportBreakMarker формирует xlsx с наклейкой спец-кода закрытия коробки
+// (666). Штрих-код — той же геометрией, что наклейка коробки (72 × 15 мм),
+// ниже цифры кода; печатают на лист 75 мм и клеят у сканера.
 func ExportBreakMarker() (string, error) {
-	f, err := newBreakWorkbook()
+	return exportMarker(breakCode)
+}
+
+// ExportOpenBoxMarker формирует xlsx с наклейкой спец-кода открытия коробки
+// (555): скан равен нажатию «+ Коробка» на странице приёмки.
+func ExportOpenBoxMarker() (string, error) {
+	return exportMarker(openBoxCode)
+}
+
+// exportMarker собирает файл наклейки спец-кода (одна наклейка = страница).
+func exportMarker(code string) (string, error) {
+	f, err := newMarkerWorkbook(code)
 	if err != nil {
 		return "", err
 	}
 	defer func() { _ = f.Close() }()
 
-	name := fmt.Sprintf("box_break_%s_%s.xlsx", breakCode, time.Now().Format("20060102_150405"))
+	name := fmt.Sprintf("box_cmd_%s_%s.xlsx", code, time.Now().Format("20060102_150405"))
 	path := filepath.Join(tempdir.Dir, name)
 	if err := f.SaveAs(path); err != nil {
-		return "", fmt.Errorf("сохранить файл наклейки %s: %w", breakCode, err)
+		return "", fmt.Errorf("сохранить файл наклейки %s: %w", code, err)
 	}
 	return path, nil
 }
 
-// newBreakWorkbook собирает книгу наклейки спец-кода: строка штрих-кода и
+// newMarkerWorkbook собирает книгу наклейки спец-кода: строка штрих-кода и
 // строка цифр — высоты берутся из раскладки наклейки коробки (rowHeightPt).
-func newBreakWorkbook() (*excelize.File, error) {
+func newMarkerWorkbook(code string) (*excelize.File, error) {
 	f := excelize.NewFile()
 	sheet := f.GetSheetName(0)
 
@@ -288,9 +302,9 @@ func newBreakWorkbook() (*excelize.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	pngBytes, err := generateBarcodePNG(breakCode, barcodeW, barcodeH)
+	pngBytes, err := generateBarcodePNG(code, barcodeW, barcodeH)
 	if err != nil {
-		return nil, fmt.Errorf("штрих-код %s: %w", breakCode, err)
+		return nil, fmt.Errorf("штрих-код %s: %w", code, err)
 	}
 
 	_ = f.AddPictureFromBytes(sheet, "B1", &excelize.Picture{
@@ -305,7 +319,7 @@ func newBreakWorkbook() (*excelize.File, error) {
 		},
 	})
 	setRow(f, sheet, styles.plain, 1, "")
-	setRow(f, sheet, styles.digits, 2, breakCode)
+	setRow(f, sheet, styles.digits, 2, code)
 
 	_ = f.SetColWidth(sheet, "B", "B", colWidthChars)
 	_ = f.SetPageMargins(sheet, zeroMargins())
