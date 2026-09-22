@@ -152,9 +152,10 @@ func (pg *PGClient) ListActive(ctx context.Context) ([]returns.ReturnEvent, erro
 	return events, nil
 }
 
-// ProductsByMSIDs — каталог-шов «Возврата в продажу»: тип учёта и код склада
-// товаров по uuid МС (чтение products — владелец записи каталог). Товаров нет
-// в каталоге — их просто нет в мапе (в возврат не идут: internal_code неизвестен).
+// ProductsByMSIDs — каталог-шов «Возврата в продажу»: тип учёта, код склада и
+// название товаров по uuid МС (чтение products — владелец записи каталог; name
+// нужен подписям наклеек). Товаров нет в каталоге — их просто нет в мапе
+// (в возврат не идут: internal_code неизвестен).
 func (pg *PGClient) ProductsByMSIDs(ctx context.Context, ids []string) (map[string]returns.CatalogProduct, error) {
 	out := make(map[string]returns.CatalogProduct, len(ids))
 	if len(ids) == 0 {
@@ -162,7 +163,7 @@ func (pg *PGClient) ProductsByMSIDs(ctx context.Context, ids []string) (map[stri
 	}
 
 	rows, err := pg.Pool.Query(ctx,
-		`SELECT id, internal_code, uom FROM products WHERE id = ANY($1)`, ids)
+		`SELECT id, internal_code, uom, name FROM products WHERE id = ANY($1)`, ids)
 	if err != nil {
 		return nil, fmt.Errorf("returns catalog products: %w", err)
 	}
@@ -174,7 +175,7 @@ func (pg *PGClient) ProductsByMSIDs(ctx context.Context, ids []string) (map[stri
 			code *string // NULL — товар без кода (в возврат не идёт)
 			uom  string
 		)
-		if err := rows.Scan(&cp.ProductID, &code, &uom); err != nil {
+		if err := rows.Scan(&cp.ProductID, &code, &uom, &cp.Name); err != nil {
 			return nil, fmt.Errorf("returns catalog products scan: %w", err)
 		}
 		if code != nil {
@@ -189,10 +190,11 @@ func (pg *PGClient) ProductsByMSIDs(ctx context.Context, ids []string) (map[stri
 	return out, nil
 }
 
-// ProductsByInternalCodes — каталог-шов «Ручного возврата»: товар по коду
-// склада (internal_code) из этикетки куска. internal_code UNIQUE — ключ мапы
-// код → товар. Кода нет в каталоге — его просто нет в мапе (батч отклоняется
-// вызывающей стороной).
+// ProductsByInternalCodes — каталог-шов страниц по сканам («Создать коробку»,
+// «Ручной возврат», «Вывод из продажи»): товар по коду склада (internal_code)
+// из этикетки куска — тип учёта, код склада и название (name идёт подписью на
+// наклейку коробки). internal_code UNIQUE — ключ мапы код → товар. Кода нет в
+// каталоге — его просто нет в мапе (батч отклоняется вызывающей стороной).
 func (pg *PGClient) ProductsByInternalCodes(ctx context.Context, codes []string) (map[string]returns.CatalogProduct, error) {
 	out := make(map[string]returns.CatalogProduct, len(codes))
 	if len(codes) == 0 {
@@ -200,7 +202,7 @@ func (pg *PGClient) ProductsByInternalCodes(ctx context.Context, codes []string)
 	}
 
 	rows, err := pg.Pool.Query(ctx,
-		`SELECT id, internal_code, uom FROM products WHERE internal_code = ANY($1)`, codes)
+		`SELECT id, internal_code, uom, name FROM products WHERE internal_code = ANY($1)`, codes)
 	if err != nil {
 		return nil, fmt.Errorf("returns catalog by codes: %w", err)
 	}
@@ -212,7 +214,7 @@ func (pg *PGClient) ProductsByInternalCodes(ctx context.Context, codes []string)
 			code string
 			uom  string
 		)
-		if err := rows.Scan(&cp.ProductID, &code, &uom); err != nil {
+		if err := rows.Scan(&cp.ProductID, &code, &uom, &cp.Name); err != nil {
 			return nil, fmt.Errorf("returns catalog by codes scan: %w", err)
 		}
 		cp.InternalCode = code
