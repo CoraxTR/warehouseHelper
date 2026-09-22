@@ -453,7 +453,8 @@ func generateBarcodePNG(data string, width, height int) ([]byte, error) {
 func setCellsStyle(f *excelize.File, sheet string, startRow, header, regular, toTheRight int) error {
 	innerCounter := startRow
 
-	err := f.SetRowHeight(sheet, innerCounter, 62)
+	// Первая строка — под укороченный штрих-код: 41,25 pt = 55 px = 1,45 см.
+	err := f.SetRowHeight(sheet, innerCounter, 41.25)
 	if err != nil {
 		return err
 	}
@@ -544,7 +545,11 @@ func setCellsStyle(f *excelize.File, sheet string, startRow, header, regular, to
 }
 
 func insertBarcodeIntoCell(f *excelize.File, sheet, refGoNumber string, cellNumber int) error {
-	pngBytes, err := generateBarcodePNG(refGoNumber, 140, 55)
+	// Размер рисунка на печати: 265 px = 7,00 см в ширину и 28 px = 0,74 см
+	// в высоту (было 140 × 55 px = 3,70 × 1,46 см). Кодирование Code128 и номер
+	// не меняются, растягивается только растр — модуль штриха становится ~0,5 мм,
+	// читаемость сканером только лучше.
+	pngBytes, err := generateBarcodePNG(refGoNumber, 265, 28)
 	if err != nil {
 		slog.Error(fmt.Sprintf("Ошибка генерации: %v\n", err))
 	}
@@ -555,10 +560,13 @@ func insertBarcodeIntoCell(f *excelize.File, sheet, refGoNumber string, cellNumb
 			Extension: ".png",
 			File:      pngBytes,
 			Format: &excelize.GraphicOptions{
-				ScaleX:      1.0,
-				ScaleY:      1.0,
-				OffsetY:     3,
-				OffsetX:     100,
+				ScaleX:  1.0,
+				ScaleY:  1.0,
+				OffsetY: 3,
+				// Отступ по центру печатной области колонок A и B (A 103 px + B 262 px
+				// = 365 px): (365 − 265) / 2 = 50 px. Тихие зоны Code128 внутри
+				// картинки симметричны, поэтому штрихи тоже встают по центру.
+				OffsetX:     50,
 				Positioning: "oneCell",
 			},
 		})
