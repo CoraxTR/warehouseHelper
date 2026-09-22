@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Создать коробку</title>
+    <link rel="stylesheet" href="/static/raven-guard.css">
+</head>
+
+<body>
+
+    <header class="brandbar">
+        <a class="brandbar__brand" href="/"><svg class="brandbar__emblem" viewBox="0 0 64 64" aria-hidden="true"><circle cx="35" cy="25" r="14" fill="#F4F1E9"/><polygon points="6,26 30,17 28,27" fill="#F4F1E9"/><polygon points="13,35 28,27 26,36" fill="#F4F1E9"/><circle cx="34" cy="23" r="3.6" fill="#0A0A0D"/><circle cx="33" cy="22" r="1.1" fill="#C02832"/></svg><span class="brandbar__name">ВОРОН&nbsp;&middot;&nbsp;СКЛАД</span></a>
+        <span class="brandbar__motto">Приёмка или смерть</span>
+    </header>
+    {{template "nav"}}
+
+    <div class="topbar">
+        <a class="btn btn-cancel cancel" href="/goods">← Продукция</a>
+        <h1>Создать коробку</h1>
+    </div>
+
+    <div class="scan-block">
+        <div class="constraint hint">Коробка — физическая группировка кусков одного товара с одним сроком: в остатки и МойСклад ничего не пишется, результат — файл наклейки. Сканируйте только штрих-коды кусков (29 цифр): один товар и один срок на коробку, коробка (33) не принимается. Повторный скан — отдельный кусок (не дедуплицируется). Наклейку печатать на лист 75×120 мм — одна наклейка на лист.</div>
+        <input id="scan-input" type="text" autocomplete="off" placeholder="Отсканируйте этикетку куска…">
+        <div id="scan-error" class="error" style="display:none;"></div>
+        <div id="ok-banner" class="banner ok" style="display:none;"></div>
+        <div id="scan-list"></div>
+        <div class="save-row">
+            <button id="save-btn" class="btn btn-save" type="button" disabled>Создать коробку</button>
+            <button id="clear-btn" class="btn btn-cancel" type="button">Очистить</button>
+        </div>
+        <div id="counter" class="counter"></div>
+    </div>
+
+    <script>
+        // Страница «Создать коробку»: сканы кусков (29 цифр) → один xlsx-файл
+        // наклейки. Только ES5 (старые браузеры склада). Локальная проверка
+        // дублирует серверную (авторитетную): батч валидируется целиком —
+        // ошибка любой строки отклоняет все сканы.
+        var BOX = { scans: [], busy: false };
+
+        function el(id) {
+            return document.getElementById(id);
+        }
+
+        function showError(msg) {
+            var e = el('scan-error');
+            e.innerHTML = msg;
+            e.style.display = 'block';
+        }
+
+        function hideError() {
+            var e = el('scan-error');
+            if (e) {
+                e.style.display = 'none';
+            }
+        }
+
+        function showOk(msg) {
+            var b = el('ok-banner');
+            if (!b) {
+                return;
+            }
+            b.innerHTML = msg;
+            b.style.display = 'block';
+            clearTimeout(BOX.okTimer);
+            BOX.okTimer = setTimeout(function () { b.style.display = 'none'; }, 6000);
+        }
+
+        // Громкий бип (Web Audio); нет звука — сообщение об ошибке всё равно видно.
+        var beepCtx = null;
+        function beep() {
+            try {
+                var AC = window.AudioContext || window.webkitAudioContext;
+                if (!AC) {
+                    return;
+                }
+                if (!beepCtx) {
+                    beepCtx = new AC();
+                }
+                var osc = beepCtx.createOscillator();
+                var gain = beepCtx.createGain();
+                osc.connect(gain);
+                gain.connect(beepCtx.destination);
+                osc.frequency.value = 880;
+                gain.gain.value = 0.5;
+                osc.start(0);
+                setTimeout(function () { osc.stop(0); }, 180);
+            } catch (e) { /* тишина */ }
+        }
+
+        // Локальная проверка скана. null — принят, иначе текст отказа.
+        function checkScan(raw) {
+            if (raw.length === 33) {
+                return 'Коробка (33) в коробку не кладётся — сканируйте куски (29)';
+            }
+            if (raw.length !== 29) {
+                return 'Не этикетка куска: ожидается 29 цифр';
+            }
+            return null;
+        }
+
+        function submitScan() {
+            var input = el('scan-input');
+            var raw = input.value.replace(/^\s+|\s+$/g, '');
+            if (raw === '') {
+                return;
+            }
+            var err = checkScan(raw);
+            if (err) {
+                beep();
+                showError(err);
+                input.value = '';
+                input.focus();
+                return;
+            }
+            hideError();
+            BOX.scans.push(raw);
+            input.value = '';
+            input.focus();
+            renderAll();
+        }
+
+        function updateSaveBtn() {
+            var btn = el('save-btn');
+            if (btn) {
+                btn.disabled = BOX.busy || BOX.scans.length === 0;
+            }
+        }
+
+        function renderAll() {
+            var list = el('scan-list');
+            var html = '';
+            for (var i = 0; i < BOX.scans.length; i++) {
+                html += '<div class="scan-row"><span class="code">' + BOX.scans[i] + '</span>'
+                    + '<button type="button" class="rm" data-idx="' + i + '">✕</button></div>';
+            }
+            list.innerHTML = html;
+
+            var c = el('counter');
+            if (c) {
+                c.innerHTML = BOX.scans.length === 0 ? '' : 'Вложений: ' + BOX.scans.length;
+            }
+            updateSaveBtn();
+        }
+
+        function removeScan(idx) {
+            BOX.scans.splice(idx, 1);
+            renderAll();
+        }
+
+        function clearAll() {
+            if (BOX.busy) {
+                return;
+            }
+            BOX.scans = [];
+            hideError();
+            renderAll();
+            el('scan-input').focus();
+        }
+
+        // Имя файла из Content-Disposition (сервер отдаёт box_labels_<ts>.xlsx).
+        function fileNameFromXhr(xhr) {
+            var cd = xhr.getResponseHeader('Content-Disposition') || '';
+            var m = /filename="?([^";]+)"?/.exec(cd);
+            return m ? m[1] : 'box_labels.xlsx';
+        }
+
+        // Скачивание наклейки: файл формирует сервер, куски шлём как есть —
+        // сервер валидирует батч целиком и либо отдаёт файл, либо отказ.
+        function createBox() {
+            if (BOX.busy || BOX.scans.length === 0) {
+                return;
+            }
+            BOX.busy = true;
+            updateSaveBtn();
+            var xhr = new XMLHttpRequest();
+            xhr.open('POST', '/goods/box/save', true);
+            xhr.setRequestHeader('Content-Type', 'application/json');
+            xhr.responseType = 'blob';
+            xhr.onreadystatechange = function () {
+                if (xhr.readyState !== 4) {
+                    return;
+                }
+                BOX.busy = false;
+                if (xhr.status !== 200) {
+                    updateSaveBtn();
+                    var msg = 'Не удалось создать коробку (HTTP ' + xhr.status + ')';
+                    var errBlob = xhr.response;
+                    if (errBlob) {
+                        var rd = new FileReader();
+                        rd.onloadend = function () {
+                            beep();
+                            showError(rd.result ? rd.result : msg);
+                        };
+                        rd.readAsText(errBlob);
+                    } else {
+                        beep();
+                        showError(msg);
+                    }
+                    return;
+                }
+                var warnings = xhr.getResponseHeader('X-Box-Warnings');
+                var name = fileNameFromXhr(xhr);
+                var url = window.URL.createObjectURL(xhr.response);
+                var a = document.createElement('a');
+                a.href = url;
+                a.download = name;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                window.URL.revokeObjectURL(url);
+
+                var qty = BOX.scans.length;
+                BOX.scans = [];
+                renderAll();
+                var ok = 'Коробка собрана: вложений ' + qty + '. Наклейка скачана (' + name + ') — печатайте на лист 75×120 мм.';
+                if (warnings) {
+                    ok += '<br>' + decodeURIComponent(warnings);
+                }
+                showOk(ok);
+                el('scan-input').focus();
+            };
+            xhr.send(JSON.stringify({ scans: BOX.scans }));
+        }
+
+        function init() {
+            var input = el('scan-input');
+            if (input) {
+                input.addEventListener('keydown', function (ev) {
+                    if (ev.keyCode === 13) {
+                        ev.preventDefault();
+                        submitScan();
+                    }
+                });
+                input.focus();
+            }
+            var list = el('scan-list');
+            if (list) {
+                list.addEventListener('click', function (ev) {
+                    var t = ev.target || ev.srcElement;
+                    while (t && t !== list) {
+                        if (t.getAttribute && t.getAttribute('data-idx') !== null) {
+                            removeScan(parseInt(t.getAttribute('data-idx'), 10));
+                            return;
+                        }
+                        t = t.parentNode;
+                    }
+                });
+            }
+            var save = el('save-btn');
+            if (save) {
+                save.addEventListener('click', createBox);
+            }
+            var clear = el('clear-btn');
+            if (clear) {
+                clear.addEventListener('click', clearAll);
+            }
+            renderAll();
+        }
+
+        init();
+    </script>
+
+</body>
+
+</html>
