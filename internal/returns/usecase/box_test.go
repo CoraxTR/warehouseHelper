@@ -96,11 +96,11 @@ func readLabel(t *testing.T, path string) (parsedCode innercode.Code, productNam
 	}
 	defer func() { _ = f.Close() }()
 
-	digits, err := f.GetCellValue(f.GetSheetName(0), "B3")
+	digits, err := f.GetCellValue(f.GetSheetName(0), "B2") // строка 1 — ШК, строка 2 — его цифры
 	if err != nil {
 		t.Fatalf("цифры кода наклейки: %v", err)
 	}
-	name, err := f.GetCellValue(f.GetSheetName(0), "B4")
+	name, err := f.GetCellValue(f.GetSheetName(0), "B3")
 	if err != nil {
 		t.Fatalf("наименование наклейки: %v", err)
 	}
