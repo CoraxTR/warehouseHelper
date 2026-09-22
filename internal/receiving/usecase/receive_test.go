@@ -92,6 +92,17 @@ const (
 	itemRuleNoWeight   = "22-1-6- -0-7-8-15-8"
 	extBarcodeNoWeight = extCode + "29082026" + "29092026" // 22
 
+	// Коробка поставщика: код 6 (поз.1), общий вес 6 (поз.7), кол-во вложений 3
+	// (поз.13), выработка 8 (поз.16), срок 8 (поз.24); последние 2 знака кода
+	// правилом не вычитываются.
+	boxRule       = "33-1-6-7-6-13-3-16-8-24-8"
+	supBoxBarcode = extCode + "002500" + "010" + "29082026" + "29092026" + "77" // 33
+
+	// Правило товара длиной 29 — как у внутреннего ярлыка куска: код поставщика
+	// такой длины должен разбираться правилом, а не внутренним форматом.
+	itemRule29   = "29-1-6-7-6-13-8-21-8"
+	supBarcode29 = extCode + "000250" + "29082026" + "29092026" + "7" // 29
+
 	// Штучный товар (вес при приёмке не спрашивают).
 	pieceCode    = "00210010"
 	pieceExtCode = "777777"
@@ -128,7 +139,7 @@ func testCacheRepo() *stubReceiveRepo {
 		supplier: &domain.Supplier{
 			ID:             "sup-1",
 			DecodeRules:    []string{itemRule},
-			BoxDecodeRules: []string{"33-1-6-7-6-13-3-16-8-24-8"},
+			BoxDecodeRules: []string{boxRule},
 		},
 		barcodes: []receiving.BarcodeRef{
 			{ExternalCode: extCode, ProductID: "p1", ProductName: "Говядина охл.", InternalCode: intCode, Weighted: true},
@@ -224,15 +235,86 @@ func TestResolveInternalItem(t *testing.T) {
 	}
 }
 
-func TestResolveInternalBox(t *testing.T) {
+// Коробка поставщика разбирается правилом коробки, а не 33-значной длиной:
+// скан включает режим коробки, товар/вес/кол-во/даты берутся из полей правила.
+func TestResolveSupplierBoxByRule(t *testing.T) {
 	uc, _ := newTestReceive()
 	cache, _ := uc.GetCache(context.Background(), "sup-1")
+
+	s, err := uc.Resolve(context.Background(), cache, receiving.ScanEntry{Raw: supBoxBarcode})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if s.Kind != receiving.KindBox || s.IsInternal {
+		t.Fatalf("коробка: %+v", s)
+	}
+	if s.ProductID != "p1" || s.ProductName != "Говядина охл." {
+		t.Fatalf("товар коробки: %+v", s)
+	}
+	if s.DeclaredQty == nil || *s.DeclaredQty != 10 {
+		t.Fatalf("кол-во вложений: %v", s.DeclaredQty)
+	}
+	if s.DeclaredWeightG == nil || *s.DeclaredWeightG != 2500 {
+		t.Fatalf("вес коробки: %v", s.DeclaredWeightG)
+	}
+	// Выработка — четвёртое поле правила коробки, а не поле кол-ва вложений.
+	if s.ProducedOn == nil || !s.ProducedOn.Equal(d(8, 29)) {
+		t.Fatalf("выработка из правила: %v", s.ProducedOn)
+	}
+	if s.BestBefore == nil || !s.BestBefore.Equal(d(9, 29)) {
+		t.Fatalf("срок из правила: %v", s.BestBefore)
+	}
+}
+
+// Код поставщика длиной 29 (как внутренний ярлык куска) разбирается правилом
+// товара: длина строки сама по себе вид скана не решает.
+func TestResolveSupplierItemWithInternalLength(t *testing.T) {
+	uc, _ := newTestReceive()
+	repo, ok := uc.repo.(*stubReceiveRepo)
+	if !ok {
+		t.Fatal("ожидался stubReceiveRepo")
+	}
+	repo.supplier.BoxDecodeRules = nil
+	repo.supplier.DecodeRules = []string{itemRule29}
+	cache, err := uc.GetCache(context.Background(), "sup-1")
+	if err != nil {
+		t.Fatalf("GetCache: %v", err)
+	}
+
+	s, err := uc.Resolve(context.Background(), cache, receiving.ScanEntry{Raw: supBarcode29})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if s.Kind != receiving.KindItem || s.IsInternal || s.ProductID != "p1" {
+		t.Fatalf("кусок по правилу: %+v", s)
+	}
+	if s.WeightG == nil || *s.WeightG != 250 {
+		t.Fatalf("вес: %v", s.WeightG)
+	}
+	if s.BestBefore == nil || !s.BestBefore.Equal(d(9, 29)) {
+		t.Fatalf("срок: %v", s.BestBefore)
+	}
+}
+
+// Внутренний 33-значный ярлык коробки читается, когда правило поставщика такой
+// длины не заявлено (запасной путь диспетчера).
+func TestResolveInternalBoxWithoutRules(t *testing.T) {
+	uc, _ := newTestReceive()
+	repo, ok := uc.repo.(*stubReceiveRepo)
+	if !ok {
+		t.Fatal("ожидался stubReceiveRepo")
+	}
+	repo.supplier.BoxDecodeRules = nil
+	cache, err := uc.GetCache(context.Background(), "sup-1")
+	if err != nil {
+		t.Fatalf("GetCache: %v", err)
+	}
 
 	s, err := uc.Resolve(context.Background(), cache, receiving.ScanEntry{Raw: boxBarcode})
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if s.Kind != receiving.KindBox {
+	if s.Kind != receiving.KindBox || !s.IsInternal {
 		t.Fatalf("коробка: %+v", s)
 	}
 	if s.DeclaredQty == nil || *s.DeclaredQty != 10 {
@@ -387,15 +469,16 @@ func TestSaveWeightRecorderFailure(t *testing.T) {
 	}
 }
 
-func TestSaveBoxMismatch(t *testing.T) {
+// Коробка поставщика, разобранная правилом: заявлено 10 вложений по 250 г, в
+// сканах — 2 куска. Приёмка проходит «как есть», расхождение помечается.
+func TestSaveSupplierBoxMismatch(t *testing.T) {
 	uc, _ := newTestReceive()
 
-	// Коробка заявляет 10 вложений по 250 г (2.5 кг), внутри — только 2 куска.
 	res, err := uc.Save(context.Background(), receiving.SaveRequest{
 		SupplierID: "sup-1",
 		Scans: []receiving.ScanEntry{
 			{
-				Raw: boxBarcode,
+				Raw: supBoxBarcode,
 				Children: []receiving.ScanEntry{
 					{Raw: itemBarcode},
 					{Raw: itemBarcode},
@@ -416,8 +499,47 @@ func TestSaveBoxMismatch(t *testing.T) {
 	if b.Qty != 2 || b.WeightG != 500 {
 		t.Fatalf("факт коробки: %+v", b)
 	}
+	if b.DeclaredQty == nil || *b.DeclaredQty != 10 || b.DeclaredWeightG == nil || *b.DeclaredWeightG != 2500 {
+		t.Fatalf("заявленное коробки: %+v", b)
+	}
+	// Даты коробки — из правила коробки (выработка — четвёртое поле).
+	if b.ProducedOn == nil || !b.ProducedOn.Equal(d(8, 29)) || b.BestBefore == nil || !b.BestBefore.Equal(d(9, 29)) {
+		t.Fatalf("даты коробки: %+v", b)
+	}
 	if len(res.Units) != 2 {
 		t.Fatalf("единиц из коробки: %d, want 2", len(res.Units))
+	}
+	if !res.Units[0].InBox || !res.Units[0].BoxMismatch {
+		t.Fatalf("кусок из коробки: %+v", res.Units[0])
+	}
+}
+
+// Совпавшая с заявленной коробка: 2 куска, 500 г — расхождения нет.
+func TestSaveSupplierBoxMatchingDeclared(t *testing.T) {
+	uc, _ := newTestReceive()
+
+	// Заявлено 2 вложения и 500 г — ровно то, что внутри.
+	raw := extCode + "000500" + "002" + "29082026" + "29092026" + "77"
+	res, err := uc.Save(context.Background(), receiving.SaveRequest{
+		SupplierID: "sup-1",
+		Scans: []receiving.ScanEntry{
+			{
+				Raw: raw,
+				Children: []receiving.ScanEntry{
+					{Raw: itemBarcode},
+					{Raw: itemBarcode},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if len(res.Boxes) != 1 {
+		t.Fatalf("коробок: %d, want 1", len(res.Boxes))
+	}
+	if b := res.Boxes[0]; b.Mismatch || b.Qty != 2 || b.WeightG != 500 {
+		t.Fatalf("коробка: %+v", b)
 	}
 }
 
@@ -428,7 +550,7 @@ func TestSaveBoxDifferentProducts(t *testing.T) {
 		SupplierID: "sup-1",
 		Scans: []receiving.ScanEntry{
 			{
-				Raw: boxBarcode,
+				Raw: supBoxBarcode,
 				Children: []receiving.ScanEntry{
 					{Raw: itemBarcode},
 					{Raw: "00310003" + "00250" + "29082026" + "29092026"}, // другой internal_code

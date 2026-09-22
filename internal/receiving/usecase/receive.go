@@ -181,12 +181,12 @@ func (uc *ReceivingUseCase) Resolve(ctx context.Context, cache *receiving.Cache,
 		return resolveManual(cache, e)
 	}
 
-	// Внутренний формат склада: кусок 29 / коробка 33.
-	if len(raw) == 29 || len(raw) == 33 {
-		return uc.resolveInternal(ctx, cache, raw, e)
-	}
-
-	// Внешние коды поставщика: сначала коробки (по длине), затем куски.
+	// Внешние коды поставщика идут раньше внутреннего формата: вид скана решает
+	// подходящее правило, а не длина строки. Код поставщика бывает любой длины —
+	// в том числе 29/33, как наши внутренние форматы, — и по длине он разбирался
+	// бы как внутренний (товар «по первым восьми цифрам», вес и даты из чужих
+	// полей). Поэтому режим коробки включает скан по правилу коробки, а не
+	// 33-значная длина. Сначала коробки (по длине), затем куски.
 	for _, rule := range cache.BoxRules {
 		if rule.Length != len(raw) {
 			continue
@@ -198,6 +198,13 @@ func (uc *ReceivingUseCase) Resolve(ctx context.Context, cache *receiving.Cache,
 			continue
 		}
 		return uc.resolveByRule(cache, rule, raw, e, receiving.KindItem)
+	}
+
+	// Внутренний формат склада: кусок 29 / коробка 33 — запасной путь, когда ни
+	// одно правило поставщика такой длины не заявило (например, скан своей
+	// этикетки).
+	if len(raw) == 29 || len(raw) == 33 {
+		return uc.resolveInternal(ctx, cache, raw, e)
 	}
 
 	return nil, receiving.ErrScanUnknown
@@ -300,12 +307,17 @@ func (uc *ReceivingUseCase) resolveByRule(cache *receiving.Cache, rule receiving
 		}
 	}
 
-	// Даты: выработка и срок (ДДММГГГГ) — правило или ручной ввод.
-	dateField := 3
+	// Даты: выработка и срок (ДДММГГГГ) — правило или ручной ввод. В правиле
+	// коробки между весом и датами стоит кол-во вложений, поэтому у коробки
+	// выработка — четвёртое поле (BoxProducedOn), а не третье: чтение её из
+	// поля кол-ва ломало приёмку коробок (поле «010» — не дата).
+	producedField := decoderules.FieldProducedOn
+	bestBeforeField := decoderules.FieldBestBefore
 	if kind == receiving.KindBox {
-		dateField = 4
+		producedField = decoderules.BoxProducedOn
+		bestBeforeField = decoderules.BoxBestBefore
 	}
-	producedOn, hasProduced, err := resolveRuleDate(rule, raw, 2, "дата выработки")
+	producedOn, hasProduced, err := resolveRuleDate(rule, raw, producedField, "дата выработки")
 	if err != nil {
 		return nil, err
 	}
@@ -315,7 +327,7 @@ func (uc *ReceivingUseCase) resolveByRule(cache *receiving.Cache, rule receiving
 	if e.ManualProducedOn != nil {
 		scan.ProducedOn = e.ManualProducedOn
 	}
-	bestBefore, hasBestBefore, err := resolveRuleDate(rule, raw, dateField, "срок годности")
+	bestBefore, hasBestBefore, err := resolveRuleDate(rule, raw, bestBeforeField, "срок годности")
 	if err != nil {
 		return nil, err
 	}
@@ -327,7 +339,7 @@ func (uc *ReceivingUseCase) resolveByRule(cache *receiving.Cache, rule receiving
 	}
 
 	if kind == receiving.KindBox {
-		if q, ok := sliceRule(rule, raw, 2); ok {
+		if q, ok := sliceRule(rule, raw, decoderules.BoxQty); ok {
 			qty, err := strconv.ParseInt(q, 10, 64)
 			if err != nil || qty <= 0 {
 				return nil, fmt.Errorf("кол-во вложений %q из штрих-кода не число", q)
