@@ -109,6 +109,10 @@ func TestNewWorkbookWeightBox(t *testing.T) {
 	if got, _ := f.GetCellValue(sheet, "B5"); got != "вес: 2,5 кг   вложений: 10" {
 		t.Errorf("строка веса = %q", got)
 	}
+	// Дата — строкой, срок — второй строкой ячейки (перенос).
+	if got, _ := f.GetCellValue(sheet, "B6"); got != "выработка 29.08.2026\nсрок 29.09.2026" {
+		t.Errorf("строка дат = %q", got)
+	}
 
 	// Штрих-код — картинка в строке 2.
 	pics, err := f.GetPictureCells(sheet)
@@ -141,13 +145,13 @@ func TestNewWorkbookWeightBox(t *testing.T) {
 	}
 
 	// Печать: область — блок наклейки, разрыв страницы после каждой наклейки.
-	if area := printArea(t, f); !strings.HasSuffix(area, "$B$1:$B$6") {
-		t.Errorf("область печати = %q, want …$B$1:$B$6", area)
+	if area := printArea(t, f); !strings.HasSuffix(area, "$B$1:$B$7") {
+		t.Errorf("область печати = %q, want …$B$1:$B$7", area)
 	}
-	// Разрыв после первой наклейки: строка 7 в Excel = id 6 в XML (нумерация с нуля).
+	// Разрыв после первой наклейки: строка 8 в Excel = id 7 в XML (нумерация с нуля).
 	xml := sheetXML(t, f)
-	if !strings.Contains(xml, "<brk id=\"6\"") {
-		t.Errorf("нет разрыва страницы после первой наклейки (строка 7)")
+	if !strings.Contains(xml, "<brk id=\"7\"") {
+		t.Errorf("нет разрыва страницы после первой наклейки (строка 8)")
 	}
 }
 
@@ -182,12 +186,12 @@ func TestNewWorkbookTwoBoxesBreakPages(t *testing.T) {
 		t.Fatalf("наклеек: %d, want 2", labels)
 	}
 
-	if area := printArea(t, f); !strings.HasSuffix(area, "$B$1:$B$12") {
-		t.Errorf("область печати = %q, want …$B$1:$B$12", area)
+	if area := printArea(t, f); !strings.HasSuffix(area, "$B$1:$B$14") {
+		t.Errorf("область печати = %q, want …$B$1:$B$14", area)
 	}
 	xml := sheetXML(t, f)
-	// Строки 7 и 13 в Excel = id 6 и 12 в XML.
-	for _, brk := range []string{"6", "12"} {
+	// Строки 8 и 15 в Excel = id 7 и 14 в XML.
+	for _, brk := range []string{"7", "14"} {
 		if !strings.Contains(xml, "<brk id=\""+brk+"\"") {
 			t.Errorf("нет разрыва страницы (id %s)", brk)
 		}
