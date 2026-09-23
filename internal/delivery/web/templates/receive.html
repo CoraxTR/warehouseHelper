@@ -859,10 +859,15 @@
             }
         }
 
+        // addRowToParty — строка россыпи вручную. Строки копятся СВЕРХУ ВНИЗ
+        // (владелец, 23.09.2026: порядок накопления инвертирован): новая строка
+        // встаёт первой, как и новая партия. data-r и индексы [...].rows[r] —
+        // это индекс массива, а разметка идёт в порядке массива, поэтому unshift
+        // не сдвигает ничего.
         function addRowToParty(btn) {
             var idx = itemIndexFromDom(btn);
             if (idx < 0) { return; }
-            items[idx].rows.push({scan: {kind: 'item', raw: '', unrecognized: true}, manual: {}});
+            items[idx].rows.unshift({scan: {kind: 'item', raw: '', unrecognized: true}, manual: {}});
             focusTarget = 'keep';
             render();
         }
@@ -926,11 +931,12 @@
         // openBox — открыть карточку коробки В АКТИВНОЙ ПАРТИИ: то же, что скан
         // спец-кода 555. Первый скан в карточке — штрих-код коробки (проверяется
         // правилом коробок), дальше вложения, закрытие — 666. Коробки без кода
-        // нет: товар и даты коробки берутся из кода.
+        // нет: товар и даты коробки берутся из кода. Коробки в партии копятся
+        // сверху вниз — как партии и строки (владелец, 23.09.2026).
         function openBox() {
             var party = activeParty || addParty();
             var box = {scan: {kind: 'box', raw: ''}, manual: {}, children: [], mismatch: false, error: ''};
-            party.boxes.push(box);
+            party.boxes.unshift(box);
             openBoxRef = box;
             boxMode = true;
             focusTarget = 'keep';
@@ -1025,7 +1031,7 @@
                 return;
             }
             if (child.error) {
-                box.children.push({scan: child});
+                box.children.unshift({scan: child}); // вложения копятся сверху вниз
                 beep();
                 return;
             }
@@ -1048,7 +1054,7 @@
                 return;
             }
             if (child.needs_product) { beep(); }
-            box.children.push({scan: child});
+            box.children.unshift({scan: child}); // вложение — наверх: сверху вниз
         }
 
         // boxChildDateConflict — даты вложения против дат, вычитанных кодом
@@ -1216,7 +1222,7 @@
                 var emp = partyManualProduct(ep);
                 var erow = {scan: {kind: 'item', raw: '', unrecognized: true}, manual: {}};
                 if (emp) { applyProductToScan(erow.scan, emp); }
-                ep.rows.push(erow);
+                ep.rows.unshift(erow); // строка — наверх: строки копятся сверху вниз
                 statusLine.textContent = 'Код не распознан полностью — выберите товар строки и даты партии, введите вес';
                 beep();
                 render();
@@ -1239,7 +1245,7 @@
             if (resolved.needs_product && mp) {
                 applyProductToScan(resolved, mp); // товар партии уже известен — берём его
             }
-            party.rows.push({scan: resolved, manual: {}});
+            party.rows.unshift({scan: resolved, manual: {}}); // строка — наверх
             if (resolved.needs_product) {
                 statusLine.textContent = 'Внешний код ' + (resolved._code_unknown || '') +
                     ' не заведён у поставщика — выберите товар строки или добавьте код на карточке поставщика';
