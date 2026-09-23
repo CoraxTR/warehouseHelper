@@ -185,7 +185,7 @@ func (d Digest) Text() string {
 	} else {
 		b.WriteString("Позиции в скидках:\n")
 		for i, r := range d.Discounts {
-			fmt.Fprintf(&b, "%d. %s (%s) — %d%%%s\n", i+1, r.Name, datesText(r), r.Percent, coeffText(r))
+			fmt.Fprintf(&b, "%d. %s (%s) — %d%%%s\n", i+1, r.Name, DatesText(r), r.Percent, coeffText(r))
 		}
 	}
 	b.WriteString("\n")
@@ -195,15 +195,16 @@ func (d Digest) Text() string {
 	} else {
 		fmt.Fprintf(&b, "Доступно для допродажи (сверх %d активных):\n", d.Cap)
 		for i, r := range d.Surplus {
-			fmt.Fprintf(&b, "%d. %s (%s) — %d%%%s\n", i+1, r.Name, datesText(r), r.Percent, coeffText(r))
+			fmt.Fprintf(&b, "%d. %s (%s) — %d%%%s\n", i+1, r.Name, DatesText(r), r.Percent, coeffText(r))
 		}
 	}
 	return b.String()
 }
 
-// datesText — сроки строки: у группы перечисление («до 15.10, 22.10»), у обычной
-// строки один срок.
-func datesText(r Row) string {
+// DatesText — сроки строки для печати: у группы избытка перечисление
+// («до 15.10, 22.10»), у обычной строки один срок. Экспорт — чтобы страница
+// «Скидки» печатала сроки тем же правилом, что дайджест.
+func DatesText(r Row) string {
 	if len(r.Dates) == 0 {
 		return "до " + r.BestBefore.Format("02.01")
 	}

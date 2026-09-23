@@ -145,6 +145,36 @@ func (r *Registry) Queue(windowSize int) []discounts.Row {
 	return queue
 }
 
+// ActiveLots — пары активных позиций окна (не больше capacity): страница «Сроки»
+// отличает по ним скидки, выставленные на сайте, от «дополнительных» — у
+// последних подсветка остаётся, а значение видно только в карточке количества
+// (решение владельца 23.09.2026). Группа избытка раскрывается во все свои сроки:
+// позиция в окне одна, а пар в ней — по числу сроков.
+func (r *Registry) ActiveLots(capacity int) []discounts.LotKey {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return activeLots(r.activeLocked(), capacity)
+}
+
+// activeLots — ключи пар активных позиций: обычная строка даёт один ключ, строка
+// группы — по ключу на каждый её срок.
+func activeLots(rows []discounts.Row, capacity int) []discounts.LotKey {
+	active := discounts.BuildDigest(rows, capacity).Discounts
+	keys := make([]discounts.LotKey, 0, len(active))
+	for _, row := range active {
+		if len(row.Dates) == 0 {
+			keys = append(keys, discounts.LotKey{ProductID: row.ProductID, BestBefore: row.BestBefore})
+			continue
+		}
+		for _, dt := range row.Dates {
+			keys = append(keys, discounts.LotKey{ProductID: row.ProductID, BestBefore: dt})
+		}
+	}
+
+	return keys
+}
+
 // Digest — отчёт по активным строкам реестра. capacity — ёмкость активных
 // скидок (окно): в первую секцию входит не больше capacity позиций по приоритету,
 // остальное уходит в «доступно для допродажи». capacity <= 0 — ёмкость не
@@ -173,6 +203,14 @@ func (uc *UseCase) Queue(windowSize int) []discounts.Row {
 	defer uc.mu.Unlock()
 
 	return uc.reg.Queue(windowSize)
+}
+
+// ActiveLots — пары активных позиций окна (см. Registry.ActiveLots).
+func (uc *UseCase) ActiveLots(capacity int) []discounts.LotKey {
+	uc.mu.Lock()
+	defer uc.mu.Unlock()
+
+	return uc.reg.ActiveLots(capacity)
 }
 
 // Digest — отчёт по реестру на текущий момент процесса (часы uc.now); capacity —
