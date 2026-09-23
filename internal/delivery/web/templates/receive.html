@@ -244,6 +244,10 @@
 
         var dateBuf = '';
         var dateBufEl = null;
+        // dateJump — дата набрана цифрами до конца (8-я цифра): после change
+        // фокус переводим дальше по форме (выработка партии → срок, срок →
+        // строка сканов). Ставится только в commitDateDigits.
+        var dateJump = false;
 
         function isDateInput(el) {
             return !!el && el.tagName === 'INPUT' && el.type === 'date';
@@ -313,6 +317,10 @@
                 return;
             }
             errorEcho = null;
+            // Дата набрана до конца: дальше фокус уводит partyField (по dateJump
+            // — перескок на следующее поле формы). Ставим флаг ДО applyIsoDate:
+            // он же рассылает change, на котором partyField и срабатывает.
+            dateJump = el.className === 'party-pd' || el.className === 'party-bb';
             applyIsoDate(el, iso);
         }
 
@@ -787,6 +795,7 @@
                 el.value = '';
                 statusLine.textContent = 'Дата ' + fmtDateRu(v) + ' вне допуска: принимаются ' + boundsText() +
                     ' (сегодня ±5 лет)';
+                dateJump = false; // перескока не будет: дата не принята
                 applyIsoDate(el, '');
                 return;
             }
@@ -801,8 +810,32 @@
             } else if (kind === 'bb') {
                 b.bb = v || '';
             }
-            focusTarget = focusSpec(el);
+            focusTarget = nextDateFocus(el, kind);
             render();
+        }
+
+        // nextDateFocus — куда уходит фокус после поля партии: дата набрана
+        // цифрами до конца (dateJump) — выработка → срок годности того же блока,
+        // срок → строка сканов (focusTarget null). Иначе поле остаётся под
+        // фокусом: решение владельца 14.09 — страница не уезжает наверх.
+        function nextDateFocus(el, kind) {
+            if (!dateJump) { return focusSpec(el); }
+            dateJump = false;
+            if (kind !== 'pd') { return null; }
+            var bb = dateFieldOf(el, 'party-bb');
+            return bb ? focusSpec(bb) : null;
+        }
+
+        // dateFieldOf — поле с этим классом в том же блоке карточки (срок стоит
+        // рядом с выработкой, искать по всей странице нельзя — блоков много).
+        function dateFieldOf(el, cls) {
+            var box = el.parentNode || el;
+            var inputs = box.getElementsByTagName('input');
+            var i;
+            for (i = 0; i < inputs.length; i++) {
+                if (inputs[i].className === cls) { return inputs[i]; }
+            }
+            return null;
         }
 
         // applyProductToScan подставляет выбранный товар прямо в скан: нужно
@@ -875,12 +908,17 @@
         }
 
         // Партия — только даты и строки; товар берётся из кода или из строки.
+        // Новая партия встаёт НАВЕРХ списка (владелец, 23.09.2026: «последняя
+        // введённая партия наверху, а не внизу») — порядок items и разметки
+        // совпадают, поэтому unshift, а не push: на этом совпадении держатся
+        // itemIndexFromDom, фокус и все обработчики по индексу карточки.
+        // Номер партии (id) — из счётчика: порядок вывода его не меняет.
         function addParty() {
             var b = {kind: 'party', id: ++partySeq, pd: '', bb: '', rows: [], boxes: []};
-            items.push(b);
+            items.unshift(b);
             activeParty = b;
             // Фокус — в дату новой партии: работа идёт здесь, а не у сканера.
-            focusTarget = {idx: items.length - 1, cls: 'party-pd', nth: 0};
+            focusTarget = {idx: 0, cls: 'party-pd', nth: 0};
             render();
             return b;
         }
