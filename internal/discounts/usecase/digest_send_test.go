@@ -52,7 +52,7 @@ func goldenDigest(now time.Time) string {
 	d := discounts.BuildDigest([]discounts.Row{
 		{ProductID: "p-manual", Name: "Творог", BestBefore: day(8), Percent: 40, Source: discounts.SourceManual, DaysLeft: 8},
 		{ProductID: "p-surplus", Name: "Хлеб", BestBefore: day(12), Percent: discounts.SurplusPercent(), Source: discounts.SourceSurplus, Coeff: 2.5, DaysLeft: 12},
-	})
+	}, 0)
 	d.Date = now
 
 	return d.Text()
@@ -77,7 +77,7 @@ func TestSendDigestSendsRegistryTextOncePerDay(t *testing.T) {
 		t.Fatalf("текст общего канала:\n%q\nwant:\n%q", got, want)
 	}
 	// тот же текст отдаёт реестр под мутексом юзкейса (Digest().Text())
-	if got := h.uc.Digest().Text(); got != want {
+	if got := h.uc.Digest(0).Text(); got != want {
 		t.Errorf("текст реестра и доменного сборщика разошлись:\n%q\n%q", got, want)
 	}
 	if !h.digestFlag() {

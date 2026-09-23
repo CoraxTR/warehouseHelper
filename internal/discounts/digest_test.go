@@ -1,6 +1,7 @@
 package discounts
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -40,6 +41,9 @@ func names(rows []Row) []string {
 	return out
 }
 
+// Ёмкость окна делит отчёт: первые cap позиций по приоритету — активные, остальное
+// «доступно для допродажи». Избыточная пара сюда же — она больше не отдельная
+// секция, а участник общего приоритета (решение владельца 23.09.2026).
 func TestBuildDigest(t *testing.T) {
 	rows := []Row{
 		{ProductID: "p3", Name: "Колбаса", BestBefore: bb(2026, 10, 12), Percent: 10, Source: SourceSurplus, Coeff: 1.6},
@@ -47,16 +51,19 @@ func TestBuildDigest(t *testing.T) {
 		{ProductID: "p9", Name: "Вода", BestBefore: bb(2027, 1, 1), Source: SourceNone},
 		{ProductID: "p1", Name: "Хлеб", BestBefore: bb(2026, 9, 22), Percent: 30, Source: SourceManual},
 	}
-	d := BuildDigest(rows)
+	d := BuildDigest(rows, 2)
 
 	if len(d.Discounts) != 2 {
-		t.Fatalf("секция скидок: %d строк, want 2 (%v)", len(d.Discounts), names(d.Discounts))
+		t.Fatalf("секция активных: %d строк, want 2 (%v)", len(d.Discounts), names(d.Discounts))
 	}
 	if d.Discounts[0].Name != "Хлеб" || d.Discounts[1].Name != "Сыр" {
-		t.Errorf("секция скидок = %v, want [Хлеб Сыр]", names(d.Discounts))
+		t.Errorf("секция активных = %v, want [Хлеб Сыр]", names(d.Discounts))
 	}
 	if len(d.Surplus) != 1 || d.Surplus[0].Name != "Колбаса" {
-		t.Errorf("секция избытка = %v, want [Колбаса]", names(d.Surplus))
+		t.Errorf("доступно для допродажи = %v, want [Колбаса]", names(d.Surplus))
+	}
+	if d.Cap != 2 {
+		t.Errorf("ёмкость отчёта %d, want 2", d.Cap)
 	}
 	// Строка без источника в отчёт не попадает, дату проставляет вызывающий.
 	if len(d.Discounts)+len(d.Surplus) != 3 {
@@ -71,14 +78,57 @@ func TestBuildDigest(t *testing.T) {
 	}
 }
 
-// Golden-тест текста: 2 позиции в скидках (ручная + срок) и 1 с избытком.
+// Ёмкость не задана (0) — активны все строки, «доступно для допродажи» пусто.
+func TestBuildDigestNoCap(t *testing.T) {
+	rows := []Row{
+		{ProductID: "p2", Name: "Сыр", BestBefore: bb(2026, 10, 5), Percent: 10, Source: SourceExpiry},
+		{ProductID: "p1", Name: "Хлеб", BestBefore: bb(2026, 9, 22), Percent: 30, Source: SourceManual},
+	}
+	d := BuildDigest(rows, 0)
+
+	if len(d.Discounts) != 2 || len(d.Surplus) != 0 {
+		t.Fatalf("секции: активных %d, допродажа %d, want 2 и 0", len(d.Discounts), len(d.Surplus))
+	}
+}
+
+// Группа избытка — ОДНА позиция ёмкости с перечислением сроков: строки одного
+// товара с Row.SurplusGroup свёрнуты в одну, скидка — максимальная по группе (она
+// у ближайшего срока), коэффициент — наибольший (решение владельца 23.09.2026).
+func TestBuildDigestGroupIsOneSlot(t *testing.T) {
+	rows := []Row{
+		{ProductID: "p1", Name: "Стейк Филе миньон Праймбиф. Охл.", BestBefore: bb(2026, 10, 15), Percent: 10, Source: SourceSurplus, Coeff: 1.2, SurplusGroup: true},
+		{ProductID: "p1", Name: "Стейк Филе миньон Праймбиф. Охл.", BestBefore: bb(2026, 10, 22), Percent: 10, Source: SourceSurplus, Coeff: 1.0, SurplusGroup: true},
+		{ProductID: "p2", Name: "Сыр Гауда", BestBefore: bb(2026, 10, 5), Percent: 30, Source: SourceExpiry},
+	}
+	d := BuildDigest(rows, 2)
+
+	if len(d.Discounts) != 2 || len(d.Surplus) != 0 {
+		t.Fatalf("секции: активных %d, допродажа %d, want 2 и 0", len(d.Discounts), len(d.Surplus))
+	}
+	// Приоритет: сроковая позиция впереди группы избытка, группа — одна строка.
+	g := d.Discounts[1]
+	if g.Name != "Стейк Филе миньон Праймбиф. Охл." || len(g.Dates) != 2 {
+		t.Fatalf("группа: %+v", g)
+	}
+	if !g.Dates[0].Equal(bb(2026, 10, 15)) || !g.Dates[1].Equal(bb(2026, 10, 22)) {
+		t.Errorf("сроки группы %v, want [15.10 22.10]", g.Dates)
+	}
+	if g.Percent != 10 || g.Coeff != 1.2 || !g.BestBefore.Equal(bb(2026, 10, 15)) {
+		t.Errorf("группа: процент %d, коэф %v, ближний срок %v", g.Percent, g.Coeff, g.BestBefore)
+	}
+	if !strings.Contains(d.Text(), "(до 15.10, 22.10) — 10% (коэф 1,2)") {
+		t.Errorf("в тексте нет перечисления сроков группы:\n%s", d.Text())
+	}
+}
+
+// Golden-тест текста: 2 позиции в скидках (ручная + срок) и 1 за ёмкостью.
 func TestDigestText(t *testing.T) {
 	rows := []Row{
 		{ProductID: "p3", Name: "Колбаса Докторская", BestBefore: bb(2026, 10, 12), Percent: SurplusPercent(), Source: SourceSurplus, Coeff: 1.6, DaysLeft: 5},
 		{ProductID: "p2", Name: "Сыр Гауда", BestBefore: bb(2026, 10, 5), Percent: 10, Source: SourceExpiry, DaysLeft: 21},
 		{ProductID: "p1", Name: "Хлеб Бородинский", BestBefore: bb(2026, 9, 22), Percent: 30, Source: SourceManual, DaysLeft: 8},
 	}
-	d := BuildDigest(rows)
+	d := BuildDigest(rows, 2)
 	d.Date = bb(2026, 9, 14)
 
 	want := `Дайджест по скидкам · 14.09.2026
@@ -87,7 +137,7 @@ func TestDigestText(t *testing.T) {
 1. Хлеб Бородинский (до 22.09) — 30%
 2. Сыр Гауда (до 05.10) — 10%
 
-Позиции с избытком (Доступны для допродажи со скидкой 10 %):
+Доступно для допродажи (сверх 2 активных):
 1. Колбаса Докторская (до 12.10) — 10% (коэф 1,6)
 `
 	if got := d.Text(); got != want {
@@ -105,15 +155,15 @@ func TestDigestTextEmptySections(t *testing.T) {
 		{
 			"обе секции пусты",
 			Digest{Date: date},
-			"Дайджест по скидкам · 14.09.2026\n\nПозиции в скидках: нет\n\nПозиции с избытком: нет\n",
+			"Дайджест по скидкам · 14.09.2026\n\nПозиции в скидках: нет\n\nДоступно для допродажи: нет\n",
 		},
 		{
-			"только избыток",
-			Digest{Date: date, Surplus: []Row{
+			"только за ёмкостью",
+			Digest{Date: date, Cap: 12, Surplus: []Row{
 				{Name: "Колбаса", BestBefore: bb(2026, 10, 12), Percent: 10, Source: SourceSurplus, Coeff: 2},
 			}},
 			"Дайджест по скидкам · 14.09.2026\n\nПозиции в скидках: нет\n\n" +
-				"Позиции с избытком (Доступны для допродажи со скидкой 10 %):\n" +
+				"Доступно для допродажи (сверх 12 активных):\n" +
 				"1. Колбаса (до 12.10) — 10% (коэф 2,0)\n",
 		},
 		{
@@ -122,7 +172,7 @@ func TestDigestTextEmptySections(t *testing.T) {
 				{Name: "Хлеб", BestBefore: bb(2026, 9, 22), Percent: 50, Source: SourceExpiry},
 			}},
 			"Дайджест по скидкам · 14.09.2026\n\nПозиции в скидках:\n1. Хлеб (до 22.09) — 50%\n\n" +
-				"Позиции с избытком: нет\n",
+				"Доступно для допродажи: нет\n",
 		},
 	}
 	for _, tc := range tests {

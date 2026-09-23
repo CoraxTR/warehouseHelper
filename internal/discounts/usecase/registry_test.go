@@ -314,8 +314,9 @@ func TestRegistryReplaceZeroEqualsNil(t *testing.T) {
 	}
 }
 
-// Digest делит активные строки на две секции (ручные+сроковые / избыток) и
-// печатает ровно тот же текст, что discounts.BuildDigest (golden).
+// Digest делит активные строки по ёмкости окна (cap=2: ручная и сроковая в
+// активных, избыточные — за ёмкостью) и печатает ровно тот же текст, что
+// discounts.BuildDigest (golden).
 func TestRegistryDigestSectionsAndGoldenText(t *testing.T) {
 	r := NewRegistry()
 	r.Replace([]PairState{
@@ -327,19 +328,19 @@ func TestRegistryDigestSectionsAndGoldenText(t *testing.T) {
 	})
 
 	now := time.Date(2026, time.September, 14, 9, 0, 0, 0, time.UTC)
-	d := r.Digest(now)
+	d := r.Digest(now, 2)
 
 	if !d.Date.Equal(now) {
 		t.Errorf("дата отчёта %v, want %v", d.Date, now)
 	}
 	if len(d.Discounts) != 2 || len(d.Surplus) != 2 {
-		t.Fatalf("секции: скидок %d, избытка %d, want 2 и 2", len(d.Discounts), len(d.Surplus))
+		t.Fatalf("секции: активных %d, допродажа %d, want 2 и 2", len(d.Discounts), len(d.Surplus))
 	}
 	if d.Discounts[0].Source != discounts.SourceManual || d.Discounts[1].Source != discounts.SourceExpiry {
-		t.Errorf("секция скидок: %s, %s, want manual, expiry", d.Discounts[0].Source, d.Discounts[1].Source)
+		t.Errorf("активные: %s, %s, want manual, expiry", d.Discounts[0].Source, d.Discounts[1].Source)
 	}
 	if d.Surplus[0].Coeff <= d.Surplus[1].Coeff {
-		t.Errorf("избыток не по коэффициенту ↓: %+v", d.Surplus)
+		t.Errorf("за ёмкостью не по коэффициенту ↓: %+v", d.Surplus)
 	}
 
 	// тот же текст, что даёт доменный сборщик по независимо собранным строкам
@@ -349,7 +350,7 @@ func TestRegistryDigestSectionsAndGoldenText(t *testing.T) {
 		{ProductID: "p3", Name: "Сыр", BestBefore: day(5), Percent: 30, Source: discounts.SourceExpiry, DaysLeft: 5},
 		{ProductID: "p4", Name: "Хлеб", BestBefore: day(12), Percent: 10, Source: discounts.SourceSurplus, Coeff: 2.5, DaysLeft: 12},
 	}
-	want := discounts.BuildDigest(rows)
+	want := discounts.BuildDigest(rows, 2)
 	want.Date = now
 	if got := d.Text(); got != want.Text() {
 		t.Errorf("текст реестра и BuildDigest разошлись:\n%q\n%q", got, want.Text())
@@ -360,7 +361,7 @@ func TestRegistryDigestSectionsAndGoldenText(t *testing.T) {
 		"1. Творог (до 22.09) — 40%\n" +
 		"2. Сыр (до 19.09) — 30%\n" +
 		"\n" +
-		"Позиции с избытком (Доступны для допродажи со скидкой 10 %):\n" +
+		"Доступно для допродажи (сверх 2 активных):\n" +
 		"1. Хлеб (до 26.09) — 10% (коэф 2,5)\n" +
 		"2. Масло (до 25.09) — 10% (коэф 1,5)\n"
 	if got := d.Text(); got != golden {
@@ -386,7 +387,7 @@ func TestUseCaseWindowQueueDigest(t *testing.T) {
 	if len(queue) != 1 || queue[0].Source != discounts.SourceSurplus {
 		t.Fatalf("очередь юзкейса: %+v", queue)
 	}
-	if d := uc.Digest(); !d.Date.Equal(now) {
+	if d := uc.Digest(1); !d.Date.Equal(now) {
 		t.Errorf("дата отчёта %v, want %v", d.Date, now)
 	}
 }

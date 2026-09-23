@@ -124,7 +124,8 @@ func NewRouter(h *Handler) *http.ServeMux {
 	mux.HandleFunc("GET /ms/dates/ws", h.StockDatesWS)              // вебсокет: снапшот и дельты
 	mux.HandleFunc("POST /ms/dates/discount", h.StockDiscount)      // запись ручной скидки
 	mux.HandleFunc("GET /ms/dates/update", h.StockUpdatePage)       // страница «Обновить сроки»
-	mux.HandleFunc("GET /ms/discounts", h.DiscountsPage)            // страница «Скидки» (окно и очередь)
+	mux.HandleFunc("GET /ms/discounts", h.DiscountsPage)            // страница «Скидки» (окно и допродажа)
+	mux.HandleFunc("GET /ms/discounts/active", h.DiscountsActive)   // активные пары окна (JSON, для страницы «Сроки»)
 	mux.HandleFunc("POST /ms/dates/update/save", h.StockUpdateSave) // применить батч сканов
 
 	return mux

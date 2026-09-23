@@ -145,14 +145,45 @@ func (r *Registry) Queue(windowSize int) []discounts.Row {
 	return queue
 }
 
-// Digest — отчёт по ВСЕМ активным строкам реестра: ручные и сроковые идут в
-// секцию «в скидках», избыточные — в секцию избытка (discounts.BuildDigest).
-// Дата отчёта — now (своих часов реестр не заводит).
-func (r *Registry) Digest(now time.Time) discounts.Digest {
+// ActiveLots — пары активных позиций окна (не больше capacity): страница «Сроки»
+// отличает по ним скидки, выставленные на сайте, от «дополнительных» — у
+// последних подсветка остаётся, а значение видно только в карточке количества
+// (решение владельца 23.09.2026). Группа избытка раскрывается во все свои сроки:
+// позиция в окне одна, а пар в ней — по числу сроков.
+func (r *Registry) ActiveLots(capacity int) []discounts.LotKey {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	d := discounts.BuildDigest(r.activeLocked())
+	return activeLots(r.activeLocked(), capacity)
+}
+
+// activeLots — ключи пар активных позиций: обычная строка даёт один ключ, строка
+// группы — по ключу на каждый её срок.
+func activeLots(rows []discounts.Row, capacity int) []discounts.LotKey {
+	active := discounts.BuildDigest(rows, capacity).Discounts
+	keys := make([]discounts.LotKey, 0, len(active))
+	for _, row := range active {
+		if len(row.Dates) == 0 {
+			keys = append(keys, discounts.LotKey{ProductID: row.ProductID, BestBefore: row.BestBefore})
+			continue
+		}
+		for _, dt := range row.Dates {
+			keys = append(keys, discounts.LotKey{ProductID: row.ProductID, BestBefore: dt})
+		}
+	}
+
+	return keys
+}
+
+// Digest — отчёт по активным строкам реестра. capacity — ёмкость активных
+// скидок (окно): в первую секцию входит не больше capacity позиций по приоритету,
+// остальное уходит в «доступно для допродажи». capacity <= 0 — ёмкость не
+// ограничена. Дата отчёта — now (своих часов реестр не заводит).
+func (r *Registry) Digest(now time.Time, capacity int) discounts.Digest {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	d := discounts.BuildDigest(r.activeLocked(), capacity)
 	d.Date = now
 
 	return d
@@ -174,12 +205,21 @@ func (uc *UseCase) Queue(windowSize int) []discounts.Row {
 	return uc.reg.Queue(windowSize)
 }
 
-// Digest — отчёт по реестру на текущий момент процесса (часы uc.now).
-func (uc *UseCase) Digest() discounts.Digest {
+// ActiveLots — пары активных позиций окна (см. Registry.ActiveLots).
+func (uc *UseCase) ActiveLots(capacity int) []discounts.LotKey {
 	uc.mu.Lock()
 	defer uc.mu.Unlock()
 
-	return uc.reg.Digest(uc.now())
+	return uc.reg.ActiveLots(capacity)
+}
+
+// Digest — отчёт по реестру на текущий момент процесса (часы uc.now); capacity —
+// ёмкость активных скидок (окно), как в Registry.Digest.
+func (uc *UseCase) Digest(capacity int) discounts.Digest {
+	uc.mu.Lock()
+	defer uc.mu.Unlock()
+
+	return uc.reg.Digest(uc.now(), capacity)
 }
 
 // activeLocked — активные строки снапшота в порядке окна (под мутексом реестра).

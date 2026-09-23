@@ -93,7 +93,7 @@ func TestTemplatesParse(t *testing.T) {
 func tmplStubFuncs() template.FuncMap {
 	stub := func(...any) any { return nil }
 	names := []string{
-		"coeff", "date", "folderCtx", "minus", "monthName", "monthSlug",
+		"coeff", "date", "dates", "folderCtx", "minus", "monthName", "monthSlug",
 		"nextMonth", "plus", "prevMonth", "seq", "source", "todayDay",
 	}
 	fm := make(template.FuncMap, len(names))

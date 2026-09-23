@@ -40,7 +40,7 @@ func (uc *UseCase) SendDigest(ctx context.Context, now time.Time) error {
 		return nil
 	}
 
-	text := uc.Digest().Text()
+	text := uc.Digest(uc.WindowCap()).Text()
 	if uc.common == nil {
 		// Канал не подключён (нет токена/чата) — как в notifyChanges: текст
 		// только в лог, маркер дня не ставим (канал могут подключить позже).
@@ -63,7 +63,7 @@ func (uc *UseCase) SendDigest(ctx context.Context, now time.Time) error {
 // проверяем — команду принимает бот, любой участник вправе увидеть отчёт.
 // Реестр пуст — короткий ответ noDataText (расчёт не дублируем).
 func (uc *UseCase) ReplyDigest(ctx context.Context, chatID int64) error {
-	text := uc.Digest().Text()
+	text := uc.Digest(uc.WindowCap()).Text()
 	if uc.emptyRegistry() {
 		text = noDataText
 	}

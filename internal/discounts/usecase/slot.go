@@ -294,8 +294,9 @@ func (uc *UseCase) writeSlot(ctx context.Context, slot []slotPosition, now time.
 	}
 
 	// Текст — тем же строителем, что дайджест: секция «в скидках» — план слота
-	// (с процентом плана), секция избытка — то, что можно допродать.
-	digest := discounts.BuildDigest(rows)
+	// (с процентом плана), вторая — «доступно для допродажи». Ёмкость — общая с
+	// дайджестом: план слота и так не длиннее её.
+	digest := discounts.BuildDigest(rows, uc.WindowCap())
 	digest.Date = now
 	if text := digest.Text(); uc.warehouse != nil {
 		if err := uc.warehouse.NotifyWarehouse(text); err != nil {

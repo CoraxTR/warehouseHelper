@@ -101,6 +101,11 @@
                 }
             });
             connect();
+            // Список активных пар окна — сразу и дальше раз в минуту: он решает,
+            // какой скидке показываться в правой колонке, а какой только в
+            // карточке количества.
+            loadActiveLots();
+            setInterval(loadActiveLots, 60000);
         }
 
         // --- вебсокет ---
@@ -386,8 +391,8 @@
                     html += '<td class="cell-empty"></td><td class="cell-empty"></td>';
                 }
             }
-            html += '<td class="cell-discount">' + fmtDiscount(rightDiscount(lots, 'general')) + '</td>';
-            html += '<td class="cell-discount">' + fmtDiscount(rightDiscount(lots, 'telegram')) + '</td>';
+            html += '<td class="cell-discount">' + fmtDiscount(rightDiscount(p, lots, 'general')) + '</td>';
+            html += '<td class="cell-discount">' + fmtDiscount(rightDiscount(p, lots, 'telegram')) + '</td>';
             html += '</tr>';
             return html;
         }
@@ -453,13 +458,58 @@
             return (m != null) ? m : discountValue(plain);
         }
 
+        // Активные пары окна («12 актуальных»): их скидки показываем в правых
+        // колонках. У «дополнительных» пар подсветка остаётся, а значение видно
+        // только в карточке количества (там, где ручная коррекция) — решение
+        // владельца 23.09.2026. Список считает модуль скидок (владелец окна) и
+        // отдаёт парами «<товар>|<ГГГГ-ММ-ДД>».
+        var ACTIVE_LOTS = null; // null — списка ещё нет: показываем как раньше
+
+        function lotKey(p, lot) {
+            return p.id + '|' + String(lot.best_before).slice(0, 10);
+        }
+
+        // Пара в окне? Пока список не загружен, считаем «в окне» — иначе скидки
+        // пропали бы с экрана до ответа сервера.
+        function inWindow(p, lot) {
+            return ACTIVE_LOTS === null || ACTIVE_LOTS[lotKey(p, lot)] === true;
+        }
+
+        // Список активных пар обновляем при загрузке и раз в минуту: окно
+        // пересчитывается реже (часовой тик избытка, утренний по сроку).
+        function loadActiveLots() {
+            var xhr = new XMLHttpRequest();
+            xhr.open('GET', '/ms/discounts/active', true);
+            xhr.onreadystatechange = function () {
+                if (xhr.readyState !== 4 || xhr.status !== 200) {
+                    return; // модуль недоступен — остаётся прошлый список
+                }
+                var data;
+                try {
+                    data = JSON.parse(xhr.responseText);
+                } catch (e) {
+                    return;
+                }
+                var set = {};
+                var lots = data.lots || [];
+                for (var i = 0; i < lots.length; i++) {
+                    set[lots[i]] = true;
+                }
+                ACTIVE_LOTS = set;
+                render();
+            };
+            xhr.send();
+        }
+
         // Правая колонка канала («Активные скидки»): значение самой левой пары,
-        // у которой оно заполнено. Всегда пересчёт из лотов — в базе отдельного
-        // поля «активная скидка» нет.
-        function rightDiscount(lots, channel) {
+        // у которой оно заполнено И которая входит в окно активных (12). Всегда
+        // пересчёт из лотов — в базе отдельного поля «активная скидка» нет.
+        // Пара за ёмкостью окна значения в колонке не даёт: её скидка видна
+        // только в карточке количества (подсветка лота при этом остаётся).
+        function rightDiscount(p, lots, channel) {
             for (var i = 0; i < lots.length; i++) {
                 var v = effectiveDiscount(lots[i], channel);
-                if (v != null) {
+                if (v != null && inWindow(p, lots[i])) {
                     return v;
                 }
             }

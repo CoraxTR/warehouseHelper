@@ -37,7 +37,7 @@
             {{range .Window}}
             <tr>
                 <td>{{.Name}}</td>
-                <td>{{date .BestBefore}}</td>
+                <td>{{dates .}}</td>
                 <td>{{.Percent}}%</td>
                 <td>{{source .Source}}</td>
                 <td>{{coeff .Coeff}}</td>
@@ -49,8 +49,8 @@
     <div class="av-hint">Позиций в скидках нет.</div>
     {{end}}
 
-    <h2>В очереди</h2>
-    <div class="banner">Избыток за пределами окна: доступны для допродажи со скидкой {{.SurplusPercent}}%.</div>
+    <h2>Доступно для допродажи</h2>
+    <div class="banner">Сверх {{.WindowCap}} активных позиций: скидки действуют и здесь (у избытка всегда {{.SurplusPercent}}%), но на сайте их не выставляют.</div>
     {{if .Queue}}
     <table>
         <thead>
@@ -66,7 +66,7 @@
             {{range .Queue}}
             <tr>
                 <td>{{.Name}}</td>
-                <td>{{date .BestBefore}}</td>
+                <td>{{dates .}}</td>
                 <td>{{.Percent}}%</td>
                 <td>{{source .Source}}</td>
                 <td>{{coeff .Coeff}}</td>
@@ -75,7 +75,7 @@
         </tbody>
     </table>
     {{else}}
-    <div class="av-hint">Очередь пуста.</div>
+    <div class="av-hint">Дополнительных скидок нет.</div>
     {{end}}
 </body>
 
