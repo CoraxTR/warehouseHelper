@@ -13,21 +13,32 @@ import (
 // Percent — победившая скидка (см. Resolve), Source — её источник.
 // Coeff — коэффициент избытка (> 1) для строк источника «избыток», иначе 0.
 // DaysLeft — остаток дней до срока на момент расчёта (печать и правило «≥ 2 дн»).
+//
+// SurplusGroup — пара входит в группу избытка товара (в избытке она сама или
+// более далёкий срок): скидка по избытку ложится и на неё. Dates заполняет
+// BuildDigest у строки-группы — это перечисление сроков группы; у обычной строки
+// дата одна (BestBefore).
 type Row struct {
-	ProductID  string
-	Name       string
-	BestBefore time.Time
-	Percent    int16
-	Source     Source
-	Coeff      float64
-	DaysLeft   int
+	ProductID    string
+	Name         string
+	BestBefore   time.Time
+	Percent      int16
+	Source       Source
+	Coeff        float64
+	DaysLeft     int
+	SurplusGroup bool
+	Dates        []time.Time
 }
 
-// Digest — собранный отчёт по скидкам: две секции, ручные скидки идут первыми.
+// Digest — собранный отчёт по скидкам: активные позиции и «доступно для
+// допродажи». Sections активных не больше ёмкости (Cap) — активные и есть окно
+// ёмкости, остальное менеджеры держат в уме («устная» скидка), решение владельца
+// 23.09.2026.
 type Digest struct {
 	Date      time.Time
-	Discounts []Row // ручные + по сроку годности
-	Surplus   []Row // все строки с источником «избыток»
+	Discounts []Row // активные: ручные, по сроку и группы избытка — по приоритету, не больше Cap
+	Surplus   []Row // за ёмкостью: «доступно для допродажи» (и сроковые, и избыточные)
+	Cap       int   // ёмкость активных, с которой собран отчёт (печать заголовка)
 }
 
 // sourceRanks — группа строки в порядке отчёта: ручные → сроковые → избыточные.
@@ -82,34 +93,89 @@ func Compare(a, b Row) int {
 	}
 }
 
-// BuildDigest — разложить строки в две секции отчёта: «Позиции в скидках»
-// (ручные + по сроку) и «Позиции с избытком». Порядок внутри секций задаёт Sort;
-// входной срез не меняется (сортируется копия). Строки без источника скидки
-// в отчёт не попадают. Дата отчёта (Digest.Date) проставляется вызывающим —
-// своих часов пакет не заводит.
-func BuildDigest(rows []Row) Digest {
-	sorted := make([]Row, len(rows))
-	copy(sorted, rows)
-	Sort(sorted)
-	var d Digest
-	for _, r := range sorted {
-		if r.Source == SourceSurplus {
-			d.Surplus = append(d.Surplus, r)
+// BuildDigest — разложить строки в две секции отчёта: активные (не больше
+// capacity) и «доступно для допродажи» (всё, что в ёмкость не влезло). Порядок
+// внутри секций задаёт Sort; входной срез не меняется (сортируется копия).
+// Строки без источника скидки в отчёт не попадают. Группы избытка
+// (Row.SurplusGroup) свёрнуты в одну позицию с перечислением сроков — группа
+// занимает ОДИН слот ёмкости, а скидка в строке — максимальная по группе (она у
+// ближайшего срока), решение владельца 23.09.2026. capacity <= 0 — ёмкость не
+// ограничена (всё активно). Подъём следующей позиции из «допродажи» в активные
+// отдельного кода не требует: состав секций пересчитывается по приоритету каждый
+// раз. Дата отчёта (Digest.Date) проставляется вызывающим — своих часов пакет не
+// заводит.
+func BuildDigest(rows []Row, capacity int) Digest {
+	active := mergeGroups(rows)
+	Sort(active)
+
+	d := Digest{Cap: capacity}
+	if capacity > 0 && len(active) > capacity {
+		d.Discounts = active[:capacity]
+		d.Surplus = active[capacity:]
+		return d
+	}
+	d.Discounts = active
+	return d
+}
+
+// mergeGroups — строки отчёта, где пары одного товара из его группы избытка
+// свёрнуты в одну позицию. Строке-группе источник ставится «избыток» (она и есть
+// позиция по избытку) — это же и её место в приоритете отчёта.
+func mergeGroups(rows []Row) []Row {
+	out := make([]Row, 0, len(rows))
+	groupAt := make(map[string]int)
+
+	for _, r := range rows {
+		// Строки без источника скидки (SourceNone) в отчёт не попадают.
+		if r.Source == SourceNone {
 			continue
 		}
-		if r.Source == SourceManual || r.Source == SourceExpiry {
-			d.Discounts = append(d.Discounts, r)
+		if !r.SurplusGroup {
+			out = append(out, r)
+			continue
 		}
-		// строки без источника скидки (SourceNone) в отчёт не попадают
+		if i, ok := groupAt[r.ProductID]; ok {
+			mergeIntoGroup(&out[i], r)
+			continue
+		}
+		g := r
+		g.Source = SourceSurplus
+		g.Dates = []time.Time{r.BestBefore}
+		groupAt[r.ProductID] = len(out)
+		out = append(out, g)
 	}
-	return d
+
+	for i := range out {
+		if len(out[i].Dates) > 1 {
+			slices.SortFunc(out[i].Dates, func(a, b time.Time) int { return a.Compare(b) })
+		}
+	}
+	return out
+}
+
+// mergeIntoGroup — свести пару группы в строку-группу: ключом строки остаётся
+// самый близкий срок, скидка — максимальная по группе, коэффициент — наибольший
+// (им избыток и меряется).
+func mergeIntoGroup(g *Row, r Row) {
+	g.Dates = append(g.Dates, r.BestBefore)
+	if r.BestBefore.Before(g.BestBefore) {
+		g.BestBefore = r.BestBefore
+		g.DaysLeft = r.DaysLeft
+	}
+	if r.Percent > g.Percent {
+		g.Percent = r.Percent
+	}
+	if r.Coeff > g.Coeff {
+		g.Coeff = r.Coeff
+	}
 }
 
 // Text — текст дайджеста для ТГ-слота и страницы «Скидки».
 // Формат фиксирован golden-тестом: заголовок «Дайджест по скидкам · дата»,
 // затем секции через пустую строку. Пустая секция печатается одной строкой
-// («Позиции в скидках: нет» / «Позиции с избытком: нет») — без заголовка списка.
-// Числа: срок — 02.01, процент — «30%», коэффициент — один знак, запятая.
+// («Позиции в скидках: нет» / «Доступно для допродажи: нет») — без заголовка
+// списка. Числа: сроки — 02.01 (у группы перечисление), процент — «30%»,
+// коэффициент — один знак, запятая.
 func (d Digest) Text() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Дайджест по скидкам · %s\n\n", d.Date.Format("02.01.2006"))
@@ -119,21 +185,43 @@ func (d Digest) Text() string {
 	} else {
 		b.WriteString("Позиции в скидках:\n")
 		for i, r := range d.Discounts {
-			fmt.Fprintf(&b, "%d. %s (до %s) — %d%%\n", i+1, r.Name, r.BestBefore.Format("02.01"), r.Percent)
+			fmt.Fprintf(&b, "%d. %s (%s) — %d%%%s\n", i+1, r.Name, DatesText(r), r.Percent, coeffText(r))
 		}
 	}
 	b.WriteString("\n")
 
 	if len(d.Surplus) == 0 {
-		b.WriteString("Позиции с избытком: нет\n")
+		b.WriteString("Доступно для допродажи: нет\n")
 	} else {
-		fmt.Fprintf(&b, "Позиции с избытком (Доступны для допродажи со скидкой %d %%):\n", SurplusPercent())
+		fmt.Fprintf(&b, "Доступно для допродажи (сверх %d активных):\n", d.Cap)
 		for i, r := range d.Surplus {
-			fmt.Fprintf(&b, "%d. %s (до %s) — %d%% (коэф %s)\n",
-				i+1, r.Name, r.BestBefore.Format("02.01"), r.Percent, FormatCoeff(r.Coeff))
+			fmt.Fprintf(&b, "%d. %s (%s) — %d%%%s\n", i+1, r.Name, DatesText(r), r.Percent, coeffText(r))
 		}
 	}
 	return b.String()
+}
+
+// DatesText — сроки строки для печати: у группы избытка перечисление
+// («до 15.10, 22.10»), у обычной строки один срок. Экспорт — чтобы страница
+// «Скидки» печатала сроки тем же правилом, что дайджест.
+func DatesText(r Row) string {
+	if len(r.Dates) == 0 {
+		return "до " + r.BestBefore.Format("02.01")
+	}
+	parts := make([]string, 0, len(r.Dates))
+	for _, dt := range r.Dates {
+		parts = append(parts, dt.Format("02.01"))
+	}
+	return "до " + strings.Join(parts, ", ")
+}
+
+// coeffText — хвост строки с коэффициентом: он есть только у избыточных позиций
+// (в т.ч. у строки-группы).
+func coeffText(r Row) string {
+	if r.Source != SourceSurplus {
+		return ""
+	}
+	return " (коэф " + FormatCoeff(r.Coeff) + ")"
 }
 
 // FormatCoeff — коэффициент избытка одним знаком после запятой с запятой как
