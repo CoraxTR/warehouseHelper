@@ -46,6 +46,10 @@ type PairState struct {
 	Surplus    *int16  // 10 при избытке, nil — избытка нет
 	Coeff      float64 // коэффициент избытка Q/(v×D), >1 — избыток
 	HasSurplus bool
+	// SurplusGroup — пара входит в группу избытка товара: избыток есть у неё
+	// самой или у любого более далёкого срока, и скидка 10 % ложится на все
+	// сроки группы (опора A, решение владельца 23.09.2026). Ставит Evaluate.
+	SurplusGroup bool
 
 	// BlockedByManualZero — пара накрыта запретом менеджера: у товара есть пара
 	// с ручной 0 («скидка 0 %») и её срок не позже этой. Запрет каскадный:
@@ -113,11 +117,12 @@ func banThreshold(lots []discounts.Input) *time.Time {
 func (p PairState) Row() discounts.Row {
 	percent, src := p.Desired()
 	row := discounts.Row{
-		ProductID:  p.ProductID,
-		Name:       p.Name,
-		BestBefore: p.BestBefore,
-		Source:     src,
-		DaysLeft:   p.DaysLeft,
+		ProductID:    p.ProductID,
+		Name:         p.Name,
+		BestBefore:   p.BestBefore,
+		Source:       src,
+		DaysLeft:     p.DaysLeft,
+		SurplusGroup: p.SurplusGroup,
 	}
 	if percent != nil {
 		row.Percent = *percent
@@ -165,6 +170,7 @@ func Evaluate(inputs []discounts.Input, rates map[string]float64, today time.Tim
 		lots := byProduct[pid]
 		ban := banThreshold(lots)
 		var cum int64
+		first := len(out)
 		for _, in := range lots {
 			cum += in.Qty
 			state := evaluatePair(in, cum, rates, day)
@@ -173,9 +179,45 @@ func Evaluate(inputs []discounts.Input, rates map[string]float64, today time.Tim
 			}
 			out = append(out, state)
 		}
+		applySurplusGroup(out[first:])
 	}
 
 	return out
+}
+
+// applySurplusGroup — группа избытка товара по опоре A (решение владельца
+// 23.09.2026): избыток на сроке распространяется на все более близкие сроки
+// товара. Пары товара идут по возрастанию срока, поэтому идём от дальнего к
+// ближнему с накопленным максимумом коэффициента: пока он > 1 (избыток есть у
+// этой пары или у любой более далёкой), пара в группе. Группа — общий префикс до
+// самого дальнего избыточного срока: пары за ним избытка не имеют и скидки не
+// получают.
+//
+// Паре без своего избытка ставится скидка 10 % (кандидат Surplus) и коэффициент
+// группы — им она и печатается. Снятие избытка отдельного кода не требует:
+// участие пересчитывается здесь же из коэффициентов, а запись в БД уходит по
+// HasSurplus (метку источника снимает модуль, см. surplusWrites).
+func applySurplusGroup(pairs []PairState) {
+	var maxCoeff float64
+	for i := len(pairs) - 1; i >= 0; i-- {
+		if pairs[i].Coeff > maxCoeff {
+			maxCoeff = pairs[i].Coeff
+		}
+		if maxCoeff <= 1 {
+			continue
+		}
+		if pairs[i].DaysLeft <= 0 {
+			continue // просроченная пара в группу не входит: скидка ей не нужна
+		}
+		pairs[i].SurplusGroup = true
+		if pairs[i].HasSurplus {
+			continue
+		}
+		percent := discounts.SurplusPercent()
+		pairs[i].Surplus = &percent
+		pairs[i].HasSurplus = true
+		pairs[i].Coeff = maxCoeff
+	}
 }
 
 // evaluatePair — состояние одной пары; cumQty уже включает её остаток.

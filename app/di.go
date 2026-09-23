@@ -433,6 +433,9 @@ func (d *DIContainer) DiscountsUC() *ducase.UseCase {
 			d.TelegramNotifier(),
 			time.Now,
 		)
+		// Ёмкость активных скидок (окно сайта) — из настроек: по ней дайджест
+		// делит позиции на активные и «доступно для допродажи».
+		d.discountsUC.SetWindowCap(d.Config().DiscountWindowCap)
 		// StockUC() создан выше (скидки пишутся через него), рекурсии нет:
 		// stock не тянет DiscountsUC. Вызов до первого запроса — слушатель стоит.
 		d.StockUC().SetLotChangeListener(d.discountsUC)

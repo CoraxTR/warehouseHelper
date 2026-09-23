@@ -145,14 +145,15 @@ func (r *Registry) Queue(windowSize int) []discounts.Row {
 	return queue
 }
 
-// Digest — отчёт по ВСЕМ активным строкам реестра: ручные и сроковые идут в
-// секцию «в скидках», избыточные — в секцию избытка (discounts.BuildDigest).
-// Дата отчёта — now (своих часов реестр не заводит).
-func (r *Registry) Digest(now time.Time) discounts.Digest {
+// Digest — отчёт по активным строкам реестра. capacity — ёмкость активных
+// скидок (окно): в первую секцию входит не больше capacity позиций по приоритету,
+// остальное уходит в «доступно для допродажи». capacity <= 0 — ёмкость не
+// ограничена. Дата отчёта — now (своих часов реестр не заводит).
+func (r *Registry) Digest(now time.Time, capacity int) discounts.Digest {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	d := discounts.BuildDigest(r.activeLocked())
+	d := discounts.BuildDigest(r.activeLocked(), capacity)
 	d.Date = now
 
 	return d
@@ -174,12 +175,13 @@ func (uc *UseCase) Queue(windowSize int) []discounts.Row {
 	return uc.reg.Queue(windowSize)
 }
 
-// Digest — отчёт по реестру на текущий момент процесса (часы uc.now).
-func (uc *UseCase) Digest() discounts.Digest {
+// Digest — отчёт по реестру на текущий момент процесса (часы uc.now); capacity —
+// ёмкость активных скидок (окно), как в Registry.Digest.
+func (uc *UseCase) Digest(capacity int) discounts.Digest {
 	uc.mu.Lock()
 	defer uc.mu.Unlock()
 
-	return uc.reg.Digest(uc.now())
+	return uc.reg.Digest(uc.now(), capacity)
 }
 
 // activeLocked — активные строки снапшота в порядке окна (под мутексом реестра).
