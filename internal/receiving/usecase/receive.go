@@ -208,11 +208,8 @@ func (uc *ReceivingUseCase) Resolve(ctx context.Context, cache *receiving.Cache,
 
 	// Обычный скан: сначала правила товаров по длине, затем внутренний ярлык
 	// куска. Правила коробок здесь не участвуют вовсе.
-	for _, rule := range cache.ItemRules {
-		if rule.Length != len(raw) {
-			continue
-		}
-		return uc.resolveByRule(cache, rule, raw, e, receiving.KindItem)
+	if scan, matched, err := uc.resolveByRules(cache, cache.ItemRules, raw, e, receiving.KindItem); matched {
+		return scan, err
 	}
 	if len(raw) == 29 {
 		return uc.resolveInternal(ctx, cache, raw, e)
@@ -239,11 +236,8 @@ func hasBoxRule(cache *receiving.Cache, length int) bool {
 // коробок, а если такого правила нет — внутренним 33-значным ярлыком (своя
 // наклейка). Кусок кодом коробки быть не может: тогда это не коробка.
 func (uc *ReceivingUseCase) resolveBoxEntry(ctx context.Context, cache *receiving.Cache, raw string, e receiving.ScanEntry) (*receiving.DecodedScan, error) {
-	for _, rule := range cache.BoxRules {
-		if rule.Length != len(raw) {
-			continue
-		}
-		return uc.resolveByRule(cache, rule, raw, e, receiving.KindBox)
+	if scan, matched, err := uc.resolveByRules(cache, cache.BoxRules, raw, e, receiving.KindBox); matched {
+		return scan, err
 	}
 	if len(raw) == 33 {
 		s, err := uc.resolveInternal(ctx, cache, raw, e)
@@ -329,6 +323,76 @@ func scanKindOf(k innercode.Kind) receiving.ScanKind {
 		return receiving.KindBox
 	}
 	return receiving.KindItem
+}
+
+// ruleNoProductError — правилом товар не определён: код правила не заведён у
+// поставщика (code) либо правило кода не вычитывает вовсе. Такой отказ не
+// приговор: приёмка пробует следующее правило той же длины (см. resolveByRules).
+type ruleNoProductError struct{ code string }
+
+func (e ruleNoProductError) Error() string {
+	if e.code == "" {
+		return "в правиле не вычитывается код товара — выберите позицию вручную"
+	}
+	return fmt.Sprintf("внешний код %q не заведён у поставщика — добавьте его на карточке поставщика", e.code)
+}
+
+// resolveByRules перебирает правила поставщика, чья длина совпала со сканом, по
+// порядку: правилом товар не определён (код не вычитан или не заведён у
+// поставщика) — пробуем следующее правило. Товар найден — дальше этим же
+// правилом вычитываются вес и даты.
+//
+// Так у поставщика могут стоять несколько правил одной длины, и рабочее не
+// первым (условие владельца 23.09.2026: «после ненахождения товара по первому
+// правилу нужно осуществить проверку по другим, на случай если дальше есть
+// подходящее»). Прочие отказы правила (битый вес, нераспознанная дата, ручной
+// выбор) — окончательные: другое правило прочло бы те же поля иначе, и угадывать
+// за поставщика нечего.
+//
+// matched=false — правила такой длины у поставщика нет: скан не про правила
+// (внутренний ярлык, код коробки мимо карточки).
+func (uc *ReceivingUseCase) resolveByRules(cache *receiving.Cache, rules []receiving.DecodeRule, raw string, e receiving.ScanEntry, kind receiving.ScanKind) (*receiving.DecodedScan, bool, error) {
+	var (
+		firstErr error    // отказ первого подошедшего по длине правила
+		codes    []string // коды правил, которых нет в маппинге поставщика
+	)
+	for _, rule := range rules {
+		if rule.Length != len(raw) {
+			continue
+		}
+		scan, err := uc.resolveByRule(cache, rule, raw, e, kind)
+		if err == nil {
+			return scan, true, nil
+		}
+		var noProduct ruleNoProductError
+		if !errors.As(err, &noProduct) {
+			return nil, true, err
+		}
+		if firstErr == nil {
+			firstErr = err
+		}
+		if noProduct.code != "" {
+			codes = append(codes, noProduct.code)
+		}
+	}
+	if firstErr == nil {
+		return nil, false, nil
+	}
+	// Ни одно правило не дало заведённого кода: в отказе перечисляем все коды —
+	// по первому оператор завёл бы не то, что читается рабочим правилом.
+	if len(codes) > 1 {
+		return nil, true, fmt.Errorf("внешние коды %s не заведены у поставщика — добавьте нужный на карточке поставщика", quoteCodes(codes))
+	}
+	return nil, true, firstErr
+}
+
+// quoteCodes — коды в кавычках через запятую (для сообщения об отказе скана).
+func quoteCodes(codes []string) string {
+	quoted := make([]string, len(codes))
+	for i, c := range codes {
+		quoted[i] = strconv.Quote(c)
+	}
+	return strings.Join(quoted, ", ")
 }
 
 // resolveByRule вычитывает скан по правилу поставщика.
@@ -487,14 +551,15 @@ func resolveManual(cache *receiving.Cache, e receiving.ScanEntry) (*receiving.De
 
 // resolveProductByRule определяет товар скана: внешний код из правила через
 // маппинг поставщика, либо ручной выбор позиции (с дополнением из списка
-// позиций — код товара в этом случае правилом не вычитывается).
+// позиций — код товара в этом случае правилом не вычитывается). Товара правилом
+// не нашлось — ruleNoProductError: приёмка попробует следующее правило той же длины.
 func resolveProductByRule(cache *receiving.Cache, rule receiving.DecodeRule, raw string, e receiving.ScanEntry) (productResolve, error) {
 	code, ok := sliceRule(rule, raw, 0)
 	if ok {
 		if ref, refOK := cache.ByExternal[code]; refOK {
 			return productResolve{ref.ProductID, ref.InternalCode, ref.ProductName, ref.Weighted}, nil
 		}
-		return productResolve{}, fmt.Errorf("внешний код %q не заведён у поставщика — добавьте его на карточке поставщика", code)
+		return productResolve{}, ruleNoProductError{code: code}
 	}
 	if e.ManualProductID != "" {
 		if p, found := findProduct(cache, e.ManualProductID); found {
@@ -502,7 +567,7 @@ func resolveProductByRule(cache *receiving.Cache, rule receiving.DecodeRule, raw
 		}
 		return productResolve{productID: e.ManualProductID}, nil
 	}
-	return productResolve{}, errors.New("в правиле не вычитывается код товара — выберите позицию вручную")
+	return productResolve{}, ruleNoProductError{}
 }
 
 // ruleDates — даты, вычитанные кодом по правилу: поля в правиле нет — дата

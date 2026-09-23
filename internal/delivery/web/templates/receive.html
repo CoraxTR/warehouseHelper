@@ -457,17 +457,35 @@
             return false;
         }
 
+        // resolveByRules перебирает правила одной длины: правилом товар не
+        // определён (код не вычитан или не заведён у поставщика) — пробуем
+        // следующее правило, рабочее может стоять не первым (условие владельца
+        // 23.09.2026). Возвращает null, если правила такой длины нет вовсе; коды
+        // всех неподошедших правил собираются в _code_unknown, чтобы сообщение
+        // оператору перечисляло их, а не только код первого правила.
+        function resolveByRules(rules, raw, kind) {
+            var i, r, res, first = null, unknown = [];
+            for (i = 0; i < rules.length; i++) {
+                r = rules[i];
+                if (r.length !== raw.length) { continue; }
+                res = resolveByRule(r, raw, kind);
+                if (res.product_id) { return res; }
+                if (res._code_unknown) { unknown.push(res._code_unknown); }
+                if (!first) { first = res; }
+            }
+            if (!first) { return null; }
+            if (unknown.length > 1) { first._code_unknown = unknown.join(', '); }
+            return first;
+        }
+
         // resolveScan — ВЕРХНЕУРОВНЕВЫЙ скан: проверяется только товар — правила
         // товаров, затем внутренний ярлык куска (29). Правила коробок здесь не
         // участвуют вовсе: коробка открывается кнопкой «+ Коробка» (или сканом
         // 555), иначе правила товаров и коробок одной длины пересекались бы.
         function resolveScan(raw) {
             var code, prod, res;
-            var i, r;
-            for (i = 0; i < CACHE.item_rules.length; i++) {
-                r = CACHE.item_rules[i];
-                if (r.length === raw.length) { return resolveByRule(r, raw, 'item'); }
-            }
+            res = resolveByRules(CACHE.item_rules, raw, 'item');
+            if (res) { return res; }
             if (raw.length === 29) {
                 code = raw.substr(0, 8);
                 prod = CACHE.by_code[code];
@@ -495,11 +513,8 @@
         // подошло — отказ скана: правило коробок не заведено или код не вычитан.
         function resolveBoxScan(raw) {
             var code, prod, res;
-            var i, r;
-            for (i = 0; i < CACHE.box_rules.length; i++) {
-                r = CACHE.box_rules[i];
-                if (r.length === raw.length) { return resolveByRule(r, raw, 'box'); }
-            }
+            res = resolveByRules(CACHE.box_rules, raw, 'box');
+            if (res) { return res; }
             if (raw.length === 33) {
                 code = raw.substr(0, 8);
                 prod = CACHE.by_code[code];
