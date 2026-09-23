@@ -130,7 +130,11 @@ func mergeGroups(rows []Row) []Row {
 		if r.Source == SourceNone {
 			continue
 		}
-		if !r.SurplusGroup {
+		// В группу идут только строки, у которых избыток — победившая скидка
+		// (Row.SurplusGroup ставит расчёт именно таким парам, здесь — та же
+		// проверка на всякий случай): строка со ступенью по сроку не
+		// сворачивается с избыточной и не получает чужой источник.
+		if !r.SurplusGroup || r.Source != SourceSurplus {
 			out = append(out, r)
 			continue
 		}

@@ -117,12 +117,16 @@ func banThreshold(lots []discounts.Input) *time.Time {
 func (p PairState) Row() discounts.Row {
 	percent, src := p.Desired()
 	row := discounts.Row{
-		ProductID:    p.ProductID,
-		Name:         p.Name,
-		BestBefore:   p.BestBefore,
-		Source:       src,
-		DaysLeft:     p.DaysLeft,
-		SurplusGroup: p.SurplusGroup,
+		ProductID:  p.ProductID,
+		Name:       p.Name,
+		BestBefore: p.BestBefore,
+		Source:     src,
+		DaysLeft:   p.DaysLeft,
+		// Группа — только у пар, где избыток и есть победившая скидка. Если
+		// ступень по сроку глубже (или есть ручная), пара печатается своим
+		// источником, а не «избытком»: иначе в таблице стояло «избыток» при
+		// скидке 30 % (жалоба владельца, 23.09.2026).
+		SurplusGroup: p.SurplusGroup && src == discounts.SourceSurplus,
 	}
 	if percent != nil {
 		row.Percent = *percent
