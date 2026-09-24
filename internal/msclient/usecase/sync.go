@@ -64,13 +64,10 @@ func (uc *SyncUseCase) SyncDeliverableOrders(ctx context.Context) {
 	internalOrders := make([]*domain.InternalOrder, 0, len(suitableOrders))
 
 	for _, o := range suitableOrders {
-		//nolint:revive //false positive, we can't use wg.Go for goroutines with variables
-		wg.Add(1)
-
-		go func(order *client.MSOrder, ctx context.Context) {
-			defer wg.Done()
-
-			internalOrder := uc.Converter.ToDomain(order)
+		// order — переменная итерации (с Go 1.22 у каждой итерации своя), ctx —
+		// контекст вызова: wg.Go запускает горутину и сам считает её в группе.
+		wg.Go(func() {
+			internalOrder := uc.Converter.ToDomain(o)
 
 			if internalOrder.GetRefGoNumber() == "" {
 				countermu.Lock()
@@ -96,7 +93,7 @@ func (uc *SyncUseCase) SyncDeliverableOrders(ctx context.Context) {
 			internalOrders = append(internalOrders, internalOrder)
 
 			appendmu.Unlock()
-		}(o, ctx)
+		})
 	}
 
 	wg.Wait()
