@@ -428,6 +428,11 @@ func TestAcceptReturn_ClearReserveErrorAborts(t *testing.T) {
 	if err == nil {
 		t.Fatal("ошибка снятия резерва должна прервать возврат")
 	}
+	// Ошибка помечена ErrReserveNotCleared: ручка отдаёт складу свой текст
+	// («снимите резерв вручную»), а не общее «попробуйте позже».
+	if !errors.Is(err, returns.ErrReserveNotCleared) {
+		t.Errorf("ошибка = %v, want ErrReserveNotCleared", err)
+	}
 	if len(stockS.accepted) != 0 {
 		t.Fatal("остатки не принимаются при ошибке МС (порядок: PUT до AcceptStock)")
 	}

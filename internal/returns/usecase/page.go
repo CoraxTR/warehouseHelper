@@ -116,8 +116,10 @@ func (uc *UseCase) AcceptReturn(ctx context.Context, eventID string, scans []str
 		// МС резерв при отмене НЕ сбрасывает сам: снимаем PUT-ом до записи
 		// остатков (ошибка МС не должна оставить рассинхрон «остатки приняты,
 		// резерв висит»). Повтор после сбоя безопасен: reserve уже 0 — no-op.
+		// Ошибка помечается ErrReserveNotCleared: склад получает свой текст
+		// (резерв снимается в МС вручную), а не общее «попробуйте позже».
 		if err := uc.orders.ClearOrderReserves(ctx, ev.OrderID); err != nil {
-			return 0, fmt.Errorf("clear order reserve %s: %w", ev.OrderID, err)
+			return 0, fmt.Errorf("%w (заказ %s): %w", returns.ErrReserveNotCleared, ev.OrderID, err)
 		}
 	}
 
