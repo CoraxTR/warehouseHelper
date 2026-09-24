@@ -271,6 +271,6 @@ func (uc *UseCase) cleanupShelfLife(ctx context.Context) {
 		return
 	}
 	if removed > 0 {
-		slog.Info("msorders: журнал подбора почищен", "rows", removed, "older_than", cutoff.Format("2006-01-02"))
+		slog.Info("msorders: журнал подбора почищен", "rows", removed, "older_than", cutoff.Format(time.DateOnly))
 	}
 }

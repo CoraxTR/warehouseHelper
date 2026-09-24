@@ -254,7 +254,7 @@ func TestOrderPickingSQL(t *testing.T) {
 // TestOrderPickingInsertCoversScanColumns — колонки чтения и записи не должны
 // расходиться: новая колонка в SELECT без колонки в INSERT читалась бы как NULL.
 func TestOrderPickingInsertCoversScanColumns(t *testing.T) {
-	for _, col := range strings.Split(orderPickingColumns, ",") {
+	for col := range strings.SplitSeq(orderPickingColumns, ",") {
 		col = strings.TrimSpace(col)
 		if col == "" {
 			continue

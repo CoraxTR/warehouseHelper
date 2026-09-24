@@ -185,7 +185,7 @@ func shelfLifeFit(header string, groups []shelfLifeGroup, blocks []string) strin
 		return text
 	}
 
-	for keep := len(blocks) - 1; keep >= 0; keep-- {
+	for keep := range slices.Backward(blocks) {
 		cropped := shelfLifeJoin(header, groups[:keep], blocks[:keep]) +
 			fmt.Sprintf("\n… (обрезано: ещё %d групп)", len(blocks)-keep)
 		if utf8.RuneCountInString(cropped) <= telegramLimit {

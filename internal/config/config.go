@@ -231,15 +231,7 @@ func loadAppconfig() *AppConfig {
 		}
 	}
 
-	// Срок хранения журнала подбора (модуль msorders): PICKJOURNAL_RETENTION_DAYS
-	// в днях, по умолчанию 180; неположительное значение — дефолт (как у
-	// остальных счётчиков приложения).
-	pickingRetention := 180 * 24 * time.Hour
-	if daysStr := os.Getenv("PICKJOURNAL_RETENTION_DAYS"); daysStr != "" {
-		if days, err := strconv.Atoi(daysStr); err == nil && days > 0 {
-			pickingRetention = time.Duration(days) * 24 * time.Hour
-		}
-	}
+	pickingRetention := loadPickingRetention()
 
 	return &AppConfig{
 		HTTPAddress:          httpAddress,
@@ -252,6 +244,22 @@ func loadAppconfig() *AppConfig {
 		DiscountTGRaiseTime:  discountTGRaiseTime,
 		PickingRetention:     pickingRetention,
 	}
+}
+
+// loadPickingRetention — срок хранения журнала подбора заказов (модуль
+// msorders): PICKJOURNAL_RETENTION_DAYS в днях, по умолчанию 180 дней.
+// Неположительное или неразбираемое значение — дефолт (как у остальных
+// счётчиков приложения).
+func loadPickingRetention() time.Duration {
+	const defaultRetention = 180 * 24 * time.Hour
+
+	if daysStr := os.Getenv("PICKJOURNAL_RETENTION_DAYS"); daysStr != "" {
+		if days, err := strconv.Atoi(daysStr); err == nil && days > 0 {
+			return time.Duration(days) * 24 * time.Hour
+		}
+	}
+
+	return defaultRetention
 }
 
 type MSWorker struct {
