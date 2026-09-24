@@ -432,6 +432,9 @@ func applyWrites(pairs []PairState, writes []discounts.DiscountWrite) {
 		pairs[i].AppliedPlain = copyDiscount(w.General)
 		pairs[i].Applied = effectiveDiscount(pairs[i].Manual, w.General)
 		pairs[i].SourceRaw = w.Source
+		// План ТГ-колонки — часть состояния пары: по нему строка помечается
+		// каналом (ТГ) в сообщении складу, а 16:00 берёт его же целью подъёма.
+		pairs[i].TelegramPlain = copyDiscount(w.Telegram)
 	}
 }
 

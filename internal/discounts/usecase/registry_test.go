@@ -358,12 +358,12 @@ func TestRegistryDigestSectionsAndGoldenText(t *testing.T) {
 
 	const golden = "Дайджест по скидкам · 14.09.2026\n\n" +
 		"Позиции в скидках:\n" +
-		"1. Творог (до 22.09) — 40%\n" +
-		"2. Сыр (до 19.09) — 30%\n" +
+		"1. (Ручная) Творог (до 22.09) — 40%\n" +
+		"2. (Срок) Сыр (до 19.09) — 30%\n" +
 		"\n" +
 		"Доступно для допродажи (сверх 2 активных):\n" +
-		"1. Хлеб (до 26.09) — 10% (коэф 2,5)\n" +
-		"2. Масло (до 25.09) — 10% (коэф 1,5)\n"
+		"1. (Избыток) Хлеб (до 26.09) — 10% (коэф 2,5)\n" +
+		"2. (Избыток) Масло (до 25.09) — 10% (коэф 1,5)\n"
 	if got := d.Text(); got != golden {
 		t.Errorf("golden-текст:\n%q\nwant:\n%q", got, golden)
 	}
@@ -389,5 +389,55 @@ func TestUseCaseWindowQueueDigest(t *testing.T) {
 	}
 	if d := uc.Digest(1); !d.Date.Equal(now) {
 		t.Errorf("дата отчёта %v, want %v", d.Date, now)
+	}
+}
+
+// Метка канала и количество строки: (ТГ) — пока значение ТГ-колонки строго выше
+// скидки сайта (подъём 16:00 доводит сайт до плана — метка гаснет сама), а
+// количество — остаток пары, у избытка — план продаж по паре (у пары вне
+// раскладки количества нет: печатать нечего). Решение владельца 24.09.2026.
+func TestRowChannelLabelAndQty(t *testing.T) {
+	tests := []struct {
+		name         string
+		pair         PairState
+		wantTelegram bool
+		wantQty      int64
+	}{
+		{
+			"ТГ-колонка выше сайта — метка ТГ, количество — остаток пары",
+			PairState{Expiry: new(int16(30)), Applied: new(int16(10)), TelegramPlain: new(int16(30)), Qty: 7},
+			true, 7,
+		},
+		{
+			"сайт догнал план (16:00) — метка гаснет",
+			PairState{Expiry: new(int16(30)), Applied: new(int16(30)), TelegramPlain: new(int16(30)), Qty: 7},
+			false, 7,
+		},
+		{
+			"ручная ТГ выше ручной сайта — метка ТГ: ручная важнее plain",
+			PairState{Manual: new(int16(30)), Applied: new(int16(30)), TelegramManual: new(int16(50)), Qty: 4},
+			true, 4,
+		},
+		{
+			"избыток — количество из плана продаж",
+			PairState{Surplus: new(discounts.SurplusPercent()), Applied: new(discounts.SurplusPercent()), HasSurplus: true, Coeff: 2, Qty: 50, SurplusPlanQty: 24},
+			false, 24,
+		},
+		{
+			"избыток вне раскладки — количества нет",
+			PairState{Surplus: new(discounts.SurplusPercent()), Applied: new(discounts.SurplusPercent()), HasSurplus: true, Coeff: 1.2, Qty: 50},
+			false, 0,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			row := tc.pair.Row()
+			if row.Telegram != tc.wantTelegram {
+				t.Errorf("метка канала: Telegram=%v, want %v", row.Telegram, tc.wantTelegram)
+			}
+			if row.Qty != tc.wantQty {
+				t.Errorf("количество строки: %d, want %d", row.Qty, tc.wantQty)
+			}
+		})
 	}
 }

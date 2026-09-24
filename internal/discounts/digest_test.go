@@ -121,12 +121,13 @@ func TestBuildDigestGroupIsOneSlot(t *testing.T) {
 	}
 }
 
-// Golden-тест текста: 2 позиции в скидках (ручная + срок) и 1 за ёмкостью.
+// Golden-тест текста: 2 позиции в скидках (в ТГ и по сроку) и 1 за ёмкостью.
+// Метка канала и количество печатаются у каждой строки; у избытка — коэффициент.
 func TestDigestText(t *testing.T) {
 	rows := []Row{
-		{ProductID: "p3", Name: "Колбаса Докторская", BestBefore: bb(2026, 10, 12), Percent: SurplusPercent(), Source: SourceSurplus, Coeff: 1.6, DaysLeft: 5},
-		{ProductID: "p2", Name: "Сыр Гауда", BestBefore: bb(2026, 10, 5), Percent: 10, Source: SourceExpiry, DaysLeft: 21},
-		{ProductID: "p1", Name: "Хлеб Бородинский", BestBefore: bb(2026, 9, 22), Percent: 30, Source: SourceManual, DaysLeft: 8},
+		{ProductID: "p3", Name: "Колбаса Докторская", BestBefore: bb(2026, 10, 12), Percent: SurplusPercent(), Source: SourceSurplus, Coeff: 1.6, DaysLeft: 5, Qty: 5},
+		{ProductID: "p2", Name: "Сыр Гауда", BestBefore: bb(2026, 10, 5), Percent: 10, Source: SourceExpiry, DaysLeft: 21, Qty: 7},
+		{ProductID: "p1", Name: "Хлеб Бородинский", BestBefore: bb(2026, 9, 22), Percent: 30, Source: SourceManual, Telegram: true, DaysLeft: 8, Qty: 3},
 	}
 	d := BuildDigest(rows, 2)
 	d.Date = bb(2026, 9, 14)
@@ -134,14 +135,26 @@ func TestDigestText(t *testing.T) {
 	want := `Дайджест по скидкам · 14.09.2026
 
 Позиции в скидках:
-1. Хлеб Бородинский (до 22.09) — 30%
-2. Сыр Гауда (до 05.10) — 10%
+1. (ТГ) Хлеб Бородинский (3 шт до 22.09) — 30%
+2. (Срок) Сыр Гауда (7 шт до 05.10) — 10%
 
 Доступно для допродажи (сверх 2 активных):
-1. Колбаса Докторская (до 12.10) — 10% (коэф 1,6)
+1. (Избыток) Колбаса Докторская (5 шт до 12.10) — 10% (коэф 1,6)
 `
 	if got := d.Text(); got != want {
 		t.Errorf("Digest.Text():\n%s\n--- want ---\n%s", got, want)
+	}
+}
+
+// Строка без количества: у пары избытка, которой нет в раскладке (продавать с
+// неё нечего), количество не печатается — скобка идёт сразу со сроком.
+func TestDigestTextNoQty(t *testing.T) {
+	d := Digest{Date: bb(2026, 9, 14), Discounts: []Row{
+		{Name: "Сыр", BestBefore: bb(2026, 9, 25), Percent: 10, Source: SourceSurplus, Coeff: 1.2},
+	}}
+
+	if want := "\n1. (Избыток) Сыр (до 25.09) — 10% (коэф 1,2)\n"; !strings.Contains(d.Text(), want) {
+		t.Errorf("строка без количества:\n%s\nwant содержит:\n%q", d.Text(), want)
 	}
 }
 
@@ -164,14 +177,14 @@ func TestDigestTextEmptySections(t *testing.T) {
 			}},
 			"Дайджест по скидкам · 14.09.2026\n\nПозиции в скидках: нет\n\n" +
 				"Доступно для допродажи (сверх 12 активных):\n" +
-				"1. Колбаса (до 12.10) — 10% (коэф 2,0)\n",
+				"1. (Избыток) Колбаса (до 12.10) — 10% (коэф 2,0)\n",
 		},
 		{
 			"только скидки",
 			Digest{Date: date, Discounts: []Row{
 				{Name: "Хлеб", BestBefore: bb(2026, 9, 22), Percent: 50, Source: SourceExpiry},
 			}},
-			"Дайджест по скидкам · 14.09.2026\n\nПозиции в скидках:\n1. Хлеб (до 22.09) — 50%\n\n" +
+			"Дайджест по скидкам · 14.09.2026\n\nПозиции в скидках:\n1. (Срок) Хлеб (до 22.09) — 50%\n\n" +
 				"Доступно для допродажи: нет\n",
 		},
 	}

@@ -65,6 +65,13 @@ type PairState struct {
 	AppliedPlain  *int16
 	SourceRaw     string
 	TelegramPlain *int16 // план ТГ-колонки: её пишет только ТГ-день (14:00/16:00)
+	// TelegramManual — ручная скидка ТГ-канала: метка «ТГ» важнее plain — так же,
+	// как ручная сайта важнее его plain-колонки.
+	TelegramManual *int16
+	// SurplusPlanQty — план продаж по паре группы избытка, шт: сколько её остатка
+	// надо продать, чтобы коэффициент группы стал < 1 (раскладка FIFO). Им
+	// печатается количество в отчёте и дайджесте; 0 — пара вне раскладки.
+	SurplusPlanQty int64
 }
 
 // Desired — какой источник должен победить по кандидатам дня (приоритет
@@ -121,6 +128,7 @@ func (p PairState) Row() discounts.Row {
 		Name:       p.Name,
 		BestBefore: p.BestBefore,
 		Source:     src,
+		Telegram:   p.telegramAboveSite(),
 		DaysLeft:   p.DaysLeft,
 		// Группа — только у пар, где избыток и есть победившая скидка. Если
 		// ступень по сроку глубже (или есть ручная), пара печатается своим
@@ -134,7 +142,28 @@ func (p PairState) Row() discounts.Row {
 	if p.HasSurplus {
 		row.Coeff = p.Coeff
 	}
+	// Количество, попавшее в скидку (ответ владельца 24.09.2026): у избытка —
+	// план продаж по паре, у ручных и сроковых — весь остаток пары.
+	if src == discounts.SourceSurplus {
+		row.Qty = p.SurplusPlanQty
+	} else {
+		row.Qty = p.Qty
+	}
 	return row
+}
+
+// telegramAboveSite — скидка живёт в ТГ-колонке: её значение (ручная в ТГ
+// важнее plain — как и на сайте) строго выше эффективной скидки сайта. Пока
+// подъём (16:00) не довёл general до плана, строка печатается меткой (ТГ);
+// после — своим источником. Отдельного переключателя нет: флаг читается из
+// данных при каждой сборке строки (решение владельца 24.09.2026).
+func (p PairState) telegramAboveSite() bool {
+	tg := effectiveDiscount(p.TelegramManual, p.TelegramPlain)
+	if tg == nil || *tg <= 0 {
+		return false
+	}
+	site := p.Applied
+	return site == nil || *tg > *site
 }
 
 // SurplusPairs — пары, у которых избыток есть сейчас (кандидаты на обновление
@@ -184,6 +213,7 @@ func Evaluate(inputs []discounts.Input, rates map[string]float64, today time.Tim
 			out = append(out, state)
 		}
 		applySurplusGroup(out[first:])
+		applyPlanQty(out[first:])
 	}
 
 	return out
@@ -359,4 +389,25 @@ func daysBetween(from, to time.Time) int {
 	f := time.Date(from.Year(), from.Month(), from.Day(), 0, 0, 0, 0, time.UTC)
 	t := time.Date(to.Year(), to.Month(), to.Day(), 0, 0, 0, 0, time.UTC)
 	return int(t.Sub(f) / (24 * time.Hour))
+}
+
+// applyPlanQty — план продаж по парам группы избытка: сколько остатка каждой
+// пары надо продать, чтобы коэффициент группы стал < 1 (раскладка FIFO, см.
+// SurplusSalePlan). Нужен для печати количества в отчёте и дайджесте; слот
+// считает ту же раскладку сам — там к плану добавляются остаток на момент
+// плана и место в ёмкости.
+func applyPlanQty(pairs []PairState) {
+	_, sales := SurplusSalePlan(pairs)
+	if len(sales) == 0 {
+		return
+	}
+	byKey := make(map[discounts.LotKey]int64, len(sales))
+	for _, s := range sales {
+		byKey[s.Key] = s.Qty
+	}
+	for i := range pairs {
+		if qty, ok := byKey[pairs[i].Key]; ok {
+			pairs[i].SurplusPlanQty = qty
+		}
+	}
 }
