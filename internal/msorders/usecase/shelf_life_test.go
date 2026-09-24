@@ -75,16 +75,14 @@ func (f *fakeShelfLifeChat) SendDetails(_ context.Context, chatID int64, text st
 	return f.err
 }
 
-// shelfLifeDay — UTC-полночь даты (даты журнала — UTC-полночь).
-func shelfLifeDay(y int, m time.Month, d int) time.Time {
-	return time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
-}
+// shelfLifeTestYear — год тестовых дат: журнал и /sroki проверяются на нём
+// (даты в ожиданиях — с этим годом, в коде он не параметр, иначе unparam
+// считает параметр года константой).
+const shelfLifeTestYear = 2026
 
-// shelfLifeDayPtr — та же дата указателем (выработка; nil — не известна).
-// Параметр — готовая дата, а не её части: helper вызывается всегда одним и тем
-// же годом, и отдельный параметр года подсказывает unparam ложную «константу».
-func shelfLifeDayPtr(t time.Time) *time.Time {
-	return &t
+// shelfLifeDay — UTC-полночь даты (даты журнала — UTC-полночь).
+func shelfLifeDay(m time.Month, d int) time.Time {
+	return time.Date(shelfLifeTestYear, m, d, 0, 0, 0, 0, time.UTC)
 }
 
 // slUnit — строка журнала подбора для тестов /sroki.
@@ -112,10 +110,10 @@ func shelfLifeUseCase(ms OrderClient, catalog CatalogReader, journal PickingJour
 }
 
 func TestBuildShelfLifeText(t *testing.T) {
-	sep10 := shelfLifeDayPtr(shelfLifeDay(2026, 9, 10))
-	sep17 := shelfLifeDay(2026, 9, 17)
-	oct10 := shelfLifeDayPtr(shelfLifeDay(2026, 10, 10))
-	oct17 := shelfLifeDay(2026, 10, 17)
+	sep10 := new(shelfLifeDay(9, 10))
+	sep17 := shelfLifeDay(9, 17)
+	oct10 := new(shelfLifeDay(10, 10))
+	oct17 := shelfLifeDay(10, 17)
 
 	tests := []struct {
 		name       string
@@ -210,8 +208,8 @@ func TestBuildShelfLifeText(t *testing.T) {
 			number: "19379",
 			moment: "2026-09-25 14:03:00.000",
 			units: []msorders.PickingUnit{
-				slUnit("30000003", "Товар В", false, 1, nil, shelfLifeDay(2026, 9, 20)),
-				slUnit("10000001", "Товар А", true, 0.4, sep10, shelfLifeDay(2026, 10, 5)),
+				slUnit("30000003", "Товар В", false, 1, nil, shelfLifeDay(9, 20)),
+				slUnit("10000001", "Товар А", true, 0.4, sep10, shelfLifeDay(10, 5)),
 				slUnit("10000001", "Товар А", true, 0.45, sep10, sep17),
 			},
 			want: `Заказ 19379 от 25.09.2026
@@ -278,8 +276,8 @@ func TestBuildShelfLifeTextTruncated(t *testing.T) {
 	for i := range total {
 		units = append(units, slUnit(
 			"10000001", "Грудка ЦБ охл", true, 0.5,
-			shelfLifeDayPtr(shelfLifeDay(2026, 8, 1)),
-			shelfLifeDay(2026, 9, 1).AddDate(0, 0, i),
+			new(shelfLifeDay(8, 1)),
+			shelfLifeDay(9, 1).AddDate(0, 0, i),
 		))
 	}
 
@@ -330,7 +328,7 @@ func TestShelfLifeTextPicksFreshestOrder(t *testing.T) {
 	}}
 	journal := &fakeShelfLifeJournal{units: map[string][]msorders.PickingUnit{
 		"fresh": {slUnit("10000001", "Грудка ЦБ охл", true, 0.657,
-			shelfLifeDayPtr(shelfLifeDay(2026, 9, 10)), shelfLifeDay(2026, 9, 17))},
+			new(shelfLifeDay(9, 10)), shelfLifeDay(9, 17))},
 	}}
 	uc := shelfLifeUseCase(ms, nil, journal, nil)
 
@@ -465,8 +463,8 @@ func TestShelfLifeTextCatalogError(t *testing.T) {
 	}}
 	journal := &fakeShelfLifeJournal{units: map[string][]msorders.PickingUnit{
 		"o1": {
-			slUnit("10000001", "Грудка ЦБ охл", true, 0.657, shelfLifeDayPtr(shelfLifeDay(2026, 9, 10)), shelfLifeDay(2026, 9, 17)),
-			slUnit("20000002", "Сыр Гауда", false, 1, shelfLifeDayPtr(shelfLifeDay(2026, 9, 10)), shelfLifeDay(2026, 9, 17)),
+			slUnit("10000001", "Грудка ЦБ охл", true, 0.657, new(shelfLifeDay(9, 10)), shelfLifeDay(9, 17)),
+			slUnit("20000002", "Сыр Гауда", false, 1, new(shelfLifeDay(9, 10)), shelfLifeDay(9, 17)),
 		},
 	}}
 	catalog := &fakeCatalog{avgErr: errors.New("каталог недоступен")}
@@ -497,7 +495,7 @@ func TestReplyShelfLifeSendsToChat(t *testing.T) {
 	}}
 	journal := &fakeShelfLifeJournal{units: map[string][]msorders.PickingUnit{
 		"o1": {slUnit("10000001", "Грудка ЦБ охл", true, 0.657,
-			shelfLifeDayPtr(shelfLifeDay(2026, 9, 10)), shelfLifeDay(2026, 9, 17))},
+			new(shelfLifeDay(9, 10)), shelfLifeDay(9, 17))},
 	}}
 	chat := &fakeShelfLifeChat{}
 	uc := shelfLifeUseCase(ms, nil, journal, chat)

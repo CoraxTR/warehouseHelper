@@ -124,7 +124,7 @@ func jUnits(units []msorders.PickingUnit) []jUnit {
 		u := &units[i]
 		produced := ""
 		if u.ProducedOn != nil {
-			produced = u.ProducedOn.Format("2006-01-02")
+			produced = u.ProducedOn.Format(time.DateOnly)
 		}
 		out = append(out, jUnit{
 			order:      u.OrderID,
@@ -135,7 +135,7 @@ func jUnits(units []msorders.PickingUnit) []jUnit {
 			weighted:   u.Weighted,
 			weightKg:   u.WeightKg,
 			produced:   produced,
-			bestBefore: u.BestBefore.Format("2006-01-02"),
+			bestBefore: u.BestBefore.Format(time.DateOnly),
 		})
 	}
 
@@ -178,8 +178,8 @@ func checkRemovals(t *testing.T, got, want []msorders.PickingReturn) {
 		if g.OrderID != w.OrderID || g.InternalCode != w.InternalCode || g.Count != w.Count ||
 			!g.BestBefore.Equal(w.BestBefore) || math.Abs(g.WeightKg-w.WeightKg) > 1e-9 {
 			t.Errorf("PickingReturn %d = {order:%s code:%s bb:%s кг:%v count:%d}, want {order:%s code:%s bb:%s кг:%v count:%d}",
-				i, g.OrderID, g.InternalCode, g.BestBefore.Format("2006-01-02"), g.WeightKg, g.Count,
-				w.OrderID, w.InternalCode, w.BestBefore.Format("2006-01-02"), w.WeightKg, w.Count)
+				i, g.OrderID, g.InternalCode, g.BestBefore.Format(time.DateOnly), g.WeightKg, g.Count,
+				w.OrderID, w.InternalCode, w.BestBefore.Format(time.DateOnly), w.WeightKg, w.Count)
 		}
 	}
 }
@@ -195,15 +195,6 @@ func checkClear(t *testing.T, got []journalClear, wantOrder string, wantPosition
 	if got[0].orderID != wantOrder || !slices.Equal(got[0].positionIDs, wantPositions) {
 		t.Errorf("ClearOrderPicking = {%s %v}, want {%s %v}",
 			got[0].orderID, got[0].positionIDs, wantOrder, wantPositions)
-	}
-}
-
-// checkNoClear — журнал по позициям не чистили.
-func checkNoClear(t *testing.T, j *fakeJournal) {
-	t.Helper()
-
-	if len(j.clears) != 0 || len(j.clearProds) != 0 {
-		t.Errorf("журнал очищен без нужды: %+v / %+v", j.clears, j.clearProds)
 	}
 }
 
@@ -554,7 +545,7 @@ func TestRunShelfLifeCleanup(t *testing.T) {
 		uc := NewUseCase(&fakeOrderDetail{}, &fakeCatalog{}, nil, nil, nil)
 		uc.SetShelfLifeRetention(retention)
 
-		runCleanupSync(t, context.Background(), uc)
+		runCleanupSync(context.Background(), t, uc)
 	})
 
 	t.Run("ретеншен не задан", func(t *testing.T) {
@@ -562,7 +553,7 @@ func TestRunShelfLifeCleanup(t *testing.T) {
 		uc := NewUseCase(&fakeOrderDetail{}, &fakeCatalog{}, nil, nil, nil)
 		uc.SetPickingJournal(j)
 
-		runCleanupSync(t, context.Background(), uc)
+		runCleanupSync(context.Background(), t, uc)
 		if len(j.cleanups) != 0 {
 			t.Errorf("CleanupOrderPicking вызовов = %d, want 0: %+v", len(j.cleanups), j.cleanups)
 		}
@@ -577,7 +568,7 @@ func TestRunShelfLifeCleanup(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 
-		runCleanupSync(t, ctx, uc)
+		runCleanupSync(ctx, t, uc)
 		if len(j.cleanups) != 1 {
 			t.Fatalf("CleanupOrderPicking вызовов = %d, want 1: %+v", len(j.cleanups), j.cleanups)
 		}
@@ -622,7 +613,7 @@ func TestRunShelfLifeCleanup(t *testing.T) {
 
 // runCleanupSync прогоняет фон чистки с защитой от зависания: до отмены ctx
 // RunShelfLifeCleanup не возвращается.
-func runCleanupSync(t *testing.T, ctx context.Context, uc *UseCase) {
+func runCleanupSync(ctx context.Context, t *testing.T, uc *UseCase) {
 	t.Helper()
 
 	done := make(chan struct{})
