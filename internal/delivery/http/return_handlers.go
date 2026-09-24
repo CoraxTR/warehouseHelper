@@ -244,6 +244,14 @@ func (h *Handler) ReturnsSave(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, returns.ErrAlreadyDone.Error(), http.StatusConflict)
 		case errors.Is(err, returns.ErrEventNotFound):
 			http.Error(w, returns.ErrEventNotFound.Error(), http.StatusNotFound)
+		case errors.Is(err, returns.ErrReserveNotCleared):
+			// Резерв отменённого заказа не снялся (МС не принял PUT или строки
+			// позиций пришли неполным составом): остатки НЕ записаны, событие
+			// живо. Склад снимает резерв в МС вручную и повторяет расформирование
+			// — повтор безопасен (reserve уже 0 → PUT не уйдёт).
+			slog.Error(fmt.Sprintf("returns accept %s: %v", req.EventID, err))
+			http.Error(w, "резерв в МойСклад не снялся — снимите резерв заказа вручную "+
+				"и повторите расформирование (остатки не записаны)", http.StatusInternalServerError)
 		default:
 			slog.Error(fmt.Sprintf("returns accept %s: %v", req.EventID, err))
 			http.Error(w, "не удалось принять возврат — попробуйте позже", http.StatusInternalServerError)
