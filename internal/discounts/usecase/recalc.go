@@ -52,6 +52,13 @@ func (uc *UseCase) RecalcExpiry(ctx context.Context, now time.Time) error {
 	if !expiryDay(today) {
 		return nil
 	}
+	// ТГ-день (вт/чт): утром лестница только СЧИТАЕТСЯ — повышения этого дня
+	// применяет план дня в 14:00 (решение владельца 24.09.2026): сайт должен
+	// получить скидку слота не раньше, чем её увидят подписчики. Маркер дня
+	// ставит он же (FlagExpiry), поэтому догон после сна не теряется.
+	if isTelegramDay(now) {
+		return nil
+	}
 
 	done, err := uc.repo.DayFlagDone(ctx, today, discounts.FlagExpiry)
 	if err != nil {

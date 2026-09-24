@@ -24,6 +24,10 @@
 -- ЖИВАЯ БД: таблица discount_day_flags могла быть создана раньше, до появления
 -- колонки turnover_window_done — поэтому ниже идёт идемпотентный ALTER:
 --   ALTER TABLE discount_day_flags ADD COLUMN IF NOT EXISTS turnover_window_done BOOLEAN NOT NULL DEFAULT false;
+-- ЖИВАЯ БД: позиции рассылки могли быть созданы раньше, до появления колонок
+-- контроля вечернего подъёма (16:00) — идемпотентный ALTER:
+--   ALTER TABLE discount_telegram_digest_item ADD COLUMN IF NOT EXISTS initial_qty BIGINT;
+--   ALTER TABLE discount_telegram_digest_item ADD COLUMN IF NOT EXISTS plan_qty BIGINT;
 
 -- Рассылка (слот ТГ): одна строка = один собранный/отправленный дайджест.
 -- 14:00 — план ТГ-слота в чат склада (chat_kind='warehouse'), 09:00 — дайджест
@@ -46,6 +50,14 @@ CREATE TABLE IF NOT EXISTS discount_telegram_digest_item (
     percent           SMALLINT NOT NULL CHECK (percent BETWEEN 0 AND 100),  -- скидка дня, %
     coeff             NUMERIC(8,2),       -- коэффициент избытка Q/(v×D); NULL — позиция не избыточная
     reason            TEXT NOT NULL CHECK (reason IN ('manual', 'expiry', 'surplus')),  -- источник скидки
+    -- Контроль вечернего подъёма (16:00, решение владельца 24.09.2026): у позиции
+    -- добора из избытка считается, сколько штук пары надо продать до 16:00.
+    -- initial_qty — остаток пары на 14:00 (момент плана), plan_qty — план продаж
+    -- по паре. Пара считается проданной, если остаток к 16:00 опустился до
+    -- initial_qty − plan_qty или ниже. Оба поля — только у добора из избытка:
+    -- у сроковых позиций план продаж не считается, поэтому NULL («не задано»).
+    initial_qty       BIGINT,             -- остаток пары на 14:00; NULL — не задано
+    plan_qty          BIGINT,             -- сколько штук пары надо продать до 16:00; NULL — не задано
     general_raised_at TIMESTAMPTZ,        -- когда general подняли до telegram (16:00); NULL — не поднимали
     PRIMARY KEY (digest_id, product_id, best_before)
 );

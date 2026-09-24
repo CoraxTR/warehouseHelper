@@ -12,20 +12,26 @@ import (
 // Тесты статуса «Вес подобран» (PUT заказа) и ручного подтверждения подбора
 // (POST /ms/orders/{id}/submit-manual): решения владельца 15.09.2026.
 
-// Статус «Вес подобран» уезжает тем же PUT, что и позиции; пустой id в
+// Статус «Вес подобран» уезжает тем же PUT, что и позиции — но ТОЛЬКО если
+// заказ в статусе «Получен» (решение владельца 24.09.2026); пустой id в
 // конфиге — PUT без смены статуса (прод .env правится руками).
 func TestSubmitWeightPickedState(t *testing.T) {
+	const weightState = "eb28c8c8-c53c-11e6-7a69-97110013c338"
+
 	cases := []struct {
-		name    string
-		stateID string
-		want    string
+		name       string
+		stateID    string // id статуса из конфига
+		orderState string // статус заказа в МС (order.StateID)
+		want       string
 	}{
-		{name: "статус из конфига", stateID: "eb28c8c8-c53c-11e6-7a69-97110013c338", want: "eb28c8c8-c53c-11e6-7a69-97110013c338"},
-		{name: "пустой id — без статуса", stateID: "", want: ""},
+		{name: "статус из конфига", stateID: weightState, orderState: stateIDReceived, want: weightState},
+		{name: "пустой id — без статуса", stateID: "", orderState: stateIDReceived, want: ""},
+		{name: "заказ не «Получен» — статус не меняем", stateID: weightState, orderState: "eb28c8c8-c53c-11e6-7a69-97110013c339", want: ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			fake, o := submitOrder()
+			o.StateID = c.orderState
 			uc := NewUseCase(fake, submitCatalog(), &fakePicker{}, nil, nil)
 			uc.SetWeightPickedState(c.stateID)
 

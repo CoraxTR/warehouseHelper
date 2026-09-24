@@ -131,7 +131,8 @@ type MSOrder struct {
 	AgentPhone    string         `json:"-"`
 	RefGoZone     string         `json:"-"`
 	// StateID — id статуса (последний сегмент state.meta.href), заполняет
-	// клиент при разборе списка: между слоями ходит id, не href.
+	// клиент при разборе заказа (список или одиночный GET по id): между слоями
+	// ходит id, не href.
 	StateID        string       `json:"-"`
 	PositionsWInfo []MSPosition `json:"-"`
 }

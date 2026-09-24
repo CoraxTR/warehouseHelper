@@ -32,6 +32,13 @@ const (
 	stubQty        = 0.0001
 	bbLayout       = "02012006" // ДДММГГГГ (срез кода ЧЗ, клиент не парсит)
 	maxScanWeightG = 99999      // 5 знаков веса в коде
+
+	// stateIDReceived — статус МС «Получен»: единственный, из которого подбор,
+	// доподбор, замена и переподбор переводят заказ в «Вес подобран» (решение
+	// владельца 24.09.2026). Из любого другого статуса PUT уходит БЕЗ смены
+	// статуса: возврат заказа в работу не должен затираться (иначе закрытый или
+	// переоткрытый заказ терял бы своё состояние).
+	stateIDReceived = "8737d601-c0b9-11e3-d6cd-002590a28eca"
 )
 
 // Ошибки валидации submit (400 на клиенте).
@@ -118,6 +125,17 @@ type submitEntry struct {
 	catalog   map[string]CatalogProduct
 }
 
+// weightStateFor — статус, который заказ получает при отправке подбора: «Вес
+// подобран» ставим ТОЛЬКО из статуса «Получен» (решение владельца 24.09.2026),
+// иначе пустая строка — PUT уходит без смены статуса. Пустой id статуса в
+// конфиге (смена не настроена) — тоже без смены статуса, как было раньше.
+func (uc *UseCase) weightStateFor(order *client.MSOrder) string {
+	if uc.weightStateID == "" || order == nil || order.StateID != stateIDReceived {
+		return ""
+	}
+	return uc.weightStateID
+}
+
 // Submit отправляет подбор в МС: читает заказ заново, пересобирает positions
 // по набранным сканам, PUT-ит заказ, при 200 — списывает сроки (PickStock).
 func (uc *UseCase) Submit(ctx context.Context, id string, req SubmitRequest) (SubmitResult, error) {
@@ -136,7 +154,7 @@ func (uc *UseCase) Submit(ctx context.Context, id string, req SubmitRequest) (Su
 
 	// Свежее чтение: PUT собирается из данных на момент отправки (менеджер
 	// мог поменять количества после того, как страница была отрисована).
-	_, entry, err := uc.fetchForSubmit(ctx, id)
+	order, entry, err := uc.fetchForSubmit(ctx, id)
 	if err != nil {
 		return SubmitResult{}, err
 	}
@@ -151,9 +169,9 @@ func (uc *UseCase) Submit(ctx context.Context, id string, req SubmitRequest) (Su
 		return SubmitResult{}, err
 	}
 
-	// Статус «Вес подобран» — при любом акте подбора (в т.ч. переподбор);
-	// пустой id в конфиге — PUT без смены статуса.
-	if err := uc.ms.UpdateCustomerOrderState(ctx, id, body, uc.weightStateID); err != nil {
+	// Статус «Вес подобран» — только из «Получен» (решение владельца 24.09.2026):
+	// заказ в любом другом статусе обновляем без смены статуса.
+	if err := uc.ms.UpdateCustomerOrderState(ctx, id, body, uc.weightStateFor(order)); err != nil {
 		return SubmitResult{}, fmt.Errorf("update order %s: %w", id, err)
 	}
 
@@ -570,7 +588,7 @@ func (uc *UseCase) SubmitManual(ctx context.Context, id string, req ManualReques
 	}
 
 	// Свежее чтение: PUT собирается из данных на момент подтверждения.
-	_, entry, err := uc.fetchForSubmit(ctx, id)
+	order, entry, err := uc.fetchForSubmit(ctx, id)
 	if err != nil {
 		return SubmitResult{}, err
 	}
@@ -585,7 +603,8 @@ func (uc *UseCase) SubmitManual(ctx context.Context, id string, req ManualReques
 		return SubmitResult{}, err
 	}
 
-	if err := uc.ms.UpdateCustomerOrderState(ctx, id, body, uc.weightStateID); err != nil {
+	// Смена статуса — только из «Получен» (решение владельца 24.09.2026).
+	if err := uc.ms.UpdateCustomerOrderState(ctx, id, body, uc.weightStateFor(order)); err != nil {
 		return SubmitResult{}, fmt.Errorf("update order %s: %w", id, err)
 	}
 

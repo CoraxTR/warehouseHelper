@@ -18,6 +18,10 @@ import (
 // более далёкий срок): скидка по избытку ложится и на неё. Dates заполняет
 // BuildDigest у строки-группы — это перечисление сроков группы; у обычной строки
 // дата одна (BestBefore).
+//
+// PlanQty — план продаж по паре (шт): сколько её остатка надо продать, чтобы
+// коэффициент группы стал < 1. Заполняют только строки ТГ-слота, добранные из
+// избытка (решение владельца 24.09.2026); в отчёте и дайджесте — nil.
 type Row struct {
 	ProductID    string
 	Name         string
@@ -28,6 +32,7 @@ type Row struct {
 	DaysLeft     int
 	SurplusGroup bool
 	Dates        []time.Time
+	PlanQty      *int64
 }
 
 // Digest — собранный отчёт по скидкам: активные позиции и «доступно для
@@ -179,7 +184,8 @@ func mergeIntoGroup(g *Row, r Row) {
 // затем секции через пустую строку. Пустая секция печатается одной строкой
 // («Позиции в скидках: нет» / «Доступно для допродажи: нет») — без заголовка
 // списка. Числа: сроки — 02.01 (у группы перечисление), процент — «30%»,
-// коэффициент — один знак, запятая.
+// коэффициент — один знак, запятая; план продаж (у добора из избытка) —
+// «— 20 шт» перед скобкой со сроком.
 func (d Digest) Text() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Дайджест по скидкам · %s\n\n", d.Date.Format("02.01.2006"))
@@ -189,7 +195,7 @@ func (d Digest) Text() string {
 	} else {
 		b.WriteString("Позиции в скидках:\n")
 		for i, r := range d.Discounts {
-			fmt.Fprintf(&b, "%d. %s (%s) — %d%%%s\n", i+1, r.Name, DatesText(r), r.Percent, coeffText(r))
+			fmt.Fprintf(&b, "%d. %s%s (%s) — %d%%%s\n", i+1, r.Name, qtyText(r), DatesText(r), r.Percent, coeffText(r))
 		}
 	}
 	b.WriteString("\n")
@@ -199,10 +205,19 @@ func (d Digest) Text() string {
 	} else {
 		fmt.Fprintf(&b, "Доступно для допродажи (сверх %d активных):\n", d.Cap)
 		for i, r := range d.Surplus {
-			fmt.Fprintf(&b, "%d. %s (%s) — %d%%%s\n", i+1, r.Name, DatesText(r), r.Percent, coeffText(r))
+			fmt.Fprintf(&b, "%d. %s%s (%s) — %d%%%s\n", i+1, r.Name, qtyText(r), DatesText(r), r.Percent, coeffText(r))
 		}
 	}
 	return b.String()
+}
+
+// qtyText — хвост строки с планом продаж: его печатают только позиции добора из
+// избытка («— 20 шт»), у остальных строк плана нет.
+func qtyText(r Row) string {
+	if r.PlanQty == nil {
+		return ""
+	}
+	return fmt.Sprintf(" — %d шт", *r.PlanQty)
 }
 
 // DatesText — сроки строки для печати: у группы избытка перечисление

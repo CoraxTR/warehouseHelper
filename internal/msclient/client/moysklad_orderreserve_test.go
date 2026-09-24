@@ -116,6 +116,11 @@ func TestClearOrderReserves(t *testing.T) {
 	if body.Name != "19191" {
 		t.Errorf("эхо тела нарушено: name = %q", body.Name)
 	}
+	// state из эха GET в PUT не переносится (решение владельца 24.09.2026):
+	// иначе PUT заново утверждал бы статус, затирая расформирование заказа.
+	if body.State != nil {
+		t.Errorf("PUT перенёс state из эха GET: %v, want отсутствие", body.State)
+	}
 	if len(body.Positions) != 3 {
 		t.Fatalf("positions = %d строк, want 3", len(body.Positions))
 	}

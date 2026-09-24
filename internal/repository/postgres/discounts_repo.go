@@ -137,6 +137,9 @@ func scanDiscountInput(row pgx.Row) (discounts.Input, error) {
 //
 // Позиции проверяются до вставки (checkDigestItems): CHECK-констрейнт из БД не
 // говорит, какая строка его нарушила.
+//
+// Контроль вечернего подъёма (initial_qty/plan_qty) пишется как есть: у добора из
+// избытка он заполнен, у сроковых позиций — NULL («план продаж не считался»).
 func (pg *PGClient) SaveDigest(ctx context.Context, d discounts.DigestRecord, items []discounts.DigestItem) error {
 	if err := checkDigestItems(items); err != nil {
 		return err
@@ -161,9 +164,9 @@ func (pg *PGClient) SaveDigest(ctx context.Context, d discounts.DigestRecord, it
 	for _, it := range items {
 		if _, err := tx.Exec(ctx, `
             INSERT INTO discount_telegram_digest_item
-                (digest_id, product_id, best_before, percent, coeff, reason)
-            VALUES ($1, $2, $3, $4, $5, $6)`,
-			digestID, it.ProductID, it.BestBefore, it.Percent, it.Coeff, it.Reason,
+                (digest_id, product_id, best_before, percent, coeff, reason, initial_qty, plan_qty)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+			digestID, it.ProductID, it.BestBefore, it.Percent, it.Coeff, it.Reason, it.InitialQty, it.PlanQty,
 		); err != nil {
 			return fmt.Errorf("insert digest item %s %s: %w", it.ProductID, it.BestBefore.Format(time.DateOnly), err)
 		}
@@ -352,14 +355,21 @@ func (pg *PGClient) MarkDayFlag(ctx context.Context, date time.Time, flag discou
 	return nil
 }
 
-// todaySlotSQL — позиции последнего ОТПРАВЛЕННОГО слота дня (лот → скидка
-// плана). Слотов в дне два — дайджест 09:00 в общий чат и план 14:00 в чат
-// склада; слотом дня считаем последний по id в СВОЁМ канале (план 14:00): по
-// нему держат эскалацию 10→20 до конца дня и по нему же поднимают general в
-// 16:00. $1 — день плана, $2 — канал (chat_kind). Отправка важна: собранную,
-// но не отправленную рассылку человек не видел.
+// todaySlotColumns — колонки позиции отправленного слота: лот, скидка плана,
+// причина и контроль вечернего подъёма (initial_qty — остаток пары на 14:00,
+// plan_qty — план продаж; заполнены только у добора из избытка, у сроковых
+// позиций NULL). Порядок обязан совпадать с порядком Scan в scanTodaySlotItem.
+// Префикс i — алиас discount_telegram_digest_item.
+const todaySlotColumns = `i.product_id, i.best_before, i.percent, i.reason, i.initial_qty, i.plan_qty`
+
+// todaySlotSQL — позиции последнего ОТПРАВЛЕННОГО слота дня. Слотов в дне два —
+// дайджест 09:00 в общий чат и план 14:00 в чат склада; слотом дня считаем
+// последний по id в СВОЁМ канале (план 14:00): по нему держат эскалацию 10→20 до
+// конца дня и по нему же поднимают general в 16:00. $1 — день плана, $2 — канал
+// (chat_kind). Отправка важна: собранную, но не отправленную рассылку человек не
+// видел.
 const todaySlotSQL = `
-    SELECT i.product_id, i.best_before, i.percent
+    SELECT ` + todaySlotColumns + `
     FROM discount_telegram_digest_item i
     WHERE i.digest_id = (
         SELECT id FROM discount_telegram_digest
@@ -368,10 +378,12 @@ const todaySlotSQL = `
         LIMIT 1
     )`
 
-// TodaySlot — позиции отправленного сегодня слота (лот → скидка плана).
-// Пустой день (слота не было) — пустая (не nil) карта, не ошибка: первый день
-// работы модуля и дни без публикации — обычное состояние.
-func (pg *PGClient) TodaySlot(ctx context.Context, date time.Time) (map[discounts.LotKey]int16, error) {
+// TodaySlot — позиции отправленного сегодня слота: скидка плана и контроль
+// «не продано» (остаток пары на 14:00 и план продаж — у добора из избытка). По
+// ним поднимают general (16:00). Пустой день (слота не было) — пустой (не nil)
+// срез, не ошибка: первый день работы модуля и дни без публикации — обычное
+// состояние.
+func (pg *PGClient) TodaySlot(ctx context.Context, date time.Time) ([]discounts.SlotItem, error) {
 	rows, err := pg.Pool.Query(ctx, todaySlotSQL, date, discounts.ChatWarehouse)
 	if err != nil {
 		return nil, fmt.Errorf("today slot %s: %w", date.Format(time.DateOnly), err)
@@ -385,25 +397,36 @@ func (pg *PGClient) TodaySlot(ctx context.Context, date time.Time) (map[discount
 	return slot, nil
 }
 
-// collectTodaySlot собирает позиции слота в карту «лот → скидка плана».
-// Выборку не закрывает — это делает вызывающий. Пустая выборка даёт пустую
-// (не nil) карту: дня без публикации — обычное состояние.
-func collectTodaySlot(rows pgx.Rows) (map[discounts.LotKey]int16, error) {
-	slot := map[discounts.LotKey]int16{}
+// collectTodaySlot собирает позиции слота в срез (порядок строк выборки
+// сохраняется). Выборку не закрывает — это делает вызывающий. Пустая выборка
+// даёт пустой (не nil) срез: дня без публикации — обычное состояние.
+func collectTodaySlot(rows pgx.Rows) ([]discounts.SlotItem, error) {
+	slot := make([]discounts.SlotItem, 0, 16)
 	for rows.Next() {
-		var (
-			key     discounts.LotKey
-			percent int16
-		)
-		if err := rows.Scan(&key.ProductID, &key.BestBefore, &percent); err != nil {
-			return nil, fmt.Errorf("today slot scan: %w", err)
+		it, err := scanTodaySlotItem(rows)
+		if err != nil {
+			return nil, err
 		}
-		slot[key] = percent
+		slot = append(slot, it)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("today slot rows: %w", err)
 	}
 	return slot, nil
+}
+
+// scanTodaySlotItem сканирует строку выборки в discounts.SlotItem (порядок
+// todaySlotColumns). Контроль вечернего подъёма nullable: у сроковых позиций
+// plan_qty не считается, там NULL — читаем через *int64 (pgx НЕ кладёт NULL в
+// int64), nil так и остаётся «не задано».
+func scanTodaySlotItem(row pgx.Row) (discounts.SlotItem, error) {
+	var it discounts.SlotItem
+	if err := row.Scan(
+		&it.ProductID, &it.BestBefore, &it.Percent, &it.Reason, &it.InitialQty, &it.PlanQty,
+	); err != nil {
+		return discounts.SlotItem{}, fmt.Errorf("scan today slot item: %w", err)
+	}
+	return it, nil
 }
 
 // MarkDigestSent фиксирует отправку рассылки: sent_at = at у строки дня плана и
