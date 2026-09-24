@@ -240,14 +240,16 @@ func channelLabel(r Row) string {
 		return "ТГ"
 	}
 	switch r.Source {
+	case SourceNone:
+		return "" // строка без источника скидки в отчёт не попадает
+	case SourceManual:
+		return "Ручная"
 	case SourceExpiry:
 		return "Срок"
 	case SourceSurplus:
 		return "Избыток"
-	case SourceManual:
-		return "Ручная"
 	}
-	return ""
+	return "" // недостижимо: все значения Source перечислены выше
 }
 
 // DatesText — сроки строки для печати: у группы избытка перечисление

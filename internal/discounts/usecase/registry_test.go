@@ -405,27 +405,27 @@ func TestRowChannelLabelAndQty(t *testing.T) {
 	}{
 		{
 			"ТГ-колонка выше сайта — метка ТГ, количество — остаток пары",
-			PairState{Expiry: p16(30), Applied: p16(10), TelegramPlain: p16(30), Qty: 7},
+			PairState{Expiry: new(int16(30)), Applied: new(int16(10)), TelegramPlain: new(int16(30)), Qty: 7},
 			true, 7,
 		},
 		{
 			"сайт догнал план (16:00) — метка гаснет",
-			PairState{Expiry: p16(30), Applied: p16(30), TelegramPlain: p16(30), Qty: 7},
+			PairState{Expiry: new(int16(30)), Applied: new(int16(30)), TelegramPlain: new(int16(30)), Qty: 7},
 			false, 7,
 		},
 		{
 			"ручная ТГ выше ручной сайта — метка ТГ: ручная важнее plain",
-			PairState{Manual: p16(30), Applied: p16(30), TelegramManual: p16(50), Qty: 4},
+			PairState{Manual: new(int16(30)), Applied: new(int16(30)), TelegramManual: new(int16(50)), Qty: 4},
 			true, 4,
 		},
 		{
 			"избыток — количество из плана продаж",
-			PairState{Surplus: p16(discounts.SurplusPercent()), Applied: p16(discounts.SurplusPercent()), HasSurplus: true, Coeff: 2, Qty: 50, SurplusPlanQty: 24},
+			PairState{Surplus: new(discounts.SurplusPercent()), Applied: new(discounts.SurplusPercent()), HasSurplus: true, Coeff: 2, Qty: 50, SurplusPlanQty: 24},
 			false, 24,
 		},
 		{
 			"избыток вне раскладки — количества нет",
-			PairState{Surplus: p16(discounts.SurplusPercent()), Applied: p16(discounts.SurplusPercent()), HasSurplus: true, Coeff: 1.2, Qty: 50},
+			PairState{Surplus: new(discounts.SurplusPercent()), Applied: new(discounts.SurplusPercent()), HasSurplus: true, Coeff: 1.2, Qty: 50},
 			false, 0,
 		},
 	}
@@ -441,6 +441,3 @@ func TestRowChannelLabelAndQty(t *testing.T) {
 		})
 	}
 }
-
-// p16 — указатель на значение скидки: кандидата пары или её колонки в БД.
-func p16(v int16) *int16 { return &v }
