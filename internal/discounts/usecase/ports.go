@@ -27,9 +27,10 @@ type Repository interface {
 	// LastDigestPairs — лоты последней ОТПРАВЛЕННОЙ рассылки (антидубль
 	// «не было в предыдущей рассылке»; пустая карта — рассылок не было).
 	LastDigestPairs(ctx context.Context) (map[discounts.LotKey]struct{}, error)
-	// TodaySlot — позиции отправленной сегодня рассылки (лот → скидка плана):
-	// по ним поднимают general (16:00) и не трогают эскалацию до конца дня.
-	TodaySlot(ctx context.Context, date time.Time) (map[discounts.LotKey]int16, error)
+	// TodaySlot — позиции отправленной сегодня рассылки (план 14:00): скидка
+	// плана плюс контроль «не продано» (остаток пары и план продаж у добора из
+	// избытка). По ним поднимают general (16:00).
+	TodaySlot(ctx context.Context, date time.Time) ([]discounts.SlotItem, error)
 	// MarkGeneralRaised — отметить подъём general до telegram по позициям.
 	MarkGeneralRaised(ctx context.Context, pairs []discounts.LotKey, at time.Time) error
 	// DayFlagDone — сделан ли шаг дня (повтор после рестарта/сна пропускается).

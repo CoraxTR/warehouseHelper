@@ -10,43 +10,77 @@ import (
 	"warehouseHelper/internal/discounts"
 )
 
-// ТГ-день модуля (решение владельца 14.09.2026, §13 черновика): в 14:00 чат
-// склада получает план слота, в 16:00 скидка сайта поднимается до плана.
+// ТГ-день модуля (решение владельца 14.09.2026, §13 черновика; переработка
+// 24.09.2026): в 09:00 автоматика только СЧИТАЕТ — повышения этого дня в
+// general не пишутся. В 14:00 план дня применяется разом: часть позиций уходит в
+// ТГ-рассылку (им пишется ТГ-колонка, сайт не трогаем), остальные получают
+// скидку сайта сразу. В 15:00 склад рассылает список руками: подписчики узнают
+// о скидках раньше покупателей сайта. В 16:00 непроданным позициям слота скидка
+// сайта поднимается до плана.
 //
-// План — это ВЫБОРКА позиций, а не новая скидка: percent позиции уже известен
-// расчёту (ступень по сроку, ручная), слот лишь говорит менеджерам, что пора
-// ставить её на сайте, и держит ёмкость (cap). ТГ-колонка (discount_telegram)
-// получает значение плана — она показывает, до чего скидку поднимут в 16:00.
+// В рассылку идут только позиции, у которых скидка ПОВЫШАЕТСЯ (повышение по
+// сроку или добор из избытка): позиция, скидка которой уже стоит на сайте,
+// подписчику ничего не даёт.
 
 // Ёмкость слота и пороги отбора (решение владельца, §13 черновика).
 const (
 	// slotMainPercent — скидка дня, с которой позиция идёт в план сразу.
 	slotMainPercent = 20
-	// slotBasePercent — ступень, которую план поднимает до slotMainPercent
-	// (добор: слот наполнен меньше половины).
+	// slotBasePercent — ступень, которую добор поднимает до slotMainPercent
+	// (на сайте её поднимут до скидки дня).
 	slotBasePercent = 10
 	// slotMinDays — минимальный остаток дней до срока: позиция должна успеть
 	// продаться, иначе скидка в ТГ бессмысленна.
 	slotMinDays = 2
+	// Ёмкость добора — 0,75 ёмкости слота (при cap 10 — 7 позиций): набралось
+	// меньше — добираем до этого числа (решение владельца 24.09.2026).
+	slotFillNum = 3
+	slotFillDen = 4
 )
 
-// slotPosition — позиция плана: пара и скидка, которую ей предлагают.
+// slotFill — до скольких позиций добирается слот: 0,75 ёмкости с округлением
+// вниз (cap 10 → 7). Нулевая ёмкость — добирать некуда.
+func slotFill(capacity int) int {
+	return capacity * slotFillNum / slotFillDen
+}
+
+// dayPlan — разобранный план дня (14:00): что публикуем и что применяем на сайте.
+type dayPlan struct {
+	// slot — позиции рассылки: им пишется ТГ-колонка, скидка сайта поднимется
+	// в 16:00 (и только непроданным).
+	slot []slotPosition
+	// extra — лишние повышения, не влезшие в ёмкость: скидка сайта ставится
+	// сразу, в рассылку они не идут.
+	extra []slotPosition
+}
+
+// slotPosition — позиция плана дня: пара, скидка дня и причина для истории.
 type slotPosition struct {
 	pair    PairState
 	percent int16
-	// writeTelegram — ставить ли значение в ТГ-колонку: у ручной скидки
-	// значение уже на сайте, писать её в ТГ незачем.
+	reason  string // причина скидки: discounts.Reason*
+	// initialQty/planQty — контроль вечернего подъёма (16:00): остаток пары на
+	// момент плана и план продаж по ней. Заполнены только у добора из избытка.
+	initialQty *int64
+	planQty    *int64
+	// writeTelegram — ставить ли значение в ТГ-колонку: у ручной скидки оно
+	// уже на сайте, писать её в ТГ незачем.
 	writeTelegram bool
 }
 
-// RunSlotPlan — собрать и отправить план ТГ-слота (14:00): позиции со скидкой
-// дня от 20 %, добираем позиции со ступенью 10 % (их план — 20 %), если слот
-// наполнен меньше чем наполовину. Позиции предыдущей рассылки не повторяем
+// RunSlotPlan — план дня (14:00): применить сегодняшние повышения, опубликовать
+// слот в чат склада и отметить маркеры дня.
+//
+// Раскладка применения: позиции слота получают только ТГ-колонку (скидка сайта
+// ждёт 16:00 — подписчики узнают раньше), лишние повышения получают скидку сайта
+// сразу и уведомление об изменении в общий канал. Ручные скидки дня в слот идут
+// как есть: сайт их уже несёт. Позиции предыдущей рассылки не повторяем
 // (антидубль по лоту). Пустой слот — молчание: сообщение «позиций нет» ничего
 // не сообщает, а дайджест 09:00 про это уже сказал.
 //
-// Шаги идемпотентны: перед работой проверяется маркер дня (флаг стоит — шаг
-// пропускается), после успеха ставится FlagPlan.
+// Шаг идемпотентен: перед работой проверяется маркер дня (флаг стоит — шаг
+// пропускается), после успеха ставятся FlagPlan и FlagExpiry: этим же шагом
+// применяется лестница по сроку, которую в ТГ-дни утренний пересчёт не пишет.
 func (uc *UseCase) RunSlotPlan(ctx context.Context, now time.Time, capacity int) error {
 	day := beginningOfDay(now)
 
@@ -62,12 +96,12 @@ func (uc *UseCase) RunSlotPlan(ctx context.Context, now time.Time, capacity int)
 	if err != nil {
 		return err
 	}
-	// Оборот обязателен: слот строится по лестнице (продажи ему не нужны), но
-	// этим же расчётом заменяется снапшот реестра — без оборота из него
-	// пропали бы избыточные пары, и страница с отчётом показали бы пустую очередь.
+	// Оборот обязателен: этим же расчётом заменяется снапшот реестра — без
+	// оборота из него пропали бы избыточные пары, и страница с отчётом показала
+	// бы пустую очередь.
 	rates, err := uc.turnover.Averages(ctx, inputProductIDs(inputs))
 	if err != nil {
-		return fmt.Errorf("оборот товаров слота: %w", err)
+		return fmt.Errorf("оборот товаров плана дня: %w", err)
 	}
 	pairs := Evaluate(inputs, rates, day)
 
@@ -75,32 +109,240 @@ func (uc *UseCase) RunSlotPlan(ctx context.Context, now time.Time, capacity int)
 	if err != nil {
 		return err
 	}
-	slot := uc.pickSlot(pairs, prev, capacity)
+	plan := buildDayPlan(pairs, prev, capacity)
 
-	if err := uc.writeSlot(ctx, slot, now); err != nil {
+	// Применение плана: слот — ТГ-колонка, лишние — скидка сайта сразу.
+	writes := dayPlanWrites(plan)
+	if len(writes) > 0 {
+		if err := uc.writer.SetDiscounts(ctx, writes); err != nil {
+			return fmt.Errorf("план дня: %w", err)
+		}
+	}
+	applyWrites(pairs, writes)
+	// Уведомления: у лишних меняется скидка канала сайта — человеку надо её
+	// поставить. У слота меняется только ТГ-колонка, эффективная скидка сайта та
+	// же, поэтому изменений реестр не видит и уведомлений по ним нет.
+	uc.notifyChanges(ctx, uc.replaceRegistry(pairs, now))
+
+	if err := uc.writeSlot(ctx, plan.slot, now); err != nil {
 		return err
 	}
-	// Реестр отражает действующие значения канала сайта: слот их не меняет
-	// (ТГ-колонка — не значение для сайта), поэтому изменения пусты и
-	// уведомлений не будет. Вызов нужен, чтобы снапшот после сбора был свежим.
-	uc.replaceRegistry(pairs, now)
 
+	if err := uc.repo.MarkDayFlag(ctx, day, discounts.FlagExpiry); err != nil {
+		return fmt.Errorf("маркер дня пересчёта по сроку: %w", err)
+	}
 	if err := uc.repo.MarkDayFlag(ctx, day, discounts.FlagPlan); err != nil {
 		return err
 	}
-	if len(slot) == 0 {
+	if len(plan.slot) == 0 {
 		slog.Info("discounts: план ТГ-слота пуст — рассылка не отправлена")
-		return nil
 	}
 	return nil
 }
 
-// RunRaise — поднять скидку сайта до плана ТГ-слота (16:00): по позициям
-// сегодняшней ОТПРАВЛЕННОЙ рассылки general := max(текущее, план).
+// buildDayPlan — план дня из состояний пар: ручные скидки дня и сегодняшние
+// повышения по сроку в порядке приоритета отчёта (ручные → срок ↑) идут в слот
+// до заполнения ёмкости, не влезшие повышения — в лишние (скидка сайта сразу).
+// Недобранный слот добирается (см. pickFill).
+func buildDayPlan(pairs []PairState, prev map[discounts.LotKey]struct{}, capacity int) dayPlan {
+	manual := make([]slotPosition, 0, capacity)
+	raises := make([]slotPosition, 0, capacity)
+	for _, p := range pairs {
+		if !slotEligible(p, prev) {
+			continue
+		}
+		switch {
+		case p.Manual != nil && *p.Manual >= slotMainPercent:
+			// Ручная скидка дня: значение уже стоит на сайте, в рассылке — как
+			// приглашение продавать по ней.
+			manual = append(manual, slotPosition{
+				pair:    p,
+				percent: *p.Manual,
+				reason:  discounts.ReasonManual,
+			})
+		case p.Manual == nil && p.Expiry != nil && *p.Expiry > appliedTop(p):
+			// Повышение по сроку: сегодня сайт получит эту ступень — сразу, если
+			// позиция в ёмкость не влезла, и в 16:00, если попала в рассылку.
+			// Пары с ручной скидкой сюда не идут: значение менеджера важнее, и
+			// автоматика его не поднимает (ни в слот, ни в лишние).
+			raises = append(raises, slotPosition{
+				pair:          p,
+				percent:       *p.Expiry,
+				reason:        discounts.ReasonExpiry,
+				writeTelegram: true,
+			})
+		}
+	}
+	sortSlot(manual)
+	sortSlot(raises)
+
+	// Ручные скидки приоритетнее: они идут в слот первыми, лишние ручные просто
+	// не публикуем — их значение уже на сайте, терять нечего.
+	slot := manual
+	if capacity < len(slot) {
+		slot = slot[:capacity]
+	}
+	var extra []slotPosition
+	for _, r := range raises {
+		if len(slot) < capacity {
+			slot = append(slot, r)
+			continue
+		}
+		extra = append(extra, r)
+	}
+
+	fill := slotFill(capacity)
+	if len(slot) < fill {
+		slot = append(slot, pickFill(pairs, slot, prev, fill-len(slot))...)
+	}
+	return dayPlan{slot: slot, extra: extra}
+}
+
+// pickFill — добор недобранного слота: сначала ступени ровно 10 % по сроку (их
+// план — 20 %), затем пары избытка — по строкам раскладки объёма продаж.
+//
+// Каждая пара раскладки занимает своё место в ёмкости (решение владельца
+// 24.09.2026): из одного товара в рассылку попадают несколько сроков — и сколько
+// по каждому надо продать, чтобы коэффициент группы стал < 1. Скидка 20 % и
+// печать — только тем парам, которые в добор попали.
+func pickFill(pairs []PairState, slot []slotPosition, prev map[discounts.LotKey]struct{}, limit int) []slotPosition {
+	if limit <= 0 {
+		return nil
+	}
+	used := make(map[discounts.LotKey]struct{}, len(slot))
+	for _, s := range slot {
+		used[s.pair.Key] = struct{}{}
+	}
+
+	out := make([]slotPosition, 0, limit)
+	// 1) Ступень ровно 10 % по сроку: добор поднимает её до скидки дня.
+	base := make([]slotPosition, 0, limit)
+	for _, p := range pairs {
+		if _, ok := used[p.Key]; ok {
+			continue
+		}
+		if !slotEligible(p, prev) {
+			continue
+		}
+		if p.Manual != nil && *p.Manual > 0 {
+			continue
+		}
+		if p.Expiry == nil || *p.Expiry != slotBasePercent {
+			continue
+		}
+		base = append(base, slotPosition{
+			pair:          p,
+			percent:       slotMainPercent,
+			reason:        discounts.ReasonExpiry,
+			writeTelegram: true,
+		})
+	}
+	sortSlot(base)
+	if len(base) > limit {
+		base = base[:limit]
+	}
+	out = append(out, base...)
+	if len(out) >= limit {
+		return out
+	}
+
+	// 2) Избыток: пары раскладки объёма продаж (FIFO), каждая — своя позиция.
+	for _, sale := range surplusFills(pairs) {
+		if len(out) >= limit {
+			break
+		}
+		if _, ok := used[sale.pair.Key]; ok {
+			continue
+		}
+		if !slotEligible(sale.pair, prev) {
+			continue
+		}
+		if sale.pair.Manual != nil {
+			continue // ручная скидка важнее: движок такую пару избытком не трогает
+		}
+		initial := sale.pair.Qty
+		planQty := sale.qty
+		out = append(out, slotPosition{
+			pair:          sale.pair,
+			percent:       slotMainPercent,
+			reason:        discounts.ReasonSurplus,
+			initialQty:    &initial,
+			planQty:       &planQty,
+			writeTelegram: true,
+		})
+	}
+	return out
+}
+
+// surplusFill — пара раскладки добора: сколько её остатка надо продать.
+type surplusFill struct {
+	pair PairState
+	qty  int64
+}
+
+// surplusFills — позиции добора из избытка по всем товарам выборки: блоки пар
+// одного товара (Evaluate отдаёт их подряд, по возрастанию срока — FIFO) →
+// объём продаж группы и его раскладка по парам. Товары без избытка и группы с
+// нулевым объёмом раскладки не дают.
+func surplusFills(pairs []PairState) []surplusFill {
+	var out []surplusFill
+	for start := 0; start < len(pairs); {
+		end := start
+		for end < len(pairs) && pairs[end].ProductID == pairs[start].ProductID {
+			end++
+		}
+		block := pairs[start:end]
+		if _, sales := SurplusSalePlan(block); len(sales) > 0 {
+			byKey := make(map[discounts.LotKey]PairState, len(block))
+			for _, p := range block {
+				byKey[p.Key] = p
+			}
+			for _, sale := range sales {
+				p, ok := byKey[sale.Key]
+				if !ok {
+					continue
+				}
+				out = append(out, surplusFill{pair: p, qty: sale.Qty})
+			}
+		}
+		start = end
+	}
+	return out
+}
+
+// dayPlanWrites — правки плана дня: позициям слота — ТГ-колонка (сайт не
+// трогаем), лишним — скидка канала сайта сразу. Ручные скидки слотов не трогаем
+// вовсе: их значение уже на сайте.
+func dayPlanWrites(plan dayPlan) []discounts.DiscountWrite {
+	writes := make([]discounts.DiscountWrite, 0, len(plan.slot)+len(plan.extra))
+	for _, s := range plan.slot {
+		if !s.writeTelegram {
+			continue
+		}
+		if discountPercent(s.pair.TelegramPlain) == s.percent {
+			continue
+		}
+		percent := s.percent
+		w := writeFor(s.pair)
+		w.Telegram = &percent
+		writes = append(writes, w)
+	}
+	for _, s := range plan.extra {
+		percent := s.percent
+		w := writeFor(s.pair)
+		w.General = &percent
+		w.Source = s.reason
+		writes = append(writes, w)
+	}
+	return writes
+}
+
+// RunRaise — подъём скидки сайта по позициям сегодняшней ОТПРАВЛЕННОЙ рассылки
+// (16:00) — тем, что к этому часу ещё не проданы.
 //
 // Распроданные позиции пропускаем (поднимать нечего), ручные — не трогаем:
-// значение менеджера важнее плана. Текущее больше плана — тоже пропуск:
-// понижать автоматика не умеет.
+// значение менеджера важнее плана. Текущее больше цели — тоже пропуск: понижать
+// автоматика не умеет.
 func (uc *UseCase) RunRaise(ctx context.Context, now time.Time) error {
 	day := beginningOfDay(now)
 
@@ -146,10 +388,9 @@ func (uc *UseCase) RunRaise(ctx context.Context, now time.Time) error {
 		}
 	}
 
-	// Подъём меняет значение канала сайта — изменения отдаём уведомлениями
-	// (тот же путь, что у расчётного тика).
-	changes := uc.replaceRegistry(pairs, now)
-	uc.notifyChanges(ctx, changes)
+	// Подъём меняет значение канала сайта — изменения уходят уведомлениями в
+	// общий канал (тот же путь, что у расчётного тика).
+	uc.notifyChanges(ctx, uc.replaceRegistry(pairs, now))
 
 	if err := uc.repo.MarkDayFlag(ctx, day, discounts.FlagRaise); err != nil {
 		return err
@@ -158,31 +399,42 @@ func (uc *UseCase) RunRaise(ctx context.Context, now time.Time) error {
 	return nil
 }
 
-// raiseWrites — правки подъёма 16:00: по позициям плана слота поднимаем скидку
-// сайта до максимума плана и ТЕКУЩЕЙ ТГ-колонки (менеджер мог поднять её руками
-// после 14:00 — решение владельца 14.09: «до максимального ТГ, если руками»).
-// Ручная скидка важнее плана (в том числе 0 % — заморозка пары, решение
-// владельца, сентябрь 2026), понижений автоматика не делает. Пары правятся по
+// raiseWrites — правки подъёма 16:00: по непроданным позициям плана слота скидка
+// сайта поднимается до максимума плана и ТЕКУЩЕЙ ТГ-колонки (менеджер мог поднять
+// её руками после 14:00 — решения владельца 14.09 и 24.09.2026). Ручная скидка
+// важнее плана (в том числе 0 % — заморозка пары), понижений автоматика не делает.
+//
+// Что значит «не продано», решает контроль позиции (SlotItem): у добора из
+// избытка план продаж по паре — пара продана, если её остаток опустился до
+// initialQty−planQty или ниже; у сроковых позиций контроль проще — пара не должна
+// обнулиться, а распроданной пары в снапшоте остатков уже нет. Пары правятся по
 // индексу, а не по копии: в реестр должен уйти снапшот с поднятым значением —
 // иначе уведомление о подъёме не уйдёт, а на следующем часу придёт ложное
 // «поднять скидку» (расчёт перечитает БД и увидит рост).
-func raiseWrites(pairs []PairState, plan map[discounts.LotKey]int16) ([]discounts.LotKey, []discounts.DiscountWrite) {
+func raiseWrites(pairs []PairState, plan []discounts.SlotItem) ([]discounts.LotKey, []discounts.DiscountWrite) {
 	if len(plan) == 0 {
 		return nil, nil
 	}
+	byKey := make(map[discounts.LotKey]int, len(pairs))
+	for i := range pairs {
+		byKey[pairs[i].Key] = i
+	}
+
 	raised := make([]discounts.LotKey, 0, len(plan))
 	writes := make([]discounts.DiscountWrite, 0, len(plan))
-	for i := range pairs {
-		p := &pairs[i]
-		percent, ok := plan[p.Key]
+	for _, item := range plan {
+		idx, ok := byKey[item.LotKey]
 		if !ok {
-			continue
+			continue // пара распродана: остатка нет, поднимать нечего
 		}
-		raised = append(raised, p.Key)
+		p := &pairs[idx]
+		if soldOut(item, *p) {
+			continue // план продаж выполнен — скидка на сайте не нужна
+		}
 		if p.Manual != nil {
-			continue // ручная скидка на сайте важнее плана (в том числе 0 % — заморозка пары)
+			continue // ручная скидка на сайте важнее плана (в том числе 0 % — заморозка)
 		}
-		target := percent
+		target := item.Percent
 		if p.TelegramPlain != nil && *p.TelegramPlain > target {
 			target = *p.TelegramPlain
 		}
@@ -191,101 +443,47 @@ func raiseWrites(pairs []PairState, plan map[discounts.LotKey]int16) ([]discount
 		}
 		general := target
 		p.AppliedPlain = &general
-		p.SourceRaw = discounts.SourceExpiry.String()
+		p.SourceRaw = item.Reason
+		raised = append(raised, p.Key)
 		writes = append(writes, writeFor(*p))
 	}
 	return raised, writes
 }
 
-// pickSlot — выбор позиций плана: сначала скидка дня 20 % и выше (в порядке
-// приоритетов отчёта: ручные → по сроку), затем добор — позиции со ступенью
-// ровно 10 %, если слот наполнен меньше чем наполовину (их план — 20 %).
-func (uc *UseCase) pickSlot(pairs []PairState, prev map[discounts.LotKey]struct{}, capacity int) []slotPosition {
-	if capacity <= 0 {
-		return nil
+// soldOut — позиция добора уже отработана: её остаток опустился до контрольного
+// значения (initialQty−planQty) или ниже, значит запланированный объём продан и
+// поднимать скидку не за чем. У позиций без плана продаж (сроковые) контроля
+// здесь нет: их пары проверяются тем, что остались в снапшоте остатков.
+func soldOut(item discounts.SlotItem, p PairState) bool {
+	if item.InitialQty == nil || item.PlanQty == nil {
+		return false
 	}
-
-	slot := make([]slotPosition, 0, capacity)
-	for _, p := range pairs {
-		if !slotEligible(p, prev) {
-			continue
-		}
-		switch {
-		case p.Manual != nil && *p.Manual >= slotMainPercent:
-			slot = append(slot, slotPosition{pair: p, percent: *p.Manual})
-		case p.Expiry != nil && *p.Expiry >= slotMainPercent:
-			slot = append(slot, slotPosition{pair: p, percent: *p.Expiry, writeTelegram: true})
-		default:
-			// ступень ниже планки слота — в слот не берём
-		}
-	}
-	sortSlot(slot)
-	if len(slot) > capacity {
-		slot = slot[:capacity]
-	}
-
-	if len(slot)*2 >= capacity {
-		return slot
-	}
-	// Добор: ступень ровно 10 % — на сайте её поднимут до 20 %, поэтому в
-	// план позиция идёт с двадцатью (решение владельца, §13).
-	inSlot := make(map[discounts.LotKey]struct{}, len(slot))
-	for _, s := range slot {
-		inSlot[s.pair.Key] = struct{}{}
-	}
-	extra := make([]slotPosition, 0, capacity)
-	for _, p := range pairs {
-		if len(slot)+len(extra) >= capacity {
-			break
-		}
-		if _, ok := inSlot[p.Key]; ok {
-			continue
-		}
-		if !slotEligible(p, prev) {
-			continue
-		}
-		if p.Manual != nil && *p.Manual > 0 {
-			continue
-		}
-		if p.Expiry == nil || *p.Expiry != slotBasePercent {
-			continue
-		}
-		extra = append(extra, slotPosition{pair: p, percent: slotMainPercent, writeTelegram: true})
-	}
-	sortSlot(extra)
-
-	return append(slot, extra...)
+	return p.Qty <= *item.InitialQty-*item.PlanQty
 }
 
-// writeSlot — записать план в ТГ-колонку и отправить список в чат склада.
+// writeSlot — сохранить и отправить позиции ТГ-слота: строки плана в чат склада
+// и история рассылки (по ней же работает подъём 16:00 и антидубль следующей
+// рассылки). Пустой слот — молчание, сообщение «позиций нет» ничего не сообщает.
 func (uc *UseCase) writeSlot(ctx context.Context, slot []slotPosition, now time.Time) error {
 	if len(slot) == 0 {
 		return nil
 	}
 
-	writes := make([]discounts.DiscountWrite, 0, len(slot))
 	items := make([]discounts.DigestItem, 0, len(slot))
 	rows := make([]discounts.Row, 0, len(slot))
 	for _, s := range slot {
-		if s.writeTelegram && discountPercent(s.pair.TelegramPlain) != s.percent {
-			w := writeFor(s.pair)
-			w.Telegram = &s.percent
-			writes = append(writes, w)
-		}
 		items = append(items, discounts.DigestItem{
 			ProductID:  s.pair.ProductID,
 			BestBefore: s.pair.BestBefore,
 			Percent:    s.percent,
-			Reason:     slotReason(s),
+			Reason:     s.reason,
+			InitialQty: s.initialQty,
+			PlanQty:    s.planQty,
 		})
 		row := s.pair.Row()
 		row.Percent = s.percent
+		row.PlanQty = s.planQty
 		rows = append(rows, row)
-	}
-	if len(writes) > 0 {
-		if err := uc.writer.SetDiscounts(ctx, writes); err != nil {
-			return fmt.Errorf("план слота: %w", err)
-		}
 	}
 
 	record := discounts.DigestRecord{PlannedAt: beginningOfDay(now), ChatKind: discounts.ChatWarehouse}
@@ -293,11 +491,9 @@ func (uc *UseCase) writeSlot(ctx context.Context, slot []slotPosition, now time.
 		return err
 	}
 
-	// Текст — тем же строителем, что дайджест: секция «в скидках» — план слота
-	// (с процентом плана), вторая — «доступно для допродажи». Ёмкость — общая с
-	// дайджестом: план слота и так не длиннее её.
-	digest := discounts.BuildDigest(rows, uc.WindowCap())
-	digest.Date = now
+	// Строки слота печатаем как есть: в рассылке каждая пара раскладки избытка —
+	// своя строка со своим количеством, свёртка групп здесь не нужна.
+	digest := discounts.Digest{Date: now, Cap: uc.WindowCap(), Discounts: rows}
 	if text := digest.Text(); uc.warehouse != nil {
 		if err := uc.warehouse.NotifyWarehouse(text); err != nil {
 			return err
@@ -333,14 +529,6 @@ func slotEligible(p PairState, prev map[discounts.LotKey]struct{}) bool {
 		return false
 	}
 	return true
-}
-
-// slotReason — причина позиции для истории рассылки.
-func slotReason(s slotPosition) string {
-	if s.pair.Manual != nil && *s.pair.Manual > 0 && !s.writeTelegram {
-		return discounts.ReasonManual
-	}
-	return discounts.ReasonExpiry
 }
 
 // sortSlot — порядок плана: тот же порядок строк, что в отчёте (правило —

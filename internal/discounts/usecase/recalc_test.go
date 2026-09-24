@@ -58,8 +58,12 @@ func recalcNow(d int) time.Time { return day(d).Add(9 * time.Hour) }
 // fakeDiscountRepo — репозиторий расчёта в памяти: «таблица» product_stock
 // (её правит фейковый шов записи), маркеры дня и след вызовов.
 type fakeDiscountRepo struct {
-	inputs    []discounts.Input
-	flags     map[string]bool
+	inputs []discounts.Input
+	flags  map[string]bool
+	// plan — план дня (14:00), который отдаёт TodaySlot: скидка плана плюс
+	// контроль продаж у добора из избытка. Расчёт его не трогает, поэтому
+	// заполняют его тесты ТГ-дня (SaveDigest фейка ТГ-дня или явно).
+	plan      []discounts.SlotItem
 	loads     int
 	lastToday time.Time
 	loadErr   error
@@ -124,6 +128,12 @@ func (r *fakeDiscountRepo) MarkDayFlag(_ context.Context, date time.Time, f disc
 	return nil
 }
 
+// TodaySlot — план дня подъёма 16:00 (RunRaise): тест кладёт его сам либо его
+// сохраняет SaveDigest фейка ТГ-дня. Самому пересчёту он не нужен.
+func (r *fakeDiscountRepo) TodaySlot(context.Context, time.Time) ([]discounts.SlotItem, error) {
+	return r.plan, nil
+}
+
 // Остальные методы репозитория пересчёту не нужны: тест падает явной ошибкой,
 // а не молчаливым нулём, если расчёт в них полезет.
 func (r *fakeDiscountRepo) SaveDigest(context.Context, discounts.DigestRecord, []discounts.DigestItem) error {
@@ -135,10 +145,6 @@ func (r *fakeDiscountRepo) MarkDigestSent(context.Context, string, time.Time, ti
 }
 
 func (r *fakeDiscountRepo) LastDigestPairs(context.Context) (map[discounts.LotKey]struct{}, error) {
-	return nil, errRepoMethodUnused
-}
-
-func (r *fakeDiscountRepo) TodaySlot(context.Context, time.Time) (map[discounts.LotKey]int16, error) {
 	return nil, errRepoMethodUnused
 }
 
@@ -293,8 +299,10 @@ func sourceInput(s string) func(*discounts.Input) {
 	return func(in *discounts.Input) { in.DiscountSource = s }
 }
 
-// Пересмотр лестницы идёт только в КТ-дни (вт/чт/сб): вне окна шаг не трогает
-// ни записи, ни снапшот входа (одна и та же пара во все семь дней недели).
+// Пересмотр лестницы идёт только в КТ-дни (вт/чт/сб), и только в СУББОТУ утро
+// её применяет: вт/чт — ТГ-дни, там повышения дня применяет план 14:00, а утро
+// (RecalcExpiry) молчит целиком. Вне КТ-дней шаг не трогает ни записи, ни
+// снапшот входа (одна и та же пара во все семь дней недели).
 func TestRecalcExpiryOnlyOnExpiryDays(t *testing.T) {
 	tests := []struct {
 		title string
@@ -302,9 +310,9 @@ func TestRecalcExpiryOnlyOnExpiryDays(t *testing.T) {
 		want  bool
 	}{
 		{"понедельник", recalcNow(0), false},
-		{"вторник", recalcNow(1), true},
+		{"вторник (ТГ-день: применяет план 14:00)", recalcNow(1), false},
 		{"среда", recalcNow(2), false},
-		{"четверг", recalcNow(3), true},
+		{"четверг (ТГ-день: применяет план 14:00)", recalcNow(3), false},
 		{"пятница", recalcNow(4), false},
 		{"суббота", recalcNow(5), true},
 		{"воскресенье", recalcNow(6), false},
@@ -338,13 +346,43 @@ func TestRecalcExpiryOnlyOnExpiryDays(t *testing.T) {
 	}
 }
 
-// Вторник с ростом ступени: правка уходит в шов записи (general, метка
+// ТГ-день (вт/чт) утром — тишина: лестницу по сроку утро НЕ применяет (это
+// делает план дня в 14:00), FlagExpiry здесь тоже не ставится. Проверяем оба
+// ТГ-дня: пара со ступенью 40 % (она бы записалась в обычный КТ-день) не даёт
+// ни правок, ни чтения снапшота, ни маркера.
+func TestRecalcExpiryTelegramDayMorningIsQuiet(t *testing.T) {
+	for _, title := range []string{"вторник", "четверг"} {
+		t.Run(title, func(t *testing.T) {
+			now := recalcNow(1)
+			if title == "четверг" {
+				now = recalcNow(3)
+			}
+			h := newRecalcHarness(now, lotInput("p1", "Творог", day(9), 20, shelfLifeInput(30)))
+
+			if err := h.uc.RecalcExpiry(context.Background(), h.now); err != nil {
+				t.Fatalf("RecalcExpiry: %v", err)
+			}
+
+			if got := len(h.batches()); got != 0 {
+				t.Errorf("батчей правок %d, want 0: утром ТГ-дня лестницу применяет план 14:00", got)
+			}
+			if h.repo.loads != 0 {
+				t.Errorf("утром ТГ-дня снапшот не читаем, чтений %d", h.repo.loads)
+			}
+			if h.flag(h.now, discounts.FlagExpiry) {
+				t.Error("утром ТГ-дня маркер пересчёта по сроку не ставим: его ставит план дня")
+			}
+		})
+	}
+}
+
+// Суббота с ростом ступени: правка уходит в шов записи (general, метка
 // источника, сохранённое значение ТГ-колонки), день обнуляется до суток, а
 // реестр показывает новое значение.
 func TestRecalcExpiryWritesGrowth(t *testing.T) {
-	now := recalcNow(1)
+	now := recalcNow(5)
 	h := newRecalcHarness(now,
-		lotInput("p1", "Творог", day(5), 20,
+		lotInput("p1", "Творог", day(9), 20,
 			shelfLifeInput(30), telegramInput(15), sourceInput(discounts.SourceSurplus.String())))
 
 	if err := h.uc.RecalcExpiry(context.Background(), h.now); err != nil {
@@ -383,8 +421,8 @@ func TestRecalcExpiryWritesGrowth(t *testing.T) {
 // Повторный вызов в тот же день: маркер дня закрыт — снапшот не читается,
 // правок нет.
 func TestRecalcExpirySecondCallSameDay(t *testing.T) {
-	now := recalcNow(1)
-	h := newRecalcHarness(now, lotInput("p1", "Творог", day(5), 20, shelfLifeInput(30)))
+	now := recalcNow(5)
+	h := newRecalcHarness(now, lotInput("p1", "Творог", day(9), 20, shelfLifeInput(30)))
 
 	for i := range 2 {
 		if err := h.uc.RecalcExpiry(context.Background(), h.now); err != nil {
@@ -438,8 +476,9 @@ func TestRecalcExpiryKeepsHigherApplied(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.title, func(t *testing.T) {
 			opts := append([]func(*discounts.Input){shelfLifeInput(30)}, tt.opts...)
-			// Четверг, D = 5 дней → ступень 40 % (не зависит от недели теста).
-			h := newRecalcHarness(recalcNow(3), lotInput("p1", "Творог", day(8), 20, opts...))
+			// Суббота (единственный КТ-день, где утро применяет лестницу),
+			// D = 5 дней → ступень 40 %.
+			h := newRecalcHarness(recalcNow(5), lotInput("p1", "Творог", day(10), 20, opts...))
 
 			if err := h.uc.RecalcExpiry(context.Background(), h.now); err != nil {
 				t.Fatalf("RecalcExpiry: %v", err)
@@ -463,9 +502,9 @@ func TestRecalcExpiryKeepsHigherApplied(t *testing.T) {
 // Пары без ступени на сегодня (вне окна, срок не задан, партия просрочена) не
 // пишутся вовсе: 0 и NULL в колонки скидок не попадают.
 func TestRecalcExpiryNeverWritesOutsideWindow(t *testing.T) {
-	h := newRecalcHarness(recalcNow(3),
+	h := newRecalcHarness(recalcNow(5),
 		lotInput("p-out", "Молоко", day(100), 10, shelfLifeInput(30), plainInput(20)),
-		lotInput("p-noshelf", "Сыр", day(5), 10, plainInput(20)),
+		lotInput("p-noshelf", "Сыр", day(6), 10, plainInput(20)),
 		lotInput("p-expired", "Кефир", day(0), 10, shelfLifeInput(30)),
 	)
 
@@ -481,7 +520,7 @@ func TestRecalcExpiryNeverWritesOutsideWindow(t *testing.T) {
 // шаг дня без записи не закрывается (после сбоя пересчёт можно повторить).
 func TestRecalcExpiryErrors(t *testing.T) {
 	t.Run("снапшот", func(t *testing.T) {
-		h := newRecalcHarness(recalcNow(1), lotInput("p1", "Творог", day(5), 20, shelfLifeInput(30)))
+		h := newRecalcHarness(recalcNow(5), lotInput("p1", "Творог", day(9), 20, shelfLifeInput(30)))
 		h.repo.loadErr = errors.New("нет связи")
 
 		if err := h.uc.RecalcExpiry(context.Background(), h.now); err == nil {
@@ -489,7 +528,7 @@ func TestRecalcExpiryErrors(t *testing.T) {
 		}
 	})
 	t.Run("маркер дня на чтении", func(t *testing.T) {
-		h := newRecalcHarness(recalcNow(1), lotInput("p1", "Творог", day(5), 20, shelfLifeInput(30)))
+		h := newRecalcHarness(recalcNow(5), lotInput("p1", "Творог", day(9), 20, shelfLifeInput(30)))
 		h.repo.flagErr = errors.New("нет связи")
 
 		if err := h.uc.RecalcExpiry(context.Background(), h.now); err == nil {
@@ -500,7 +539,7 @@ func TestRecalcExpiryErrors(t *testing.T) {
 		}
 	})
 	t.Run("запись", func(t *testing.T) {
-		h := newRecalcHarness(recalcNow(1), lotInput("p1", "Творог", day(5), 20, shelfLifeInput(30)))
+		h := newRecalcHarness(recalcNow(5), lotInput("p1", "Творог", day(9), 20, shelfLifeInput(30)))
 		h.writer.err = errors.New("нет связи")
 
 		if err := h.uc.RecalcExpiry(context.Background(), h.now); err == nil {
@@ -511,7 +550,7 @@ func TestRecalcExpiryErrors(t *testing.T) {
 		}
 	})
 	t.Run("маркер дня на записи", func(t *testing.T) {
-		h := newRecalcHarness(recalcNow(1), lotInput("p1", "Творог", day(5), 20, shelfLifeInput(30)))
+		h := newRecalcHarness(recalcNow(5), lotInput("p1", "Творог", day(9), 20, shelfLifeInput(30)))
 		h.repo.markErr = errors.New("нет связи")
 
 		if err := h.uc.RecalcExpiry(context.Background(), h.now); err == nil {
@@ -523,8 +562,8 @@ func TestRecalcExpiryErrors(t *testing.T) {
 // Значение 0 в PLAIN-колонке читается как «скидки нет» (движок пишет NULL): нулевая
 // ступень ничего не пишет.
 func TestRecalcExpiryZeroDiscountIsNoDiscount(t *testing.T) {
-	h := newRecalcHarness(recalcNow(1),
-		lotInput("p1", "Творог", day(5), 20, shelfLifeInput(30), plainInput(0)),
+	h := newRecalcHarness(recalcNow(5),
+		lotInput("p1", "Творог", day(9), 20, shelfLifeInput(30), plainInput(0)),
 	)
 
 	if err := h.uc.RecalcExpiry(context.Background(), h.now); err != nil {
@@ -799,8 +838,8 @@ func TestRecalcSurplusErrors(t *testing.T) {
 // Изменение эффективной скидки уходит людям: рост ступени — «поставить X %»
 // в общий канал (уведомляем о том, что человеку надо сделать на сайте).
 func TestRecalcExpiryNotifiesGrowth(t *testing.T) {
-	h := newRecalcHarness(recalcNow(1),
-		lotInput("p1", "Творог", day(5), 20, shelfLifeInput(30), manualInput(30)))
+	h := newRecalcHarness(recalcNow(5),
+		lotInput("p1", "Творог", day(9), 20, shelfLifeInput(30), manualInput(30)))
 	ctx := context.Background()
 
 	// Первый пересчёт процесса только наполняет реестр — уведомлений он не даёт.
@@ -817,7 +856,7 @@ func TestRecalcExpiryNotifiesGrowth(t *testing.T) {
 	if err := h.uc.RecalcExpiry(ctx, h.now); err != nil {
 		t.Fatalf("RecalcExpiry: %v", err)
 	}
-	want := []string{"Творог (до 19.09): Необходимо поднять скидку до 40%"}
+	want := []string{"Творог (до 23.09): Необходимо поднять скидку до 40%"}
 	if !reflect.DeepEqual(h.common.texts, want) {
 		t.Errorf("уведомления %q, want %q", h.common.texts, want)
 	}
