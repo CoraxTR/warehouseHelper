@@ -171,6 +171,11 @@ linters:
             rules:
                 - name: unexported-return
                   disabled: true
+                # http к локальному хосту — намеренно: TLS-сертификата у
+                # приложения нет, ссылки открываются только внутри локальной
+                # сети (mDNS warehouse.local), правило про https неприменимо.
+                - name: unsecure-url-scheme
+                  disabled: true
                 - name: line-length-limit
                   disabled: true
                 - name: add-constant
