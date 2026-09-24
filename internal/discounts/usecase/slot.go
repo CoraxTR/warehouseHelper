@@ -124,7 +124,7 @@ func (uc *UseCase) RunSlotPlan(ctx context.Context, now time.Time, capacity int)
 	// же, поэтому изменений реестр не видит и уведомлений по ним нет.
 	uc.notifyChanges(ctx, uc.replaceRegistry(pairs, now))
 
-	if err := uc.writeSlot(ctx, plan.slot, now); err != nil {
+	if err := uc.writeSlot(ctx, pairs, plan, now); err != nil {
 		return err
 	}
 
@@ -464,17 +464,19 @@ func soldOut(item discounts.SlotItem, p PairState) bool {
 	return p.Qty <= *item.InitialQty-*item.PlanQty
 }
 
-// writeSlot — сохранить и отправить позиции ТГ-слота: строки плана в чат склада
-// и история рассылки (по ней же работает подъём 16:00 и антидубль следующей
-// рассылки). Пустой слот — молчание, сообщение «позиций нет» ничего не сообщает.
-func (uc *UseCase) writeSlot(ctx context.Context, slot []slotPosition, now time.Time) error {
-	if len(slot) == 0 {
+// writeSlot — сохранить план рассылки и отправить сообщение складу. История —
+// позиции плана (по ним работает подъём 16:00 и антидубль следующей рассылки);
+// текст сообщения — всё окно активных скидок с метками канала: склад должен
+// видеть, что уходит в канал ((ТГ)), а что просто стоит на сайте
+// ((Срок)/(Избыток)/(Ручная)) — решение владельца 24.09.2026. Пустой слот —
+// молчание, сообщение «позиций нет» ничего не сообщает.
+func (uc *UseCase) writeSlot(ctx context.Context, pairs []PairState, plan dayPlan, now time.Time) error {
+	if len(plan.slot) == 0 {
 		return nil
 	}
 
-	items := make([]discounts.DigestItem, 0, len(slot))
-	rows := make([]discounts.Row, 0, len(slot))
-	for _, s := range slot {
+	items := make([]discounts.DigestItem, 0, len(plan.slot))
+	for _, s := range plan.slot {
 		items = append(items, discounts.DigestItem{
 			ProductID:  s.pair.ProductID,
 			BestBefore: s.pair.BestBefore,
@@ -483,10 +485,6 @@ func (uc *UseCase) writeSlot(ctx context.Context, slot []slotPosition, now time.
 			InitialQty: s.initialQty,
 			PlanQty:    s.planQty,
 		})
-		row := s.pair.Row()
-		row.Percent = s.percent
-		row.PlanQty = s.planQty
-		rows = append(rows, row)
 	}
 
 	record := discounts.DigestRecord{PlannedAt: beginningOfDay(now), ChatKind: discounts.ChatWarehouse}
@@ -494,20 +492,51 @@ func (uc *UseCase) writeSlot(ctx context.Context, slot []slotPosition, now time.
 		return err
 	}
 
-	// Строки слота печатаем как есть: в рассылке каждая пара раскладки избытка —
-	// своя строка со своим количеством, свёртка групп здесь не нужна.
-	digest := discounts.Digest{Date: now, Cap: uc.WindowCap(), Discounts: rows}
-	if text := digest.Text(); uc.warehouse != nil {
+	digest := discounts.BuildDigest(uc.windowRows(pairs, plan.slot), uc.WindowCap())
+	digest.Date = now
+	text := digest.Text()
+	if uc.warehouse != nil {
 		if err := uc.warehouse.NotifyWarehouse(text); err != nil {
 			return err
 		}
 	} else {
-		slog.Info(fmt.Sprintf("discounts: план слота (канал склада не подключён): %s", digest.Text()))
+		slog.Info(fmt.Sprintf("discounts: план слота (канал склада не подключён): %s", text))
 	}
 
 	// Маркер отправки — только после успешной отправки: иначе подъём 16:00
 	// считал бы несобранную рассылку отправленной.
 	return uc.repo.MarkDigestSent(ctx, discounts.ChatWarehouse, beginningOfDay(now), now)
+}
+
+// windowRows — строки сообщения складу: активные пары окна (как в дайджесте), а
+// позициям плана дня подставляется скидка дня (у добора из избытка она выше
+// расчётной ступени) и план продаж; метка канала — по признаку записи в
+// ТГ-колонку (позиция плана, которой ТГ-колонку не пишут — ручная, — остаётся
+// со своим источником).
+func (uc *UseCase) windowRows(pairs []PairState, slot []slotPosition) []discounts.Row {
+	byKey := make(map[discounts.LotKey]slotPosition, len(slot))
+	for _, s := range slot {
+		byKey[s.pair.Key] = s
+	}
+
+	rows := make([]discounts.Row, 0, len(pairs))
+	for _, p := range pairs {
+		percent, _ := p.Desired()
+		if percent == nil || *percent <= 0 {
+			continue
+		}
+		row := p.Row()
+		if s, ok := byKey[p.Key]; ok {
+			row.Percent = s.percent
+			row.Telegram = row.Telegram || s.writeTelegram
+			if s.planQty != nil {
+				row.Qty = *s.planQty
+			}
+		}
+		rows = append(rows, row)
+	}
+
+	return rows
 }
 
 // replaceRegistry — положить в реестр свежий снапшот и вернуть изменения

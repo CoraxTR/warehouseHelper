@@ -19,20 +19,27 @@ import (
 // BuildDigest у строки-группы — это перечисление сроков группы; у обычной строки
 // дата одна (BestBefore).
 //
-// PlanQty — план продаж по паре (шт): сколько её остатка надо продать, чтобы
-// коэффициент группы стал < 1. Заполняют только строки ТГ-слота, добранные из
-// избытка (решение владельца 24.09.2026); в отчёте и дайджесте — nil.
+// Telegram — скидка действует из ТГ-колонки: её значение строго выше
+// эффективной скидки сайта (сайт ещё не догнал — подписчики видят больше).
+// Как только подъём (16:00) доведёт general до плана, флаг снимается сам, и
+// строка печатается своим источником ((Срок)/(Избыток)/(Ручная)) — решение
+// владельца 24.09.2026.
+//
+// Qty — количество, которое попало в скидку (шт): у ручных и сроковых пар —
+// остаток пары, у избыточных — план продаж по паре (сколько надо продать).
+// 0 — печатать количество нечем (избыточная пара вне раскладки).
 type Row struct {
 	ProductID    string
 	Name         string
 	BestBefore   time.Time
 	Percent      int16
 	Source       Source
+	Telegram     bool
 	Coeff        float64
 	DaysLeft     int
 	SurplusGroup bool
 	Dates        []time.Time
-	PlanQty      *int64
+	Qty          int64
 }
 
 // Digest — собранный отчёт по скидкам: активные позиции и «доступно для
@@ -167,6 +174,9 @@ func mergeGroups(rows []Row) []Row {
 // (им избыток и меряется).
 func mergeIntoGroup(g *Row, r Row) {
 	g.Dates = append(g.Dates, r.BestBefore)
+	// Количество строки-группы — её план продаж целиком: сумма планов пар
+	// (сколько надо продать, чтобы коэффициент группы стал < 1).
+	g.Qty += r.Qty
 	if r.BestBefore.Before(g.BestBefore) {
 		g.BestBefore = r.BestBefore
 		g.DaysLeft = r.DaysLeft
@@ -183,9 +193,10 @@ func mergeIntoGroup(g *Row, r Row) {
 // Формат фиксирован golden-тестом: заголовок «Дайджест по скидкам · дата»,
 // затем секции через пустую строку. Пустая секция печатается одной строкой
 // («Позиции в скидках: нет» / «Доступно для допродажи: нет») — без заголовка
-// списка. Числа: сроки — 02.01 (у группы перечисление), процент — «30%»,
-// коэффициент — один знак, запятая; план продаж (у добора из избытка) —
-// «— 20 шт» перед скобкой со сроком.
+// списка. Строка позиции: «1. (ТГ) Название (9 шт до 22.11) — 30% (коэф 1,1)».
+// Метка канала — (ТГ)/(Срок)/(Избыток)/(Ручная); количество печатается, когда
+// известно (нет — скобка идёт сразу со сроком). Числа: сроки — 02.01 (у группы
+// перечисление), процент — «30%», коэффициент — один знак, запятая.
 func (d Digest) Text() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Дайджест по скидкам · %s\n\n", d.Date.Format("02.01.2006"))
@@ -195,7 +206,7 @@ func (d Digest) Text() string {
 	} else {
 		b.WriteString("Позиции в скидках:\n")
 		for i, r := range d.Discounts {
-			fmt.Fprintf(&b, "%d. %s%s (%s) — %d%%%s\n", i+1, r.Name, qtyText(r), DatesText(r), r.Percent, coeffText(r))
+			b.WriteString(rowLine(i+1, r))
 		}
 	}
 	b.WriteString("\n")
@@ -205,19 +216,38 @@ func (d Digest) Text() string {
 	} else {
 		fmt.Fprintf(&b, "Доступно для допродажи (сверх %d активных):\n", d.Cap)
 		for i, r := range d.Surplus {
-			fmt.Fprintf(&b, "%d. %s%s (%s) — %d%%%s\n", i+1, r.Name, qtyText(r), DatesText(r), r.Percent, coeffText(r))
+			b.WriteString(rowLine(i+1, r))
 		}
 	}
 	return b.String()
 }
 
-// qtyText — хвост строки с планом продаж: его печатают только позиции добора из
-// избытка («— 20 шт»), у остальных строк плана нет.
-func qtyText(r Row) string {
-	if r.PlanQty == nil {
-		return ""
+// rowLine — строка позиции отчёта: номер, метка канала, название, количество и
+// срок в скобках, скидка, у избытка — коэффициент.
+func rowLine(n int, r Row) string {
+	qty := ""
+	if r.Qty > 0 {
+		qty = fmt.Sprintf("%d шт ", r.Qty)
 	}
-	return fmt.Sprintf(" — %d шт", *r.PlanQty)
+	return fmt.Sprintf("%d. (%s) %s (%s%s) — %d%%%s\n",
+		n, channelLabel(r), r.Name, qty, DatesText(r), r.Percent, coeffText(r))
+}
+
+// channelLabel — метка канала/источника строки: (ТГ) — скидка живёт в
+// ТГ-колонке (сайт ещё не догнал), иначе источник скидки сайта.
+func channelLabel(r Row) string {
+	if r.Telegram {
+		return "ТГ"
+	}
+	switch r.Source {
+	case SourceExpiry:
+		return "Срок"
+	case SourceSurplus:
+		return "Избыток"
+	case SourceManual:
+		return "Ручная"
+	}
+	return ""
 }
 
 // DatesText — сроки строки для печати: у группы избытка перечисление

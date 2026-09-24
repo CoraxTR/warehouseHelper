@@ -379,11 +379,11 @@ func TestRunSlotPlanDoborFromSurplusSalesPlan(t *testing.T) {
 		t.Fatalf("сообщения в чат склада: %q, want одно", h.chat.texts)
 	}
 	text := h.chat.texts[0]
-	if !strings.Contains(text, "1. Колбаса (до 23.09) — 20%") {
-		t.Errorf("строка сроковой позиции без количества: %q", text)
+	if !strings.Contains(text, "1. (ТГ) Колбаса (100 шт до 23.09) — 20%") {
+		t.Errorf("строка сроковой позиции плана: %q", text)
 	}
-	if !strings.Contains(text, "2. Сыр — 51 шт (до 25.09) — 20% (коэф 2,0)") {
-		t.Errorf("строка добора из избытка с количеством: %q", text)
+	if !strings.Contains(text, "2. (ТГ) Сыр (51 шт до 25.09) — 20% (коэф 2,0)") {
+		t.Errorf("строка добора из избытка с планом продаж: %q", text)
 	}
 }
 
@@ -437,8 +437,18 @@ func TestRunSlotPlanAppliesExtraImmediately(t *testing.T) {
 	if !reflect.DeepEqual(h.common.texts, want) {
 		t.Errorf("уведомления %q, want %q", h.common.texts, want)
 	}
-	if len(h.chat.texts) != 1 || !strings.Contains(h.chat.texts[0], "Колбаса") || strings.Contains(h.chat.texts[0], "Сыр") {
-		t.Errorf("сообщение в чат склада: %q, want только позиция слота", h.chat.texts)
+	// Сообщение складу — всё окно скидок с метками канала: позиция плана уходит
+	// в ТГ-колонку (метка (ТГ)), лишняя остаётся скидкой сайта (свой источник).
+	// Склад по метке видит, что рассылать, а что просто стоит на сайте.
+	if len(h.chat.texts) != 1 {
+		t.Fatalf("сообщения в чат склада: %q, want одно", h.chat.texts)
+	}
+	text := h.chat.texts[0]
+	if !strings.Contains(text, "1. (ТГ) Колбаса (100 шт до 19.09) — 40%") {
+		t.Errorf("строка плана с меткой ТГ: %q", text)
+	}
+	if !strings.Contains(text, "2. (Срок) Сыр (50 шт до 23.09) — 20%") {
+		t.Errorf("строка лишней позиции с меткой источника: %q", text)
 	}
 }
 
