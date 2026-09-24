@@ -147,6 +147,9 @@ func (msac *MSAPIClient) FetchOrderByID(parentctx context.Context, id string) (o
 		if err := json.Unmarshal(body, &msOrder); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal order: %w", err)
 		}
+		// StateID — производное поле модели: id статуса достаёт клиент, между
+		// слоями ходит id, не href (msorders гейтит смену статуса по текущему).
+		msOrder.StateID = hrefID(msOrder.State.Meta.HREF)
 
 		return &orderFetch{order: &msOrder, raw: json.RawMessage(body)}, nil
 	}

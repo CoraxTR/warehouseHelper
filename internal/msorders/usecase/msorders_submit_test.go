@@ -41,6 +41,10 @@ func submitCatalog() *fakeCatalog {
 // submitOrder — заказ с двумя активными позициями (штучная + весовая).
 func submitOrder() (*fakeOrderDetail, *client.MSOrder) {
 	o := detailOrder()
+	// Заказ в статусе «Получен»: смена статуса на «Вес подобран» разрешена
+	// только из него (решение владельца 24.09.2026), поэтому в фикстуре это
+	// норма — тесты других статусов задают StateID явно.
+	o.StateID = stateIDReceived
 	o.MSPositions = client.MSPositions{
 		Meta: client.MSMeta{HREF: "https://api.moysklad.ru/api/remap/1.2/entity/customerorder/" + o.ID + "/positions"},
 	}
