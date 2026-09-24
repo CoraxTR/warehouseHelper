@@ -361,40 +361,52 @@ func TestDayFlagColumn(t *testing.T) {
 	}
 }
 
-// TestCollectTodaySlot — карта слота дня «лот → скидка плана»: пустой день даёт
-// пустую (не nil) карту, короткая строка и ошибка выборки не молчат.
+// TestCollectTodaySlot — срез слота дня «позиция плана»: порядок строк выборки
+// сохраняется, пустой день даёт пустой (не nil) срез, короткая строка и ошибка
+// выборки не молчат. Контроль вечернего подъёма: у сроковой позиции план продаж
+// не считается — initial_qty/plan_qty NULL (nil), у добора из избытка оба поля
+// заполнены. NULL подделка обязана отклонять (см. TestScanValueNullStrict):
+// мягкое «NULL → 0» показало бы непроданную пару проданной (остаток 0 дошёл до
+// InitialQty−PlanQty).
 func TestCollectTodaySlot(t *testing.T) {
 	october := time.Date(2026, time.October, 1, 0, 0, 0, 0, time.UTC)
 	november := time.Date(2026, time.November, 15, 0, 0, 0, 0, time.UTC)
 
-	t.Run("позиции слота", func(t *testing.T) {
+	t.Run("позиции слота: сроковая с NULL и добор из избытка", func(t *testing.T) {
 		rows := &fakeRows{rows: [][]any{
-			{testLotMilk, october, int16(10)},
-			{testLotCheese, november, int16(20)},
+			{testLotMilk, october, int16(20), discounts.ReasonExpiry, nil, nil},
+			{testLotCheese, november, int16(10), discounts.ReasonSurplus, int64(24), int64(6)},
 		}}
 		got, err := collectTodaySlot(rows)
 		if err != nil {
 			t.Fatalf("collectTodaySlot: %v", err)
 		}
-		want := map[discounts.LotKey]int16{
-			{ProductID: testLotMilk, BestBefore: october}:    10,
-			{ProductID: testLotCheese, BestBefore: november}: 20,
+		want := []discounts.SlotItem{
+			{
+				LotKey:  discounts.LotKey{ProductID: testLotMilk, BestBefore: october},
+				Percent: 20, Reason: discounts.ReasonExpiry,
+			},
+			{
+				LotKey:  discounts.LotKey{ProductID: testLotCheese, BestBefore: november},
+				Percent: 10, Reason: discounts.ReasonSurplus,
+				InitialQty: new(int64(24)), PlanQty: new(int64(6)),
+			},
 		}
 		if !reflect.DeepEqual(got, want) {
-			t.Errorf("collectTodaySlot = %v, want %v", got, want)
+			t.Errorf("collectTodaySlot = %+v, want %+v", got, want)
 		}
 	})
 
-	t.Run("дня без публикации — пустая карта", func(t *testing.T) {
+	t.Run("дня без публикации — пустой срез", func(t *testing.T) {
 		got, err := collectTodaySlot(&fakeRows{})
 		if err != nil {
 			t.Fatalf("collectTodaySlot: %v", err)
 		}
 		if got == nil {
-			t.Fatal("карта nil, want пустую")
+			t.Fatal("срез nil, want пустой")
 		}
 		if len(got) != 0 {
-			t.Errorf("в карте %d лотов, want 0", len(got))
+			t.Errorf("в срезе %d позиций, want 0", len(got))
 		}
 	})
 
@@ -405,23 +417,73 @@ func TestCollectTodaySlot(t *testing.T) {
 	})
 
 	t.Run("ошибка выборки после строк", func(t *testing.T) {
-		rows := &fakeRows{rows: [][]any{{testLotMilk, october, int16(10)}}, err: errors.New("обрыв связи")}
+		rows := &fakeRows{
+			rows: [][]any{{testLotMilk, october, int16(20), discounts.ReasonExpiry, nil, nil}},
+			err:  errors.New("обрыв связи"),
+		}
 		if _, err := collectTodaySlot(rows); !errors.Is(err, rows.err) {
 			t.Fatalf("collectTodaySlot: %v, want обёртку ошибки выборки", err)
 		}
 	})
 }
 
+// TestScanTodaySlotItem — разбор строки слота: NULL в nullable-колонках контроля
+// (initial_qty/plan_qty) даёт nil, а не ноль. Ноль означал бы другое состояние:
+// «остаток пары 0 / план продаж 0» вместо «план продаж не считался».
+func TestScanTodaySlotItem(t *testing.T) {
+	october := time.Date(2026, time.October, 1, 0, 0, 0, 0, time.UTC)
+
+	got, err := scanTodaySlotItem(fakeRow{vals: []any{
+		testLotMilk, october, int16(30), discounts.ReasonManual, nil, nil,
+	}})
+	if err != nil {
+		t.Fatalf("scanTodaySlotItem: %v", err)
+	}
+	want := discounts.SlotItem{
+		LotKey:  discounts.LotKey{ProductID: testLotMilk, BestBefore: october},
+		Percent: 30, Reason: discounts.ReasonManual,
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("scanTodaySlotItem = %+v, want %+v", got, want)
+	}
+}
+
+// TestTodaySlotColumnCount — список колонок слота в константе и порядок Scan в
+// scanTodaySlotItem обязаны совпадать: арность сверяется, чтобы рассинхрон
+// (AGENTS.md) не молчал.
+func TestTodaySlotColumnCount(t *testing.T) {
+	row := &captureRow{}
+	if _, err := scanTodaySlotItem(row); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("scanTodaySlotItem: %v, want обёртку pgx.ErrNoRows", err)
+	}
+
+	want := countColumns(todaySlotColumns)
+	if row.dests != want {
+		t.Errorf("scan-хелпер разбирает %d колонок, в списке — %d", row.dests, want)
+	}
+	// 6 колонок: лот (2), скидка плана и её причина (2), контроль вечернего
+	// подъёма (2): остаток пары на 14:00 и план продаж добора из избытка.
+	if want != 6 {
+		t.Errorf("в списке колонок %d, want 6", want)
+	}
+}
+
 // TestTodaySlotSQL — слотом дня считаем последний ОТПРАВЛЕННЫЙ слот этого дня
 // (план 14:00 идёт после дайджеста 09:00): по нему держат эскалацию 10→20 и по
 // нему же поднимают general в 16:00. Отправленный слот важен — собранную, но не
-// отправленную рассылку человек не видел.
+// отправленную рассылку человек не видел. Выборка обязана нести и контроль
+// вечернего подъёма: без initial_qty/plan_qty подъём 16:00 не знает, продана ли
+// пара.
 func TestTodaySlotSQL(t *testing.T) {
 	for _, want := range []string{
 		"sent_at IS NOT NULL",
 		"planned_at = $1::date",
 		"ORDER BY id DESC",
 		"LIMIT 1",
+		todaySlotColumns,
+		"i.initial_qty",
+		"i.plan_qty",
+		"i.reason",
 	} {
 		if !strings.Contains(todaySlotSQL, want) {
 			t.Errorf("в todaySlotSQL нет %q", want)

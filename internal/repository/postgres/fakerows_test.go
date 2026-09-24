@@ -158,8 +158,10 @@ func TestScanValueNullStrict(t *testing.T) {
 	var (
 		plain  string
 		num    int16
+		num64  int64
 		optStr *string
 		optNum *int16
+		qty    *int64
 		viaSQL sql.NullString
 	)
 
@@ -169,16 +171,25 @@ func TestScanValueNullStrict(t *testing.T) {
 	if err := scanValue(&num, nil); err == nil {
 		t.Error("NULL в int16: ошибки нет, а pgx здесь падает")
 	}
+	// int64 — контроль вечернего подъёма слота (initial_qty/plan_qty): NULL там
+	// значит «план продаж не считался», и мягкое «NULL → 0» показало бы
+	// непроданную пару проданной.
+	if err := scanValue(&num64, nil); err == nil {
+		t.Error("NULL в int64: ошибки нет, а pgx здесь падает")
+	}
 	if err := scanValue(&optStr, nil); err != nil {
 		t.Errorf("NULL в *string: %v", err)
 	}
 	if err := scanValue(&optNum, nil); err != nil {
 		t.Errorf("NULL в *int16: %v", err)
 	}
+	if err := scanValue(&qty, nil); err != nil {
+		t.Errorf("NULL в *int64: %v", err)
+	}
 	if err := scanValue(&viaSQL, nil); err != nil {
 		t.Errorf("NULL в sql.NullString: %v", err)
 	}
-	if optStr != nil || optNum != nil {
-		t.Errorf("NULL под *T должен давать nil, получили %v / %v", optStr, optNum)
+	if optStr != nil || optNum != nil || qty != nil {
+		t.Errorf("NULL под *T должен давать nil, получили %v / %v / %v", optStr, optNum, qty)
 	}
 }
