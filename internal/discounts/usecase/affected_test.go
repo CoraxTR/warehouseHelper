@@ -76,6 +76,40 @@ func TestRecalcAffectedStockEventReturnsExpiryOutOfExpiryDay(t *testing.T) {
 	}
 }
 
+// Подбор заказа в ТГ-день (вт/чт): списание остатка — тоже событие стока, но
+// поднимать скидку сайта раньше рассылки оно не имеет права. Ступень по сроку
+// в ТГ-дни двигают план дня (14:00) и подъём (16:00), до них действуют старые
+// значения (правило владельца 24.09.2026): иначе подписчик увидел бы в рассылке
+// то, что сайт уже отдал покупателю.
+func TestRecalcAffectedTelegramDayKeepsExpiryStill(t *testing.T) {
+	now := day(1).Add(8 * time.Hour) // вторник, 08:00 — ТГ-день
+	if !isTelegramDay(now) {
+		t.Fatalf("тест требует ТГ-день, а %s — не он", now.Weekday())
+	}
+	h := newRecalcHarness(now,
+		lotInput("p-affected", "Творог", day(5), 20, shelfLifeInput(30)), // D = 5 → ступень 40
+	)
+	ctx := context.Background()
+
+	// Наполняем реестр (первый снапшот процесса уведомлений не даёт): до события
+	// скидок у пары нет.
+	if err := h.uc.RecalcSurplus(ctx, now); err != nil {
+		t.Fatalf("RecalcSurplus (наполнение): %v", err)
+	}
+	h.common.texts, h.common.tries = nil, nil
+
+	// Событие стока: подбор заказа списал часть остатка пары.
+	h.uc.MarkDirty("p-affected")
+	h.uc.runSteps(ctx, affectedSchedule())
+
+	if got := h.batches(); len(got) != 0 {
+		t.Errorf("батчи записи: %+v, want ни одного: в ТГ-день ступень по сроку двигает план дня, а не событие стока", got)
+	}
+	if len(h.common.texts) != 0 {
+		t.Errorf("уведомления %q, want тишину: до подъёма скидка сайта не меняется", h.common.texts)
+	}
+}
+
 // Тот же проход, но лот товара без событий: его ступень НЕ пишется — правило
 // «вне КТ-дней лестница не пересматривается» осталось для остального окна,
 // исключение — только помеченные товары.

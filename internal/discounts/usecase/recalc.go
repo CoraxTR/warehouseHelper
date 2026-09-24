@@ -184,8 +184,15 @@ func (uc *UseCase) RecalcAffected(ctx context.Context, now time.Time, productIDs
 	}
 
 	writes := surplusWrites(pairs)
-	// Ступень по сроку — только у затронутых товаров (см. комментарий выше).
-	writes = append(writes, writesForProducts(expiryWrites(pairs), affected)...)
+	// Ступень по сроку — только у затронутых товаров (см. комментарий выше) и
+	// только вне ТГ-дня: в ТГ-дни (вт/чт) ступень двигают план дня (14:00) и
+	// подъём (16:00). Иначе событие стока — в том числе подбор заказа, который
+	// списывает остаток пары, — подняло бы скидку сайта раньше рассылки, и
+	// подписчики увидели бы не то, о чём договорились (правило владельца
+	// 24.09.2026: до подъёма действуют старые значения).
+	if !isTelegramDay(now) {
+		writes = append(writes, writesForProducts(expiryWrites(pairs), affected)...)
+	}
 	// Снятие по запрету менеджера — тоже только по товару события: ручную 0
 	// ставят через страницу «Сроки», а её запись дёргает пересчёт товара.
 	writes = append(writes, writesForProducts(banWrites(pairs), affected)...)
