@@ -174,7 +174,10 @@ func productHREF(p map[string]any) string {
 	if !ok {
 		return ""
 	}
-	href, _ := meta["href"].(string)
+	href, ok := meta["href"].(string)
+	if !ok {
+		return ""
+	}
 	return href
 }
 
@@ -220,33 +223,40 @@ func TestClearOrderReserves(t *testing.T) {
 	if body.State != nil {
 		t.Errorf("PUT перенёс state из эха GET: %v, want отсутствие", body.State)
 	}
-	if len(body.Positions) != 3 {
-		t.Fatalf("positions = %d строк, want 3", len(body.Positions))
-	}
+	checkPutPositions(t, body.Positions)
+}
 
-	wantIDs := []string{"pos-1", "pos-2", "pos-3"}
+// checkPutPositions сверяет строки тела PUT: reserve обнулён у всех, id и порядок
+// строк — как пришли из .../positions, остальные поля строк не тронуты. PUT
+// заменяет раздел целиком, поэтому проверяются ЗНАЧЕНИЯ, а не наличие полей.
+func checkPutPositions(t *testing.T, got []map[string]any) {
+	t.Helper()
+
 	// Ожидаемые значения — из positionsRowsTest: менять вместе с фикстурой.
+	wantIDs := []string{"pos-1", "pos-2", "pos-3"}
 	wantQty := []float64{0.657, 2, 0.5}
 	wantPrice := []float64{1000, 500, 2000}
 	wantProduct := []string{"a02a", "d00d", "b00b"}
-	for i, p := range body.Positions {
-		if got, ok := p["reserve"].(float64); !ok || got != 0 {
+
+	if len(got) != len(wantIDs) {
+		t.Fatalf("positions = %d строк, want %d", len(got), len(wantIDs))
+	}
+
+	for i, p := range got {
+		if reserve, ok := p["reserve"].(float64); !ok || reserve != 0 {
 			t.Errorf("position %d: reserve = %v, want 0", i, p["reserve"])
 		}
 		if p["id"] != wantIDs[i] {
 			t.Errorf("position %d: id = %v, want %s (порядок строк из .../positions)", i, p["id"], wantIDs[i])
 		}
-		// Значения строк сверяются, а не только их наличие: PUT перетирает
-		// раздел positions целиком, и испорченная quantity/чужой assortment
-		// прошли бы проверку «поле есть».
-		if got, ok := p["quantity"].(float64); !ok || got != wantQty[i] {
+		if qty, ok := p["quantity"].(float64); !ok || qty != wantQty[i] {
 			t.Errorf("position %d: quantity = %v, want %v", i, p["quantity"], wantQty[i])
 		}
-		if got, ok := p["price"].(float64); !ok || got != wantPrice[i] {
+		if price, ok := p["price"].(float64); !ok || price != wantPrice[i] {
 			t.Errorf("position %d: price = %v, want %v", i, p["price"], wantPrice[i])
 		}
-		if got := productHREF(p); !strings.HasSuffix(got, "/"+wantProduct[i]) {
-			t.Errorf("position %d: assortment = %q, want товар %s", i, got, wantProduct[i])
+		if href := productHREF(p); !strings.HasSuffix(href, "/"+wantProduct[i]) {
+			t.Errorf("position %d: assortment = %q, want товар %s", i, href, wantProduct[i])
 		}
 	}
 }
