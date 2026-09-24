@@ -69,6 +69,15 @@ type Notifier interface {
 	NotifyWarehouse(text string) error
 }
 
+// ShelfLife — шов журнала подбора заказов (модуль msorders): при
+// расформировании даты подобранных единиц снимаются — заказ отменён целиком
+// (productIDs пусто) или из заказа убраны позиции (передаются uuid товаров
+// удалённых позиций: id самих позиций в событии аудита нет). Реализует
+// *msorders.UseCase (см. app/di.go).
+type ShelfLife interface {
+	ClearShelfLife(ctx context.Context, orderID string, productIDs []string) error
+}
+
 // Config — параметры модуля (собираются в di.go из конфига приложения).
 type Config struct {
 	CancelledStateID string        // id статуса «Отменён»; пусто — отмена не детектится (warn при старте)
@@ -93,6 +102,10 @@ type UseCase struct {
 	stock   Stock
 	notify  Notifier
 	orders  Orders
+	// shelfLife — шов журнала подбора (модуль msorders): расформирование
+	// снимает даты подобранных единиц. Ставится сеттером при сборке (di.go);
+	// без шва расформирование работает как раньше.
+	shelfLife ShelfLife
 }
 
 func NewUseCase(cfg Config, audit AuditAPI, repo Repo, catalog Catalog, stock Stock, notify Notifier, orders Orders) *UseCase {
@@ -100,6 +113,13 @@ func NewUseCase(cfg Config, audit AuditAPI, repo Repo, catalog Catalog, stock St
 		cfg.PollInterval = time.Minute
 	}
 	return &UseCase{cfg: cfg, audit: audit, repo: repo, catalog: catalog, stock: stock, notify: notify, orders: orders}
+}
+
+// SetShelfLife — шов журнала подбора заказов (таблица order_picking модуля
+// msorders). Ставится при сборке (di.go) до запуска поллера и обработки
+// страницы возврата.
+func (uc *UseCase) SetShelfLife(s ShelfLife) {
+	uc.shelfLife = s
 }
 
 // Run — поллер аудита. Каждый тик: опрос журнала с курсора (return_cursor),

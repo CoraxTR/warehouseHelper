@@ -101,18 +101,24 @@ type SubmitRow struct {
 	Records []ScanRecord `json:"records"`
 }
 
-// ScanRecord — один засчитанный скан: вес в граммах (0 у штучных) и срок
-// годности ДДММГГГГ (сырой срез кода, клиент не парсит дату).
+// ScanRecord — один засчитанный скан: вес в граммах (0 у штучных), дата
+// выработки и срок годности ДДММГГГГ (сырые срезы кода ЧЗ, даты клиент не
+// парсит). PD пустая — выработку клиент не прислал (старая версия страницы):
+// дата выработки считается неизвестной.
 type ScanRecord struct {
 	WeightG int    `json:"w"`
+	PD      string `json:"pd"`
 	BB      string `json:"bb"`
 }
 
 // SubmitResult — итог отправки. StockWarn заполняется, когда заказ в МС
 // обновлён (200), но списание сроков не прошло: повторный submit невозможен
-// (заказ уже переведён), остатки списываются вручную.
+// (заказ уже переведён), остатки списываются вручную. JournalWarn — тот же
+// случай для журнала сроков: заказ обновлён, а даты выработки и срока годности
+// подобранных единиц не записались, позиции нужно пересчитать вручную.
 type SubmitResult struct {
-	StockWarn string `json:"stock_warn,omitempty"`
+	StockWarn   string `json:"stock_warn,omitempty"`
+	JournalWarn string `json:"journal_warn,omitempty"`
 }
 
 // submitEntry — сырьё одного заказа, прочитанное на Submit: тело GET заказа
@@ -176,6 +182,9 @@ func (uc *UseCase) Submit(ctx context.Context, id string, req SubmitRequest) (Su
 	}
 
 	res := SubmitResult{}
+	// Журнал сроков — до шва остатков: даты подобранных единиц не зависят от
+	// того, прошло ли списание (заказ в МС уже обновлён).
+	res.JournalWarn = uc.writeSubmitJournal(ctx, id, req, records, entry)
 	if uc.picker == nil {
 		// Без шва (не подключён) заказ уже обновлён — остатки не списаны.
 		slog.Error(fmt.Sprintf("msorders: stock picker not wired for order %s", id))
@@ -231,7 +240,7 @@ func validateSubmit(req SubmitRequest) (map[int][]parsedScan, error) {
 			if rec.WeightG < 0 || rec.WeightG > maxScanWeightG {
 				return nil, fmt.Errorf("строка %d: %w: %d", i+1, ErrSubmitBadWeight, rec.WeightG)
 			}
-			parsed = append(parsed, parsedScan{weightG: rec.WeightG, bb: bb})
+			parsed = append(parsed, parsedScan{weightG: rec.WeightG, pd: parsePD(rec.PD), bb: bb})
 		}
 		records[i] = parsed
 	}
@@ -239,9 +248,11 @@ func validateSubmit(req SubmitRequest) (map[int][]parsedScan, error) {
 	return records, nil
 }
 
-// parsedScan — разобранная запись скана (вес г + срок UTC-полночь).
+// parsedScan — разобранная запись скана: вес в граммах, дата выработки и срок
+// годности в UTC-полночь (nil у выработки — не прислали или не разобралась).
 type parsedScan struct {
 	weightG int
+	pd      *time.Time
 	bb      time.Time
 }
 
@@ -261,6 +272,20 @@ func parseBB(s string) (time.Time, error) {
 // utcDay приводит время к UTC-полуночи (единый ключ лота остатков).
 func utcDay(t time.Time) time.Time {
 	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
+}
+
+// parsePD разбирает дату выработки ДДММГГГГ (срез кода ЧЗ) в UTC-полночь.
+// Пустая строка (старая версия страницы) или неразбираемый срез — nil: дата
+// выработки неизвестна. Выработка не участвует ни в сверке строк, ни в
+// остатках, поэтому ронять из-за неё подбор нельзя — в этом отличие от срока
+// годности (BB: пусто или мусор — 400, ErrSubmitBadBB).
+func parsePD(s string) *time.Time {
+	t, err := parseBB(s)
+	if err != nil {
+		return nil
+	}
+
+	return &t
 }
 
 // coveredRef — разобранная покрытая строка отправки (живая + смёрженные).
@@ -610,6 +635,9 @@ func (uc *UseCase) SubmitManual(ctx context.Context, id string, req ManualReques
 
 	// Остатки не трогаем: ручной вес — не подбор кусков (решение владельца).
 	res := SubmitResult{}
+	// Дат у ручного веса нет: строки журнала по этим позициям убираем, иначе
+	// /sroki показывал бы сроки прежнего подбора как актуальные.
+	res.JournalWarn = uc.clearJournalPositions(ctx, id, manualRowPositions(req.Rows))
 	if uc.notify == nil {
 		slog.Error(fmt.Sprintf("msorders: warehouse notifier not wired for order %s", id))
 		res.StockWarn = manualNoNotifyWarn

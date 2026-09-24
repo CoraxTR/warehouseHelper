@@ -55,6 +55,16 @@ type UseCase struct {
 	picker   StockPicker       // шов stock: списание сроков после успешного PUT
 	acceptor StockAcceptor     // шов stock: приём остатков (возврат в сроки)
 	notify   WarehouseNotifier // шов telegram: пересчёт сроков при ручном закрытии
+	// journal — шов журнала подбора (своя таблица модуля order_picking): даты
+	// выработки и срока годности подобранных единиц по строкам заказа. Без шва
+	// подбор работает как раньше (журнал не пишется), ответ на /sroki недоступен.
+	journal PickingJournal
+	// chat — шов отправки ответа на команду /sroki в чат отправителя.
+	chat ChatSender
+	// retention — срок хранения журнала (ретеншен по дате последней записи):
+	// номер заказа повторяется каждый год, старые строки удаляются фоновой
+	// задачей. Ноль — ретеншен не задан, строки не чистятся.
+	retention time.Duration
 	// weightStateID — id статуса «Вес подобран» (env MSAPI_WEIGHT_PICKED_STATE_ID):
 	// ставится при любом акте подбора (Submit/SubmitManual/переподбор).
 	// Пусто — статус не ставится (прод .env правит владелец руками).
@@ -65,6 +75,24 @@ type UseCase struct {
 // сборке (di.go) до первого подбора; пусто — подбор не меняет статус заказа.
 func (uc *UseCase) SetWeightPickedState(stateID string) {
 	uc.weightStateID = stateID
+}
+
+// SetPickingJournal — шов журнала подбора (таблица order_picking). Ставится
+// при сборке (di.go); без него подбор работает как раньше, журнал не пишется.
+func (uc *UseCase) SetPickingJournal(j PickingJournal) {
+	uc.journal = j
+}
+
+// SetChatSender — шов отправки ответа на команду /sroki в чат отправителя.
+// Ставится при сборке (di.go); без него команда отвечает только в лог.
+func (uc *UseCase) SetChatSender(s ChatSender) {
+	uc.chat = s
+}
+
+// SetShelfLifeRetention — срок хранения журнала подбора (из конфига, env
+// PICKJOURNAL_RETENTION_DAYS). Ноль и меньше — строки не чистятся.
+func (uc *UseCase) SetShelfLifeRetention(d time.Duration) {
+	uc.retention = d
 }
 
 // NewUseCase создаёт сценарии с клиентом МС, каталогом склада (резолв

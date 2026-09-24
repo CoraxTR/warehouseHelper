@@ -191,7 +191,7 @@
                     // mergeTouched — строка участвовала в склейке: переподбор по
                     // ней запрещён (ожидание возврата и ids группы не восстановить).
                     mergeTouched: false,
-                    records: [] // {w: граммы, bb: ДДММГГГГ}
+                    records: [] // {w: граммы, pd: выработка ДДММГГГГ, bb: срок ДДММГГГГ}
                 };
                 rows.push(row);
 
@@ -374,7 +374,8 @@
                     return;
                 }
 
-                r.records.push({ w: r.weighted ? w : 0, bb: bb });
+                var pd = raw.substr(13, 8); // дата выработки с этикетки, ДДММГГГГ
+                r.records.push({ w: r.weighted ? w : 0, pd: pd, bb: bb });
                 if (r.repickTarget !== undefined) {
                     // переподбор: цель — ровно N новых сканов (весовая — 1 кусок)
                     r.done = r.records.length >= r.repickTarget;
@@ -1035,6 +1036,7 @@
                         var raw = m.scans[i][s];
                         scans.push({
                             w: exp.weighted ? scanWeight(raw) : 0,
+                            pd: raw.substr(13, 8), // выработка с этикетки, ДДММГГГГ
                             bb: raw.substr(21, 8) // срок с этикетки, ДДММГГГГ
                         });
                     }
@@ -1232,7 +1234,7 @@
                     }
                     var recs = [];
                     for (var k = 0; k < r.records.length; k++) {
-                        recs.push({ w: r.records[k].w, bb: r.records[k].bb });
+                        recs.push({ w: r.records[k].w, pd: r.records[k].pd, bb: r.records[k].bb });
                     }
                     // from: у переподбора своё значение (резерв − N для штучной,
                     // 0 для весовой, кусок один), у обычной строки — резерв МС.
@@ -1282,7 +1284,10 @@
                         var warn = '';
                         try {
                             var res = JSON.parse(xhr.responseText);
-                            warn = res && res.stock_warn ? res.stock_warn : '';
+                            // сначала «остатки не списаны» (блокирует повторную
+                            // отправку), иначе — журнал сроков не записан
+                            warn = res && res.stock_warn ? res.stock_warn
+                                : (res && res.journal_warn ? res.journal_warn : '');
                         } catch (e) { /* нет тела — обычный успех */ }
                         if (warn) {
                             // заказ в МС обновлён, но списание сроков не прошло —
@@ -1451,7 +1456,8 @@
                         var warn = '';
                         try {
                             var res = JSON.parse(xhr.responseText);
-                            warn = res && res.stock_warn ? res.stock_warn : '';
+                            warn = res && res.stock_warn ? res.stock_warn
+                                : (res && res.journal_warn ? res.journal_warn : '');
                         } catch (e) { /* нет тела — обычный успех */ }
                         closeManual();
                         submitStatus.textContent = 'Подбор подтверждён вручную. '

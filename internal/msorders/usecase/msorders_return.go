@@ -149,6 +149,11 @@ func (uc *UseCase) SavePickReturn(ctx context.Context, id string, req PickReturn
 
 	slog.Info("msorders: возврат в сроки принят", "order", id, "units", len(units))
 
+	// Вернувшиеся куски ушли в остатки — их даты убираем и из журнала заказа
+	// (та же единица не может числиться и на складе, и в заказе). Ошибка журнала
+	// не откатывает приём остатков: даты пересчитывает склад (текст — в лог).
+	uc.removeJournalUnits(ctx, id, units)
+
 	return savedReturn(units), nil
 }
 
@@ -177,6 +182,12 @@ func (uc *UseCase) ClosePickReturn(ctx context.Context, id string, req PickRetur
 	}
 
 	unclosed := unclosedReturnRows(req.Rows, entry)
+
+	// Ручное закрытие обходит обычный путь возврата: куски в остатки не пишутся,
+	// поэтому их даты неизвестны — строки журнала по позициям запроса убираем
+	// (пересчёт сроков идёт по уведомлению складу ниже).
+	uc.clearJournalPositions(ctx, id, returnRowPositions(req.Rows))
+
 	if len(unclosed) == 0 {
 		return nil // все строки закрыты сканами — пересчитывать нечего
 	}
@@ -348,11 +359,13 @@ func returnScanLabels(plans []returnPlan) ([]string, error) {
 }
 
 // returnScanLabel кодирует одну запись скана в этикетку куска: у весовой строки
-// берётся вес записи, у штучной — вес-заглушка (сверка по количеству). Срок
-// годности записи идёт в этикетку и выработкой, и сроком (выработку клиент не
-// присылает, а лоту остатков нужен только срок). Ошибка кодирования возможна
-// только на коде склада, не проходящем формат внутреннего кода (8 цифр) — это
-// 400: код позиции не складской.
+// берётся вес записи, у штучной — вес-заглушка (сверка по количеству). В
+// этикетке — срок годности записи и её выработка; выработку клиент присылает
+// отдельным срезом кода (PD), а если не прислал (старая версия страницы) —
+// выработкой идёт срок годности, как было до появления PD: лоту остатков нужен
+// только срок (produced_on уходит в COALESCE и известную дату не затирает).
+// Ошибка кодирования возможна только на коде склада, не проходящем формат
+// внутреннего кода (8 цифр) — это 400: код позиции не складской.
 func returnScanLabel(expected *scanmatch.Expected, rec ScanRecord) (string, error) {
 	weightG := int64(rec.WeightG)
 	if !expected.Weighted {
@@ -364,7 +377,11 @@ func returnScanLabel(expected *scanmatch.Expected, rec ScanRecord) (string, erro
 	if err != nil {
 		return "", fmt.Errorf("строка %d: %w: %q", expected.Idx+1, ErrSubmitBadBB, rec.BB)
 	}
-	label, err := innercode.EncodeItem(expected.InternalCode, weightG, bb, bb)
+	produced := bb
+	if pd := parsePD(rec.PD); pd != nil {
+		produced = *pd
+	}
+	label, err := innercode.EncodeItem(expected.InternalCode, weightG, produced, bb)
 	if err != nil {
 		return "", fmt.Errorf("строка %d: %w: %q: %w", expected.Idx+1, ErrReturnCodeMissing, expected.InternalCode, err)
 	}
