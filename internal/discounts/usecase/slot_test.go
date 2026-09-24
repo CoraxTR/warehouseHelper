@@ -68,7 +68,7 @@ func slotItems(items []discounts.DigestItem) []discounts.SlotItem {
 	out := make([]discounts.SlotItem, 0, len(items))
 	for _, it := range items {
 		out = append(out, discounts.SlotItem{
-			LotKey:     discounts.LotKey{ProductID: it.ProductID, BestBefore: beginningOfDay(it.BestBefore)},
+			ProductID: it.ProductID, BestBefore: beginningOfDay(it.BestBefore),
 			Percent:    it.Percent,
 			Reason:     it.Reason,
 			InitialQty: it.InitialQty,
@@ -121,8 +121,8 @@ func (h *slotHarness) key(pid string, bestBefore time.Time) discounts.LotKey {
 
 // planItem — позиция плана дня для фейка подъёма: лот, скидка плана и причина.
 // Контроля продаж нет — так выглядят сроковые позиции слота.
-func (h *slotHarness) planItem(pid string, bestBefore time.Time, percent int16, reason string) discounts.SlotItem {
-	return discounts.SlotItem{LotKey: h.key(pid, bestBefore), Percent: percent, Reason: reason}
+func (h *slotHarness) planItem(pid string, bestBefore time.Time, reason string) discounts.SlotItem {
+	return discounts.SlotItem{LotKey: h.key(pid, bestBefore), Percent: slotMainPercent, Reason: reason}
 }
 
 // surplusPlanItem — позиция добора из избытка: с её контролем продаж пара
@@ -194,8 +194,25 @@ func TestRunSlotPlanPublishesRaisesAndManual(t *testing.T) {
 		t.Errorf("причины плана %v, want p1=expiry p2=manual", reasons)
 	}
 
-	if h.repo.digests[0].ChatKind != discounts.ChatWarehouse {
-		t.Errorf("канал рассылки %q, want %q", h.repo.digests[0].ChatKind, discounts.ChatWarehouse)
+	if len(h.chat.texts) != 1 || !strings.Contains(h.chat.texts[0], "Колбаса") || !strings.Contains(h.chat.texts[0], "Сыр") {
+		t.Errorf("сообщение в чат склада: %q, want список с обеими позициями", h.chat.texts)
+	}
+}
+
+// План дня закрывает день: рассылка уходит в чат склада (канал warehouse),
+// отмечается отправленной, и оба шага дня (план и пересчёт по сроку) закрыты —
+// подъём 16:00 работает по отправленной рассылке, повторный сбор не нужен.
+func TestRunSlotPlanMarksDayAndSendsDigest(t *testing.T) {
+	h := newSlotHarness(recalcNow(1),
+		lotInput("p1", "Колбаса", day(9), 100, shelfLifeInput(26)),
+	)
+
+	if err := h.uc.RunSlotPlan(context.Background(), h.now, 4); err != nil {
+		t.Fatalf("план дня: %v", err)
+	}
+
+	if len(h.repo.digests) != 1 || h.repo.digests[0].ChatKind != discounts.ChatWarehouse {
+		t.Fatalf("рассылки: %+v, want одна в %q", h.repo.digests, discounts.ChatWarehouse)
 	}
 	if h.repo.sent != 1 {
 		t.Errorf("отметок отправки %d, want 1", h.repo.sent)
@@ -205,9 +222,6 @@ func TestRunSlotPlanPublishesRaisesAndManual(t *testing.T) {
 	}
 	if !h.repo.flags[fakeFlagKey(h.today, discounts.FlagExpiry)] {
 		t.Error("маркер дня пересчёта по сроку не поставлен: его ставит план дня")
-	}
-	if len(h.chat.texts) != 1 || !strings.Contains(h.chat.texts[0], "Колбаса") || !strings.Contains(h.chat.texts[0], "Сыр") {
-		t.Errorf("сообщение в чат склада: %q, want список с обеими позициями", h.chat.texts)
 	}
 }
 
@@ -511,7 +525,7 @@ func TestRunRaiseNotifiesGrowth(t *testing.T) {
 	h.common.texts, h.common.tries = nil, nil
 
 	// План дня: позиции назначена скидка дня 20 %.
-	h.repo.plan = []discounts.SlotItem{h.planItem("p1", day(9), slotMainPercent, discounts.ReasonExpiry)}
+	h.repo.plan = []discounts.SlotItem{h.planItem("p1", day(9), discounts.ReasonExpiry)}
 	if err := h.uc.RunRaise(ctx, h.now); err != nil {
 		t.Fatalf("RunRaise: %v", err)
 	}
@@ -572,7 +586,7 @@ func TestRunRaiseUpgradesGeneralFromPlan(t *testing.T) {
 	h := newSlotHarness(recalcNow(1),
 		lotInput("p1", "Колбаса", day(9), 100, shelfLifeInput(26), telegramInput(slotMainPercent)),
 	)
-	h.repo.plan = []discounts.SlotItem{h.planItem("p1", day(9), slotMainPercent, discounts.ReasonExpiry)}
+	h.repo.plan = []discounts.SlotItem{h.planItem("p1", day(9), discounts.ReasonExpiry)}
 
 	if err := h.uc.RunRaise(context.Background(), h.now); err != nil {
 		t.Fatalf("подъём general: %v", err)
@@ -603,7 +617,7 @@ func TestRunRaiseUsesHigherTelegramValue(t *testing.T) {
 	h := newSlotHarness(recalcNow(1),
 		lotInput("p1", "Колбаса", day(9), 100, telegramInput(30)),
 	)
-	h.repo.plan = []discounts.SlotItem{h.planItem("p1", day(9), slotMainPercent, discounts.ReasonExpiry)}
+	h.repo.plan = []discounts.SlotItem{h.planItem("p1", day(9), discounts.ReasonExpiry)}
 
 	if err := h.uc.RunRaise(context.Background(), h.now); err != nil {
 		t.Fatalf("подъём general: %v", err)
@@ -626,8 +640,8 @@ func TestRunRaiseDoesNotLowerOrTouchManual(t *testing.T) {
 		lotInput("p2", "Сыр", day(9), 50, shelfLifeInput(26), manualInput(30), telegramInput(slotMainPercent)),
 	)
 	h.repo.plan = []discounts.SlotItem{
-		h.planItem("p1", day(9), slotMainPercent, discounts.ReasonExpiry),
-		h.planItem("p2", day(9), slotMainPercent, discounts.ReasonManual),
+		h.planItem("p1", day(9), discounts.ReasonExpiry),
+		h.planItem("p2", day(9), discounts.ReasonManual),
 	}
 
 	if err := h.uc.RunRaise(context.Background(), h.now); err != nil {
@@ -688,7 +702,7 @@ func TestRunRaiseSkipsAbsentLot(t *testing.T) {
 	h := newSlotHarness(recalcNow(1),
 		lotInput("p1", "Колбаса", day(9), 100, shelfLifeInput(26)),
 	)
-	h.repo.plan = []discounts.SlotItem{h.planItem("p9", day(9), slotMainPercent, discounts.ReasonExpiry)}
+	h.repo.plan = []discounts.SlotItem{h.planItem("p9", day(9), discounts.ReasonExpiry)}
 
 	if err := h.uc.RunRaise(context.Background(), h.now); err != nil {
 		t.Fatalf("подъём general: %v", err)
@@ -726,7 +740,7 @@ func TestRunRaiseSecondRunSameDayIsNoop(t *testing.T) {
 	h := newSlotHarness(recalcNow(1),
 		lotInput("p1", "Колбаса", day(9), 100, telegramInput(slotMainPercent)),
 	)
-	h.repo.plan = []discounts.SlotItem{h.planItem("p1", day(9), slotMainPercent, discounts.ReasonExpiry)}
+	h.repo.plan = []discounts.SlotItem{h.planItem("p1", day(9), discounts.ReasonExpiry)}
 
 	for i := range 2 {
 		if err := h.uc.RunRaise(context.Background(), h.now); err != nil {

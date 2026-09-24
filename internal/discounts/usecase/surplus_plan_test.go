@@ -7,30 +7,44 @@ import (
 	"warehouseHelper/internal/discounts"
 )
 
+// testPairPID — товар тестовых пар: в плане добора все пары одного товара
+// (оборот у них общий), поэтому имя товара у хелперов одно.
+const testPairPID = "p1"
+
 // salePair — пара товара для плана добора: срок в днях от дня расчёта, остаток
 // лота, накопленный FIFO-остаток (CumQty), дневной оборот товара и признак
 // группы избытка. Оборот товара один на все его пары, поэтому v одна и та же;
 // Coeff пары и её метка избытка заполняются, как их отдал бы Evaluate.
-func salePair(pid string, daysLeft int, qty, cumQty int64, rate float64, inGroup bool) PairState {
+func salePair(daysLeft int, qty, cumQty int64, rate float64) PairState {
+	return pairState(daysLeft, qty, cumQty, rate)
+}
+
+// groupPair — пара, помеченная участником группы избытка: скидка по избытку
+// ложится и на неё (так их метит Evaluate).
+func groupPair(daysLeft int, qty, cumQty int64, rate float64) PairState {
+	p := pairState(daysLeft, qty, cumQty, rate)
+	p.SurplusGroup = true
+	p.HasSurplus = true
+	p.Surplus = surplusPtr()
+	return p
+}
+
+// pairState — состояние пары без признака группы избытка.
+func pairState(daysLeft int, qty, cumQty int64, rate float64) PairState {
 	bb := day(daysLeft)
 	p := PairState{
-		Key:          discounts.LotKey{ProductID: pid, BestBefore: bb},
-		ProductID:    pid,
-		Name:         pid,
-		BestBefore:   bb,
-		DaysLeft:     daysLeft,
-		Qty:          qty,
-		CumQty:       cumQty,
-		Rate:         rate,
-		HasRate:      rate > 0,
-		SurplusGroup: inGroup,
+		Key:        discounts.LotKey{ProductID: testPairPID, BestBefore: bb},
+		ProductID:  testPairPID,
+		Name:       testPairPID,
+		BestBefore: bb,
+		DaysLeft:   daysLeft,
+		Qty:        qty,
+		CumQty:     cumQty,
+		Rate:       rate,
+		HasRate:    rate > 0,
 	}
 	if rate > 0 && daysLeft > 0 {
 		p.Coeff = float64(cumQty) / (rate * float64(daysLeft))
-	}
-	if inGroup {
-		p.HasSurplus = true
-		p.Surplus = surplusPtr()
 	}
 	return p
 }
@@ -47,10 +61,7 @@ func coeffsAfterSale(pairs []PairState, x int64) []float64 {
 	taken := int64(0)
 	coeffs := make([]float64, 0, len(group))
 	for _, p := range group {
-		take := min(p.Qty, left)
-		if take < 0 {
-			take = 0
-		}
+		take := max(min(p.Qty, left), 0)
 		left -= take
 		taken += take
 		coeffs = append(coeffs, float64(p.CumQty-taken)/(p.Rate*float64(p.DaysLeft)))
@@ -81,8 +92,8 @@ func TestSurplusSalePlan(t *testing.T) {
 			// need = 0 — «ровно столько, сколько продаётся»), группа не
 			// помечена, значит и плана нет.
 			pairs: []PairState{
-				salePair("p1", 20, 9, 9, 0.5, false),
-				salePair("p1", 30, 6, 15, 0.5, false),
+				salePair(20, 9, 9, 0.5),
+				salePair(30, 6, 15, 0.5),
 			},
 		},
 		{
@@ -91,8 +102,8 @@ func TestSurplusSalePlan(t *testing.T) {
 			// группы (избытка нет) и в раскладку не входит. После продажи
 			// остаток 1, кф 1/2 = 0,5 < 1.
 			pairs: []PairState{
-				salePair("p1", 20, 10, 10, 0.1, true),
-				salePair("p1", 60, 7, 17, 0.1, false),
+				groupPair(20, 10, 10, 0.1),
+				salePair(60, 7, 17, 0.1),
 			},
 			wantX:  9,
 			want:   []wantSale{{pair: 0, qty: 9}},
@@ -104,9 +115,9 @@ func TestSurplusSalePlan(t *testing.T) {
 			// равен всему остатку группы, раскладка съедает обе пары (дальняя —
 			// целиком), кф последней 0 < 1. Пара за группой не в счёте.
 			pairs: []PairState{
-				salePair("p1", 5, 10, 10, 0.1, true),
-				salePair("p1", 10, 5, 15, 0.1, true),
-				salePair("p1", 40, 4, 19, 0.1, false),
+				groupPair(5, 10, 10, 0.1),
+				groupPair(10, 5, 15, 0.1),
+				salePair(40, 4, 19, 0.1),
 			},
 			wantX:  15,
 			want:   []wantSale{{pair: 0, qty: 10}, {pair: 1, qty: 5}},
@@ -121,8 +132,8 @@ func TestSurplusSalePlan(t *testing.T) {
 			// позволяет остаток (кф после списания — 40/4 = 10: впереди лежит
 			// нераспродаваемое).
 			pairs: []PairState{
-				salePair("p1", 0, 40, 40, 0.5, false),
-				salePair("p1", 8, 6, 46, 0.5, true),
+				salePair(0, 40, 40, 0.5),
+				groupPair(8, 6, 46, 0.5),
 			},
 			wantX: 6,
 			want:  []wantSale{{pair: 1, qty: 6}},
@@ -133,8 +144,8 @@ func TestSurplusSalePlan(t *testing.T) {
 			// оборота — нет и коэффициента), но и помеченная пара без оборота не
 			// должна ни давать вклад, ни делить на ноль — объёма нет.
 			pairs: []PairState{
-				salePair("p1", 20, 10, 10, 0, true),
-				salePair("p1", 30, 5, 15, 0, true),
+				groupPair(20, 10, 10, 0),
+				groupPair(30, 5, 15, 0),
 			},
 		},
 		{
@@ -181,9 +192,9 @@ func TestSurplusSalePlan(t *testing.T) {
 // дают CumQty/(v×D) = 9/9, 15/10 и 25/12,5 ровно те самые 1,0 / 1,5 / 2,0.
 func ownerExamplePairs() []PairState {
 	return []PairState{
-		salePair("p1", 18, 9, 9, 0.5, true),
-		salePair("p1", 20, 6, 15, 0.5, true),
-		salePair("p1", 25, 10, 25, 0.5, true),
+		groupPair(18, 9, 9, 0.5),
+		groupPair(20, 6, 15, 0.5),
+		groupPair(25, 10, 25, 0.5),
 	}
 }
 

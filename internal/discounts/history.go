@@ -70,6 +70,7 @@ type DigestRecord struct {
 // обнулилась», поэтому оба поля nil.
 type SlotItem struct {
 	LotKey
+
 	Percent    int16
 	Reason     string
 	InitialQty *int64

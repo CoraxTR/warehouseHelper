@@ -383,11 +383,11 @@ func TestCollectTodaySlot(t *testing.T) {
 		}
 		want := []discounts.SlotItem{
 			{
-				LotKey:  discounts.LotKey{ProductID: testLotMilk, BestBefore: october},
+				ProductID: testLotMilk, BestBefore: october,
 				Percent: 20, Reason: discounts.ReasonExpiry,
 			},
 			{
-				LotKey:  discounts.LotKey{ProductID: testLotCheese, BestBefore: november},
+				ProductID: testLotCheese, BestBefore: november,
 				Percent: 10, Reason: discounts.ReasonSurplus,
 				InitialQty: new(int64(24)), PlanQty: new(int64(6)),
 			},
@@ -440,7 +440,7 @@ func TestScanTodaySlotItem(t *testing.T) {
 		t.Fatalf("scanTodaySlotItem: %v", err)
 	}
 	want := discounts.SlotItem{
-		LotKey:  discounts.LotKey{ProductID: testLotMilk, BestBefore: october},
+		ProductID: testLotMilk, BestBefore: october,
 		Percent: 30, Reason: discounts.ReasonManual,
 	}
 	if !reflect.DeepEqual(got, want) {

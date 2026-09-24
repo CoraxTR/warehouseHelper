@@ -171,6 +171,9 @@ func buildDayPlan(pairs []PairState, prev map[discounts.LotKey]struct{}, capacit
 				reason:        discounts.ReasonExpiry,
 				writeTelegram: true,
 			})
+		default:
+			// Ни ручной скидки дня, ни сегодняшнего повышения: паре в плане
+			// делать нечего — скидка уже стоит на сайте либо её нет вовсе.
 		}
 	}
 	sortSlot(manual)
