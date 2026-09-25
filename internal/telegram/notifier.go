@@ -30,9 +30,13 @@ const (
 
 	// Имена полей payload'ов Bot API — повторяются в каждом методе нотифаера
 	// (goconst: вынесены в константы, 16.09.2026).
-	fieldChatID   = "chat_id"
-	fieldText     = "text"
-	fieldCommands = "commands"
+	fieldChatID       = "chat_id"
+	fieldText         = "text"
+	fieldCommands     = "commands"
+	fieldMessageID    = "message_id"
+	fieldReplyMarkup  = "reply_markup"
+	fieldInlineKbd    = "inline_keyboard"
+	fieldCallbackData = "callback_data"
 )
 
 // Notifier отправляет сообщения в чаты Telegram. Если токен бота или
@@ -103,13 +107,78 @@ func (n *Notifier) NotifyCommonStatus(ctx context.Context, textHTML, callbackDat
 		fieldChatID:  n.commonChatID,
 		fieldText:    textHTML,
 		"parse_mode": "HTML",
-		"reply_markup": map[string]any{
-			"inline_keyboard": [][]map[string]string{{
-				{fieldText: "Получить подробности", "callback_data": callbackData},
+		fieldReplyMarkup: map[string]any{
+			fieldInlineKbd: [][]map[string]string{{
+				{fieldText: "Получить подробности", fieldCallbackData: callbackData},
 			}},
 		},
 	}
 	return n.postJSON(ctx, "sendMessage", payload)
+}
+
+// SendTask отправляет в общий канал сообщение-задачу модуля «Внутренние
+// задачи»: обычный текст (без разметки — имена товаров со спецсимволами) и
+// одна inline-кнопка отметки (buttonText + callbackData).
+//
+// Возвращает message_id отправленного сообщения; 0 — канал не подключён
+// (пустой токен или chat_id общего канала) либо API не вернул id. Вызывающий
+// (модуль задач) по нулю понимает, что задачи в чате нет, и строку ленты не
+// заводит.
+func (n *Notifier) SendTask(ctx context.Context, text, buttonText, callbackData string) (int64, error) {
+	if n.botToken == "" || n.commonChatID == 0 {
+		return 0, nil
+	}
+
+	payload := map[string]any{
+		fieldChatID: n.commonChatID,
+		fieldText:   text,
+		fieldReplyMarkup: map[string]any{
+			fieldInlineKbd: [][]map[string]string{{
+				{fieldText: buttonText, fieldCallbackData: callbackData},
+			}},
+		},
+	}
+	return n.postJSONResult(ctx, "sendMessage", payload)
+}
+
+// EditKeyboard заменяет inline-кнопки отправленного сообщения (шаг «кто
+// отметил»): вопрос виден там же, где задача, отдельного сообщения нет.
+// Пустой rows — снять кнопки. Без токена или id сообщения — no-op.
+func (n *Notifier) EditKeyboard(ctx context.Context, chatID, messageID int64, rows [][]domain.TGButton) error {
+	if n.botToken == "" || chatID == 0 || messageID == 0 {
+		return nil
+	}
+
+	keyboard := make([][]map[string]string, 0, len(rows))
+	for _, row := range rows {
+		buttons := make([]map[string]string, 0, len(row))
+		for _, b := range row {
+			buttons = append(buttons, map[string]string{fieldText: b.Text, fieldCallbackData: b.CallbackData})
+		}
+		keyboard = append(keyboard, buttons)
+	}
+
+	return n.postJSON(ctx, "editMessageReplyMarkup", map[string]any{
+		fieldChatID:      chatID,
+		fieldMessageID:   messageID,
+		fieldReplyMarkup: map[string]any{fieldInlineKbd: keyboard},
+	})
+}
+
+// EditText заменяет текст отправленного сообщения и СНИМАЕТ его inline-кнопки
+// (пустая клавиатура): отмеченная задача больше не нажимается. Текст —
+// обычный, без разметки. Без токена или id сообщения — no-op.
+func (n *Notifier) EditText(ctx context.Context, chatID, messageID int64, text string) error {
+	if n.botToken == "" || chatID == 0 || messageID == 0 {
+		return nil
+	}
+
+	return n.postJSON(ctx, "editMessageText", map[string]any{
+		fieldChatID:      chatID,
+		fieldMessageID:   messageID,
+		fieldText:        text,
+		fieldReplyMarkup: map[string]any{fieldInlineKbd: [][]map[string]string{}},
+	})
 }
 
 // SendWarehouseReturn отправляет в чат склада сообщение с URL-кнопкой
@@ -135,8 +204,8 @@ func (n *Notifier) SendWarehouseButton(ctx context.Context, text, buttonText, bu
 	payload := map[string]any{
 		fieldChatID: n.warehouseChatID,
 		fieldText:   text,
-		"reply_markup": map[string]any{
-			"inline_keyboard": [][]map[string]string{{
+		fieldReplyMarkup: map[string]any{
+			fieldInlineKbd: [][]map[string]string{{
 				{fieldText: buttonText, "url": buttonURL},
 			}},
 		},
@@ -155,8 +224,8 @@ func (n *Notifier) DeleteWarehouseMessage(ctx context.Context, messageID int64) 
 		return nil
 	}
 	return n.postJSON(ctx, "deleteMessage", map[string]any{
-		fieldChatID:  n.warehouseChatID,
-		"message_id": messageID,
+		fieldChatID:    n.warehouseChatID,
+		fieldMessageID: messageID,
 	})
 }
 
@@ -168,8 +237,8 @@ func (n *Notifier) DeleteMessage(ctx context.Context, chatID, messageID int64) e
 		return nil
 	}
 	return n.postJSON(ctx, "deleteMessage", map[string]any{
-		fieldChatID:  chatID,
-		"message_id": messageID,
+		fieldChatID:    chatID,
+		fieldMessageID: messageID,
 	})
 }
 
@@ -191,6 +260,21 @@ func (n *Notifier) AnswerCallback(ctx context.Context, callbackQueryID string) e
 	}
 	return n.postJSON(ctx, "answerCallbackQuery", map[string]any{
 		"callback_query_id": callbackQueryID,
+	})
+}
+
+// AnswerCallbackAlert закрывает нажатие ВСПЛЫВАЮЩИМ окном с текстом (клиент
+// показывает его до подтверждения) — так сообщаются причины отказа: задача
+// уже отмечена (видно, кем и когда), задачи нет, база сотрудников пуста.
+// Без токена или id нажатия — no-op.
+func (n *Notifier) AnswerCallbackAlert(ctx context.Context, callbackQueryID, alert string) error {
+	if n.botToken == "" || callbackQueryID == "" {
+		return nil
+	}
+	return n.postJSON(ctx, "answerCallbackQuery", map[string]any{
+		"callback_query_id": callbackQueryID,
+		fieldText:           alert,
+		"show_alert":        true,
 	})
 }
 
@@ -387,13 +471,26 @@ func (n *Notifier) postJSONResult(ctx context.Context, method string, payload ma
 	}
 
 	var r struct {
-		OK     bool `json:"ok"`
-		Result struct {
-			MessageID int64 `json:"message_id"`
-		} `json:"result"`
+		OK     bool            `json:"ok"`
+		Result json.RawMessage `json:"result"`
 	}
 	if err := json.Unmarshal(respBody, &r); err != nil {
 		return 0, fmt.Errorf("failed to parse telegram response: %w", err)
 	}
-	return r.Result.MessageID, nil
+
+	// result — не всегда объект: answerCallbackQuery и deleteMessage отвечают
+	// `true`. message_id ищем только в объекте, иначе возвращаем 0 (25.09.2026:
+	// прежний безусловный разбор в структуру падал на `true` и логировал
+	// ошибку на каждом нажатии кнопки, хотя ответ уже дошёл).
+	if len(r.Result) == 0 || r.Result[0] != '{' {
+		return 0, nil
+	}
+
+	var res struct {
+		MessageID int64 `json:"message_id"`
+	}
+	if err := json.Unmarshal(r.Result, &res); err != nil {
+		return 0, fmt.Errorf("failed to parse telegram result: %w", err)
+	}
+	return res.MessageID, nil
 }

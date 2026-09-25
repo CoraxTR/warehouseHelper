@@ -98,6 +98,7 @@ type slotHarness struct {
 	turn   *fakeTurnover
 	chat   *fakeWarehouseNotifier
 	common *fakeCommonNotifier
+	tasks  *fakeTaskOpener
 	now    time.Time
 	today  time.Time
 }
@@ -109,9 +110,10 @@ func newSlotHarness(now time.Time, inputs ...discounts.Input) *slotHarness {
 	turn := &fakeTurnover{}
 	chat := &fakeWarehouseNotifier{}
 	common := &fakeCommonNotifier{}
-	uc := NewUseCase(repo, turn, writer, common, chat, func() time.Time { return now })
+	tasks := &fakeTaskOpener{}
+	uc := NewUseCase(repo, turn, writer, common, tasks, chat, func() time.Time { return now })
 
-	return &slotHarness{uc: uc, repo: repo, writer: writer, turn: turn, chat: chat, common: common, now: now, today: beginningOfDay(now)}
+	return &slotHarness{uc: uc, repo: repo, writer: writer, turn: turn, chat: chat, common: common, tasks: tasks, now: now, today: beginningOfDay(now)}
 }
 
 // key — ключ лота пары теста (нормализация срока, как в расчёте).
@@ -402,7 +404,7 @@ func TestRunSlotPlanAppliesExtraImmediately(t *testing.T) {
 	if err := h.uc.RecalcSurplus(ctx, h.now); err != nil {
 		t.Fatalf("RecalcSurplus (наполнение): %v", err)
 	}
-	h.common.texts, h.common.tries = nil, nil
+	h.tasks.texts, h.tasks.tries = nil, nil
 
 	// Ёмкость 1: в слот идёт БЛИЖНИЙ срок, более далёкая ступень — в лишние.
 	if err := h.uc.RunSlotPlan(ctx, h.now, 1); err != nil {
@@ -433,9 +435,9 @@ func TestRunSlotPlanAppliesExtraImmediately(t *testing.T) {
 		t.Errorf("метка источника лишней %q, want %q", extra.Source, discounts.ReasonExpiry)
 	}
 
-	want := []string{"Сыр (до 23.09): Необходимо поднять скидку до 20%"}
-	if !reflect.DeepEqual(h.common.texts, want) {
-		t.Errorf("уведомления %q, want %q", h.common.texts, want)
+	want := []string{"Поднять скидку до 20% на Сыр (до 23.09)"}
+	if !reflect.DeepEqual(h.tasks.texts, want) {
+		t.Errorf("уведомления %q, want %q", h.tasks.texts, want)
 	}
 	// Сообщение складу — всё окно скидок с метками канала: позиция плана уходит
 	// в ТГ-колонку (метка (ТГ)), лишняя остаётся скидкой сайта (свой источник).
@@ -532,7 +534,7 @@ func TestRunRaiseNotifiesGrowth(t *testing.T) {
 	if err := h.uc.RecalcSurplus(ctx, h.now); err != nil {
 		t.Fatalf("RecalcSurplus (наполнение): %v", err)
 	}
-	h.common.texts, h.common.tries = nil, nil
+	h.tasks.texts, h.tasks.tries = nil, nil
 
 	// План дня: позиции назначена скидка дня 20 %.
 	h.repo.plan = []discounts.SlotItem{h.planItem("p1", day(9), discounts.ReasonExpiry)}
@@ -540,19 +542,19 @@ func TestRunRaiseNotifiesGrowth(t *testing.T) {
 		t.Fatalf("RunRaise: %v", err)
 	}
 
-	want := []string{"Колбаса (до 23.09): Необходимо поднять скидку до 20%"}
-	if !reflect.DeepEqual(h.common.texts, want) {
-		t.Errorf("уведомления %q, want %q", h.common.texts, want)
+	want := []string{"Поднять скидку до 20% на Колбаса (до 23.09)"}
+	if !reflect.DeepEqual(h.tasks.texts, want) {
+		t.Errorf("уведомления %q, want %q", h.tasks.texts, want)
 	}
 
 	// Следующий час: расчёт видит уже поднятое значение и молчит.
-	h.common.texts, h.common.tries = nil, nil
+	h.tasks.texts, h.tasks.tries = nil, nil
 	delete(h.repo.flags, fakeFlagKey(h.today, discounts.FlagSurplus))
 	if err := h.uc.RecalcSurplus(ctx, h.now); err != nil {
 		t.Fatalf("RecalcSurplus (после подъёма): %v", err)
 	}
-	if len(h.common.texts) != 0 {
-		t.Errorf("после подъёма пришло %q, want тишину", h.common.texts)
+	if len(h.tasks.texts) != 0 {
+		t.Errorf("после подъёма пришло %q, want тишину", h.tasks.texts)
 	}
 }
 

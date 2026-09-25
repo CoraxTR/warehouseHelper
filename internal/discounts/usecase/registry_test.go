@@ -372,7 +372,7 @@ func TestRegistryDigestSectionsAndGoldenText(t *testing.T) {
 // Обёртки UseCase: окно, очередь и отчёт под мутексом юзкейса, дата — из uc.now.
 func TestUseCaseWindowQueueDigest(t *testing.T) {
 	now := time.Date(2026, time.September, 14, 14, 0, 0, 0, time.UTC)
-	uc := NewUseCase(nil, nil, nil, nil, nil, func() time.Time { return now })
+	uc := NewUseCase(nil, nil, nil, nil, nil, nil, func() time.Time { return now })
 
 	uc.reg.Replace([]PairState{
 		regPair("p-manual", "Ручной", day(9), manualOpt(40)),

@@ -16,6 +16,7 @@ import (
 	cucase "warehouseHelper/internal/complaints/usecase"
 	"warehouseHelper/internal/config"
 	"warehouseHelper/internal/metrics"
+	tusecase "warehouseHelper/internal/tasks/usecase"
 	"warehouseHelper/internal/telegram"
 )
 
@@ -281,12 +282,9 @@ func (a *App) initBotPoller() {
 	}
 
 	complaintsUC := a.di.ComplaintsUC()
+	tasksUC := a.di.TasksUC()
 	poller := telegram.NewPoller(token, func(ctx context.Context, cb telegram.CallbackQuery) error {
-		id, ok := cucase.ParseCallbackData(cb.Data)
-		if !ok {
-			return nil // кнопка не нашего модуля — не наше нажатие
-		}
-		return complaintsUC.HandleDetailsButton(ctx, cb.ID, cb.ChatID, id)
+		return handleCallback(ctx, complaintsUC, tasksUC, cb)
 	})
 	poller.SetMessageHandler(a.botMessageHandler())
 
@@ -305,6 +303,35 @@ func (a *App) initBotPoller() {
 			slog.Info(fmt.Sprintf("бот: поллер завершился: %v", err))
 		}
 	})
+}
+
+// complaintCallbackHandler — кнопки карточек жалоб (модуль «Жалобы»).
+type complaintCallbackHandler interface {
+	HandleDetailsButton(ctx context.Context, callbackQueryID string, chatID, complaintID int64) error
+}
+
+// taskCallbackHandler — кнопки задач (модуль «Внутренние задачи»): «✅ Отметить»
+// и выбор сотрудника в списке «кто отметил».
+type taskCallbackHandler interface {
+	HandleDone(ctx context.Context, callbackQueryID string, chatID, messageID, taskID int64) error
+	HandleWho(ctx context.Context, callbackQueryID string, chatID, messageID, taskID, employeeID int64) error
+}
+
+// handleCallback — диспетчер нажатий inline-кнопок бота: по префиксу данных
+// кнопки нажатие уходит своему модулю. Поллер один на токен, а кнопки
+// принадлежат разным модулям (жалобы, внутренние задачи) — диспетчер живёт
+// здесь, а не внутри модуля. Чужие данные — не наше нажатие, молчание.
+func handleCallback(ctx context.Context, complaints complaintCallbackHandler, tasks taskCallbackHandler, cb telegram.CallbackQuery) error {
+	if complaintID, ok := cucase.ParseCallbackData(cb.Data); ok {
+		return complaints.HandleDetailsButton(ctx, cb.ID, cb.ChatID, complaintID)
+	}
+	if task, ok := tusecase.ParseCallbackData(cb.Data); ok {
+		if task.EmployeeID == 0 {
+			return tasks.HandleDone(ctx, cb.ID, cb.ChatID, cb.MessageID, task.TaskID)
+		}
+		return tasks.HandleWho(ctx, cb.ID, cb.ChatID, cb.MessageID, task.TaskID, task.EmployeeID)
+	}
+	return nil
 }
 
 // discountsCommand — имя бот-команды отчёта по скидкам. Telegram принимает в

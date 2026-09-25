@@ -20,6 +20,7 @@ type recalcHarness struct {
 	writer *fakeDiscountWriter
 	turn   *fakeTurnover
 	common *fakeCommonNotifier
+	tasks  *fakeTaskOpener
 	now    time.Time
 }
 
@@ -29,9 +30,10 @@ func newRecalcHarness(now time.Time, inputs ...discounts.Input) *recalcHarness {
 	writer := &fakeDiscountWriter{repo: repo}
 	turn := &fakeTurnover{}
 	common := &fakeCommonNotifier{}
-	uc := NewUseCase(repo, turn, writer, common, nil, func() time.Time { return now })
+	tasks := &fakeTaskOpener{}
+	uc := NewUseCase(repo, turn, writer, common, tasks, nil, func() time.Time { return now })
 
-	return &recalcHarness{uc: uc, repo: repo, writer: writer, turn: turn, common: common, now: now}
+	return &recalcHarness{uc: uc, repo: repo, writer: writer, turn: turn, common: common, tasks: tasks, now: now}
 }
 
 // batches — батчи правок, ушедшие в шов записи (пустой батч в шов не уходит).
@@ -846,7 +848,7 @@ func TestRecalcExpiryNotifiesGrowth(t *testing.T) {
 	if err := h.uc.RecalcExpiry(ctx, h.now); err != nil {
 		t.Fatalf("RecalcExpiry (наполнение): %v", err)
 	}
-	h.common.texts, h.common.tries = nil, nil
+	h.tasks.texts, h.tasks.tries = nil, nil
 
 	// Ручную скидку менеджер снял: теперь на сайте решает ступень лестницы —
 	// о росте движок сообщает человеку.
@@ -856,9 +858,9 @@ func TestRecalcExpiryNotifiesGrowth(t *testing.T) {
 	if err := h.uc.RecalcExpiry(ctx, h.now); err != nil {
 		t.Fatalf("RecalcExpiry: %v", err)
 	}
-	want := []string{"Творог (до 23.09): Необходимо поднять скидку до 40%"}
-	if !reflect.DeepEqual(h.common.texts, want) {
-		t.Errorf("уведомления %q, want %q", h.common.texts, want)
+	want := []string{"Поднять скидку до 40% на Творог (до 23.09)"}
+	if !reflect.DeepEqual(h.tasks.texts, want) {
+		t.Errorf("уведомления %q, want %q", h.tasks.texts, want)
 	}
 }
 
@@ -873,7 +875,7 @@ func TestRecalcSurplusNotifiesChanges(t *testing.T) {
 	if err := h.uc.RecalcSurplus(ctx, h.now); err != nil {
 		t.Fatalf("RecalcSurplus (наполнение): %v", err)
 	}
-	h.common.texts, h.common.tries = nil, nil
+	h.tasks.texts, h.tasks.tries = nil, nil
 
 	// Продажи замедлились — появился избыток: движок ставит 10 % и сообщает.
 	h.turnover("p1", 30)
@@ -893,11 +895,11 @@ func TestRecalcSurplusNotifiesChanges(t *testing.T) {
 	}
 
 	want := []string{
-		"Колбаса (до 24.09): Необходимо поставить скидку 10%",
-		"Колбаса (до 24.09): Необходимо убрать скидку",
+		"Поставить скидку 10% на Колбаса (до 24.09)",
+		"Убрать скидку с: Колбаса (до 24.09)",
 	}
-	if !reflect.DeepEqual(h.common.texts, want) {
-		t.Errorf("уведомления %q, want %q", h.common.texts, want)
+	if !reflect.DeepEqual(h.tasks.texts, want) {
+		t.Errorf("уведомления %q, want %q", h.tasks.texts, want)
 	}
 }
 

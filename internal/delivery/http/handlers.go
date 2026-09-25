@@ -28,6 +28,7 @@ import (
 	retucase "warehouseHelper/internal/returns/usecase"
 	sucase "warehouseHelper/internal/stock/usecase"
 	stockws "warehouseHelper/internal/stock/ws"
+	tusecase "warehouseHelper/internal/tasks/usecase"
 	"warehouseHelper/internal/tempdir"
 	wucase "warehouseHelper/internal/wiki/usecase"
 )
@@ -49,6 +50,7 @@ type Handler struct {
 	receiveUC    *rucase.BarcodeEditor
 	receivingUC  *rucase.ReceivingUseCase
 	complaintsUC *cucase.UseCase
+	tasksUC      *tusecase.UseCase
 	msOrdersUC   *msordersuc.UseCase
 	msFormsUC    *msordersuc.FormsUseCase
 	returnsUC    *retucase.UseCase
@@ -59,7 +61,7 @@ type Handler struct {
 	discountWindowCap int
 }
 
-func NewHandler(syncUC *msucase.SyncUseCase, ordersUC *msucase.OrdersUseCase, exportUC *rgucase.ExportToExcelUseCase, pdfUC *rgucase.ExportOrderPDFUseCase, barcodeUC *rgucase.ExportBarcodesToExcelUseCase, refGoUC *rgucase.RefGoCheckAgainstUseCase, wikiUC *wucase.WikiUseCase, goodsUC *gucase.GoodsUseCase, dayStateUC *ducecase.UseCase, qrUC *qucase.QRUseCase, msUC *msu.MSSuppliersUseCase, stockUC *sucase.StockUseCase, stockHub *stockws.Hub, receiveUC *rucase.BarcodeEditor, receivingUC *rucase.ReceivingUseCase, complaintsUC *cucase.UseCase, msOrdersUC *msordersuc.UseCase, msFormsUC *msordersuc.FormsUseCase, returnsUC *retucase.UseCase, discountsUC *discucase.UseCase, discountWindowCap int) *Handler {
+func NewHandler(syncUC *msucase.SyncUseCase, ordersUC *msucase.OrdersUseCase, exportUC *rgucase.ExportToExcelUseCase, pdfUC *rgucase.ExportOrderPDFUseCase, barcodeUC *rgucase.ExportBarcodesToExcelUseCase, refGoUC *rgucase.RefGoCheckAgainstUseCase, wikiUC *wucase.WikiUseCase, goodsUC *gucase.GoodsUseCase, dayStateUC *ducecase.UseCase, qrUC *qucase.QRUseCase, msUC *msu.MSSuppliersUseCase, stockUC *sucase.StockUseCase, stockHub *stockws.Hub, receiveUC *rucase.BarcodeEditor, receivingUC *rucase.ReceivingUseCase, complaintsUC *cucase.UseCase, tasksUC *tusecase.UseCase, msOrdersUC *msordersuc.UseCase, msFormsUC *msordersuc.FormsUseCase, returnsUC *retucase.UseCase, discountsUC *discucase.UseCase, discountWindowCap int) *Handler {
 	return &Handler{
 		syncUC:       syncUC,
 		ordersUC:     ordersUC,
@@ -77,6 +79,7 @@ func NewHandler(syncUC *msucase.SyncUseCase, ordersUC *msucase.OrdersUseCase, ex
 		receiveUC:    receiveUC,
 		receivingUC:  receivingUC,
 		complaintsUC: complaintsUC,
+		tasksUC:      tasksUC,
 		msOrdersUC:   msOrdersUC,
 		msFormsUC:    msFormsUC,
 		returnsUC:    returnsUC,

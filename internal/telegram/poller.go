@@ -19,6 +19,9 @@ type CallbackQuery struct {
 	// ChatID — чат, в котором находится сообщение с кнопкой
 	// (message.chat.id) — сюда шлётся ответ на нажатие.
 	ChatID int64
+	// MessageID — сообщение с нажатой кнопкой (message.message_id): по нему
+	// модуль правит кнопки/текст прямо в сообщении (шаг «кто отметил» у задач).
+	MessageID int64
 	// Data — callback_data кнопки.
 	Data string
 }
@@ -82,7 +85,8 @@ type tgUser struct {
 }
 
 type tgMsg struct {
-	Chat *tgChat `json:"chat"`
+	Chat      *tgChat `json:"chat"`
+	MessageID int64   `json:"message_id"`
 }
 
 type tgChat struct {
@@ -175,9 +179,10 @@ func (p *Poller) handle(ctx context.Context, u tgUpdate) {
 	}
 
 	query := CallbackQuery{
-		ID:     cb.ID,
-		ChatID: cb.Msg.Chat.ID,
-		Data:   cb.Data,
+		ID:        cb.ID,
+		ChatID:    cb.Msg.Chat.ID,
+		MessageID: cb.Msg.MessageID,
+		Data:      cb.Data,
 	}
 	if err := p.handler(ctx, query); err != nil {
 		slog.Info(fmt.Sprintf("telegram: обработка callback %q: %v", cb.Data, err))

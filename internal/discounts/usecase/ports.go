@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"warehouseHelper/internal/discounts"
+	"warehouseHelper/internal/domain"
 )
 
 // Repository — данные модуля: снапшот входа расчёта, история ТГ-слотов
@@ -78,8 +79,20 @@ type WarehouseNotifier interface {
 // CommonNotifier — уведомления об изменениях скидок и дайджест в общий канал,
 // плюс ответ боту в чат отправителя (команда /discounts). Один шов: обе отправки
 // делает один телеграм-уведомитель.
+//
+// Изменения скидок уходят в канал НЕ отсюда, а швом TaskOpener: по такому
+// уведомлению сотрудник делает действие на сайте, значит оно должно стать
+// задачей с кнопкой «кто выполнил» (модуль «Внутренние задачи»).
 type CommonNotifier interface {
 	NotifyCommon(ctx context.Context, text string) error
 	// SendDetails — обычный текст в конкретный чат (ответ на /discounts).
 	SendDetails(ctx context.Context, chatID int64, text string) error
+}
+
+// TaskOpener — шов модуля «Внутренние задачи» (реализация — tasks/usecase):
+// открыть задачу по уведомлению общего канала — строка ленты плюс сообщение
+// с одноразовой кнопкой отметки. Реализация подставляется без адаптера:
+// сигнатура совпадает дословно.
+type TaskOpener interface {
+	Open(ctx context.Context, kind domain.TaskKind, text string) error
 }
