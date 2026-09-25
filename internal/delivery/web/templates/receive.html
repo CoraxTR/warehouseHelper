@@ -672,6 +672,23 @@
             return out;
         }
 
+        // datesClash — текст отказа, если дата из кода не совпала с ручной датой
+        // партии; пусто — расхождения нет. Решение владельца 25.09.2026: даты
+        // сверяются, расхождение — скан не принимается (раньше ручное молча
+        // перекрывало код, а расхождение лишь подсвечивалось бейджем).
+        function datesClash(scan, party) {
+            if (!scan || !party) { return ''; }
+            if (scan.produced_on && party.pd && scan.produced_on !== party.pd) {
+                return 'Выработка из кода ' + fmtDateRu(scan.produced_on) + ' ≠ дате партии ' +
+                    fmtDateRu(party.pd) + ' — поправьте партию или скан';
+            }
+            if (scan.best_before && party.bb && scan.best_before !== party.bb) {
+                return 'Срок годности из кода ' + fmtDateRu(scan.best_before) + ' ≠ сроку партии ' +
+                    fmtDateRu(party.bb) + ' — поправьте партию или скан';
+            }
+            return '';
+        }
+
         // partyCard — партия: только даты (выработка + срок) и строки. Товар и
         // вес берутся из кода, для строк без кода — из select ПО СТРОКЕ.
         function partyCard(b) {
@@ -687,12 +704,24 @@
                 ' &nbsp;Срок годности: <input type="date" class="party-bb" data-kind="bb" value="' +
                 esc(b.bb || '') + '" onchange="partyField(this)">' +
                 ' <span class="date-echo" style="color:#66645C;">' + fmtDateRu(b.bb) + '</span></div>';
-            html += '<div class="hint">Пусто — даты берутся из кода (заполняются обе даты или ни одной). ' +
-                'Введённые даты партии перекрывают код (расхождение подсветится). В партию сканируются любые ' +
-                'товары поставщика: товар и вес — из кода, для строк без кода — товар выбирается в строке. ' +
-                'Если в партии товар задан руками (код не несёт ни товара, ни сроков), скан другого товара не принимается. ' +
-                'Коробка — кнопка «+ Коробка» (или скан 555): сканируйте код коробки (проверяется правилом коробок), ' +
-                'затем вложения, закрытие — 666.</div>';
+            // CACHE может быть ещё null: страница рисует партию ДО загрузки кеша.
+            if (CACHE && CACHE.no_item_code) {
+                // Ни одно правило поставщика не вычитывает код товара: товар задаёт
+                // оператор — один на партию, строки его не спрашивают (решение
+                // владельца 25.09.2026). Вес скана по-прежнему берётся из кода.
+                html += '<div class="fix">Товар партии: ' +
+                    productSelect(b.product_id || '', 'party-product', 'partyField(this)', null) + '</div>';
+            }
+            html += '<div class="hint">' + (CACHE && CACHE.no_item_code
+                ? 'Ни одно правило поставщика не вычитывает код товара: товар задаётся здесь, один на партию — ' +
+                  'каждый скан становится единицей этого товара, вес берётся из кода. Даты: пусто — из кода, ' +
+                  'заполнено — сверяются со сканом, расхождение — скан не принимается.'
+                : 'Пусто — даты берутся из кода (заполняются обе даты или ни одной). Введённые даты партии ' +
+                  'перекрывают код и сверяются со сканом (расхождение — скан не принимается). В партию сканируются ' +
+                  'любые товары поставщика: товар и вес — из кода, для строк без кода — товар выбирается в строке. ' +
+                  'Если в партии товар задан руками (код не несёт ни товара, ни сроков), скан другого товара не принимается.') +
+                ' Коробка — кнопка «+ Коробка» (или скан 555): сканируйте код коробки (проверяется правилом ' +
+                'коробок), затем вложения, закрытие — 666.</div>';
 
             var i, row, s, e, rpid, mp;
             for (i = 0; i < b.rows.length; i++) {
@@ -708,7 +737,9 @@
                     (e.conflict ? ' <span class="mismatch">даты ≠ кода</span>' : '') +
                     (s._code_unknown ? ' <span class="mismatch">код ' + esc(s._code_unknown) + ' не заведён</span>' : '') +
                     '</span>';
-                if (!s._prod_code) {
+                // У поставщика без кода товара товар задаёт партия: селект в строке
+                // не нужен (строка и так берёт товар партии).
+                if (!s._prod_code && !(CACHE && CACHE.no_item_code)) {
                     html += productSelect(rpid, 'row-product', 'partyField(this)', i);
                 }
                 if (isWeighted(row, b) && !s.weight_g) {
@@ -860,6 +891,14 @@
                 applyIsoDate(el, '');
                 return;
             }
+            // Товар партии (поставщик без кода товара в правилах): выбор идёт без
+            // номера строки — товар уезжает во ВСЕ строки партии без своего кода.
+            if (kind === 'product' && String(el.className || '').indexOf('party-product') >= 0) {
+                b.product_id = v || '';
+                applyPartyProduct(b);
+                render();
+                return;
+            }
             if (!isNaN(r) && kind === 'weight') {
                 b.rows[r].manual = b.rows[r].manual || {};
                 b.rows[r].manual.weight_g = v ? parseInt(v, 10) : null;
@@ -957,13 +996,29 @@
         // несёт ни товара, ни сроков): первая строка с выбранным товаром. Задан —
         // партия принимает только его; пусто — в неё идут любые товары.
         function partyManualProduct(b) {
+            if (!b) { return ''; }
+            // Товар партии — явный выбор в шапке (поставщик без кода товара в
+            // правилах, решение владельца 25.09.2026), иначе — товар первой
+            // ручной строки.
+            if (b.product_id) { return b.product_id; }
             var i, row;
-            if (!b || !b.rows) { return ''; }
+            if (!b.rows) { return ''; }
             for (i = 0; i < b.rows.length; i++) {
                 row = b.rows[i] || {};
                 if (row.manual && row.manual.product_id) { return row.manual.product_id; }
             }
             return '';
+        }
+
+        // applyPartyProduct — товар партии раздаётся всем её строкам, товар которых
+        // не вычитан кодом: у поставщика без артикула товар задаёт оператор, а без
+        // товара скан не принять. Вес строк берётся из кода (reapplyRuleFields).
+        function applyPartyProduct(b) {
+            var i, pid = (b && b.product_id) || '';
+            if (!b || !b.rows) { return; }
+            for (i = 0; i < b.rows.length; i++) {
+                if (b.rows[i].scan && !b.rows[i].scan._prod_code) { applyProductToScan(b.rows[i].scan, pid); }
+            }
         }
 
         // productName — имя позиции каталога по id («—», если не найдена).
@@ -1313,8 +1368,18 @@
                 render();
                 return;
             }
-            if (resolved.needs_product && mp) {
+            if (mp && !resolved.product_id) {
                 applyProductToScan(resolved, mp); // товар партии уже известен — берём его
+            }
+            // Даты кода сверяются с датами партии: расхождение — скан не принимаем
+            // (решение владельца 25.09.2026). Строки, добавленные ДО ввода дат,
+            // ловит проверка при сохранении, а на сервере — тот же отказ.
+            var clash = datesClash(resolved, party);
+            if (clash) {
+                beep();
+                statusLine.textContent = clash;
+                render();
+                return;
             }
             party.rows.unshift({scan: resolved, manual: {}}); // строка — наверх
             if (resolved.needs_product) {
@@ -1367,7 +1432,7 @@
                     for (j = 0; j < it.rows.length && ok; j++) {
                         var row = it.rows[j];
                         var rm = row.manual || {};
-                        if (!row.scan.product_id && !rm.product_id) {
+                        if (!row.scan.product_id && !rm.product_id && !it.product_id) {
                             problems.push('Партия ' + it.id + ', строка ' + (j + 1) +
                                 ': не выбран товар — выберите позицию в строке');
                             ok = false; break;
@@ -1375,6 +1440,15 @@
                         var re = effDates(row, it);
                         if (!re.bb) {
                             problems.push('Партия ' + it.id + ', строка ' + (j + 1) + ': не указан срок годности');
+                            ok = false; break;
+                        }
+                        // Даты кода сверяются с партией (решение владельца 25.09.2026):
+                        // скан с расхождением не принимается, а строки, добавленные до
+                        // ввода дат партии, тут и всплывают — сохранить нельзя, пока
+                        // оператор не поправит партию или строку.
+                        if (re.conflict) {
+                            problems.push('Партия ' + it.id + ', строка ' + (j + 1) +
+                                ': даты из кода ≠ датам партии — поправьте партию или уберите строку');
                             ok = false; break;
                         }
                         if (isWeighted(row, it) && !rm.weight_g && !row.scan.weight_g) {
