@@ -2,8 +2,11 @@ package app
 
 import (
 	"bytes"
+	"errors"
 	"html/template"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -101,4 +104,51 @@ func tmplStubFuncs() template.FuncMap {
 		fm[n] = stub
 	}
 	return fm
+}
+
+// TestNavCopiesInSync — страницы на http.ServeFile (index, refgo,
+// refgo_checkagainst, qrcodes) директив не исполняют: блок меню в них лежит
+// СТАТИЧНОЙ копией частиала _nav.html, и копию переносят руками. Без этой
+// проверки пункт, добавленный в частиал, молча не появляется в меню главной и
+// соседних страниц: 25.09.2026 там разом не хватало «Вывод из продажи»,
+// «Печать бланков», «Скидки» и всего раздела «Внутренние задачи».
+func TestNavCopiesInSync(t *testing.T) {
+	const dir = "../internal/delivery/web/templates"
+
+	want, err := navBlock(dir + "/_nav.html")
+	if err != nil {
+		t.Fatalf("частиал меню: %v", err)
+	}
+	for _, file := range []string{"index.html", "qrcodes.html", "refgo.html", "refgo_checkagainst.html"} {
+		got, err := navBlock(dir + "/" + file)
+		if err != nil {
+			t.Errorf("%s: %v", file, err)
+
+			continue
+		}
+		if got != want {
+			t.Errorf("%s: статичная копия меню разошлась с _nav.html (копия %d симв, частиал %d) — перенесите блок <nav id=\"sidebar\">…</nav> из частиала как есть",
+				file, len(got), len(want))
+		}
+	}
+}
+
+// navBlock вырезает блок <nav id="sidebar">…</nav>: у частиала и статичных
+// копий он обязан совпадать дословно (шапка и окружение страниц — своё).
+func navBlock(path string) (string, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	text := string(raw)
+	start := strings.Index(text, `<nav id="sidebar"`)
+	if start < 0 {
+		return "", errors.New(`блок <nav id="sidebar"> не найден`)
+	}
+	rel := strings.Index(text[start:], "</nav>")
+	if rel < 0 {
+		return "", errors.New(`блок <nav id="sidebar"> не закрыт`)
+	}
+
+	return text[start : start+rel+len("</nav>")], nil
 }
