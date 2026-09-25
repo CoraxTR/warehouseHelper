@@ -111,6 +111,7 @@ func (uc *ReceivingUseCase) GetCache(ctx context.Context, supplierID string) (*r
 		ByCode:     make(map[string]receiving.ProductRef),
 		BBByBatch: needBatchBestBefore(itemRules, receiving.ItemBestBeforeField) ||
 			needBatchBestBefore(boxRules, receiving.BoxBestBeforeField),
+		NoItemCode: anyItemRuleWithoutCode(itemRules),
 	}
 	seen := make(map[string]struct{}, len(barcodes))
 	for _, b := range barcodes {
@@ -223,6 +224,29 @@ func (uc *ReceivingUseCase) Resolve(ctx context.Context, cache *receiving.Cache,
 	}
 
 	return nil, receiving.ErrScanUnknown
+}
+
+// readsItemCode — правило вычитывает код товара (поле кода задано и не пустое).
+func readsItemCode(r receiving.DecodeRule) bool {
+	return decoderules.FieldCode < len(r.Fields) && r.Fields[decoderules.FieldCode].Pos > 0
+}
+
+// anyItemRuleWithoutCode — есть товарное правило, не вычитывающее код товара (или
+// правил нет вовсе). Тогда поставщик работает и «без артикула»: товар для таких
+// сканов задаёт оператор — партией, правило несёт из кода только вес (даты
+// сверяются с партией). Режим включается, если у поставщика ХОТЬ ОДНО такое
+// правило (решение владельца 25.09.2026), и в партии с заданным товаром скан, чей
+// код известен базе, не принимается. См. Cache.NoItemCode.
+func anyItemRuleWithoutCode(rules []receiving.DecodeRule) bool {
+	if len(rules) == 0 {
+		return true
+	}
+	for _, r := range rules {
+		if !readsItemCode(r) {
+			return true
+		}
+	}
+	return false
 }
 
 // hasBoxRule — заявлено ли у поставщика правило коробок такой длины (нужно
@@ -442,6 +466,12 @@ func fillRuleScanData(scan *receiving.DecodedScan, rule receiving.DecodeRule, ra
 	if err != nil {
 		return err
 	}
+	// Дата из кода сверяется с введённой руками (партия/строка): расхождение —
+	// отказ скана (решение владельца 25.09.2026; раньше ручное просто перекрывало
+	// код, а расхождение подсвечивалось бейджем).
+	if err := checkDatesMatch(dates, e); err != nil {
+		return err
+	}
 
 	if kind != receiving.KindBox {
 		scan.Qty = 1
@@ -501,6 +531,22 @@ func applyDates(scan *receiving.DecodedScan, dates ruleDates, e receiving.ScanEn
 	if e.ManualBestBefore != nil {
 		scan.BestBefore = e.ManualBestBefore
 	}
+}
+
+// checkDatesMatch — дата из кода обязана совпасть с датой, введённой руками
+// (партия/строка): расхождение — окончательный отказ скана (решение владельца
+// 25.09.2026), чтобы срок не подменился молча: ручное перекрытие кода тут
+// сработало бы «мимо глаз» оператора.
+func checkDatesMatch(dates ruleDates, e receiving.ScanEntry) error {
+	if dates.hasProduced && e.ManualProducedOn != nil && !dates.producedOn.Equal(*e.ManualProducedOn) {
+		return fmt.Errorf("дата выработки из штрих-кода (%s) не совпадает с введённой (%s) — поправьте партию или скан",
+			ruDate(dates.producedOn), ruDate(*e.ManualProducedOn))
+	}
+	if dates.hasBestBefore && e.ManualBestBefore != nil && !dates.bestBefore.Equal(*e.ManualBestBefore) {
+		return fmt.Errorf("срок годности из штрих-кода (%s) не совпадает с введённым (%s) — поправьте партию или скан",
+			ruDate(dates.bestBefore), ruDate(*e.ManualBestBefore))
+	}
+	return nil
 }
 
 // productResolve — результат определения товара по правилу (структура,

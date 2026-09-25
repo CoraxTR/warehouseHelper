@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -38,6 +39,10 @@ const (
 	// Правило коробки того же кода: кол-во вложений — из (30) 44-45.
 	gs1BoxRuleYMD = "50-3-13-20-6-44-2-36-6-28-6-ггммдд"
 )
+
+// gs1NoCodeRule — ШК без артикула (реальный кейс владельца): 13 цифр, только вес.
+// Товар сканам задаёт оператор: правило несёт один вес, кода товара не вычитывает.
+const gs1NoCodeRule = "13- -0-8-5- -0- -0"
 
 // addGS1Product заводит у поставщика товар с внешним кодом-ГТИН.
 func addGS1Product(repo *stubReceiveRepo) {
@@ -168,5 +173,68 @@ func TestResolveRuleDateOutOfCalendar(t *testing.T) {
 	raw := gs1Prefix + gs1Weight + "17" + "990732" + "11" + "260710" + gs1Tail
 	if _, err := uc.Resolve(context.Background(), cache, receiving.ScanEntry{Raw: raw}); err == nil {
 		t.Fatal("ожидалась ошибка о нераспознанной дате")
+	}
+}
+
+// --- товар задаёт оператор: правила без кода товара (решение владельца 25.09.2026) ---
+
+// NoItemCode — ни одно товарное правило не вычитывает код товара: скан сам товар
+// не определит, страница показывает выбор товара в шапке партии (а не в строке).
+func TestGetCacheNoItemCode(t *testing.T) {
+	cases := []struct {
+		name  string
+		rules []string
+		want  bool
+	}{
+		{"только правило без кода товара", []string{gs1NoCodeRule}, true},
+		{"только правило с кодом товара", []string{gs1RuleYMD}, false},
+		{"смешанные правила: режим включается", []string{gs1RuleYMD, gs1NoCodeRule}, true},
+		{"правил нет", nil, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			repo := testCacheRepo()
+			repo.supplier.DecodeRules = c.rules
+			uc := NewReceivingUseCase(repo, &stubStockAccepter{}, &stubWeightRecorder{})
+			cache, err := uc.GetCache(context.Background(), "sup-1")
+			if err != nil {
+				t.Fatalf("GetCache: %v", err)
+			}
+			if cache.NoItemCode != c.want {
+				t.Fatalf("NoItemCode = %v, want %v", cache.NoItemCode, c.want)
+			}
+		})
+	}
+}
+
+// Даты кода сверяются с введёнными руками (партия/строка): совпали — скан принят,
+// разошлись — отказ, а не молчаливая подмена срока.
+func TestResolveDateMismatchRejected(t *testing.T) {
+	uc, _ := newTestReceive()
+	cache, _ := uc.GetCache(context.Background(), "sup-1")
+
+	// extBarcode несёт выработку 29.08.2026 и срок 29.09.2026 (правило itemRule).
+	same := d(time.August, 29)
+	s, err := uc.Resolve(context.Background(), cache,
+		receiving.ScanEntry{Raw: extBarcode, ManualProducedOn: &same})
+	if err != nil {
+		t.Fatalf("совпадающая выработка: %v", err)
+	}
+	if s.ProducedOn == nil || !s.ProducedOn.Equal(same) {
+		t.Fatalf("выработка: %v, want %v", s.ProducedOn, same)
+	}
+
+	other := d(time.August, 28)
+	_, err = uc.Resolve(context.Background(), cache,
+		receiving.ScanEntry{Raw: extBarcode, ManualProducedOn: &other})
+	if err == nil || !strings.Contains(err.Error(), "не совпадает") {
+		t.Fatalf("расхождение выработки: ожидался отказ, получили %v", err)
+	}
+
+	bbOther := d(time.September, 30)
+	_, err = uc.Resolve(context.Background(), cache,
+		receiving.ScanEntry{Raw: extBarcode, ManualBestBefore: &bbOther})
+	if err == nil || !strings.Contains(err.Error(), "срок годности") {
+		t.Fatalf("расхождение срока: ожидался отказ, получили %v", err)
 	}
 }
