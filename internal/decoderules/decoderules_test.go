@@ -169,3 +169,126 @@ func TestRuleAgainstRealBarcode(t *testing.T) {
 		t.Errorf("конкатенация полей %q != исходный код %q", got, raw)
 	}
 }
+
+// --- формат дат в правиле: необязательный хвостовой токен (25.09.2026) ---
+
+// Дата в ШК поставщика не всегда ДДММГГГГ: последний токен правила задаёт
+// формат — «ггммдд» (GS1: AI 11 выработка, AI 17 срок) или «ддммгг».
+func TestParseItemDateFormat(t *testing.T) {
+	cases := []struct {
+		rule string
+		want DateFormat
+	}{
+		{"28-1-6-7-6-13-8-21-8", ""},                    // токена нет — исторический ДДММГГГГ
+		{"28-1-6-7-6-13-8-21-8-ддммгггг", DateDDMMYYYY}, // токен задан явно
+		{"28-1-6-7-6-13-6-21-6-ггммдд", DateYYMMDD},     // 6 цифр, год-месяц-день
+		{"28-1-6-7-6-13-6-21-6-ддммгг", DateDDMMYY},     // 6 цифр, день-месяц-год
+		{"28- -6-7-6-13-6-21-6-ггммдд", DateYYMMDD},     // без кода товара
+	}
+	for _, c := range cases {
+		r, err := ParseItem(c.rule)
+		if err != nil {
+			t.Errorf("ParseItem(%q): %v", c.rule, err)
+			continue
+		}
+		if r.DateFormat != c.want {
+			t.Errorf("ParseItem(%q).DateFormat = %q, want %q", c.rule, r.DateFormat, c.want)
+		}
+	}
+}
+
+func TestParseBoxDateFormat(t *testing.T) {
+	// Пять пар: код, вес, вложения, выработка (6), срок (6).
+	r, err := ParseBox("33-1-6-7-6-13-3-16-6-22-6-ггммдд")
+	if err != nil {
+		t.Fatalf("ParseBox: %v", err)
+	}
+	if r.DateFormat != DateYYMMDD {
+		t.Errorf("DateFormat = %q, want %q", r.DateFormat, DateYYMMDD)
+	}
+}
+
+// Name/Layout/Digits — единый источник правды для приёмки (Go) и страницы (JS
+// читает тот же токен из кеша).
+func TestDateFormatLayout(t *testing.T) {
+	cases := []struct {
+		format DateFormat
+		name   string
+		layout string
+		digits int
+	}{
+		{"", string(DateDDMMYYYY), "02012006", 8},
+		{DateDDMMYYYY, "ддммгггг", "02012006", 8},
+		{DateDDMMYY, "ддммгг", "020106", 6},
+		{DateYYMMDD, "ггммдд", "060102", 6},
+	}
+	for _, c := range cases {
+		if got := c.format.Name(); got != c.name {
+			t.Errorf("Name(%q) = %q, want %q", c.format, got, c.name)
+		}
+		if got := c.format.Layout(); got != c.layout {
+			t.Errorf("Layout(%q) = %q, want %q", c.format, got, c.layout)
+		}
+		if got := c.format.Digits(); got != c.digits {
+			t.Errorf("Digits(%q) = %d, want %d", c.format, got, c.digits)
+		}
+	}
+}
+
+// Неизвестный/лишний токен формата — ошибка сохранения карточки.
+func TestParseDateFormatErrors(t *testing.T) {
+	cases := []struct {
+		rule string
+		do   func(string) (Rule, error)
+	}{
+		{"28-1-6-7-6-13-8-21-8-ггм", ParseItem},              // незнакомый формат
+		{"28-1-6-7-6-13-8-21-8-6", ParseItem},                // число вместо формата
+		{"28-1-6-7-6-13-8-21-8-ггммдд-лишнее", ParseItem},    // лишний токен после формата
+		{"28-1-6-7-6-13-8-21-8-ггммдд-ддммгг", ParseItem},    // два формата
+		{"33-1-6-7-6-13-3-16-8-24-8-ддммгггг-ещё", ParseBox}, // коробка: лишний токен
+	}
+	for _, c := range cases {
+		if _, err := c.do(c.rule); err == nil {
+			t.Errorf("разбор %q: ожидалась ошибка", c.rule)
+		}
+	}
+}
+
+// Длина поля даты обязана совпадать с форматом: раньше 6-значное поле
+// сохранялось на карточке и падало только на приёмке («дата не распознана»),
+// теперь отказ приходит при сохранении — с подсказкой о формате.
+func TestParseDateLengthMustMatchFormat(t *testing.T) {
+	bad := []struct {
+		rule string
+		do   func(string) (Rule, error)
+	}{
+		{"28-1-6-7-6-13-6-21-6", ParseItem},            // 6 цифр, формата нет
+		{"28-1-6-7-6-13-6-21-6-ддммгггг", ParseItem},   // 6 цифр, формат 8-значный
+		{"28-1-6-7-6-13-8-21-8-ггммдд", ParseItem},     // 8 цифр, формат 6-значный
+		{"28-1-6-7-6-13-5-21-5-ггммдд", ParseItem},     // 5 цифр
+		{"33-1-6-7-6-13-3-16-8-24-8-ддммгг", ParseBox}, // коробка: 8 цифр, формат 6-значный
+	}
+	for _, c := range bad {
+		_, err := c.do(c.rule)
+		if err == nil {
+			t.Errorf("разбор %q: ожидалась ошибка длины поля даты", c.rule)
+			continue
+		}
+		if !strings.Contains(err.Error(), "формат") {
+			t.Errorf("разбор %q: в ошибке нет подсказки о формате: %v", c.rule, err)
+		}
+	}
+	// Без токена подсказка называет оба 6-значных формата — оператор правит
+	// карточку по тексту ошибки.
+	_, err := ParseItem("28-1-6-7-6-13-6-21-6")
+	if err == nil || !strings.Contains(err.Error(), string(DateYYMMDD)) || !strings.Contains(err.Error(), string(DateDDMMYY)) {
+		t.Errorf("подсказка без форматов: %v", err)
+	}
+	// Поле даты не задано (пустая позиция) — формат ни при чём.
+	if _, err := ParseItem("28-1-6-7-6- -0- -0"); err != nil {
+		t.Errorf("правило без дат длиной 6 отклонено: %v", err)
+	}
+	if _, err := ParseBox("33-1-6-7-6-13-3- -0- -0"); err != nil {
+		t.Errorf("правило коробки без дат отклонено: %v", err)
+	}
+}
