@@ -111,7 +111,7 @@ func (uc *ReceivingUseCase) GetCache(ctx context.Context, supplierID string) (*r
 		ByCode:     make(map[string]receiving.ProductRef),
 		BBByBatch: needBatchBestBefore(itemRules, receiving.ItemBestBeforeField) ||
 			needBatchBestBefore(boxRules, receiving.BoxBestBeforeField),
-		NoItemCode: !hasItemCodeRule(itemRules),
+		NoItemCode: anyItemRuleWithoutCode(itemRules),
 	}
 	seen := make(map[string]struct{}, len(barcodes))
 	for _, b := range barcodes {
@@ -226,12 +226,23 @@ func (uc *ReceivingUseCase) Resolve(ctx context.Context, cache *receiving.Cache,
 	return nil, receiving.ErrScanUnknown
 }
 
-// hasItemCodeRule — хоть одно товарное правило вычитывает код товара. Если ни
-// одно — поставщик работает «без артикула»: товар сканам задаёт оператор (шапка
-// партии), правило несёт только вес (и, может быть, даты). См. Cache.NoItemCode.
-func hasItemCodeRule(rules []receiving.DecodeRule) bool {
+// readsItemCode — правило вычитывает код товара (поле кода задано и не пустое).
+func readsItemCode(r receiving.DecodeRule) bool {
+	return decoderules.FieldCode < len(r.Fields) && r.Fields[decoderules.FieldCode].Pos > 0
+}
+
+// anyItemRuleWithoutCode — есть товарное правило, не вычитывающее код товара (или
+// правил нет вовсе). Тогда поставщик работает и «без артикула»: товар для таких
+// сканов задаёт оператор — партией, правило несёт из кода только вес (даты
+// сверяются с партией). Режим включается, если у поставщика ХОТЬ ОДНО такое
+// правило (решение владельца 25.09.2026), и в партии с заданным товаром скан, чей
+// код известен базе, не принимается. См. Cache.NoItemCode.
+func anyItemRuleWithoutCode(rules []receiving.DecodeRule) bool {
+	if len(rules) == 0 {
+		return true
+	}
 	for _, r := range rules {
-		if decoderules.FieldCode < len(r.Fields) && r.Fields[decoderules.FieldCode].Pos > 0 {
+		if !readsItemCode(r) {
 			return true
 		}
 	}

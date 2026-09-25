@@ -186,9 +186,9 @@ func TestGetCacheNoItemCode(t *testing.T) {
 		rules []string
 		want  bool
 	}{
-		{"правило без кода товара", []string{gs1NoCodeRule}, true},
-		{"правило с кодом товара", []string{gs1RuleYMD}, false},
-		{"смешанные правила", []string{gs1NoCodeRule, gs1RuleYMD}, false},
+		{"только правило без кода товара", []string{gs1NoCodeRule}, true},
+		{"только правило с кодом товара", []string{gs1RuleYMD}, false},
+		{"смешанные правила: режим включается", []string{gs1RuleYMD, gs1NoCodeRule}, true},
 		{"правил нет", nil, true},
 	}
 	for _, c := range cases {

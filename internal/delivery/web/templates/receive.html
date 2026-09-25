@@ -738,8 +738,8 @@
                     (s._code_unknown ? ' <span class="mismatch">код ' + esc(s._code_unknown) + ' не заведён</span>' : '') +
                     '</span>';
                 // У поставщика без кода товара товар задаёт партия: селект в строке
-                // не нужен (строка и так берёт товар партии).
-                if (!s._prod_code && !(CACHE && CACHE.no_item_code)) {
+                // нужен только как фолбэк — пока в партии товар не выбран.
+                if (!s._prod_code && !(CACHE && CACHE.no_item_code && b.product_id)) {
                     html += productSelect(rpid, 'row-product', 'partyField(this)', i);
                 }
                 if (isWeighted(row, b) && !s.weight_g) {
@@ -1356,15 +1356,22 @@
             }
 
             // Активная партия есть всегда — сканы идут в неё. Любые товары
-            // поставщика разрешены; исключение — партия, где товар задан РУКАМИ
-            // (код не несёт ни товара, ни сроков): скан несовпадающего товара
-            // бипает и не принимается.
+            // поставщика разрешены; исключение — партия, где товар задан РУКАМИ.
             var party = activeParty || addParty();
             var mp = partyManualProduct(party);
-            if (resolved.product_id && mp && resolved.product_id !== mp) {
+            // Поставщик, у которого есть правило без кода товара: в партии с
+            // заданным товаром сканы идут БЕЗ артикула (для них она и заведена),
+            // поэтому скан, чей код известен базе, не принимается — решение
+            // владельца 25.09.2026 (раньше бипал только несовпадающий товар).
+            // Коробки этой проверкой не задеты: у них свой поток (+ Коробка/555).
+            var noCodeMode = mp !== '' && resolved.kind !== 'box' && !!(CACHE && CACHE.no_item_code);
+            if (mp && resolved.product_id && (noCodeMode || resolved.product_id !== mp)) {
                 beep();
-                statusLine.textContent = 'Не товар партии: ' + (resolved.name || '') +
-                    ' — в партии задан товар «' + productName(mp) + '», скан не принят';
+                statusLine.textContent = noCodeMode
+                    ? 'В партии товар задан вручную — скан с кодом товара («' + (resolved.name || '') +
+                      '») не принят: в эту партию идут только ШК без артикула'
+                    : 'Не товар партии: ' + (resolved.name || '') +
+                      ' — в партии задан товар «' + productName(mp) + '», скан не принят';
                 render();
                 return;
             }
