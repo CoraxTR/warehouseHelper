@@ -23,6 +23,7 @@ type UseCase struct {
 	turnover  Turnover
 	writer    DiscountWriter
 	common    CommonNotifier
+	tasks     TaskOpener
 	warehouse WarehouseNotifier
 	now       func() time.Time
 
@@ -55,6 +56,7 @@ func NewUseCase(
 	turnover Turnover,
 	writer DiscountWriter,
 	common CommonNotifier,
+	tasks TaskOpener,
 	warehouse WarehouseNotifier,
 	now func() time.Time,
 ) *UseCase {
@@ -66,6 +68,7 @@ func NewUseCase(
 		turnover:  turnover,
 		writer:    writer,
 		common:    common,
+		tasks:     tasks,
 		warehouse: warehouse,
 		now:       now,
 		reg:       NewRegistry(),

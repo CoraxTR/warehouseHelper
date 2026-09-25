@@ -35,6 +35,7 @@ import (
 	"warehouseHelper/internal/stock"
 	sucase "warehouseHelper/internal/stock/usecase"
 	stockws "warehouseHelper/internal/stock/ws"
+	tusecase "warehouseHelper/internal/tasks/usecase"
 	"warehouseHelper/internal/telegram"
 	"warehouseHelper/internal/tempcleaner"
 	"warehouseHelper/internal/tempdir"
@@ -58,6 +59,7 @@ type DIContainer struct {
 	tg           *telegram.Notifier
 	stockStatus  *stockStatusNotifier
 	complaintsUC *cucase.UseCase
+	tasksUC      *tusecase.UseCase
 
 	// Юзкейсы
 	syncUC          *msucase.SyncUseCase
@@ -215,10 +217,11 @@ func (d *DIContainer) TelegramNotifier() *telegram.Notifier {
 }
 
 // StockStatusNotifier — уведомления о смене наличия в общий канал telegram
-// (имя товара — из каталога; без TG_COMMON_CHAT_ID — молчаливый no-op).
+// (имя товара — из каталога, задача с кнопкой отметки — модуль «Внутренние
+// задачи»; без TG_COMMON_CHAT_ID задачи не создаются).
 func (d *DIContainer) StockStatusNotifier() *stockStatusNotifier {
 	if d.stockStatus == nil {
-		d.stockStatus = NewStockStatusNotifier(d.TelegramNotifier(), d.GoodsUC())
+		d.stockStatus = NewStockStatusNotifier(d.TasksUC(), d.GoodsUC())
 	}
 
 	return d.stockStatus
@@ -430,6 +433,7 @@ func (d *DIContainer) DiscountsUC() *ducase.UseCase {
 			d.AverageSalesUC(),
 			discountsWriter{stock: d.StockUC()},
 			d.TelegramNotifier(),
+			d.TasksUC(),
 			d.TelegramNotifier(),
 			time.Now,
 		)
@@ -499,6 +503,19 @@ func (d *DIContainer) ComplaintsUC() *cucase.UseCase {
 	}
 
 	return d.complaintsUC
+}
+
+// TasksUC — сценарии модуля «Внутренние задачи»: уведомления общего канала
+// (наличие и изменения скидок) открываются задачами с одноразовой кнопкой
+// отметки, лента задач и база сотрудников — для страницы модуля. Швы:
+// PGClient — Repository (задачи и сотрудники), TelegramNotifier — Notifier
+// (сообщение-задача в общем канале, правка кнопок и текста, ответ на нажатие).
+func (d *DIContainer) TasksUC() *tusecase.UseCase {
+	if d.tasksUC == nil {
+		d.tasksUC = tusecase.NewUseCase(d.OrdersRepository(), d.TelegramNotifier())
+	}
+
+	return d.tasksUC
 }
 
 // MSOrdersUC — сценарии раздела «Заказы» МойСклад: поиск заказа по номеру,
@@ -625,7 +642,7 @@ func (d *DIContainer) ReserveWatchUC() *rwucase.UseCase {
 
 func (d *DIContainer) Handler() *myhttp.Handler {
 	if d.handlers == nil {
-		d.handlers = myhttp.NewHandler(d.SyncUC(), d.OrdersUC(), d.ExcelExportUC(), d.PdfExportUC(), d.BarcodeExportUC(), d.RefGoCheckAgainstUC(), d.WikiUC(), d.GoodsUC(), d.DayStateUC(), d.QRUC(), d.SuppliersUC(), d.StockUC(), d.StockHub(), d.ReceiveBarcodes(), d.ReceivingUC(), d.ComplaintsUC(), d.MSOrdersUC(), d.MSFormsUC(), d.ReturnsUC(), d.DiscountsUC(), d.Config().DiscountWindowCap)
+		d.handlers = myhttp.NewHandler(d.SyncUC(), d.OrdersUC(), d.ExcelExportUC(), d.PdfExportUC(), d.BarcodeExportUC(), d.RefGoCheckAgainstUC(), d.WikiUC(), d.GoodsUC(), d.DayStateUC(), d.QRUC(), d.SuppliersUC(), d.StockUC(), d.StockHub(), d.ReceiveBarcodes(), d.ReceivingUC(), d.ComplaintsUC(), d.TasksUC(), d.MSOrdersUC(), d.MSFormsUC(), d.ReturnsUC(), d.DiscountsUC(), d.Config().DiscountWindowCap)
 	}
 
 	return d.handlers

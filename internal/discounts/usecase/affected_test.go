@@ -43,7 +43,7 @@ func TestRecalcAffectedStockEventReturnsExpiryOutOfExpiryDay(t *testing.T) {
 	if err := h.uc.RecalcSurplus(ctx, now); err != nil {
 		t.Fatalf("RecalcSurplus (наполнение): %v", err)
 	}
-	h.common.texts, h.common.tries = nil, nil
+	h.tasks.texts, h.tasks.tries = nil, nil
 
 	// Событие стока: расформированный лот вернулся в остатки.
 	h.uc.MarkDirty("p-affected")
@@ -61,9 +61,9 @@ func TestRecalcAffectedStockEventReturnsExpiryOutOfExpiryDay(t *testing.T) {
 		t.Errorf("правка события: %+v, ожидалась ступень по сроку 40 у p-affected", w)
 	}
 
-	want := []string{"Творог (до " + day(5).Format(notifyLayout) + "): Необходимо поставить скидку 40%"}
-	if !reflect.DeepEqual(h.common.texts, want) {
-		t.Errorf("уведомления %q, want %q", h.common.texts, want)
+	want := []string{"Поставить скидку 40% на Творог (до " + day(5).Format(notifyLayout) + ")"}
+	if !reflect.DeepEqual(h.tasks.texts, want) {
+		t.Errorf("уведомления %q, want %q", h.tasks.texts, want)
 	}
 
 	// Свежий оборот спрашивают ровно по товару события.
@@ -96,7 +96,7 @@ func TestRecalcAffectedTelegramDayKeepsExpiryStill(t *testing.T) {
 	if err := h.uc.RecalcSurplus(ctx, now); err != nil {
 		t.Fatalf("RecalcSurplus (наполнение): %v", err)
 	}
-	h.common.texts, h.common.tries = nil, nil
+	h.tasks.texts, h.tasks.tries = nil, nil
 
 	// Событие стока: подбор заказа списал часть остатка пары.
 	h.uc.MarkDirty("p-affected")
@@ -105,8 +105,8 @@ func TestRecalcAffectedTelegramDayKeepsExpiryStill(t *testing.T) {
 	if got := h.batches(); len(got) != 0 {
 		t.Errorf("батчи записи: %+v, want ни одного: в ТГ-день ступень по сроку двигает план дня, а не событие стока", got)
 	}
-	if len(h.common.texts) != 0 {
-		t.Errorf("уведомления %q, want тишину: до подъёма скидка сайта не меняется", h.common.texts)
+	if len(h.tasks.texts) != 0 {
+		t.Errorf("уведомления %q, want тишину: до подъёма скидка сайта не меняется", h.tasks.texts)
 	}
 }
 
@@ -175,7 +175,7 @@ func TestRunStepsNoRecalcWithoutEvents(t *testing.T) {
 		t.Fatalf("первый проход без событий записал %d батчей: %v", got, h.batches())
 	}
 	loads, avgCalls := h.repo.loads, h.turn.avgCalls
-	h.common.texts, h.common.tries = nil, nil
+	h.tasks.texts, h.tasks.tries = nil, nil
 
 	// Тот же час, событий нет: снапшот входа и оборот не переспрашивают.
 	h.uc.runSteps(ctx, s)
@@ -183,8 +183,8 @@ func TestRunStepsNoRecalcWithoutEvents(t *testing.T) {
 		t.Errorf("проход без событий и смены часа пересчитывал: снапшот %d → %d, оборот %d → %d",
 			loads, h.repo.loads, avgCalls, h.turn.avgCalls)
 	}
-	if len(h.batches()) != 0 || len(h.common.texts) != 0 {
-		t.Errorf("проход без событий: записи %v, уведомления %q", h.batches(), h.common.texts)
+	if len(h.batches()) != 0 || len(h.tasks.texts) != 0 {
+		t.Errorf("проход без событий: записи %v, уведомления %q", h.batches(), h.tasks.texts)
 	}
 
 	// Событие стока в тот же час: пересчёт идёт сразу (ступень + уведомление),
@@ -194,9 +194,9 @@ func TestRunStepsNoRecalcWithoutEvents(t *testing.T) {
 	if got := len(h.batches()); got != 1 {
 		t.Fatalf("проход с событием записал %d батчей, ожидался 1: %v", got, h.batches())
 	}
-	want := []string{"Творог (до " + day(5).Format(notifyLayout) + "): Необходимо поставить скидку 40%"}
-	if !reflect.DeepEqual(h.common.texts, want) {
-		t.Errorf("уведомления %q, want %q", h.common.texts, want)
+	want := []string{"Поставить скидку 40% на Творог (до " + day(5).Format(notifyLayout) + ")"}
+	if !reflect.DeepEqual(h.tasks.texts, want) {
+		t.Errorf("уведомления %q, want %q", h.tasks.texts, want)
 	}
 	if h.turn.avgCalls != avgCalls+1 {
 		t.Errorf("оборот спрашивали %d раз, ожидался %d: час события не отмечен",

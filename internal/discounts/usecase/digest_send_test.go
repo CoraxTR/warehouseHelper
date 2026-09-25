@@ -24,7 +24,7 @@ type digestHarness struct {
 func newDigestHarness(now time.Time) *digestHarness {
 	repo := newFakeDiscountRepo()
 	common := &fakeCommonNotifier{}
-	uc := NewUseCase(repo, nil, nil, common, nil, func() time.Time { return now })
+	uc := NewUseCase(repo, nil, nil, common, nil, nil, func() time.Time { return now })
 
 	return &digestHarness{uc: uc, repo: repo, common: common, now: now}
 }

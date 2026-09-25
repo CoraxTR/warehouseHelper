@@ -104,6 +104,11 @@ func NewRouter(h *Handler) *http.ServeMux {
 	mux.HandleFunc("POST /complaint/photo/delete", h.ComplaintPhotoDelete) // удалить фото
 	mux.HandleFunc("GET /complaint/photo", h.ComplaintPhotoFile)           // раздача фото из архива (img src)
 
+	// Модуль «Внутренние задачи»: уведомления общего чата с отметкой «кто
+	// выполнил» и база сотрудников для кнопок отметки.
+	mux.HandleFunc("GET /tasks", h.TasksPage)            // лента задач и отметок
+	mux.HandleFunc("/tasks/employees", h.TasksEmployees) // база сотрудников: GET — список и форма, POST — добавить/удалить
+
 	// Метрики приложения для Prometheus (скрейпит внешний сервер).
 	mux.Handle("/metrics", metrics.Handler())
 
