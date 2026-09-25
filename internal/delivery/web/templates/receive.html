@@ -156,8 +156,26 @@
             return el.getAttribute(name);
         }
 
-        function parseDate(s) {
-            if (!s || s.length !== 8) { return null; }
+        // parseDate — дата из ШК по формату правила: без формата ДДММГГГГ (8 цифр),
+        // 'ггммдд' и 'ддммгг' — 6 цифр. Двузначный год разворачиваем тем же
+        // порогом, что Go (69..99 → 19xx, иначе 20xx): иначе клиент и сервер
+        // читали бы один код разными годами.
+        function yyToYear(yy) {
+            var n = parseInt(yy, 10);
+            return (n >= 69 ? 1900 : 2000) + n;
+        }
+
+        function parseDate(s, fmt) {
+            if (!s) { return null; }
+            if (fmt === 'ггммдд') {
+                if (s.length !== 6) { return null; }
+                return '' + yyToYear(s.substr(0, 2)) + '-' + s.substr(2, 2) + '-' + s.substr(4, 2);
+            }
+            if (fmt === 'ддммгг') {
+                if (s.length !== 6) { return null; }
+                return '' + yyToYear(s.substr(4, 2)) + '-' + s.substr(2, 2) + '-' + s.substr(0, 2);
+            }
+            if (s.length !== 8) { return null; }
             return s.substr(4, 4) + '-' + s.substr(2, 2) + '-' + s.substr(0, 2);
         }
 
@@ -445,9 +463,9 @@
             // Выработка — поле 3 у коробки (2-е — кол-во вложений) и поле 2 у
             // куска: сдвиг индекса читал бы у коробки кол-во как дату.
             var pd = sliceRule(rule, raw, kind === 'box' ? 3 : 2);
-            if (pd) { scan.produced_on = parseDate(pd); scan._pd_code = true; }
+            if (pd) { scan.produced_on = parseDate(pd, rule.date_format); scan._pd_code = true; }
             var bd = sliceRule(rule, raw, kind === 'box' ? 4 : 3);
-            if (bd) { scan.best_before = parseDate(bd); scan._bb_code = true; }
+            if (bd) { scan.best_before = parseDate(bd, rule.date_format); scan._bb_code = true; }
             if (kind === 'box') {
                 var q = sliceRule(rule, raw, 2);
                 if (q) { scan.qty = parseInt(q, 10); scan.declared_qty = scan.qty; }

@@ -46,9 +46,13 @@ type Cache struct {
 
 // DecodeRule — распарсенное правило вычитки поставщика (decoderules.Rule
 // не экспортируем наружу: пакет decoderules — деталь реализации).
+// DateFormat — формат дат правила токеном из decoderules («ддммгг»/«ггммдд»/
+// «ддммгггг»); пусто — исторический ДДММГГГГ. Уезжает на страницу приёмки в
+// кеше: JS читает даты тем же форматом, что и сервер.
 type DecodeRule struct {
-	Length int         `json:"length"`
-	Fields []RuleField `json:"fields"`
+	Length     int         `json:"length"`
+	DateFormat string      `json:"date_format"`
+	Fields     []RuleField `json:"fields"`
 }
 
 // Индексы полей в DecodeRule.Fields: у правила товара срок — 3-е поле,

@@ -172,7 +172,11 @@ func parseRules(rules []string, parse func(string) (decoderules.Rule, error)) ([
 		if err != nil {
 			return nil, err
 		}
-		dr := receiving.DecodeRule{Length: parsed.Length, Fields: make([]receiving.RuleField, len(parsed.Fields))}
+		dr := receiving.DecodeRule{
+			Length:     parsed.Length,
+			DateFormat: string(parsed.DateFormat),
+			Fields:     make([]receiving.RuleField, len(parsed.Fields)),
+		}
 		for i, f := range parsed.Fields {
 			dr.Fields[i] = receiving.RuleField{Pos: f.Pos, Len: f.Len}
 		}
@@ -433,7 +437,7 @@ func fillRuleScanData(scan *receiving.DecodedScan, rule receiving.DecodeRule, ra
 		}
 	}
 
-	// Даты: выработка и срок (ДДММГГГГ) — правило или ручной ввод строки.
+	// Даты: выработка и срок (формат правила) — правило или ручной ввод строки.
 	dates, err := resolveRuleDates(rule, raw, kind)
 	if err != nil {
 		return err
@@ -605,16 +609,18 @@ func resolveRuleDates(rule receiving.DecodeRule, raw string, kind receiving.Scan
 	}, nil
 }
 
-// resolveRuleDate вычитывает дату ДДММГГГГ из поля правила; ok=false — поля
-// не задано (дата известна не всегда: у куска в правиле может не быть срока).
+// resolveRuleDate вычитывает дату из поля правила форматом правила (по
+// умолчанию ДДММГГГГ, «ггммдд»/«ддммгг» — 6 цифр); ok=false — поля не задано
+// (дата известна не всегда: у куска в правиле может не быть срока).
 func resolveRuleDate(rule receiving.DecodeRule, raw string, field int, label string) (time.Time, bool, error) {
 	d, ok := sliceRule(rule, raw, field)
 	if !ok {
 		return time.Time{}, false, nil
 	}
-	t, err := time.Parse("02012006", d)
+	format := decoderules.DateFormat(rule.DateFormat)
+	t, err := time.Parse(format.Layout(), d)
 	if err != nil {
-		return time.Time{}, false, fmt.Errorf("%s %q не распознана (ожидается ДДММГГГГ)", label, d)
+		return time.Time{}, false, fmt.Errorf("%s %q не распознана (ожидается %s)", label, d, format.Name())
 	}
 	return t, true, nil
 }
