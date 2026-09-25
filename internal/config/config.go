@@ -100,6 +100,11 @@ type AppConfig struct {
 	// DiscountTGRaiseTime — время подъёма general до telegram (16:00 по
 	// умолчанию), от полуночи, локальное время процесса.
 	DiscountTGRaiseTime time.Duration
+	// PickingRetention — срок хранения журнала подбора заказов (модуль msorders):
+	// строки старше удаляются фоновой задачей. Номер заказа в МС начинается
+	// заново каждый год, поэтому старые записи обязаны уходить — иначе поиск по
+	// номеру мог бы встретить прошлогоднего тёзку.
+	PickingRetention time.Duration
 }
 
 // QRConfig — модуль «Честный знак»: фото кодов маркировки по заказам.
@@ -226,6 +231,8 @@ func loadAppconfig() *AppConfig {
 		}
 	}
 
+	pickingRetention := loadPickingRetention()
+
 	return &AppConfig{
 		HTTPAddress:          httpAddress,
 		TempCleanupMaxAge:    tempCleanupMaxAge,
@@ -235,7 +242,24 @@ func loadAppconfig() *AppConfig {
 		DiscountTelegramCap:  discountTelegramCap,
 		DiscountTGPlanTime:   discountTGPlanTime,
 		DiscountTGRaiseTime:  discountTGRaiseTime,
+		PickingRetention:     pickingRetention,
 	}
+}
+
+// loadPickingRetention — срок хранения журнала подбора заказов (модуль
+// msorders): PICKJOURNAL_RETENTION_DAYS в днях, по умолчанию 180 дней.
+// Неположительное или неразбираемое значение — дефолт (как у остальных
+// счётчиков приложения).
+func loadPickingRetention() time.Duration {
+	const defaultRetention = 180 * 24 * time.Hour
+
+	if daysStr := os.Getenv("PICKJOURNAL_RETENTION_DAYS"); daysStr != "" {
+		if days, err := strconv.Atoi(daysStr); err == nil && days > 0 {
+			return time.Duration(days) * 24 * time.Hour
+		}
+	}
+
+	return defaultRetention
 }
 
 type MSWorker struct {

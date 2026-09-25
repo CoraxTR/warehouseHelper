@@ -158,6 +158,7 @@ func (a *App) initDeps() {
 		a.initBotPoller,
 		a.initReturns,
 		a.initReserveWatch,
+		a.initMSOrders,
 	}
 
 	for _, init := range inits {
@@ -313,6 +314,13 @@ func (a *App) initBotPoller() {
 // латиницей, а русское название — в описании.
 const discountsCommand = "discounts"
 
+// srokiCommand — имя бот-команды сроков годности в заказе. Как и у скидок,
+// имя латиницей: Telegram принимает в именах команд только строчные латинские
+// буквы, цифры и подчёркивание — кириллическое «/сроки» не подсвечивается, в
+// меню «/» не показывается и тапом не набирается. Русское название («Сроки
+// годности в заказе») живёт в описании меню.
+const srokiCommand = "sroki"
+
 // botCommands — меню команд бота (кнопка «/» в клиентах Telegram).
 //
 // setMyCommands замещает список ЦЕЛИКОМ, поэтому здесь лежит полный перечень
@@ -320,29 +328,40 @@ const discountsCommand = "discounts"
 // сообщений: имя в меню и в isDiscountsCommand обязаны совпадать, иначе команда
 // будет видна, но не отвечает (проверка — TestBotCommandsMatchParser).
 func botCommands() []telegram.BotCommand {
-	return []telegram.BotCommand{{
-		Command:     discountsCommand,
-		Description: "Актуальный отчёт по скидкам",
-	}}
+	return []telegram.BotCommand{
+		{
+			Command:     discountsCommand,
+			Description: "Актуальный отчёт по скидкам",
+		},
+		{
+			Command:     srokiCommand,
+			Description: "Сроки годности в заказе",
+		},
+	}
 }
 
-// botMessageHandler — обработчик текстовых команд бота. Сейчас одна: /discounts —
-// отчёт по скидкам (тот же текст, что в дайджест 09:00) в чат отправителя.
-// Чужие сообщения игнорируются: отвечать на них — дело других модулей.
+// botMessageHandler — обработчик текстовых команд бота: /discounts — отчёт по
+// скидкам (тот же текст, что в дайджест 09:00), /sroki <номер> — сроки годности
+// подобранных единиц заказа; оба отвечают в чат отправителя. Чужие сообщения
+// игнорируются: отвечать на них — дело других модулей.
 //
 // Юзкейс собирается ЗДЕСЬ, до подписки обработчика: за ленивым геттером стоит
 // создание пула БД (context.Background() внутри NewPGClient), а такая цепочка
 // из ctx-функции не проходит линт (contextcheck). Контекст команды уходит в
 // ReplyDigest на каждом вызове.
 func (a *App) botMessageHandler() func(context.Context, telegram.Message) error {
-	uc := a.di.DiscountsUC()
+	discountsUC := a.di.DiscountsUC()
+	msOrdersUC := a.di.MSOrdersUC()
 
 	return func(ctx context.Context, msg telegram.Message) error {
-		if !isDiscountsCommand(msg.Text) {
-			return nil
+		if isDiscountsCommand(msg.Text) {
+			return discountsUC.ReplyDigest(ctx, msg.ChatID)
+		}
+		if isSrokiCommand(msg.Text) {
+			return msOrdersUC.ReplyShelfLife(ctx, msg.ChatID, commandArg(msg.Text))
 		}
 
-		return uc.ReplyDigest(ctx, msg.ChatID)
+		return nil
 	}
 }
 
@@ -350,6 +369,23 @@ func (a *App) botMessageHandler() func(context.Context, telegram.Message) error 
 // («/discounts@warehouse_bot», «/discounts ?»).
 func isDiscountsCommand(text string) bool {
 	return commandOf(text) == discountsCommand
+}
+
+// isSrokiCommand — «/sroki» с необязательным адресом бота; номер заказа — в
+// хвосте сообщения («/sroki 19379», «/sroki@warehouse_bot 19379»).
+func isSrokiCommand(text string) bool {
+	return commandOf(text) == srokiCommand
+}
+
+// commandArg — хвост сообщения после имени команды (аргумент команды) без
+// ведущих пробелов; пусто — аргумента нет.
+func commandArg(text string) string {
+	trimmed := strings.TrimSpace(text)
+	if i := strings.IndexAny(trimmed, " \n	"); i >= 0 {
+		return strings.TrimSpace(trimmed[i+1:])
+	}
+
+	return ""
 }
 
 // commandOf — имя бот-команды из текста сообщения: первое слово, приведённое к
@@ -386,6 +422,15 @@ func (a *App) initReturns() {
 			slog.Info(fmt.Sprintf("returns: наблюдатель завершился: %v", err))
 		}
 	})
+}
+
+// initMSOrders запускает суточную чистку журнала подбора (модуль msorders):
+// поллера у модуля нет, а журналу нужна задача по возрасту строк — номер заказа
+// в МС начинается заново каждый год, и прошлогодний тёзка не должен попадаться
+// в ответе на /sroki. Срок хранения — PICKJOURNAL_RETENTION_DAYS (180 дней).
+func (a *App) initMSOrders() {
+	uc := a.di.MSOrdersUC()
+	a.background("msorders: чистка журнала подбора", func() { uc.RunShelfLifeCleanup(a.ctx) })
 }
 
 // initReserveWatch запускает наблюдатель резервов заказов (модуль

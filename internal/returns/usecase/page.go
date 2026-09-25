@@ -131,6 +131,11 @@ func (uc *UseCase) AcceptReturn(ctx context.Context, eventID string, scans []str
 		return 0, err
 	}
 
+	// Товар снят с заказа: даты подобранных единиц убираем из журнала подбора
+	// (отмена — весь заказ, удаление позиций — по uuid товаров события). Ошибка
+	// журнала расформирование не отменяет: остатки уже приняты, событие закрыто.
+	uc.clearShelfLife(ctx, ev, removedProducts(ev, expected))
+
 	return len(units), nil
 }
 
@@ -163,7 +168,67 @@ func (uc *UseCase) CloseManual(ctx context.Context, eventID string, scans []stri
 			slog.Error("returns recount notify failed", "event", ev.ID, "err", err)
 		}
 	}
+
+	// Куски в остатки НЕ писались — даты по позициям события недостоверны, из
+	// журнала подбора их снимаем (пересчёт склада — по уведомлению выше).
+	uc.clearShelfLifeFromEvent(ctx, ev)
+
 	return nil
+}
+
+// clearShelfLife снимает даты подобранных единиц расформированного заказа в
+// журнале подбора (шов msorders): productIDs пусто — весь заказ, иначе только
+// товары удалённых позиций. Ошибка не отменяет расформирование (остатки приняты,
+// событие закрыто) — текст уходит в лог.
+func (uc *UseCase) clearShelfLife(ctx context.Context, ev *returns.ReturnEvent, productIDs []string) {
+	if uc.shelfLife == nil {
+		return
+	}
+	if err := uc.shelfLife.ClearShelfLife(ctx, ev.OrderID, productIDs); err != nil {
+		slog.Error("returns: журнал сроков не очищен",
+			"order", ev.OrderID, "kind", string(ev.Kind), "err", err)
+	}
+}
+
+// clearShelfLifeFromEvent — то же для ручного закрытия: состава удалённых
+// позиций под рукой нет (unclosedRows отдаёт только незакрытые строки, а снять
+// даты надо по всем позициям события), поэтому читаем состав заново. Ошибка
+// чтения — журнал не трогаем: чистить по догадке хуже, чем не чистить.
+func (uc *UseCase) clearShelfLifeFromEvent(ctx context.Context, ev *returns.ReturnEvent) {
+	if uc.shelfLife == nil {
+		return
+	}
+	if ev.Kind != returns.KindRemoved {
+		uc.clearShelfLife(ctx, ev, nil)
+
+		return
+	}
+
+	expected, err := uc.buildExpected(ctx, ev)
+	if err != nil {
+		slog.Warn("returns: состав события недоступен, журнал сроков не очищен",
+			"event", ev.ID, "err", err)
+
+		return
+	}
+	uc.clearShelfLife(ctx, ev, removedProducts(ev, expected))
+}
+
+// removedProducts — uuid товаров удалённых позиций события. Пустой результат —
+// заказ отменён целиком (или состав без товаров): журнал чистится по заказу.
+func removedProducts(ev *returns.ReturnEvent, expected []returns.Expected) []string {
+	if ev.Kind != returns.KindRemoved {
+		return nil
+	}
+
+	ids := make([]string, 0, len(expected))
+	for i := range expected {
+		if expected[i].ProductID != "" {
+			ids = append(ids, expected[i].ProductID)
+		}
+	}
+
+	return ids
 }
 
 // unclosedRows — строки события, которые не закрыты присланными сканами (для

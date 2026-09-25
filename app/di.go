@@ -519,6 +519,12 @@ func (d *DIContainer) MSOrdersUC() *mordersuc.UseCase {
 		)
 		// Статус «Вес подобран» (env): пусто — подбор статус не меняет.
 		d.msOrdersUC.SetWeightPickedState(d.Config().Refs.WeightPickedStateID)
+		// Журнал подбора (таблица order_picking) — PGClient напрямую: сигнатуры
+		// шва совпадают дословно. Ответ на /sroki уходит в чат отправителя
+		// (TelegramNotifier.SendDetails), ретеншен журнала — из конфига.
+		d.msOrdersUC.SetPickingJournal(d.OrdersRepository())
+		d.msOrdersUC.SetChatSender(d.TelegramNotifier())
+		d.msOrdersUC.SetShelfLifeRetention(d.Config().PickingRetention)
 	}
 
 	return d.msOrdersUC
@@ -586,6 +592,9 @@ func (d *DIContainer) ReturnsUC() *retucase.UseCase {
 			d.TelegramNotifier(),
 			d.MSClient(),
 		)
+		// Расформирование снимает даты подобранных единиц из журнала подбора
+		// (модуль msorders): отмена — весь заказ, удаление позиций — по товарам.
+		d.returnsUC.SetShelfLife(d.MSOrdersUC())
 	}
 
 	return d.returnsUC
