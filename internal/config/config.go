@@ -1,9 +1,12 @@
 package config
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -138,9 +141,8 @@ func loadQRConfig() *QRConfig {
 // ComplaintsConfig — модуль «Жалобы»: zip-архивы фото обращений и публичный
 // адрес для ссылок в уведомлениях. PhotosDir — папка архивов <id>.zip (по
 // умолчанию ../ComplaintsPhotos — от каталога cmd/, как tempdir "../temp");
-// PublicURL — адрес, по которому приложение видно в локалке (по умолчанию
-// http://warehouse.local:8080; mDNS, поэтому ссылки открываются только в
-// локальной сети).
+// PublicURL — база ссылок на приложение (кнопки «Подобрать» и
+// «Расформировать», ссылки на обращения), её собирает publicURL.
 type ComplaintsConfig struct {
 	PhotosDir string
 	PublicURL string
@@ -152,17 +154,151 @@ func loadComplaintsConfig() *ComplaintsConfig {
 		photosDir = "../ComplaintsPhotos"
 	}
 
-	publicURL := os.Getenv("COMPLAINTS_PUBLIC_URL")
-	if publicURL == "" {
-		// http по умолчанию: ссылки открываются только в локальной сети
-		// (mDNS warehouse.local), TLS-сертификата у приложения нет.
-		publicURL = "http://warehouse.local:8080"
-	}
-
 	return &ComplaintsConfig{
 		PhotosDir: photosDir,
-		PublicURL: publicURL,
+		PublicURL: publicURL(),
 	}
+}
+
+// defaultPublicURL — адрес ссылок, когда настроек нет вовсе. mDNS-имя
+// warehouse.local резолвится только в локальной сети и только там, где работает
+// mDNS: у клиентов с VPN в режиме TUN запрос уходит в чужой DNS и имя не
+// находится, поэтому адрес настраиваемый. Оставлен последним рубежом — ссылка
+// без хоста хуже нерабочей.
+const defaultPublicURL = "http://warehouse.local:8080"
+
+// publicURL — база адресов в уведомлениях: ссылки на обращения, кнопки
+// «Подобрать» (reservewatch) и «Расформировать» (returns).
+//
+// Источники по убыванию старшинства:
+//  1. COMPLAINTS_PUBLIC_URL — адрес, заданный целиком: он старше всего, чтобы
+//     прежняя настройка продолжала работать.
+//  2. APP_PUBLIC_HOST + порт из APP_HTTPADDRESS — обычный случай: хост задаёт
+//     владелец, порт не дублируется второй настройкой.
+//  3. Локальный IPv4 приложения (APP_PUBLIC_HOST не задан) — работает без
+//     правки .env, но зависит от того, какой адрес машина отдаст первой.
+//  4. defaultPublicURL.
+//
+// Порт обязателен: без него адрес на шаге 2/3 не собирается (ссылка на порт по
+// умолчанию вела бы мимо приложения) и источник пропускается.
+func publicURL() string {
+	if url := strings.TrimSpace(os.Getenv("COMPLAINTS_PUBLIC_URL")); url != "" {
+		return url
+	}
+
+	port := httpPort()
+	if port == "" {
+		slog.Info("адрес ссылок: порт не задан в APP_HTTPADDRESS", "url", defaultPublicURL)
+
+		return defaultPublicURL
+	}
+
+	host := cmp.Or(strings.TrimSpace(os.Getenv("APP_PUBLIC_HOST")), localIPv4())
+	if host == "" {
+		slog.Info("адрес ссылок: APP_PUBLIC_HOST пуст и локальный IPv4 не найден", "url", defaultPublicURL)
+
+		return defaultPublicURL
+	}
+
+	// Хост с портом («192.168.1.71:9000») принимаем как готовую пару: склейка
+	// через JoinHostPort дала бы адрес с двумя портами.
+	url := "http://" + host
+	if _, _, err := net.SplitHostPort(host); err != nil {
+		url = "http://" + net.JoinHostPort(host, port)
+	}
+
+	slog.Info("адрес ссылок в уведомлениях", "url", url)
+
+	return url
+}
+
+// httpPort — порт из APP_HTTPADDRESS (":8080", "0.0.0.0:8080",
+// "192.168.1.71:8080"). Пустая строка — адрес пуст, без порта, порт не число
+// или вне 1..65535.
+func httpPort() string {
+	_, port, err := net.SplitHostPort(strings.TrimSpace(os.Getenv("APP_HTTPADDRESS")))
+	if err != nil {
+		return ""
+	}
+
+	n, err := strconv.Atoi(port)
+	if err != nil || n < 1 || n > 65535 {
+		return ""
+	}
+
+	return port
+}
+
+// localIPv4 — IPv4-адрес машины для ссылок: частный адрес (ссылки открывают из
+// локальной сети) предпочтительнее прочего, loopback и link-local (169.254.*)
+// пропускаются. Пустая строка — подходящих адресов нет.
+func localIPv4() string {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return ""
+	}
+
+	candidates := make([]netip.Addr, 0, len(addrs))
+	for _, a := range addrs {
+		addr, ok := ipv4Of(a)
+		if !ok {
+			continue
+		}
+		candidates = append(candidates, addr)
+	}
+
+	addr, ok := firstUsableIPv4(candidates)
+	if !ok {
+		return ""
+	}
+
+	return addr.String()
+}
+
+// ipv4Of — IPv4-адрес интерфейса из net.Addr: IPv6 и не-IP значения
+// отбрасываются.
+func ipv4Of(a net.Addr) (netip.Addr, bool) {
+	var ip net.IP
+	switch v := a.(type) {
+	case *net.IPNet:
+		ip = v.IP
+	case *net.IPAddr:
+		ip = v.IP
+	default:
+		return netip.Addr{}, false
+	}
+
+	addr, ok := netip.AddrFromSlice(ip)
+	if !ok {
+		return netip.Addr{}, false
+	}
+
+	addr = addr.Unmap()
+	if !addr.Is4() {
+		return netip.Addr{}, false
+	}
+
+	return addr, true
+}
+
+// firstUsableIPv4 — первый пригодный для ссылки адрес: частный, если он есть в
+// списке, иначе первый не-loopback и не link-local. Отдельная функция (а не
+// цикл в localIPv4), чтобы выбор адреса проверялся тестом без реальных
+// интерфейсов машины.
+func firstUsableIPv4(addrs []netip.Addr) (netip.Addr, bool) {
+	for _, addr := range addrs {
+		if addr.Is4() && addr.IsPrivate() {
+			return addr, true
+		}
+	}
+
+	for _, addr := range addrs {
+		if addr.Is4() && !addr.IsLoopback() && !addr.IsLinkLocalUnicast() {
+			return addr, true
+		}
+	}
+
+	return netip.Addr{}, false
 }
 
 func loadAppconfig() *AppConfig {
