@@ -230,3 +230,53 @@ func TestRunAffectedKeepsEventOnError(t *testing.T) {
 		t.Errorf("правка после сбоя: %+v, ожидалась ступень по сроку 40 у p-one", w)
 	}
 }
+
+// Пара уже со скидкой: событие стока вне КТ-дня стоящее значение не поднимает —
+// ступень пишется только на пустое место (решение владельца 28.09.2026). Кейс с
+// сайта 28.09.2026: в субботу плановый пересмотр поставил лоту 30 %, в понедельник
+// подбор заказа отметил товар событием — и «ступень на сегодня» (40 %) ушла бы на
+// сайт на день раньше плана (вторник: план дня 14:00 и подъём 16:00).
+func TestRecalcAffectedKeepsAppliedExpiryStill(t *testing.T) {
+	now := day(0).Add(8 * time.Hour) // понедельник, 08:00 — вне КТ-дней
+	h := newRecalcHarness(now,
+		// D = 5 → ступень 40; у первой пары в канале сайта стоит 10 %.
+		lotInput("p-applied", "Творог", day(5), 20, shelfLifeInput(30), plainInput(10)),
+		lotInput("p-empty", "Молоко", day(5), 20, shelfLifeInput(30)),
+	)
+	ctx := context.Background()
+
+	// Наполняем реестр (первый снапшот процесса уведомлений не даёт).
+	if err := h.uc.RecalcSurplus(ctx, now); err != nil {
+		t.Fatalf("RecalcSurplus (наполнение): %v", err)
+	}
+	h.tasks.texts, h.tasks.tries = nil, nil
+
+	// Событие стока по обоим товарам: подбор заказа списал часть остатка.
+	h.uc.MarkDirty("p-applied", "p-empty")
+	h.uc.runSteps(ctx, affectedSchedule())
+
+	if got := len(h.batches()); got != 1 {
+		t.Fatalf("батчей записи: %d, ожидался один: %v", got, h.batches())
+	}
+	writes := h.batches()[0]
+	if len(writes) != 1 {
+		t.Fatalf("правок в батче: %d, ожидалась одна: %+v", len(writes), writes)
+	}
+	if w := writes[0]; w.ProductID != "p-empty" || w.General == nil || *w.General != 40 ||
+		w.Source != discounts.SourceExpiry.String() {
+		t.Errorf("правка события: %+v, ожидалась ступень 40 у пары без скидки (p-empty)", w)
+	}
+
+	// Значение пары со скидкой не тронуто: ступень на пустое место пишем, стоящее
+	// не поднимаем.
+	for _, in := range h.repo.inputs {
+		if in.ProductID == "p-applied" && (in.GeneralPlain == nil || *in.GeneralPlain != 10) {
+			t.Errorf("general пары со скидкой стал %v, want 10: ступень вне КТ-дня стоящее значение не поднимает", in.GeneralPlain)
+		}
+	}
+
+	want := []string{"Поставить скидку 40% на Молоко (до " + day(5).Format(notifyLayout) + ")"}
+	if !reflect.DeepEqual(h.tasks.texts, want) {
+		t.Errorf("уведомления %q, want %q", h.tasks.texts, want)
+	}
+}
