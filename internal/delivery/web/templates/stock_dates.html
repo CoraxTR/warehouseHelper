@@ -335,7 +335,8 @@
             }
             document.getElementById('stock-body').innerHTML = html;
             renderDataCount();
-            applyPendingFocus(); // строка, найденная поиском: фокус + мигание
+            applyPendingFocus(); // строка, найденная поиском: фокус
+            blinkReapply();     // мигание продолжается после пересборки tbody
         }
 
         // Диагностика в статусе соединения: после рендера показывает, сколько
@@ -590,7 +591,7 @@
         // Стрелки — выбор, Enter — переход, Esc — закрыть список.
         // keyCode читаем вместе с key: старые браузеры склада знают только keyCode.
         function onSearchKey(ev) {
-            var kc = ev.keyCode || 0;
+            var kc = ev.keyCode || ev.which || 0;
             var key = ev.key || '';
             if (kc === 40 || key === 'ArrowDown' || key === 'Down') {
                 ev.preventDefault();
@@ -685,8 +686,8 @@
             return new Date().getTime();
         }
 
-        // Фокус и мигание ставим ПОСЛЕ перерисовки: render() собирает tbody
-        // заново, ссылку на строку хранить нельзя — ищем по data-row-product.
+        // Фокус ставим ПОСЛЕ перерисовки: render() собирает tbody заново,
+        // ссылку на строку хранить нельзя — ищем по data-row-product.
         // Ждём до 5 с: строка может появиться не в этой перерисовке (ws-дельта).
         function applyPendingFocus() {
             if (!PENDING_FOCUS) {
@@ -700,8 +701,9 @@
             if (!row) {
                 return;
             }
+            var id = PENDING_FOCUS.product;
             PENDING_FOCUS = null;
-            row.className = 'row-blink'; // мигание — см. raven-guard.css
+            blinkStart(id); // мигание: своим таймером, см. ниже
             var cell = nameCell(row);
             if (cell && cell.focus) {
                 try {
@@ -709,6 +711,69 @@
                 } catch (e) { /* браузер может отказать — мигания достаточно */ }
             }
             scrollRowIntoView(row);
+        }
+
+        // Мигание найденной строки делаем сами, inline-фоном по ячейкам:
+        // CSS-анимация на td в старых браузерах склада не отрисовывалась, а класс
+        // слетал при каждой пересборке tbody (ws-изменение, опрос окна раз в минуту).
+        // Каждую итерацию строку ищем заново — ссылка на ячейки устаревает.
+        var BLINK_STEPS = 6;    // сколько раз мигнуть
+        var BLINK_HALF_MS = 200; // половина цикла вкл/выкл (6 * 2 * 200 мс = 2.4 с)
+        var BLINK_COLOR = '#7A1B22';
+        var BLINK = { product: null, left: 0, on: false, timer: 0 };
+
+        function blinkStart(id) {
+            blinkStop();
+            BLINK.product = id;
+            BLINK.left = BLINK_STEPS;
+            BLINK.on = false;
+            blinkTick();
+        }
+
+        function blinkStop() {
+            if (BLINK.timer) {
+                clearTimeout(BLINK.timer);
+                BLINK.timer = 0;
+            }
+            if (BLINK.product) {
+                blinkPaint(BLINK.product, '');
+            }
+            BLINK.product = null;
+            BLINK.left = 0;
+            BLINK.on = false;
+        }
+
+        // Покрасить ячейки строки: цвет — мигание, пустая строка — как было.
+        function blinkPaint(id, color) {
+            var row = rowByProduct(id);
+            if (!row) {
+                return;
+            }
+            var tds = row.getElementsByTagName('td');
+            for (var i = 0; i < tds.length; i++) {
+                tds[i].style.backgroundColor = color;
+            }
+        }
+
+        function blinkTick() {
+            var id = BLINK.product;
+            if (!id || BLINK.left <= 0) {
+                blinkStop();
+                return;
+            }
+            BLINK.on = !BLINK.on;
+            blinkPaint(id, BLINK.on ? BLINK_COLOR : '');
+            if (BLINK.on) {
+                BLINK.left = BLINK.left - 1;
+            }
+            BLINK.timer = setTimeout(blinkTick, BLINK_HALF_MS);
+        }
+
+        // Пересборка tbody сносит inline-фон: пока мигание идёт — красим снова.
+        function blinkReapply() {
+            if (BLINK.product && BLINK.on) {
+                blinkPaint(BLINK.product, BLINK_COLOR);
+            }
         }
 
         function rowByProduct(id) {
@@ -760,7 +825,7 @@
             var html = '';
             for (var i = 0; i < SEARCH.hits.length; i++) {
                 var h = SEARCH.hits[i];
-                html += '<div class="hit' + (i === SEARCH.sel ? ' sel' : '') + '" data-hit="' + i + '">' +
+                html += '<div class="hit' + (i === SEARCH.sel ? ' sel' : '') + '" data-hit="' + i + '" data-product="' + esc(h.p.id) + '">' +
                     '<span class="hit-name">' + h.html + '</span>' +
                     '<span class="hit-group">' + esc(groupLabel(h.p.group_name || '')) + '</span>' +
                     '</div>';
