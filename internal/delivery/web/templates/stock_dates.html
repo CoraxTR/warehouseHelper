@@ -24,6 +24,13 @@
         </div>
     </div>
 
+    {{if not .ShortList}}
+    <div class="dates-search">
+        <input type="text" id="dates-search" placeholder="Поиск позиции по названию" autocomplete="off" spellcheck="false">
+        <div id="dates-hits" class="hits hidden"></div>
+    </div>
+    {{end}}
+
     <table id="stock-table">
         <thead>
             <tr id="head-row"></tr>
@@ -68,6 +75,7 @@
             STOCK.shortList = (document.body.getAttribute('data-short') === '1');
             STOCK.defaultCollapsed = !STOCK.shortList;
             document.getElementById('stock-body').addEventListener('click', onBodyClick);
+            initSearch(); // на шорт-листе поля поиска нет — функция молча выходит
             var overlay = document.getElementById('modal-overlay');
             overlay.addEventListener('click', function (ev) {
                 if (ev.target === overlay) {
@@ -327,6 +335,7 @@
             }
             document.getElementById('stock-body').innerHTML = html;
             renderDataCount();
+            applyPendingFocus(); // строка, найденная поиском: фокус + мигание
         }
 
         // Диагностика в статусе соединения: после рендера показывает, сколько
@@ -377,9 +386,10 @@
 
         function productRow(p, n) {
             var lots = visibleLots(p);
-            var html = '<tr>';
+            var html = '<tr data-row-product="' + esc(p.id) + '">';
             html += '<td class="col-toggle"></td>';
-            html += '<td class="col-name" data-role="name" data-product="' + esc(p.id) + '">' + esc(p.name) + '</td>';
+            // tabindex="-1" — строка может получить фокус (поиск), в обход Tab.
+            html += '<td class="col-name" tabindex="-1" data-role="name" data-product="' + esc(p.id) + '">' + esc(p.name) + '</td>';
             for (var k = 0; k < n; k++) {
                 if (k < lots.length) {
                     var lot = lots[k];
@@ -535,6 +545,385 @@
                 .replace(/</g, '&lt;')
                 .replace(/>/g, '&gt;')
                 .replace(/"/g, '&quot;');
+        }
+
+        // --- поиск позиции («похожее» по названию, страница «Сроки») ---
+        //
+        // Оператор набирает часть названия — под полем поиска появляются похожие
+        // позиции; выбор стрелками/мышью + Enter раскрывает группу позиции,
+        // переносит фокус на её строку и мигает строкой, чтобы её было видно
+        // в длинной таблице. На шорт-листе поиска нет (initSearch выходит).
+
+        var SEARCH = { hits: [], sel: -1 }; // hits: [{p, score, html, name}]
+        var SEARCH_LIMIT = 12;              // сколько подсказок показываем
+        var SEARCH_MIN_FUZZY = 3;           // запрос короче — только точная подстрока
+        var PENDING_FOCUS = null;           // {product, until} — ждём перерисовки tbody
+
+        function initSearch() {
+            var input = document.getElementById('dates-search');
+            if (!input) {
+                return; // шорт-лист: поля поиска нет
+            }
+            input.addEventListener('input', onSearchInput);
+            input.addEventListener('keydown', onSearchKey);
+            // Клик по подсказке: прячем список с паузой, иначе blur успевает
+            // убрать его до того, как клик дойдёт до пункта.
+            input.addEventListener('blur', function () {
+                setTimeout(hideHits, 150);
+            });
+            document.getElementById('dates-hits').addEventListener('click', onHitClick);
+        }
+
+        function onSearchInput() {
+            var q = document.getElementById('dates-search').value;
+            if (q.replace(/^\s+|\s+$/g, '') === '') {
+                SEARCH.hits = [];
+                SEARCH.sel = -1;
+                hideHits();
+                return;
+            }
+            SEARCH.hits = searchProducts(q);
+            SEARCH.sel = SEARCH.hits.length ? 0 : -1; // лучший вариант подсвечен сразу
+            renderHits();
+        }
+
+        // Стрелки — выбор, Enter — переход, Esc — закрыть список.
+        // keyCode читаем вместе с key: старые браузеры склада знают только keyCode.
+        function onSearchKey(ev) {
+            var kc = ev.keyCode || 0;
+            var key = ev.key || '';
+            if (kc === 40 || key === 'ArrowDown' || key === 'Down') {
+                ev.preventDefault();
+                moveSel(1);
+            } else if (kc === 38 || key === 'ArrowUp' || key === 'Up') {
+                ev.preventDefault();
+                moveSel(-1);
+            } else if (kc === 13 || key === 'Enter') {
+                ev.preventDefault();
+                activateHit();
+            } else if (kc === 27 || key === 'Escape' || key === 'Esc') {
+                hideHits();
+            }
+        }
+
+        function moveSel(step) {
+            var n = SEARCH.hits.length;
+            if (!n) {
+                return;
+            }
+            var i = SEARCH.sel + step;
+            if (i < 0) {
+                i = n - 1;
+            }
+            if (i >= n) {
+                i = 0;
+            }
+            SEARCH.sel = i;
+            renderHits();
+            scrollHitIntoView(i);
+        }
+
+        // Подсвеченный пункт не должен уехать за границу прокручиваемого списка.
+        function scrollHitIntoView(i) {
+            var box = document.getElementById('dates-hits');
+            var item = box.getElementsByTagName('div')[i];
+            if (!item) {
+                return;
+            }
+            var top = item.offsetTop;
+            var bottom = top + item.offsetHeight;
+            if (top < box.scrollTop) {
+                box.scrollTop = top;
+            } else if (bottom > box.scrollTop + box.clientHeight) {
+                box.scrollTop = bottom - box.clientHeight;
+            }
+        }
+
+        function onHitClick(ev) {
+            var box = document.getElementById('dates-hits');
+            var el = ev.target || ev.srcElement;
+            while (el && el !== box && el.nodeType === 1) {
+                var idx = el.getAttribute ? el.getAttribute('data-hit') : null;
+                if (idx !== null && idx !== undefined && idx !== '') {
+                    SEARCH.sel = parseInt(idx, 10);
+                    activateHit();
+                    return;
+                }
+                el = el.parentNode;
+            }
+        }
+
+        // Enter (или клик): раскрыть группу позиции, показать и подсветить строку.
+        function activateHit() {
+            if (!SEARCH.hits.length) {
+                var q = document.getElementById('dates-search').value;
+                setStatus(q.replace(/^\s+|\s+$/g, '') === ''
+                    ? 'поиск: начните вводить название позиции'
+                    : 'поиск: ничего не найдено — уточните название', 'offline');
+                return;
+            }
+            if (SEARCH.sel < 0) {
+                SEARCH.sel = 0; // Enter без стрелок — самый похожий вариант
+            }
+            var p = SEARCH.hits[SEARCH.sel].p;
+            hideHits();
+            revealProduct(p.id);
+        }
+
+        function revealProduct(id) {
+            var p = findProduct(id);
+            if (!p) {
+                setStatus('позиция не найдена — данные обновились, повторите поиск', 'offline');
+                return;
+            }
+            STOCK.collapsed[p.group_name || ''] = false; // группа позиции раскрыта
+            PENDING_FOCUS = { product: id, until: nowMs() + 5000 };
+            render(); // перерисовка вызовет applyPendingFocus()
+        }
+
+        function nowMs() {
+            return new Date().getTime();
+        }
+
+        // Фокус и мигание ставим ПОСЛЕ перерисовки: render() собирает tbody
+        // заново, ссылку на строку хранить нельзя — ищем по data-row-product.
+        // Ждём до 5 с: строка может появиться не в этой перерисовке (ws-дельта).
+        function applyPendingFocus() {
+            if (!PENDING_FOCUS) {
+                return;
+            }
+            if (nowMs() > PENDING_FOCUS.until) {
+                PENDING_FOCUS = null;
+                return;
+            }
+            var row = rowByProduct(PENDING_FOCUS.product);
+            if (!row) {
+                return;
+            }
+            PENDING_FOCUS = null;
+            row.className = 'row-blink'; // мигание — см. raven-guard.css
+            var cell = nameCell(row);
+            if (cell && cell.focus) {
+                try {
+                    cell.focus(); // фокус на строку — до прокрутки
+                } catch (e) { /* браузер может отказать — мигания достаточно */ }
+            }
+            scrollRowIntoView(row);
+        }
+
+        function rowByProduct(id) {
+            var rows = document.getElementById('stock-body').getElementsByTagName('tr');
+            for (var i = 0; i < rows.length; i++) {
+                if (rows[i].getAttribute('data-row-product') === id) {
+                    return rows[i];
+                }
+            }
+            return null;
+        }
+
+        function nameCell(row) {
+            var tds = row.getElementsByTagName('td');
+            for (var i = 0; i < tds.length; i++) {
+                if (tds[i].getAttribute('data-role') === 'name') {
+                    return tds[i];
+                }
+            }
+            return null;
+        }
+
+        // Строку ставим не под самый верх экрана, а с запасом: над ней должна
+        // остаться шапка таблицы — иначе непонятно, в какой колонке числа.
+        function scrollRowIntoView(row) {
+            var rect = row.getBoundingClientRect();
+            var top = (window.pageYOffset || document.documentElement.scrollTop || document.body.scrollTop || 0) + rect.top;
+            var y = top - 120;
+            if (y < 0) {
+                y = 0;
+            }
+            window.scrollTo(0, y);
+        }
+
+        function hideHits() {
+            var box = document.getElementById('dates-hits');
+            if (box) {
+                box.className = 'hits hidden';
+            }
+        }
+
+        function renderHits() {
+            var box = document.getElementById('dates-hits');
+            if (!SEARCH.hits.length) {
+                box.innerHTML = '<div class="hit-none">ничего не найдено — уточните название</div>';
+                box.className = 'hits';
+                return;
+            }
+            var html = '';
+            for (var i = 0; i < SEARCH.hits.length; i++) {
+                var h = SEARCH.hits[i];
+                html += '<div class="hit' + (i === SEARCH.sel ? ' sel' : '') + '" data-hit="' + i + '">' +
+                    '<span class="hit-name">' + h.html + '</span>' +
+                    '<span class="hit-group">' + esc(groupLabel(h.p.group_name || '')) + '</span>' +
+                    '</div>';
+            }
+            box.innerHTML = html;
+            box.className = 'hits';
+        }
+
+        // Похожие позиции: подстрока (начало названия — выше), затем «все слова
+        // запроса», затем буквы запроса по порядку (опечатки/пропуски). Скорее
+        // всего нужный товар — первым: сортировка по очкам, при равенстве — короткое имя.
+        function searchProducts(query) {
+            var q = fold(query);
+            if (norm(q) === '') {
+                return [];
+            }
+            var out = [];
+            for (var i = 0; i < STOCK.products.length; i++) {
+                var p = STOCK.products[i];
+                if (STOCK.shortList && !p.short_list) {
+                    continue;
+                }
+                var name = p.name || '';
+                var score = scoreName(name, q);
+                if (score > 0) {
+                    out.push({ p: p, score: score, name: name, html: highlightName(name, q) });
+                }
+            }
+            out.sort(function (a, b) {
+                if (a.score !== b.score) {
+                    return b.score - a.score;
+                }
+                if (a.name.length !== b.name.length) {
+                    return a.name.length - b.name.length;
+                }
+                return a.name < b.name ? -1 : (a.name > b.name ? 1 : 0);
+            });
+            if (out.length > SEARCH_LIMIT) {
+                out = out.slice(0, SEARCH_LIMIT);
+            }
+            return out;
+        }
+
+        function scoreName(name, q) {
+            var n = fold(name);
+            if (q === '') {
+                return 0;
+            }
+            if (n === q) {
+                return 1000;
+            }
+            var idx = n.indexOf(q);
+            if (idx === 0) {
+                return 950 - Math.min(60, n.length - q.length);
+            }
+            if (idx > 0) {
+                return (isWordStart(n, idx) ? 850 : 780) - Math.min(80, idx);
+            }
+
+            // все слова запроса (в любом порядке) есть в названии подстрокой
+            var qw = splitWords(q);
+            var nw = splitWords(n);
+            var hit = 0;
+            var first = -1;
+            var last = -1;
+            for (var i = 0; i < qw.length; i++) {
+                for (var j = 0; j < nw.length; j++) {
+                    if (nw[j].indexOf(qw[i]) !== -1) {
+                        hit++;
+                        if (first < 0) {
+                            first = j;
+                        }
+                        last = j;
+                        break;
+                    }
+                }
+            }
+            if (qw.length > 1 && hit === qw.length) {
+                return 600 - 4 * (last - first);
+            }
+
+            // «похожее»: буквы запроса идут по порядку, часть букв пропущена
+            var qc = q.replace(/\s+/g, '');
+            if (qc.length >= SEARCH_MIN_FUZZY) {
+                var sub = subsequence(n, qc);
+                if (sub >= 0) {
+                    return sub;
+                }
+            }
+            return 0;
+        }
+
+        // Очки за «буквы по порядку»: чем длиннее непрерывный кусок совпадения и
+        // меньше пропусков, тем выше. -1 — запрос не проходит по порядку.
+        function subsequence(s, q) {
+            var qi = 0;
+            var gaps = 0;
+            var run = 0;
+            var best = 0;
+            for (var si = 0; si < s.length && qi < q.length; si++) {
+                if (s.charAt(si) === q.charAt(qi)) {
+                    qi++;
+                    run++;
+                    if (run > best) {
+                        best = run;
+                    }
+                } else if (run > 0) {
+                    gaps++;
+                    run = 0;
+                }
+            }
+            if (qi < q.length) {
+                return -1;
+            }
+            var score = 60 + best * 20 - gaps * 10;
+            if (score < 0) {
+                return 0;
+            }
+            return score > 200 ? 200 : score;
+        }
+
+        // Приведение к нижнему регистру БЕЗ изменения длины (индексы годятся для
+        // подсветки), ё → е: «филе» находит «ФИЛЕ», «ёж» — «еж».
+        function fold(s) {
+            return String(s == null ? '' : s).toLowerCase().replace(/ё/g, 'е');
+        }
+
+        // Нормализация для сравнения слов: знаки препинания и лишние пробелы не значимы.
+        function norm(s) {
+            return fold(s).replace(/[^0-9a-zа-я]+/g, ' ').replace(/^\s+|\s+$/g, '');
+        }
+
+        function splitWords(s) {
+            var parts = norm(s).split(' ');
+            var out = [];
+            for (var i = 0; i < parts.length; i++) {
+                if (parts[i] !== '') {
+                    out.push(parts[i]);
+                }
+            }
+            return out;
+        }
+
+        // Совпадение на границе слова («кур» в «филе кур/бедро») весит больше,
+        // чем совпадение внутри слова.
+        function isWordStart(s, i) {
+            if (i === 0) {
+                return true;
+            }
+            var c = s.charAt(i - 1);
+            return c === ' ' || c === '-' || c === '(' || c === ',' || c === '/';
+        }
+
+        // Подсветка найденного куска (только для точной подстроки: при «похожем»
+        // подсвечивать нечего). Экранирование по частям — HTML из названия не пройдёт.
+        function highlightName(name, q) {
+            var n = fold(name);
+            var idx = n.indexOf(q);
+            if (q === '' || idx < 0) {
+                return esc(name);
+            }
+            return esc(name.slice(0, idx)) + '<b>' + esc(name.slice(idx, idx + q.length)) + '</b>' +
+                esc(name.slice(idx + q.length));
         }
 
         // --- клики по ячейкам ---
