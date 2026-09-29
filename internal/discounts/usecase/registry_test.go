@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -236,8 +237,9 @@ func TestRegistryQueueSurplusBeyondWindow(t *testing.T) {
 	}
 }
 
-// Replace возвращает изменения эффективной скидки по четырём переходам
-// (нет→10, 10→20, 20→нет, без изменений → пусто) и учитывает исчезнувшие пары.
+// Replace возвращает изменения скидки ПОЗИЦИИ по четырём переходам
+// (нет→10, 10→20, 20→нет, без изменений → пусто) и учитывает исчезнувшие
+// позиции: одна запись на товар, в Dates — его сроки для текста уведомления.
 func TestRegistryReplaceTransitions(t *testing.T) {
 	r := NewRegistry()
 
@@ -257,18 +259,20 @@ func TestRegistryReplaceTransitions(t *testing.T) {
 	}
 
 	// второй расчёт: A — нет→10, B — 10→20, C — 20→нет, D — без изменений,
-	// E из расчёта ушла (её скидка уходит вместе с парой)
+	// E из расчёта ушла (её скидка уходит вместе с позицией)
 	second := []PairState{
 		regPair("A", "Нет скидки", day(7), expiryOpt(), appliedOpt(10)),
 		regPair("B", "Десять", day(8), expiryOpt(), appliedOpt(20)),
 		regPair("C", "Двадцать", day(9), expiryOpt()),
 		regPair("D", "Без изменений", day(10), expiryOpt(), appliedOpt(15)),
 	}
+	// Сроки для текста: при постановке/подъёме — сроки лотов с новым значением,
+	// при «убрать» — сроки, где скидка была (у C и E позиция обнулилась).
 	want := []Change{
-		{ProductID: "A", Name: "Нет скидки", BestBefore: day(7), Next: new(int16(10))},
-		{ProductID: "B", Name: "Десять", BestBefore: day(8), Prev: new(int16(10)), Next: new(int16(20))},
-		{ProductID: "C", Name: "Двадцать", BestBefore: day(9), Prev: new(int16(20))},
-		{ProductID: "E", Name: "Удалили", BestBefore: day(11), Prev: new(int16(10))},
+		{ProductID: "A", Name: "Нет скидки", Dates: []time.Time{day(7)}, Next: new(int16(10))},
+		{ProductID: "B", Name: "Десять", Dates: []time.Time{day(8)}, Prev: new(int16(10)), Next: new(int16(20))},
+		{ProductID: "C", Name: "Двадцать", Dates: []time.Time{day(9)}, Prev: new(int16(20))},
+		{ProductID: "E", Name: "Удалили", Dates: []time.Time{day(11)}, Prev: new(int16(10))},
 	}
 	got := r.Replace(second)
 	if !reflect.DeepEqual(got, want) {
@@ -281,8 +285,9 @@ func TestRegistryReplaceTransitions(t *testing.T) {
 	}
 }
 
-// Порядок изменений стабилен: по ProductID, затем по сроку — уведомления не
-// зависят от порядка обхода карт и порядка входа.
+// Порядок изменений стабилен и не зависит от порядка обхода карт: изменения
+// отсортированы по ProductID, а сроки внутри записи — по возрастанию даты.
+// Одно сообщение на позицию: у P1 оба срока в тексте одной задачи.
 func TestRegistryReplaceChangeOrder(t *testing.T) {
 	r := NewRegistry()
 	early, late := day(3), day(20)
@@ -297,7 +302,7 @@ func TestRegistryReplaceChangeOrder(t *testing.T) {
 		t.Fatalf("расчёт без скидок: %d изменений, want 0", len(got))
 	}
 
-	// второй расчёт: скидка появилась у всех трёх пар
+	// второй расчёт: скидка появилась у всех пар — у P1 сроки вошли в одну запись
 	noisy := []PairState{
 		regPair("P1", "Товар", late, expiryOpt(), appliedOpt(30)),
 		regPair("P0", "Первый", early, expiryOpt(), appliedOpt(30)),
@@ -306,11 +311,140 @@ func TestRegistryReplaceChangeOrder(t *testing.T) {
 	got := r.Replace(noisy)
 	order := make([]string, 0, len(got))
 	for _, c := range got {
-		order = append(order, c.ProductID+" "+c.BestBefore.Format("02.01"))
+		dates := make([]string, 0, len(c.Dates))
+		for _, d := range c.Dates {
+			dates = append(dates, d.Format("02.01"))
+		}
+		order = append(order, c.ProductID+" "+strings.Join(dates, ","))
 	}
-	wantOrder := []string{"P0 17.09", "P1 17.09", "P1 04.10"}
+	wantOrder := []string{"P0 17.09", "P1 17.09,04.10"}
 	if !reflect.DeepEqual(order, wantOrder) {
 		t.Errorf("порядок изменений %v, want %v", order, wantOrder)
+	}
+}
+
+// Скидка позиции — максимум по её лотам (решение владельца, 29.09.2026):
+// перестановка значений между сроками ничего не меняет — задача не открывается,
+// а настоящий сдвиг максимума даёт ОДНУ запись с новым значением.
+func TestRegistryReplacePositionMaxAcrossLots(t *testing.T) {
+	r := NewRegistry()
+	early, late := day(3), day(20)
+
+	first := []PairState{
+		regPair("P1", "Товар", early, expiryOpt(), appliedOpt(20)),
+		regPair("P1", "Товар", late, expiryOpt(), appliedOpt(10)),
+	}
+	if got := r.Replace(first); len(got) != 0 {
+		t.Fatalf("первый снапшот: %d изменений, want 0", len(got))
+	}
+
+	// Значения сроков поменялись местами, максимум позиции прежний (20) — тишина.
+	swapped := []PairState{
+		regPair("P1", "Товар", early, expiryOpt(), appliedOpt(10)),
+		regPair("P1", "Товар", late, expiryOpt(), appliedOpt(20)),
+	}
+	if got := r.Replace(swapped); len(got) != 0 {
+		t.Errorf("перестановка значений: %+v, want тишину (максимум позиции не изменился)", got)
+	}
+
+	// Максимум упал 20 → 10: одна запись, сроки — лоты с новым максимумом.
+	lowered := []PairState{
+		regPair("P1", "Товар", early, expiryOpt(), appliedOpt(10)),
+		regPair("P1", "Товар", late, expiryOpt(), appliedOpt(5)),
+	}
+	want := []Change{{
+		ProductID: "P1",
+		Name:      "Товар",
+		Dates:     []time.Time{early},
+		Prev:      new(int16(20)),
+		Next:      new(int16(10)),
+	}}
+	if got := r.Replace(lowered); !reflect.DeepEqual(got, want) {
+		t.Errorf("понижение позиции:\n%+v\nwant:\n%+v", got, want)
+	}
+}
+
+// Оба срока позиции получили одну и ту же скидку из избытка — в чат уходит ОДНО
+// сообщение на позицию: запись одна, в тексте оба срока по возрастанию
+// (решение владельца, 29.09.2026; порядок входных пар намеренно обратный).
+func TestRegistryReplaceAggregatesPositionDates(t *testing.T) {
+	r := NewRegistry()
+	early, late := day(3), day(20)
+
+	if got := r.Replace([]PairState{
+		regPair("P1", "Товар", late, surplusOpt(2.5)),
+		regPair("P1", "Товар", early, surplusOpt(2.5)),
+	}); len(got) != 0 {
+		t.Fatalf("первый снапшот: %d изменений, want 0", len(got))
+	}
+
+	got := r.Replace([]PairState{
+		regPair("P1", "Товар", late, surplusOpt(2.5), appliedOpt(20)),
+		regPair("P1", "Товар", early, surplusOpt(2.5), appliedOpt(20)),
+	})
+	want := []Change{{
+		ProductID: "P1",
+		Name:      "Товар",
+		Dates:     []time.Time{early, late},
+		Next:      new(int16(20)),
+	}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("скидка встала на оба срока:\n%+v\nwant одну запись с двумя сроками:\n%+v", got, want)
+	}
+}
+
+// Дальний срок вышел из избытка, ближний держит то же значение: скидка ПОЗИЦИИ
+// не изменилась — уведомления нет (прежде на пару «дальний срок» уходило
+// «убрать скидку», хотя человеку на сайте делать нечего).
+func TestRegistryReplaceSilentWhenPositionValueKeeps(t *testing.T) {
+	r := NewRegistry()
+	early, late := day(3), day(20)
+
+	if got := r.Replace([]PairState{
+		regPair("P1", "Товар", early, surplusOpt(2.5), appliedOpt(20)),
+		regPair("P1", "Товар", late, surplusOpt(2.5), appliedOpt(20)),
+	}); len(got) != 0 {
+		t.Fatalf("первый снапшот: %d изменений, want 0", len(got))
+	}
+
+	// Избыток дальнего срока исчерпан (свойства больше не дают скидку), ближний
+	// остаётся с тем же значением: максимум позиции по-прежнему 20.
+	got := r.Replace([]PairState{
+		regPair("P1", "Товар", early, surplusOpt(2.5), appliedOpt(20)),
+		regPair("P1", "Товар", late, expiryOpt()),
+	})
+	if len(got) != 0 {
+		t.Errorf("смена набора лотов при том же значении позиции: %+v, want тишину", got)
+	}
+}
+
+// Позиция ушла из скидок целиком: «убрать» с перечислением сроков, где скидка
+// БЫЛА (по ним человек находит пары на сайте), по возрастанию даты.
+func TestRegistryReplaceRemoveListsPrevDates(t *testing.T) {
+	r := NewRegistry()
+	early, late := day(3), day(20)
+
+	if got := r.Replace([]PairState{
+		regPair("P1", "Товар", early, surplusOpt(2.5), appliedOpt(20)),
+		regPair("P1", "Товар", late, surplusOpt(2.5), appliedOpt(20)),
+	}); len(got) != 0 {
+		t.Fatalf("первый снапшот: %d изменений, want 0", len(got))
+	}
+
+	// Скидка снята с обоих сроков: значение позиции 20 → 0, одна запись,
+	// в ней — прежние сроки со скидкой (их и надо почистить на сайте).
+	got := r.Replace([]PairState{
+		regPair("P1", "Товар", late, surplusOpt(2.5), appliedOpt(0)),
+		regPair("P1", "Товар", early, surplusOpt(2.5), appliedOpt(0)),
+	})
+	want := []Change{{
+		ProductID: "P1",
+		Name:      "Товар",
+		Dates:     []time.Time{early, late},
+		Prev:      new(int16(20)),
+	}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("снятие скидки:\n%+v\nwant:\n%+v", got, want)
 	}
 }
 

@@ -858,14 +858,15 @@ func TestRecalcExpiryNotifiesGrowth(t *testing.T) {
 	if err := h.uc.RecalcExpiry(ctx, h.now); err != nil {
 		t.Fatalf("RecalcExpiry: %v", err)
 	}
-	want := []string{"Поднять скидку до 40% на Творог (до 23.09)"}
+	want := []string{"Поднять скидку до 40% на Творог сроки до: 23.09"}
 	if !reflect.DeepEqual(h.tasks.texts, want) {
 		t.Errorf("уведомления %q, want %q", h.tasks.texts, want)
 	}
 }
 
-// Два изменения избытка дают два уведомления, а тик без изменений молчит:
-// «поставить 10 %» при появлении избытка и «убрать скидку» при его уходе.
+// Два изменения избытка дают два уведомления (по одному на изменение скидки
+// позиции), а тик без изменений молчит: «поставить 10 %» при появлении избытка
+// и «убрать скидку» при его уходе.
 func TestRecalcSurplusNotifiesChanges(t *testing.T) {
 	h := newRecalcHarness(recalcNow(1), lotInput("p1", "Колбаса", day(10), 100))
 	h.turnover("p1", 400)
@@ -895,8 +896,8 @@ func TestRecalcSurplusNotifiesChanges(t *testing.T) {
 	}
 
 	want := []string{
-		"Поставить скидку 10% на Колбаса (до 24.09)",
-		"Убрать скидку с: Колбаса (до 24.09)",
+		"Поставить скидку 10% на Колбаса сроки до: 24.09",
+		"Убрать скидку с: Колбаса сроки до: 24.09",
 	}
 	if !reflect.DeepEqual(h.tasks.texts, want) {
 		t.Errorf("уведомления %q, want %q", h.tasks.texts, want)

@@ -61,7 +61,7 @@ func TestRecalcAffectedStockEventReturnsExpiryOutOfExpiryDay(t *testing.T) {
 		t.Errorf("правка события: %+v, ожидалась ступень по сроку 40 у p-affected", w)
 	}
 
-	want := []string{"Поставить скидку 40% на Творог (до " + day(5).Format(notifyLayout) + ")"}
+	want := []string{"Поставить скидку 40% на Творог сроки до: " + day(5).Format(notifyLayout)}
 	if !reflect.DeepEqual(h.tasks.texts, want) {
 		t.Errorf("уведомления %q, want %q", h.tasks.texts, want)
 	}
@@ -194,7 +194,7 @@ func TestRunStepsNoRecalcWithoutEvents(t *testing.T) {
 	if got := len(h.batches()); got != 1 {
 		t.Fatalf("проход с событием записал %d батчей, ожидался 1: %v", got, h.batches())
 	}
-	want := []string{"Поставить скидку 40% на Творог (до " + day(5).Format(notifyLayout) + ")"}
+	want := []string{"Поставить скидку 40% на Творог сроки до: " + day(5).Format(notifyLayout)}
 	if !reflect.DeepEqual(h.tasks.texts, want) {
 		t.Errorf("уведомления %q, want %q", h.tasks.texts, want)
 	}
@@ -275,7 +275,7 @@ func TestRecalcAffectedKeepsAppliedExpiryStill(t *testing.T) {
 		}
 	}
 
-	want := []string{"Поставить скидку 40% на Молоко (до " + day(5).Format(notifyLayout) + ")"}
+	want := []string{"Поставить скидку 40% на Молоко сроки до: " + day(5).Format(notifyLayout)}
 	if !reflect.DeepEqual(h.tasks.texts, want) {
 		t.Errorf("уведомления %q, want %q", h.tasks.texts, want)
 	}

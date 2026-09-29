@@ -518,7 +518,7 @@ func TestRunSlotPlanAppliesExtraImmediately(t *testing.T) {
 		t.Errorf("метка источника лишней %q, want %q", extra.Source, discounts.ReasonExpiry)
 	}
 
-	want := []string{"Поднять скидку до 20% на Сыр (до 23.09)"}
+	want := []string{"Поднять скидку до 20% на Сыр сроки до: 23.09"}
 	if !reflect.DeepEqual(h.tasks.texts, want) {
 		t.Errorf("уведомления %q, want %q", h.tasks.texts, want)
 	}
@@ -625,7 +625,7 @@ func TestRunRaiseNotifiesGrowth(t *testing.T) {
 		t.Fatalf("RunRaise: %v", err)
 	}
 
-	want := []string{"Поднять скидку до 20% на Колбаса (до 23.09)"}
+	want := []string{"Поднять скидку до 20% на Колбаса сроки до: 23.09"}
 	if !reflect.DeepEqual(h.tasks.texts, want) {
 		t.Errorf("уведомления %q, want %q", h.tasks.texts, want)
 	}
