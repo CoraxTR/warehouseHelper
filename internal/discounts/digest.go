@@ -234,12 +234,19 @@ func rowLine(n int, r Row) string {
 		qty = fmt.Sprintf("%d шт ", r.Qty)
 	}
 	return fmt.Sprintf("%d. (%s) %s (%s%s) — %d%%%s\n",
-		n, channelLabel(r), r.Name, qty, DatesText(r), r.Percent, coeffText(r))
+		n, ChannelLabel(r), r.Name, qty, DatesText(r), r.Percent, coeffText(r))
 }
 
-// channelLabel — метка канала/источника строки: (ТГ) — скидка живёт в
-// ТГ-колонке (сайт ещё не догнал), иначе источник скидки сайта.
-func channelLabel(r Row) string {
+// ChannelLabel — метка канала/источника строки (экспорт — чтобы страница «Скидки»
+// подписывала строки тем же правилом, что дайджест, как DatesText): (Ручная ТГ) — скидку ТГ-канала
+// поставил менеджер (сайт её ещё не догнал), (ТГ) — скидка живёт в ТГ-колонке,
+// иначе источник скидки сайта.
+func ChannelLabel(r Row) string {
+	// Ручная ТГ важнее общей метки канала: значение держит менеджер, а не рассылка
+	// (решение владельца 29.09.2026).
+	if r.Source == SourceTelegramManual {
+		return "Ручная ТГ"
+	}
 	if r.Telegram {
 		return "ТГ"
 	}
@@ -248,6 +255,8 @@ func channelLabel(r Row) string {
 		return "" // строка без источника скидки в отчёт не попадает
 	case SourceManual:
 		return "Ручная"
+	case SourceTelegramManual:
+		return "Ручная ТГ" // недостижимо: обработано выше (для полноты переключателя)
 	case SourceExpiry:
 		return "Срок"
 	case SourceSurplus:

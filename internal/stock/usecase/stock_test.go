@@ -1816,6 +1816,7 @@ func TestLotChangeListenerErrorDoesNotBreakWrites(t *testing.T) {
 // её немедленно, не ожидая минутного тика (решение владельца 29.09.2026).
 type manualListener struct {
 	mockLotListener
+
 	manual []string
 }
 

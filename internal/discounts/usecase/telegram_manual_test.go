@@ -193,3 +193,12 @@ func TestEvaluateFillsTelegramManual(t *testing.T) {
 		t.Fatalf("окно пары: (%s, %s), want (30, %s)", percentOf(percent), src, discounts.SourceTelegramManual)
 	}
 }
+
+// Метка пары с ручной ТГ в отчёте и на «Скидках» — «Ручная ТГ»: она не «ТГ» от
+// рассылки, но и не сайтовая ручная (решение владельца 29.09.2026).
+func TestChannelLabelManualTelegram(t *testing.T) {
+	row := discounts.Row{Source: discounts.SourceTelegramManual, Percent: 30}
+	if got := discounts.ChannelLabel(row); got != "Ручная ТГ" {
+		t.Errorf("метка %q, want %q", got, "Ручная ТГ")
+	}
+}
