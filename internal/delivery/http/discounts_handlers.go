@@ -30,6 +30,10 @@ type discountsPage struct {
 	Date           string
 	WindowCap      int
 	SurplusPercent int16
+	// Plan — предпросмотр плана 14:00: что встанет с рассылкой и сразу на сайте.
+	// Считается на момент открытия страницы и ничего не пишет — до 14:00 состав
+	// может измениться.
+	Plan ducase.DayPlanPreview
 	// Window — активные позиции (не больше ёмкости окна): группа избытка идёт
 	// ОДНОЙ строкой с перечислением сроков.
 	Window []discounts.Row
@@ -41,7 +45,7 @@ type discountsPage struct {
 // DiscountsPage — GET /ms/discounts: актуальные скидки и очередь избытка.
 // Реестр живёт в памяти процесса: страница показывает последний расчёт
 // (после рестарта — до первого тика он пуст).
-func (h *Handler) DiscountsPage(w http.ResponseWriter, _ *http.Request) {
+func (h *Handler) DiscountsPage(w http.ResponseWriter, r *http.Request) {
 	uc := h.discountsUC
 	if uc == nil {
 		http.Error(w, "модуль скидок не подключён", http.StatusServiceUnavailable)
@@ -63,6 +67,14 @@ func (h *Handler) DiscountsPage(w http.ResponseWriter, _ *http.Request) {
 		SurplusPercent: discounts.SurplusPercent(),
 		Window:         digest.Discounts,
 		Queue:          digest.Surplus,
+	}
+	// Предпросмотр плана 14:00: отчёт собирается по факту (стоящие скидки), а
+	// что встанет днём — видно только здесь. Ошибка расчёта страницу не роняет:
+	// блока не будет, остальное покажем.
+	if prev, err := uc.PlanPreview(r.Context(), h.discountTelegramCap); err != nil {
+		slog.Error(fmt.Sprintf("предпросмотр плана скидок: %v", err))
+	} else {
+		page.Plan = prev
 	}
 	if err := discountsTmpl.Execute(w, page); err != nil {
 		slog.Error(fmt.Sprintf("discounts template: %v", err))

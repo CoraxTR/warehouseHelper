@@ -642,7 +642,7 @@ func (d *DIContainer) ReserveWatchUC() *rwucase.UseCase {
 
 func (d *DIContainer) Handler() *myhttp.Handler {
 	if d.handlers == nil {
-		d.handlers = myhttp.NewHandler(d.SyncUC(), d.OrdersUC(), d.ExcelExportUC(), d.PdfExportUC(), d.BarcodeExportUC(), d.RefGoCheckAgainstUC(), d.WikiUC(), d.GoodsUC(), d.DayStateUC(), d.QRUC(), d.SuppliersUC(), d.StockUC(), d.StockHub(), d.ReceiveBarcodes(), d.ReceivingUC(), d.ComplaintsUC(), d.TasksUC(), d.MSOrdersUC(), d.MSFormsUC(), d.ReturnsUC(), d.DiscountsUC(), d.Config().DiscountWindowCap)
+		d.handlers = myhttp.NewHandler(d.SyncUC(), d.OrdersUC(), d.ExcelExportUC(), d.PdfExportUC(), d.BarcodeExportUC(), d.RefGoCheckAgainstUC(), d.WikiUC(), d.GoodsUC(), d.DayStateUC(), d.QRUC(), d.SuppliersUC(), d.StockUC(), d.StockHub(), d.ReceiveBarcodes(), d.ReceivingUC(), d.ComplaintsUC(), d.TasksUC(), d.MSOrdersUC(), d.MSFormsUC(), d.ReturnsUC(), d.DiscountsUC(), d.Config().DiscountWindowCap, d.Config().DiscountTelegramCap)
 	}
 
 	return d.handlers
