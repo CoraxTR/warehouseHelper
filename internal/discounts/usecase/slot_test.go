@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -335,6 +336,88 @@ func TestRunSlotPlanDoborFillsByTenPercent(t *testing.T) {
 		if in.GeneralPlain == nil || *in.GeneralPlain != slotBasePercent {
 			t.Errorf("скидка сайта %s = %v, want %d (план сайт не трогает)", in.ProductID, in.GeneralPlain, slotBasePercent)
 		}
+	}
+}
+
+// Свежая ступень ровно 10 % (на сайте скидки нет) места в слоте не занимает: она
+// уходит в рассылку через добор — под скидку дня, а не под свою ступень (решение
+// владельца 29.09.2026). Сайт при этом остаётся без скидки: её поднимет 16:00.
+func TestRunSlotPlanFreshTenPercentGoesToDobor(t *testing.T) {
+	h := newSlotHarness(recalcNow(1),
+		lotInput("p1", "Томагавк", day(13), 4, shelfLifeInput(40)), // D=12 → ступень 10 %, сайт пуст
+	)
+
+	if err := h.uc.RunSlotPlan(context.Background(), h.now, 10); err != nil {
+		t.Fatalf("план дня: %v", err)
+	}
+
+	writes := h.writesOf(t)
+	if len(writes) != 1 {
+		t.Fatalf("правки: %+v, want одна (ТГ-колонка добора)", writes)
+	}
+	w := writes[0]
+	if w.Telegram == nil || *w.Telegram != slotMainPercent {
+		t.Errorf("правка %+v, want telegram=%d (скидка дня, не ступень)", w, slotMainPercent)
+	}
+	if w.General != nil {
+		t.Errorf("general правки %v, want nil (сайт план не трогает)", *w.General)
+	}
+	if len(h.repo.items) != 1 || len(h.repo.items[0]) != 1 {
+		t.Fatalf("позиции истории: %+v, want одна", h.repo.items)
+	}
+	item := h.repo.items[0][0]
+	if item.Percent != slotMainPercent || item.Reason != discounts.ReasonExpiry {
+		t.Errorf("позиция истории %+v, want %d %% и причину %q", item, slotMainPercent, discounts.ReasonExpiry)
+	}
+	// Склад видит пару позицией рассылки: метка канала (ТГ) и скидка дня.
+	if len(h.chat.texts) != 1 || !strings.Contains(h.chat.texts[0], "(ТГ) Томагавк (4 шт до 27.09) — 20%") {
+		t.Errorf("сообщение складу: %q, want строку добора", h.chat.texts)
+	}
+}
+
+// Слот уже набран до добора (0,75 ёмкости): свежей 10 %-й ступени места нет —
+// скидка сайта ставится сразу её ступенью, без рассылки и без ожидания 16:00.
+func TestRunSlotPlanFreshTenPercentExtraWhenSlotFull(t *testing.T) {
+	inputs := make([]discounts.Input, 0, 9)
+	for i := 1; i <= 8; i++ {
+		// D=8 → ступень 20 %, сайт без скидки: восемь повышений переполняют добор.
+		inputs = append(inputs, lotInput(fmt.Sprintf("p%d", i), "Колбаса", day(9), 10, shelfLifeInput(26)))
+	}
+	inputs = append(inputs, lotInput("p9", "Томагавк", day(13), 4, shelfLifeInput(40)))
+
+	h := newSlotHarness(recalcNow(1), inputs...)
+
+	if err := h.uc.RunSlotPlan(context.Background(), h.now, 10); err != nil {
+		t.Fatalf("план дня: %v", err)
+	}
+
+	byPID := map[string]discounts.DiscountWrite{}
+	for _, w := range h.writesOf(t) {
+		byPID[w.ProductID] = w
+	}
+	got, ok := byPID["p9"]
+	if !ok {
+		t.Fatalf("правки %+v, want правку свежей ступени", byPID)
+	}
+	if got.General == nil || *got.General != slotBasePercent {
+		t.Errorf("свежая ступень: %+v, want general=%d (скидка сайта сразу)", got, slotBasePercent)
+	}
+	if got.Telegram != nil {
+		t.Errorf("свежая ступень telegram %v, want nil (в рассылку не идёт)", got.Telegram)
+	}
+	if got.Source != discounts.ReasonExpiry {
+		t.Errorf("метка источника %q, want %q", got.Source, discounts.ReasonExpiry)
+	}
+	if len(h.repo.items) != 1 || len(h.repo.items[0]) != 8 {
+		t.Fatalf("позиции истории: %+v, want одна рассылка из 8 повышений", h.repo.items)
+	}
+	// В сообщении складу пара осталась скидкой сайта, а не позицией рассылки.
+	text := h.chat.texts[0]
+	if !strings.Contains(text, "(Срок) Томагавк (4 шт до 27.09) — 10%") {
+		t.Errorf("строка свежей ступени: %q", text)
+	}
+	if strings.Contains(text, "(ТГ) Томагавк") {
+		t.Errorf("свежая ступень ушла в рассылку: %q", text)
 	}
 }
 
