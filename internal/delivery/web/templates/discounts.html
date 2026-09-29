@@ -77,6 +77,61 @@
     {{else}}
     <div class="av-hint">Дополнительных скидок нет.</div>
     {{end}}
+
+    <h2>План рассылки 14:00 (предпросмотр)</h2>
+    <div class="banner">
+        Что уйдёт складу в чат: позиции с меткой (ТГ) — скидка уходит подписчикам, сайт поднимется в 16:00;
+        остальные — скидка сайта сразу. В рассылку: <span id="plan-slot">{{.Plan.SlotCount}}</span>,
+        сразу на сайт: <span id="plan-extra">{{.Plan.ExtraCount}}</span>.
+        План считается на момент расчёта (последний — <span id="plan-at">{{.PlanAt}}</span>) и обновляется раз в 10 минут:
+        до 14:00 состав может измениться — сам план ничего не пишет.
+    </div>
+    <pre class="plan" id="plan-text">{{.Plan.Text}}</pre>
+
+    <script>
+        (function () {
+            // Блок плана обновляется раз в 10 минут: план — снимок на момент
+            // расчёта, до 14:00 он меняется (приёмка, подбор, ручная правка,
+            // продажа пары). Страницу не перезагружаем — меняем только блок
+            // (ES5: XHR + таймер, как на «Сроках»).
+            var EVERY = 10 * 60 * 1000;
+
+            function setText(id, value) {
+                var el = document.getElementById(id);
+                if (el) {
+                    el.textContent = value;
+                }
+            }
+
+            function loadPlan() {
+                var xhr = new XMLHttpRequest();
+                xhr.open('GET', '/ms/discounts/plan', true);
+                xhr.onreadystatechange = function () {
+                    if (xhr.readyState !== 4) {
+                        return;
+                    }
+                    if (xhr.status !== 200) {
+                        setText('plan-at', 'обновление не удалось');
+
+                        return; // модуль недоступен — остаётся прошлый план
+                    }
+                    var data;
+                    try {
+                        data = JSON.parse(xhr.responseText);
+                    } catch (e) {
+                        return;
+                    }
+                    setText('plan-slot', data.slot);
+                    setText('plan-extra', data.extra);
+                    setText('plan-at', data.at);
+                    setText('plan-text', data.text || 'Публиковать нечего: позиций в плане нет.');
+                };
+                xhr.send();
+            }
+
+            setInterval(loadPlan, EVERY);
+        })();
+    </script>
 </body>
 
 </html>

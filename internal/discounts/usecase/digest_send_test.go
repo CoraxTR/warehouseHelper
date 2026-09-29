@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -33,11 +34,13 @@ func newDigestHarness(now time.Time) *digestHarness {
 func digestNow() time.Time { return testDay.Add(9 * time.Hour) }
 
 // fillRegistry — состояние реестра с обеими секциями отчёта: ручная скидка и
-// избыток (порядок секций и строк задаёт доменный сборщик).
+// избыток (порядок секций и строк задаёт доменный сборщик). Скидки СТОЯТ
+// (applied + метка источника): отчёт по дайджесту собирается по факту, а не по
+// кандидатам дня.
 func (h *digestHarness) fillRegistry() {
 	h.uc.reg.Replace([]PairState{
-		regPair("p-manual", "Творог", day(8), manualOpt(40)),
-		regPair("p-surplus", "Хлеб", day(12), surplusOpt(2.5)),
+		regPair("p-manual", "Творог", day(8), manualOpt(40), appliedOpt(40), sourceOpt(discounts.ReasonManual)),
+		regPair("p-surplus", "Хлеб", day(12), surplusOpt(2.5), appliedOpt(discounts.SurplusPercent()), sourceOpt(discounts.ReasonSurplus)),
 	})
 }
 
@@ -180,6 +183,33 @@ func TestReplyDigestSendsToChatAndIgnoresDayFlag(t *testing.T) {
 	}
 	if !h.digestFlag() {
 		t.Error("команда сняла маркер дня дайджеста")
+	}
+}
+
+// Дайджест показывает только СТОЯЩИЕ скидки (решение владельца 29.09.2026):
+// скидка дня, которую применит только план 14:00, до 14:00 в отчёт не попадает —
+// менеджеры по продажам не видят её заранее. Позиция рассылки после плана в
+// отчёте есть — значением ТГ-колонки с меткой (ТГ); скидка, которую сайт уже
+// несёт, печатается своим источником и своим (поднятым) значением.
+func TestDigestShowsOnlyStandingDiscounts(t *testing.T) {
+	h := newDigestHarness(digestNow())
+
+	// Утро ТГ-дня: расчёт дал паре ступень по сроку, на сайте скидки ещё нет.
+	h.uc.reg.Replace([]PairState{regPair("p1", "Томагавк", day(12), expiryOpt())})
+	if text := h.uc.Digest(12).Text(); strings.Contains(text, "Томагавк") {
+		t.Errorf("скидка дня видна в дайджесте до плана:\n%s", text)
+	}
+
+	// 14:00: план записал скидку дня в ТГ-колонку (сайт пока без скидки).
+	h.uc.reg.Replace([]PairState{regPair("p1", "Томагавк", day(12), expiryOpt(), telegramOpt(20), sourceOpt(discounts.ReasonExpiry))})
+	if text := h.uc.Digest(12).Text(); !strings.Contains(text, "(ТГ) Томагавк (до 26.09) — 20%") {
+		t.Errorf("позиция рассылки не попала в дайджест:\n%s", text)
+	}
+
+	// 16:00: сайт догнал рассылку — строка печатается скидкой сайта и её меткой.
+	h.uc.reg.Replace([]PairState{regPair("p1", "Томагавк", day(12), expiryOpt(), appliedOpt(20), sourceOpt(discounts.ReasonExpiry))})
+	if text := h.uc.Digest(12).Text(); !strings.Contains(text, "(Срок) Томагавк (до 26.09) — 20%") {
+		t.Errorf("стоящая скидка напечатана не своим источником:\n%s", text)
 	}
 }
 

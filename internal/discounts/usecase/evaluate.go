@@ -120,9 +120,40 @@ func banThreshold(lots []discounts.Input) *time.Time {
 	return ban
 }
 
-// Row — строка отчёта/реестра по паре (канал сайта).
+// Row — строка отчёта/реестра по паре (канал сайта) по КАНДИДАТАМ дня: что
+// должен победить расчёт (ручная → срок → избыток). Ею собраны окно страницы
+// «Скидки», очередь допродажи и подсветка «Сроков» — там вопрос «что в работе».
+// Для отчёта людям (дайджест) нужна строка по факту: см. AppliedRow.
 func (p PairState) Row() discounts.Row {
 	percent, src := p.Desired()
+
+	return p.rowWith(percent, src)
+}
+
+// AppliedRow — строка отчёта ПО ФАКТУ: что стоит в каналах пары сейчас. Ею
+// собран дайджест (09:00 и /discounts): скидка дня, которая встанет только с
+// планом 14:00, в отчёт не попадает — до 14:00 менеджеры по продажам видят
+// скидки вчерашнего дня, новые встают вместе с рассылкой (решение владельца
+// 29.09.2026). Динамика дня при этом цела: план слота и уведомления считаются по
+// кандидатам (Desired), а не по этой строке.
+//
+// Значение: скидка, которая действует СЕЙЧАС. Действует она из ТГ-колонки, если
+// её значение выше скидки сайта (позиция рассылки: с 14:00 до подъёма 16:00) —
+// тогда строка печатается значением рассылки; иначе — скидкой канала сайта как
+// она стоит в БД (ручная важнее plain).
+func (p PairState) AppliedRow() discounts.Row {
+	percent, src := p.appliedValue()
+	if p.telegramAboveSite() {
+		percent, src = p.telegramValue(), p.plainSource()
+	}
+
+	return p.rowWith(percent, src)
+}
+
+// rowWith — строка отчёта из готовых значения и метки источника: подпись пары,
+// метка канала, коэффициент и количество — одинаковы для строки по кандидатам и
+// строки по факту, различаются только значение и источник.
+func (p PairState) rowWith(percent *int16, src discounts.Source) discounts.Row {
 	row := discounts.Row{
 		ProductID:  p.ProductID,
 		Name:       p.Name,
@@ -130,7 +161,7 @@ func (p PairState) Row() discounts.Row {
 		Source:     src,
 		Telegram:   p.telegramAboveSite(),
 		DaysLeft:   p.DaysLeft,
-		// Группа — только у пар, где избыток и есть победившая скидка. Если
+		// Группа — только у пар, где избыток и есть стоящая скидка. Если
 		// ступень по сроку глубже (или есть ручная), пара печатается своим
 		// источником, а не «избытком»: иначе в таблице стояло «избыток» при
 		// скидке 30 % (жалоба владельца, 23.09.2026).
@@ -149,7 +180,46 @@ func (p PairState) Row() discounts.Row {
 	} else {
 		row.Qty = p.Qty
 	}
+
 	return row
+}
+
+// appliedValue — скидка канала сайта как она стоит в БД: эффективное значение
+// (ручная важнее plain — Applied считает ровно это перекрытие). Скидки нет →
+// (nil, SourceNone).
+func (p PairState) appliedValue() (*int16, discounts.Source) {
+	percent := positiveDiscount(p.Applied)
+	if percent == nil {
+		return nil, discounts.SourceNone
+	}
+	if manualDiscount(p.Manual) != nil {
+		return percent, discounts.SourceManual
+	}
+
+	return percent, p.plainSource()
+}
+
+// plainSource — метка стоящего plain-значения: из БД
+// (product_stock.discount_source), а если метки в БД нет — метка кандидата дня
+// (колонка появилась позже части значений, и пустая метка не значит «без
+// источника»).
+func (p PairState) plainSource() discounts.Source {
+	switch p.SourceRaw {
+	case discounts.ReasonManual:
+		return discounts.SourceManual
+	case discounts.ReasonExpiry:
+		return discounts.SourceExpiry
+	case discounts.ReasonSurplus:
+		return discounts.SourceSurplus
+	}
+	_, src := p.Desired()
+	return src
+}
+
+// telegramValue — скидка ТГ-колонки как она стоит в БД: ручная ТГ важнее plain
+// (так же, как ручная сайта важнее его plain-колонки). nil — ТГ-скидки нет.
+func (p PairState) telegramValue() *int16 {
+	return effectiveDiscount(p.TelegramManual, p.TelegramPlain)
 }
 
 // telegramAboveSite — скидка живёт в ТГ-колонке: её значение (ручная в ТГ
@@ -158,7 +228,7 @@ func (p PairState) Row() discounts.Row {
 // после — своим источником. Отдельного переключателя нет: флаг читается из
 // данных при каждой сборке строки (решение владельца 24.09.2026).
 func (p PairState) telegramAboveSite() bool {
-	tg := effectiveDiscount(p.TelegramManual, p.TelegramPlain)
+	tg := p.telegramValue()
 	if tg == nil || *tg <= 0 {
 		return false
 	}

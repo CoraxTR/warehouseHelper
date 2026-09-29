@@ -175,15 +175,16 @@ func activeLots(rows []discounts.Row, capacity int) []discounts.LotKey {
 	return keys
 }
 
-// Digest — отчёт по активным строкам реестра. capacity — ёмкость активных
-// скидок (окно): в первую секцию входит не больше capacity позиций по приоритету,
-// остальное уходит в «доступно для допродажи». capacity <= 0 — ёмкость не
-// ограничена. Дата отчёта — now (своих часов реестр не заводит).
+// Digest — отчёт по СТОЯЩИМ скидкам реестра (см. standingLocked). capacity —
+// ёмкость активных скидок (окно): в первую секцию входит не больше capacity
+// позиций по приоритету, остальное уходит в «доступно для допродажи».
+// capacity <= 0 — ёмкость не ограничена. Дата отчёта — now (своих часов реестр
+// не заводит).
 func (r *Registry) Digest(now time.Time, capacity int) discounts.Digest {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	d := discounts.BuildDigest(r.activeLocked(), capacity)
+	d := discounts.BuildDigest(r.standingLocked(), capacity)
 	d.Date = now
 
 	return d
@@ -234,6 +235,36 @@ func (r *Registry) activeLocked() []discounts.Row {
 			continue // пары без скидки и замороженные ручным нулём: в окне и отчёте их нет
 		}
 		rows = append(rows, p.Row())
+	}
+	discounts.Sort(rows)
+
+	return rows
+}
+
+// standingLocked — строки отчёта по ФАКТУ (под мутексом реестра): скидка стоит
+// в канале сайта или уже ушла в рассылку (ТГ-колонка). Скидка дня, которую
+// применит только план 14:00, в отчёт не попадает: до 14:00 в дайджесте
+// актуальны скидки вчерашнего дня, новые встают вместе с рассылкой (решение
+// владельца 29.09.2026) — дайджест читают менеджеры по продажам, и заранее
+// видеть скидку, которая встанет только днём, им незачем.
+//
+// Замороженная ручным нулём пара (0 % — в том числе пара под каскадным запретом
+// менеджера) не попадает в отчёт: скидки по ней не будет.
+//
+// Окно страницы «Скидки», очередь допродажи и подсветка «Сроков» считаются
+// по-прежнему по кандидатам дня (activeLocked): там вопрос «что в работе»,
+// а не «что стоит».
+func (r *Registry) standingLocked() []discounts.Row {
+	rows := make([]discounts.Row, 0, len(r.snap))
+	for _, p := range r.snap {
+		if p.Frozen() {
+			continue
+		}
+		row := p.AppliedRow()
+		if row.Source == discounts.SourceNone || row.Percent <= 0 {
+			continue // скидки нет ни на сайте, ни в рассылке
+		}
+		rows = append(rows, row)
 	}
 	discounts.Sort(rows)
 

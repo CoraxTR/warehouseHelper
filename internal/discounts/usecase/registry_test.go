@@ -55,6 +55,18 @@ func appliedOpt(v int16) func(*PairState) {
 	return func(p *PairState) { p.Applied = &v }
 }
 
+// telegramOpt — скидка, которая стоит в ТГ-колонке: позиция рассылки ТГ-дня
+// (с 14:00 до подъёма сайта в 16:00).
+func telegramOpt(v int16) func(*PairState) {
+	return func(p *PairState) { p.TelegramPlain = &v }
+}
+
+// sourceOpt — метка источника стоящего значения (product_stock.discount_source):
+// движок пишет её тем же именем, что в константах discounts.Reason* (history.go).
+func sourceOpt(reason string) func(*PairState) {
+	return func(p *PairState) { p.SourceRaw = reason }
+}
+
 // day — срок в днях от дня расчёта.
 func day(n int) time.Time { return testDay.AddDate(0, 0, n) }
 
@@ -316,14 +328,15 @@ func TestRegistryReplaceZeroEqualsNil(t *testing.T) {
 
 // Digest делит активные строки по ёмкости окна (cap=2: ручная и сроковая в
 // активных, избыточные — за ёмкостью) и печатает ровно тот же текст, что
-// discounts.BuildDigest (golden).
+// discounts.BuildDigest (golden). Строки отчёта собираются по ФАКТУ, поэтому у
+// пар, которые должны попасть в отчёт, скидка стоит в БД (applied + метка).
 func TestRegistryDigestSectionsAndGoldenText(t *testing.T) {
 	r := NewRegistry()
 	r.Replace([]PairState{
-		regPair("p1", "Масло", day(11), surplusOpt(1.5)),
-		regPair("p2", "Творог", day(8), manualOpt(40)),
-		regPair("p3", "Сыр", day(5), expiryOpt()),
-		regPair("p4", "Хлеб", day(12), surplusOpt(2.5)),
+		regPair("p1", "Масло", day(11), surplusOpt(1.5), appliedOpt(10), sourceOpt(discounts.ReasonSurplus)),
+		regPair("p2", "Творог", day(8), manualOpt(40), appliedOpt(40), sourceOpt(discounts.ReasonManual)),
+		regPair("p3", "Сыр", day(5), expiryOpt(), appliedOpt(30), sourceOpt(discounts.ReasonExpiry)),
+		regPair("p4", "Хлеб", day(12), surplusOpt(2.5), appliedOpt(10), sourceOpt(discounts.ReasonSurplus)),
 		regPair("p5", "Без скидки", day(20)),
 	})
 
