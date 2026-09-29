@@ -27,6 +27,18 @@ const (
 	TaskKindDiscountLower TaskKind = "discount_lower"
 	// TaskKindDiscountRemove — скидку с сайта надо убрать.
 	TaskKindDiscountRemove TaskKind = "discount_remove"
+	// TaskKindSiteDiscount — сверка с фидом сайта: скидку на сайте не поменяли
+	// (на сайте стоит не то значение, что в базе). Модуль «Проверка сайта».
+	TaskKindSiteDiscount TaskKind = "site_discount"
+	// TaskKindSiteOffer — сверка с фидом сайта: позиции нет в торговом
+	// предложении (available="false") — её надо туда добавить.
+	TaskKindSiteOffer TaskKind = "site_offer"
+	// TaskKindSiteReturn — сверка с фидом сайта: позиция есть по факту, а в фиде
+	// её нет — на сайт не вернули. Модуль «Проверка сайта».
+	TaskKindSiteReturn TaskKind = "site_return"
+	// TaskKindSiteRemove — сверка с фидом сайта: позиция есть в фиде, а по факту
+	// её нет — с сайта не убрали. Модуль «Проверка сайта».
+	TaskKindSiteRemove TaskKind = "site_remove"
 )
 
 // Task — задача из уведомления общего канала: текст, который увидели в чате,

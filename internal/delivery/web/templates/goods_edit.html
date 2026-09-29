@@ -71,6 +71,12 @@
             <input type="text" name="inventory_type" value="{{.Product.InventoryType}}">
         </div>
         <div class="field">
+            <label>URL на сайте</label>
+            <input type="text" name="site_url" value="{{.Product.SiteURL}}"
+                placeholder="https://www.steakhome.ru/catalog/element/...">
+            {{if .Product.SiteURL}}<a href="{{.Product.SiteURL}}" target="_blank" rel="noopener">открыть</a>{{end}}
+        </div>
+        <div class="field">
             <label><input type="checkbox" name="short_list" {{if .Product.ShortList}}checked{{end}}> Шорт лист</label>
         </div>
         <div class="field">

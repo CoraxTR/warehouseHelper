@@ -12,7 +12,8 @@ CREATE TABLE IF NOT EXISTS tasks (
     id          BIGSERIAL PRIMARY KEY,
     kind        TEXT NOT NULL CHECK (kind IN (
                     'stock_out', 'stock_in',
-                    'discount_put', 'discount_raise', 'discount_lower', 'discount_remove')),
+                    'discount_put', 'discount_raise', 'discount_lower', 'discount_remove',
+                    'site_discount', 'site_offer', 'site_return', 'site_remove')),
     text        TEXT NOT NULL,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     done_at     TIMESTAMPTZ,

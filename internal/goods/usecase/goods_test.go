@@ -11,6 +11,7 @@ import (
 
 	"warehouseHelper/internal/domain"
 	"warehouseHelper/internal/msclient/client"
+	"warehouseHelper/internal/sitecheck"
 )
 
 // testGroupA — имя группы товаров в тестах экспорта (goconst).
@@ -372,9 +373,27 @@ type stubProductsRepo struct {
 	upsertErr    error
 	updateAvgErr error
 	updateAvg    []float64
+	// siteURLs — записанные адреса на сайте по id (SetProductSiteURL),
+	// siteURLErr — ошибка этой записи; siteURLProducts — выборка позиций с url
+	// на сайте (SiteCheckTargets).
+	siteURLs           map[string]string
+	siteURLErr         error
+	siteURLProducts    []domain.Product
+	siteURLProductsErr error
 }
 
 var _ ProductsRepository = (*stubProductsRepo)(nil)
+
+func (s *stubProductsRepo) SetProductSiteURL(_ context.Context, productID, siteURL string) error {
+	if s.siteURLErr != nil {
+		return s.siteURLErr
+	}
+	if s.siteURLs == nil {
+		s.siteURLs = make(map[string]string)
+	}
+	s.siteURLs[productID] = siteURL
+	return nil
+}
 
 func (s *stubProductsRepo) UpsertProduct(_ context.Context, p *domain.Product) error {
 	if s.upsertErr != nil {
@@ -382,6 +401,13 @@ func (s *stubProductsRepo) UpsertProduct(_ context.Context, p *domain.Product) e
 	}
 	s.saved = append(s.saved, *p)
 	return nil
+}
+
+func (s *stubProductsRepo) LoadProductsWithSiteURL(_ context.Context) ([]domain.Product, error) {
+	if s.siteURLProductsErr != nil {
+		return nil, s.siteURLProductsErr
+	}
+	return s.siteURLProducts, nil
 }
 
 func (s *stubProductsRepo) SearchProducts(_ context.Context, _ string) ([]domain.Product, error) {
@@ -739,21 +765,76 @@ func TestGetProduct(t *testing.T) {
 	}
 }
 
+func TestSiteCheckTargets(t *testing.T) {
+	repo := &stubProductsRepo{
+		siteURLProducts: []domain.Product{
+			{ID: "p1", Name: "Рибай", SiteURL: "https://www.steakhome.ru/catalog/element/ribeye/"},
+			{ID: "p2", Name: "Соус"},
+		},
+	}
+	uc := NewGoodsUseCase(&stubProductFolderClient{}, &stubProductClient{}, repo, nil)
+
+	targets, err := uc.SiteCheckTargets(context.Background())
+	if err != nil {
+		t.Fatalf("SiteCheckTargets error: %v", err)
+	}
+	want := []sitecheck.Target{
+		{ProductID: "p1", Name: "Рибай", SiteURL: "https://www.steakhome.ru/catalog/element/ribeye/"},
+		{ProductID: "p2", Name: "Соус"},
+	}
+	if !reflect.DeepEqual(targets, want) {
+		t.Errorf("SiteCheckTargets = %+v, want %+v", targets, want)
+	}
+
+	// Ошибка выборки уходит вызывающему: сверка сайта пропускает час, а не
+	// молча считает, что позиций с url нет.
+	broken := &stubProductsRepo{siteURLProductsErr: errors.New("pg down")}
+	ucBroken := NewGoodsUseCase(&stubProductFolderClient{}, &stubProductClient{}, broken, nil)
+	if _, err := ucBroken.SiteCheckTargets(context.Background()); err == nil {
+		t.Error("ожидалась ошибка выборки позиций с url на сайте")
+	}
+}
+
 func TestSaveProduct(t *testing.T) {
 	repo := &stubProductsRepo{}
 	ls := &stubCatalogListener{}
 	uc := NewGoodsUseCase(&stubProductFolderClient{}, &stubProductClient{}, repo, nil)
 	uc.SetCatalogChangeListener(ls)
 
-	p := &domain.Product{ID: "p1", Name: "Говядина"}
+	p := &domain.Product{ID: "p1", Name: "Говядина", SiteURL: "https://www.steakhome.ru/catalog/element/govyadina/"}
 	if err := uc.SaveProduct(context.Background(), p); err != nil {
 		t.Fatalf("SaveProduct error: %v", err)
 	}
 	if len(repo.saved) != 1 || repo.saved[0].Name != "Говядина" {
 		t.Errorf("сохранено: %+v", repo.saved)
 	}
+	// URL на сайте пишется отдельной записью (колонку не трогают синки из МС).
+	if got := repo.siteURLs["p1"]; got != p.SiteURL {
+		t.Errorf("url на сайте: %q, want %q", got, p.SiteURL)
+	}
 	if ls.reloads != 1 {
 		t.Errorf("перечитываний кэша сроков: %d, want 1 (шов после правки товара)", ls.reloads)
+	}
+
+	// Пустое поле сбрасывает url (позиция перестаёт сверяться с сайтом).
+	if err := uc.SaveProduct(context.Background(), &domain.Product{ID: "p1", Name: "Говядина"}); err != nil {
+		t.Fatalf("SaveProduct без url: %v", err)
+	}
+	if got, ok := repo.siteURLs["p1"]; !ok || got != "" {
+		t.Errorf("url после сброса: %q (записан=%v), want пустая строка", got, ok)
+	}
+
+	// Ошибка записи url роняет правку целиком: каталог не перечитывается,
+	// вызывающий видит ошибку (карточка покажет «не удалось сохранить»).
+	repoErr := &stubProductsRepo{siteURLErr: errors.New("pg down")}
+	lsErr := &stubCatalogListener{}
+	ucErr := NewGoodsUseCase(&stubProductFolderClient{}, &stubProductClient{}, repoErr, nil)
+	ucErr.SetCatalogChangeListener(lsErr)
+	if err := ucErr.SaveProduct(context.Background(), &domain.Product{ID: "p3", Name: "Сыр"}); err == nil {
+		t.Error("ожидалась ошибка записи url на сайте")
+	}
+	if lsErr.reloads != 0 {
+		t.Errorf("перечитываний кэша при ошибке: %d, want 0", lsErr.reloads)
 	}
 
 	// Ошибка перечитывания не роняет правку товара: лог, следующий синк повторит.

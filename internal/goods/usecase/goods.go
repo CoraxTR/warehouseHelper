@@ -20,6 +20,7 @@ import (
 	"warehouseHelper/internal/domain"
 	"warehouseHelper/internal/metrics"
 	"warehouseHelper/internal/msclient/client"
+	"warehouseHelper/internal/sitecheck"
 )
 
 const trackPkg = "goods"
@@ -49,6 +50,12 @@ type ProductsRepository interface {
 	// UpdateProductAverageWeight — обновление среднего веса (кг) по входу
 	// модуля среднего веса (products.average_weight пишет только каталог).
 	UpdateProductAverageWeight(ctx context.Context, productID string, avgKg float64) error
+	// LoadProductsWithSiteURL — позиции каталога с заданным url на сайте:
+	// вход сверки модуля «Проверка сайта» (позиции без url не сверяются).
+	LoadProductsWithSiteURL(ctx context.Context) ([]domain.Product, error)
+	// SetProductSiteURL — запись адреса позиции на сайте (products.site_url):
+	// единственный писатель колонки, синки из МС её не трогают.
+	SetProductSiteURL(ctx context.Context, productID, siteURL string) error
 }
 
 // ProductPageSynchronizer — контракт автосоздания страницы товара в вики
@@ -459,6 +466,25 @@ func (uc *GoodsUseCase) CatalogProducts(ctx context.Context) ([]daystate.Catalog
 	return out, nil
 }
 
+// SiteCheckTargets — позиции каталога с заданным url на сайте (вход сверки
+// модуля «Проверка сайта»): реализует шов sitecheck.Catalog, связка в di.go.
+func (uc *GoodsUseCase) SiteCheckTargets(ctx context.Context) ([]sitecheck.Target, error) {
+	done := metrics.Track(trackPkg, "SiteCheckTargets")
+	defer done()
+
+	products, err := uc.repo.LoadProductsWithSiteURL(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("позиции с url на сайте: %w", err)
+	}
+
+	out := make([]sitecheck.Target, 0, len(products))
+	for _, p := range products {
+		out = append(out, sitecheck.Target{ProductID: p.ID, Name: p.Name, SiteURL: p.SiteURL})
+	}
+
+	return out, nil
+}
+
 // GetProduct — товар каталога по id.
 func (uc *GoodsUseCase) GetProduct(ctx context.Context, id string) (*domain.Product, error) {
 	done := metrics.Track(trackPkg, "GetProduct")
@@ -492,6 +518,13 @@ func (uc *GoodsUseCase) SaveProduct(ctx context.Context, p *domain.Product) erro
 	if err := uc.repo.UpsertProduct(ctx, p); err != nil {
 		return err
 	}
+	// URL на сайте — отдельной записью: upsert общий с синками из МС (выгрузка
+	// дерева, ресинк), и если бы колонка шла через него, «Обновить до МС» и
+	// повторная выгрузка затирали бы ручной адрес.
+	if err := uc.repo.SetProductSiteURL(ctx, p.ID, p.SiteURL); err != nil {
+		return fmt.Errorf("url на сайте: %w", err)
+	}
+
 	uc.notifyCatalogChanged(ctx)
 	uc.scheduleTurnoverBackfill(p.ID)
 	return nil

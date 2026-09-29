@@ -284,6 +284,9 @@ func productFromForm(r *http.Request) (*domain.Product, error) {
 		InventoryType: strings.TrimSpace(r.FormValue("inventory_type")),
 		ShortList:     r.FormValue("short_list") == "on",
 		TrackWeekly:   r.FormValue("track_weekly") == "on",
+		// URL на сайте — ручное поле сверки сайта: пустое значение допустимо
+		// (позиция не сверяется), обязательным не делаем.
+		SiteURL: strings.TrimSpace(r.FormValue("site_url")),
 	}
 
 	if p.ID == "" || p.InternalCode == "" || p.Name == "" || p.UOM == "" || p.InventoryType == "" {
