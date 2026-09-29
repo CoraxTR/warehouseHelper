@@ -32,8 +32,12 @@ type discountsPage struct {
 	SurplusPercent int16
 	// Plan — предпросмотр плана 14:00: что встанет с рассылкой и сразу на сайте.
 	// Считается на момент открытия страницы и ничего не пишет — до 14:00 состав
-	// может измениться.
+	// может измениться. Дальше блок обновляет страница (раз в 10 минут,
+	// GET /ms/discounts/plan).
 	Plan ducase.DayPlanPreview
+	// PlanAt — время расчёта плана (ЧЧ:ММ): страница показывает, насколько
+	// свежий план у неё на экране.
+	PlanAt string
 	// Window — активные позиции (не больше ёмкости окна): группа избытка идёт
 	// ОДНОЙ строкой с перечислением сроков.
 	Window []discounts.Row
@@ -75,6 +79,7 @@ func (h *Handler) DiscountsPage(w http.ResponseWriter, r *http.Request) {
 		slog.Error(fmt.Sprintf("предпросмотр плана скидок: %v", err))
 	} else {
 		page.Plan = prev
+		page.PlanAt = uc.Now().Format("15:04")
 	}
 	if err := discountsTmpl.Execute(w, page); err != nil {
 		slog.Error(fmt.Sprintf("discounts template: %v", err))
@@ -120,6 +125,48 @@ func discountCoeff(v float64) string {
 // lotKeyFormat — формат ключа пары в JSON активных: как даты лота на странице
 // «Сроки» (ключ = «<товар>|<ГГГГ-ММ-ДД>»).
 const lotKeyFormat = time.DateOnly
+
+// planResponse — ответ GET /ms/discounts/plan: предпросмотр плана 14:00 для
+// блока страницы «Скидки» (страница обновляет его раз в 10 минут: план — снимок
+// на момент расчёта и до 14:00 меняется).
+type planResponse struct {
+	Text  string `json:"text"`
+	Slot  int    `json:"slot"`
+	Extra int    `json:"extra"`
+	// At — время расчёта (ЧЧ:ММ) в часах модуля: страница показывает, насколько
+	// свежий план перед ней.
+	At string `json:"at"`
+}
+
+// DiscountsPlan — GET /ms/discounts/plan: предпросмотр плана 14:00 (JSON).
+// Расчёт ничего не пишет (см. usecase.PlanPreview); при ошибке — 503, страница
+// оставляет прошлый план на экране.
+func (h *Handler) DiscountsPlan(w http.ResponseWriter, r *http.Request) {
+	uc := h.discountsUC
+	if uc == nil {
+		http.Error(w, "модуль скидок не подключён", http.StatusServiceUnavailable)
+
+		return
+	}
+
+	prev, err := uc.PlanPreview(r.Context(), h.discountTelegramCap)
+	if err != nil {
+		slog.Error(fmt.Sprintf("предпросмотр плана скидок: %v", err))
+		http.Error(w, "предпросмотр плана недоступен", http.StatusServiceUnavailable)
+
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	if err := json.NewEncoder(w).Encode(planResponse{
+		Text:  prev.Text,
+		Slot:  prev.SlotCount,
+		Extra: prev.ExtraCount,
+		At:    uc.Now().Format("15:04"),
+	}); err != nil {
+		slog.Error(fmt.Sprintf("предпросмотр плана: ответ: %v", err))
+	}
+}
 
 // activeLotsResponse — ответ GET /ms/discounts/active: ёмкость окна и пары
 // активных позиций окна.
