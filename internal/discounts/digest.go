@@ -58,9 +58,10 @@ type Digest struct {
 
 // sourceRanks — группа строки в порядке отчёта: ручные → сроковые → избыточные.
 var sourceRanks = map[Source]int{
-	SourceManual:  0,
-	SourceExpiry:  1,
-	SourceSurplus: 2,
+	SourceManual:         0,
+	SourceTelegramManual: 0, // ручная ТГ — тоже решение менеджера (29.09.2026)
+	SourceExpiry:         1,
+	SourceSurplus:        2,
 }
 
 // sortRank — группа строки в порядке отчёта. Строки без источника (SourceNone)

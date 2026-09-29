@@ -163,6 +163,11 @@ func (uc *UseCase) RecalcSurplus(ctx context.Context, now time.Time) error {
 // очередь на странице, «Позиции с избытком: нет» в дайджесте) — урок ревью
 // 14.09 про шаги, заменяющие снапшот.
 func (uc *UseCase) RecalcAffected(ctx context.Context, now time.Time, productIDs []string) error {
+	// Точечный пересчёт сериализован: сюда приходят и тик расписания, и ручная
+	// правка скидки (OnManualDiscountChanged) — оба пишут снапшот реестра.
+	uc.recalcMu.Lock()
+	defer uc.recalcMu.Unlock()
+
 	today := beginningOfDay(now)
 
 	inputs, err := uc.loadInputs(ctx, today)
