@@ -58,9 +58,10 @@ type Digest struct {
 
 // sourceRanks — группа строки в порядке отчёта: ручные → сроковые → избыточные.
 var sourceRanks = map[Source]int{
-	SourceManual:  0,
-	SourceExpiry:  1,
-	SourceSurplus: 2,
+	SourceManual:         0,
+	SourceTelegramManual: 0, // ручная ТГ — тоже решение менеджера (29.09.2026)
+	SourceExpiry:         1,
+	SourceSurplus:        2,
 }
 
 // sortRank — группа строки в порядке отчёта. Строки без источника (SourceNone)
@@ -236,8 +237,10 @@ func rowLine(n int, r Row) string {
 		n, channelLabel(r), r.Name, qty, DatesText(r), r.Percent, coeffText(r))
 }
 
-// channelLabel — метка канала/источника строки: (ТГ) — скидка живёт в
-// ТГ-колонке (сайт ещё не догнал), иначе источник скидки сайта.
+// channelLabel — метка канала/источника строки: (ТГ) — скидка живёт в ТГ-колонке
+// (сайт ещё не догнал), иначе источник скидки сайта. Ручную ТГ отдельно не
+// подписываем: владельцу важно поведение скидки, а не её происхождение
+// (решение 29.09.2026).
 func channelLabel(r Row) string {
 	if r.Telegram {
 		return "ТГ"
@@ -247,6 +250,8 @@ func channelLabel(r Row) string {
 		return "" // строка без источника скидки в отчёт не попадает
 	case SourceManual:
 		return "Ручная"
+	case SourceTelegramManual:
+		return "ТГ" // ручная ТГ на сайте ещё не стоит — значение в ТГ-колонке
 	case SourceExpiry:
 		return "Срок"
 	case SourceSurplus:

@@ -196,3 +196,18 @@ func TestDigestTextEmptySections(t *testing.T) {
 		})
 	}
 }
+
+// Метка канала для пары с ручной ТГ — «ТГ»: значение живёт в ТГ-колонке, сайт его
+// ещё не получил. Отдельной метки происхождения (ручная/движок) не заводим —
+// владельцу важно поведение скидки, а не её источник (решение 29.09.2026).
+func TestChannelLabelManualTelegram(t *testing.T) {
+	if got := channelLabel(Row{Source: SourceTelegramManual, Telegram: true, Percent: 30}); got != "ТГ" {
+		t.Errorf("метка ручной ТГ %q, want %q", got, "ТГ")
+	}
+	if got := channelLabel(Row{Source: SourceManual, Percent: 40}); got != "Ручная" {
+		t.Errorf("метка ручной сайта %q, want %q", got, "Ручная")
+	}
+	if got := channelLabel(Row{Source: SourceSurplus, Percent: 10}); got != "Избыток" {
+		t.Errorf("метка избытка %q, want %q", got, "Избыток")
+	}
+}

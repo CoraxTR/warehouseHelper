@@ -230,9 +230,9 @@ func (uc *UseCase) Digest(capacity int) discounts.Digest {
 func (r *Registry) activeLocked() []discounts.Row {
 	rows := make([]discounts.Row, 0, len(r.snap))
 	for _, p := range r.snap {
-		percent, _ := p.Desired()
+		percent, _ := p.windowResolve()
 		if percent == nil || *percent <= 0 {
-			continue // пары без скидки и замороженные ручным нулём: в окне и отчёте их нет
+			continue // без скидки и замороженные ручным нулём: в окне и отчёте их нет
 		}
 		rows = append(rows, p.Row())
 	}

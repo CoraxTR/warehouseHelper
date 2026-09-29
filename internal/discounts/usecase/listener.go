@@ -21,3 +21,17 @@ func (uc *UseCase) OnLotsChanged(_ context.Context, productID string) error {
 
 	return nil
 }
+
+// OnManualDiscountChanged — ручную скидку поставили вручную (шов стока): товар
+// пересчитывается СРАЗУ, а не минутным тиком. Иначе свежая ручная ТГ-скидка не
+// занимала бы место в окне до следующего тика, и страница «Сроки» держала бы
+// пустую правую колонку (решение владельца 29.09.2026: скидка показана сразу).
+// MarkDirty оставлен страховкой: если пересчёт не удался, пару догонит тик.
+func (uc *UseCase) OnManualDiscountChanged(ctx context.Context, productID string) error {
+	if productID == "" {
+		return nil
+	}
+	uc.MarkDirty(productID)
+
+	return uc.RecalcAffected(ctx, uc.now(), []string{productID})
+}
