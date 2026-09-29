@@ -423,6 +423,8 @@
         }
 
         scannerEl.addEventListener('focusout', onDateBlur, false);
+        // Enter в поле строки списка — к тому же полю следующей строки.
+        scansBox.addEventListener('keydown', onRowKeydown, false);
         applyDateBounds();
         // ===================================================================
 
@@ -940,6 +942,75 @@
             var i;
             for (i = 0; i < inputs.length; i++) {
                 if (inputs[i].className === cls) { return inputs[i]; }
+            }
+            return null;
+        }
+
+        // onRowKeydown — Enter в поле СТРОКИ списка (партия/коробка): переход к
+        // тому же полю следующей строки. Владелец 29.09.2026: веса набиваются
+        // очередью, а до этого поле по Enter оставалось тем же (к следующей
+        // строке вели только Tab×3: селект товара, вес, «✕»).
+        // Слушатель висит на #scans: строки пересобираются целиком на каждое
+        // изменение, сам контейнер — нет.
+        function onRowKeydown(ev) {
+            var kc = ev.keyCode || 0;
+            var key = ev.key || '';
+            if (kc !== 13 && key !== 'Enter') { return; }
+            var el = ev.target || ev.srcElement;
+            // Селект товара не перехватываем: у него Enter — выбор пункта списка.
+            if (!el || el.tagName !== 'INPUT') { return; }
+            var kind = el.getAttribute('data-kind');
+            var row = rowOf(el);
+            if (!kind || !row) { return; } // поле не в строке (даты партии, шапка)
+            var next = nextRowField(row, kind);
+            if (!next) {
+                // Последняя строка: введённое всё равно фиксируем — сохранение
+                // читает состояние, а не разметку (иначе вес терялся).
+                partyField(el);
+                statusLine.textContent = 'Это последняя строка списка: следующей с весом нет. ' +
+                    'Нужна ещё — нажмите «+ строка».';
+                return;
+            }
+            ev.preventDefault();            // Enter не должен отправлять форму
+            var spec = focusSpec(next);     // куда встать в пересобранном DOM
+            partyField(el);                 // зафиксировать введённое и перерисовать
+            var to = spec ? focusBySpec(spec) : null;
+            if (to) {
+                to.focus();
+                try { to.select(); } catch (e) { /* number: select не всюду */ }
+            }
+        }
+
+        // rowOf — ближайшая вверх строка списка (.child-row).
+        function rowOf(el) {
+            var n = el;
+            while (n && n.nodeType === 1) {
+                if (String(n.className || '').indexOf('child-row') >= 0) { return n; }
+                n = n.parentNode;
+            }
+            return null;
+        }
+
+        // nextRowField — следующая по разметке строка, где есть такое же поле.
+        // Строки без него (вес вычитан из кода) пропускаются: набивать там нечего.
+        function nextRowField(row, kind) {
+            var n = row.nextElementSibling;
+            while (n) {
+                if (String(n.className || '').indexOf('child-row') >= 0) {
+                    var f = rowFieldOf(n, kind);
+                    if (f) { return f; }
+                }
+                n = n.nextElementSibling;
+            }
+            return null;
+        }
+
+        // rowFieldOf — поле этого вида внутри строки (вес строки).
+        function rowFieldOf(row, kind) {
+            var inputs = row.getElementsByTagName('input');
+            var i;
+            for (i = 0; i < inputs.length; i++) {
+                if (inputs[i].getAttribute('data-kind') === kind) { return inputs[i]; }
             }
             return null;
         }
