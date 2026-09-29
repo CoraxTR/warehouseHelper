@@ -52,8 +52,13 @@ func (uc *UseCase) PlanPreview(ctx context.Context, capacity int) (DayPlanPrevie
 	pairs := Evaluate(inputs, rates, day)
 	plan := buildDayPlan(pairs, prev, capacity)
 
+	// Дата в шапке — как у сообщения складу (writeSlot): без неё отчёт печатает
+	// нулевой год.
+	digest := discounts.BuildDigest(uc.windowRows(pairs, plan.slot), uc.WindowCap())
+	digest.Date = uc.now()
+
 	return DayPlanPreview{
-		Text:       discounts.BuildDigest(uc.windowRows(pairs, plan.slot), uc.WindowCap()).Text(),
+		Text:       digest.Text(),
 		SlotCount:  len(plan.slot),
 		ExtraCount: len(plan.extra),
 	}, nil
