@@ -20,14 +20,17 @@ import (
 //
 // В рассылку идут только позиции, у которых скидка ПОВЫШАЕТСЯ (повышение по
 // сроку или добор из избытка): позиция, скидка которой уже стоит на сайте,
-// подписчику ничего не даёт.
+// подписчику ничего не даёт. Свежая ступень ровно 10 % идёт в рассылку только
+// через добор — под скидку дня (20 %), как есть она подписчику тоже ничего не
+// даёт (решение владельца 29.09.2026, см. buildDayPlan).
 
 // Ёмкость слота и пороги отбора (решение владельца, §13 черновика).
 const (
 	// slotMainPercent — скидка дня, с которой позиция идёт в план сразу.
 	slotMainPercent = 20
 	// slotBasePercent — ступень, которую добор поднимает до slotMainPercent
-	// (на сайте её поднимут до скидки дня).
+	// (на сайте её поднимут до скидки дня). Свежая такая ступень (сайт без
+	// скидки) местом в слоте не пользуется — она сама идёт в добор.
 	slotBasePercent = 10
 	// slotMinDays — минимальный остаток дней до срока: позиция должна успеть
 	// продаться, иначе скидка в ТГ бессмысленна.
@@ -144,9 +147,18 @@ func (uc *UseCase) RunSlotPlan(ctx context.Context, now time.Time, capacity int)
 // повышения по сроку в порядке приоритета отчёта (ручные → срок ↑) идут в слот
 // до заполнения ёмкости, не влезшие повышения — в лишние (скидка сайта сразу).
 // Недобранный слот добирается (см. pickFill).
+//
+// Свежая ступень ровно 10 % (сайт без скидки) места в слоте не занимает: она
+// сама — материал добора, в рассылке такая пара идёт под скидку дня (20 %), а не
+// под свою ступень (решение владельца 29.09.2026): 10 % сайт получит и так, как
+// есть подписчику оно ничего не даёт. Не дошёл добор до пары (слот уже набран до
+// fill) — скидка сайта ставится сразу её ступенью, как у лишних повышений.
 func buildDayPlan(pairs []PairState, prev map[discounts.LotKey]struct{}, capacity int) dayPlan {
 	manual := make([]slotPosition, 0, capacity)
 	raises := make([]slotPosition, 0, capacity)
+	// weak — пары со СВЕЖЕЙ ступенью ровно 10 % (site 0 → 10): материал добора,
+	// местом в слоте они не пользуются.
+	weak := make([]PairState, 0, capacity)
 	for _, p := range pairs {
 		if !slotEligible(p, prev) {
 			continue
@@ -165,6 +177,10 @@ func buildDayPlan(pairs []PairState, prev map[discounts.LotKey]struct{}, capacit
 			// позиция в ёмкость не влезла, и в 16:00, если попала в рассылку.
 			// Пары с ручной скидкой сюда не идут: значение менеджера важнее, и
 			// автоматика его не поднимает (ни в слот, ни в лишние).
+			if *p.Expiry == slotBasePercent {
+				weak = append(weak, p)
+				continue
+			}
 			raises = append(raises, slotPosition{
 				pair:          p,
 				percent:       *p.Expiry,
@@ -198,7 +214,32 @@ func buildDayPlan(pairs []PairState, prev map[discounts.LotKey]struct{}, capacit
 	if len(slot) < fill {
 		slot = append(slot, pickFill(pairs, slot, prev, fill-len(slot))...)
 	}
+	// Свежая 10 %-я ступень, до которой добор не дошёл, получает скидку сайта
+	// сразу — своей ступенью. Без этой ветки пара осталась бы без скидки вовсе:
+	// в ТГ-дни утренний пересчёт ступень не пишет, а следующая возможность —
+	// ближайший КТ-день.
+	for _, p := range weak {
+		if slotHasPair(slot, p.Key) {
+			continue
+		}
+		percent := *p.Expiry
+		extra = append(extra, slotPosition{
+			pair:    p,
+			percent: percent,
+			reason:  discounts.ReasonExpiry,
+		})
+	}
 	return dayPlan{slot: slot, extra: extra}
+}
+
+// slotHasPair — пара уже попала в позиции слота (её мог забрать добор).
+func slotHasPair(slot []slotPosition, key discounts.LotKey) bool {
+	for i := range slot {
+		if slot[i].pair.Key == key {
+			return true
+		}
+	}
+	return false
 }
 
 // pickFill — добор недобранного слота: сначала ступени ровно 10 % по сроку (их
