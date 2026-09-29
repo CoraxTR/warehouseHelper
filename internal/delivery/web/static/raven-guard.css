@@ -457,17 +457,20 @@ td.cell-discount { text-align: center; white-space: nowrap; }
 }
 .dates-search .hit { display: flex; justify-content: space-between; align-items: baseline; padding: 6px 10px; cursor: pointer; }
 .dates-search .hit + .hit { border-top: 1px solid #1B1B21; }
-.dates-search .hit.sel { background: #1B1B21; outline: 1px solid #6E6E7A; outline-offset: -1px; }
+/* Выбранная подсказка: подсветка должна быть ЗАМЕТНОЙ (старые браузеры склада
+   игнорируют outline-offset, из-за чего подсветки не было видно вовсе). */
+.dates-search .hit.sel { background: #2E2E3A; box-shadow: inset 3px 0 0 #E0C47E; }
+.dates-search .hit.sel .hit-name { color: #FFFFFF; font-weight: bold; }
+.dates-search .hit.sel .hit-group { color: #B9B6AC; }
 .dates-search .hit-name { color: #E9E6DD; }
 .dates-search .hit-name b { color: #E0C47E; }
 .dates-search .hit-group { color: #66645C; font-size: 12px; margin-left: 10px; white-space: nowrap; }
 .dates-search .hit-none { padding: 8px 10px; color: #66645C; }
 
-/* Строка, найденная поиском: мигает 6 раз, чтобы её было видно в длинной таблице */
-@-webkit-keyframes row-blink { 0%, 49.9% { background-color: #7A1B22; } 50%, 100% { background-color: transparent; } }
-@keyframes row-blink { 0%, 49.9% { background-color: #7A1B22; } 50%, 100% { background-color: transparent; } }
-#stock-body tr.row-blink td { -webkit-animation: row-blink 0.4s linear 6; animation: row-blink 0.4s linear 6; }
-td.col-name:focus { outline: 2px solid #E0C47E; outline-offset: -2px; }
+/* Строка, найденная поиском, мигает 6 раз — мигание делает JS (inline-фон по
+   ячейкам): CSS-анимация на td старыми браузерами склада не отрисовывалась,
+   а класс слетал при пересборке tbody. Здесь только фон под фокус-рамку. */
+td.col-name:focus { box-shadow: inset 0 0 0 2px #E0C47E; }
 
 .discount-table { width: auto; margin: 0 auto; }
 .discount-table td, .discount-table th { border: 1px solid #26262E; padding: 4px 10px; text-align: center; }
