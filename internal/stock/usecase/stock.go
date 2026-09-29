@@ -94,6 +94,16 @@ type LotChangeListener interface {
 	OnLotsChanged(ctx context.Context, productID string) error
 }
 
+// ManualDiscountListener — необязательный шов того же наблюдателя: ручную скидку
+// пары поставили вручную. Такому слушателю нужно пересчитать пару СРАЗУ, не
+// дожидаясь минутного тика: окно «Скидок» и правая колонка «Сроков» показывают
+// её немедленно, потому что менеджер ставит скидку уже после составления списка
+// рассылки (решение владельца 29.09.2026). Слушатель, его не реализующий,
+// догоняется минутным тиком.
+type ManualDiscountListener interface {
+	OnManualDiscountChanged(ctx context.Context, productID string) error
+}
+
 // maxDiscount — верхняя граница скидки в процентах (CHECK в БД дублирует).
 const maxDiscount = 100
 
@@ -172,6 +182,23 @@ func (uc *StockUseCase) notifyLotChange(ctx context.Context, productIDs ...strin
 		if err := l.OnLotsChanged(ctx, pid); err != nil {
 			slog.Info(fmt.Sprintf("stock: lot listener %s: %v", pid, err))
 		}
+	}
+}
+
+// notifyManualDiscount — ручную скидку поставили вручную (см.
+// ManualDiscountListener): событие уходит только тем слушателям, кто умеет
+// пересчитать пару немедленно. Ошибка только логируется — запись уже принята.
+func (uc *StockUseCase) notifyManualDiscount(ctx context.Context, productID string) {
+	l := uc.lotListener
+	if l == nil || productID == "" {
+		return
+	}
+	mn, ok := l.(ManualDiscountListener)
+	if !ok {
+		return
+	}
+	if err := mn.OnManualDiscountChanged(ctx, productID); err != nil {
+		slog.Info(fmt.Sprintf("stock: manual discount listener %s: %v", productID, err))
 	}
 }
 
@@ -310,6 +337,7 @@ func (uc *StockUseCase) SetManualDiscount(ctx context.Context, productID string,
 	}
 	uc.notifyDayState(ctx, productID)
 	uc.notifyLotChange(ctx, productID)
+	uc.notifyManualDiscount(ctx, productID)
 
 	return nil
 }

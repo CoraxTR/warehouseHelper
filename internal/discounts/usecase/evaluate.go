@@ -120,12 +120,38 @@ func banThreshold(lots []discounts.Input) *time.Time {
 	return ban
 }
 
+// TelegramActive — у пары стоит ручная скидка ТГ-канала (> 0): пара в работе,
+// даже если расчётного кандидата у неё нет. Ноль не считается: 0 % — «скидки
+// нет».
+func (p PairState) TelegramActive() bool {
+	return p.TelegramManual != nil && *p.TelegramManual > 0
+}
+
+// windowResolve — значение пары для окна, отчёта и подсветки «Сроков»: кандидат
+// дня (ручная сайта → срок → избыток), а если кандидата нет, но стоит ручная
+// ТГ-скидка — сама она с меткой ТГ-канала.
+//
+// Решение владельца 29.09.2026: ручная ТГ занимает место в окне, как поставленная
+// движком — её вводит менеджер, а сайт получает значение подъёмом 16:00 (см.
+// raiseWrites). До этого ручная ТГ жила только в ТГ-колонке и окно её не видело.
+func (p PairState) windowResolve() (*int16, discounts.Source) {
+	percent, src := p.Desired()
+	if percent != nil {
+		return percent, src
+	}
+	if p.TelegramActive() {
+		return copyDiscount(p.TelegramManual), discounts.SourceTelegramManual
+	}
+
+	return nil, discounts.SourceNone
+}
+
 // Row — строка отчёта/реестра по паре (канал сайта) по КАНДИДАТАМ дня: что
 // должен победить расчёт (ручная → срок → избыток). Ею собраны окно страницы
 // «Скидки», очередь допродажи и подсветка «Сроков» — там вопрос «что в работе».
 // Для отчёта людям (дайджест) нужна строка по факту: см. AppliedRow.
 func (p PairState) Row() discounts.Row {
-	percent, src := p.Desired()
+	percent, src := p.windowResolve()
 
 	return p.rowWith(percent, src)
 }
@@ -363,6 +389,10 @@ func evaluatePair(in discounts.Input, cumQty int64, rates map[string]float64, da
 		AppliedPlain:  positiveDiscount(in.GeneralPlain),
 		SourceRaw:     in.DiscountSource,
 		TelegramPlain: positiveDiscount(in.TelegramPlain),
+		// Ручная скидка ТГ-канала: без этой строки движок её не видел вовсе
+		// (telegramValue падал на план), и пара с ручной ТГ не попадала в окно
+		// (дефект найден 29.09.2026).
+		TelegramManual: manualDiscount(in.TelegramManual),
 	}
 
 	if in.ShelfLife != nil {

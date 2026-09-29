@@ -447,6 +447,8 @@ func (uc *UseCase) RunRaise(ctx context.Context, now time.Time) error {
 // сайта поднимается до максимума плана и ТЕКУЩЕЙ ТГ-колонки (менеджер мог поднять
 // её руками после 14:00 — решения владельца 14.09 и 24.09.2026). Ручная скидка
 // важнее плана (в том числе 0 % — заморозка пары), понижений автоматика не делает.
+// Пару с ручной ТГ-скидкой подъём поднимает и вне отправленной рассылки: её
+// поставили уже после составления списка (решение владельца 29.09.2026).
 //
 // Что значит «не продано», решает контроль позиции (SlotItem): у добора из
 // избытка план продаж по паре — пара продана, если её остаток опустился до
@@ -456,12 +458,13 @@ func (uc *UseCase) RunRaise(ctx context.Context, now time.Time) error {
 // иначе уведомление о подъёме не уйдёт, а на следующем часу придёт ложное
 // «поднять скидку» (расчёт перечитает БД и увидит рост).
 func raiseWrites(pairs []PairState, plan []discounts.SlotItem) ([]discounts.LotKey, []discounts.DiscountWrite) {
-	if len(plan) == 0 {
-		return nil, nil
-	}
 	byKey := make(map[discounts.LotKey]int, len(pairs))
 	for i := range pairs {
 		byKey[pairs[i].Key] = i
+	}
+	inPlan := make(map[discounts.LotKey]struct{}, len(plan))
+	for _, item := range plan {
+		inPlan[item.LotKey] = struct{}{}
 	}
 
 	raised := make([]discounts.LotKey, 0, len(plan))
@@ -479,8 +482,10 @@ func raiseWrites(pairs []PairState, plan []discounts.SlotItem) ([]discounts.LotK
 			continue // ручная скидка на сайте важнее плана (в том числе 0 % — заморозка)
 		}
 		target := item.Percent
-		if p.TelegramPlain != nil && *p.TelegramPlain > target {
-			target = *p.TelegramPlain
+		// Цель — эффективная скидка ТГ-колонки: ручная ТГ важнее плана (её ставит
+		// менеджер, а не движок — решение владельца 29.09.2026).
+		if tg := p.telegramValue(); tg != nil && *tg > target {
+			target = *tg
 		}
 		if discountPercent(p.Applied) >= target {
 			continue // уже не ниже цели: не понижаем
@@ -491,6 +496,33 @@ func raiseWrites(pairs []PairState, plan []discounts.SlotItem) ([]discounts.LotK
 		raised = append(raised, p.Key)
 		writes = append(writes, writeFor(*p))
 	}
+
+	// Ручная ТГ вне отправленной рассылки: её поставили уже ПОСЛЕ составления
+	// списка, поэтому в плане дня её нет — но подъём обязан довести её до сайта
+	// теми же правилами (решение владельца 29.09.2026). Распродано и заморожено
+	// ручным нулём не поднимаем, как и плановые пары.
+	for i := range pairs {
+		p := &pairs[i]
+		if !p.TelegramActive() {
+			continue
+		}
+		if _, ok := inPlan[p.Key]; ok {
+			continue // плановые подняты выше своим кругом
+		}
+		if p.Manual != nil {
+			continue // ручная скидка сайта важнее (в том числе 0 % — заморозка)
+		}
+		target := *p.TelegramManual
+		if discountPercent(p.Applied) >= target {
+			continue // уже не ниже цели: не понижаем
+		}
+		general := target
+		p.AppliedPlain = &general
+		p.SourceRaw = discounts.ReasonManual
+		raised = append(raised, p.Key)
+		writes = append(writes, writeFor(*p))
+	}
+
 	return raised, writes
 }
 

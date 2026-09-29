@@ -175,10 +175,11 @@ type Source int
 
 // Источники скидки по убыванию приоритета.
 const (
-	SourceNone    Source = iota // скидки нет
-	SourceManual                // ручная скидка менеджера (пишет stock, UI сроков)
-	SourceExpiry                // лестница по сроку годности
-	SourceSurplus               // избыток остатка к скорости продаж
+	SourceNone           Source = iota // скидки нет
+	SourceManual                       // ручная скидка менеджера (пишет stock, UI сроков)
+	SourceTelegramManual               // ручная скидка ТГ-канала: пара в работе, сайт берёт её подъёмом 16:00
+	SourceExpiry                       // лестница по сроку годности
+	SourceSurplus                      // избыток остатка к скорости продаж
 )
 
 // String — короткое имя источника для логов и отчётов.
@@ -188,6 +189,8 @@ func (s Source) String() string {
 		return "none" // скидки нет: в product_stock это NULL (пустая метка)
 	case SourceManual:
 		return "manual"
+	case SourceTelegramManual:
+		return "manual_tg"
 	case SourceExpiry:
 		return "expiry"
 	case SourceSurplus:

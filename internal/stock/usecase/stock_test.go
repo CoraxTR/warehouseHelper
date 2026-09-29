@@ -1810,3 +1810,42 @@ func TestLotChangeListenerErrorDoesNotBreakWrites(t *testing.T) {
 		}
 	}
 }
+
+// manualListener — слушатель, умеющий пересчитать пару СРАЗУ после ручной правки
+// (ManualDiscountListener): окно скидок и правая колонка «Сроков» должны показать
+// её немедленно, не ожидая минутного тика (решение владельца 29.09.2026).
+type manualListener struct {
+	mockLotListener
+
+	manual []string
+}
+
+func (m *manualListener) OnManualDiscountChanged(_ context.Context, productID string) error {
+	m.manual = append(m.manual, productID)
+	return m.err
+}
+
+// Ручная скидка со страницы «Сроки» поднимает отдельное событие «пересчитать
+// сейчас»: товар уходит и общему слушателю лотов, и тому, кто умеет немедленный
+// пересчёт. Слушатель без этого умения (mockLotListener) работает как раньше.
+func TestSetManualDiscountNotifiesManualListener(t *testing.T) {
+	repo := &mockRepo{products: testStock()}
+	uc := newTestUC(repo, &mockPub{})
+	if err := uc.WarmUp(context.Background()); err != nil {
+		t.Fatalf("WarmUp: %v", err)
+	}
+
+	ls := &manualListener{}
+	uc.SetLotChangeListener(ls)
+
+	if err := uc.SetManualDiscount(context.Background(), "p1", d(2026, 9, 1), nil, new(int16(30))); err != nil {
+		t.Fatalf("SetManualDiscount: %v", err)
+	}
+
+	if len(ls.manual) != 1 || ls.manual[0] != "p1" {
+		t.Errorf("немедленный пересчёт: %v, want [p1]", ls.manual)
+	}
+	if len(ls.calls) != 1 || ls.calls[0] != "p1" {
+		t.Errorf("общее событие лотов: %v, want [p1]", ls.calls)
+	}
+}
