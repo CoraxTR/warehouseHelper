@@ -1877,6 +1877,8 @@ func TestEffectiveDiscount(t *testing.T) {
 				t.Errorf("получено %d, want nil (скидки нет)", *got)
 			case tc.want != nil && (got == nil || *got != *tc.want):
 				t.Errorf("получено %v, want %d", got, *tc.want)
+			default:
+				// Значения совпали — проверять нечего.
 			}
 		})
 	}
@@ -1922,6 +1924,8 @@ func TestGeneralDiscountOfLots(t *testing.T) {
 				t.Errorf("получено %d, want nil (скидки нет)", *got)
 			case tc.want != nil && (got == nil || *got != *tc.want):
 				t.Errorf("получено %v, want %d", got, *tc.want)
+			default:
+				// Значения совпали — проверять нечего.
 			}
 		})
 	}
