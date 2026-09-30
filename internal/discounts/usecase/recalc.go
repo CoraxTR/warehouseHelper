@@ -162,13 +162,28 @@ func (uc *UseCase) RecalcSurplus(ctx context.Context, now time.Time) error {
 // снапшот реестра, и без оборота из него выпали бы избыточные пары (пустая
 // очередь на странице, «Позиции с избытком: нет» в дайджесте) — урок ревью
 // 14.09 про шаги, заменяющие снапшот.
-func (uc *UseCase) RecalcAffected(ctx context.Context, now time.Time, productIDs []string) error {
+// events — товары события стока и признак роста по каждому (true — остаток
+// вырос): рост даёт право заполнить пустое место ступенью по сроку вне КТ-дней.
+func (uc *UseCase) RecalcAffected(ctx context.Context, now time.Time, events map[string]bool) error {
 	// Точечный пересчёт сериализован: сюда приходят и тик расписания, и ручная
 	// правка скидки (OnManualDiscountChanged) — оба пишут снапшот реестра.
 	uc.recalcMu.Lock()
 	defer uc.recalcMu.Unlock()
 
 	today := beginningOfDay(now)
+
+	// Товары события: affected — кому расчёт вправе писать вообще, grown — у кого
+	// остаток вырос (только им событие ставит ступень по сроку).
+	productIDs := make([]string, 0, len(events))
+	affected := make(map[string]struct{}, len(events))
+	grown := make(map[string]struct{}, len(events))
+	for pid, grew := range events {
+		productIDs = append(productIDs, pid)
+		affected[pid] = struct{}{}
+		if grew {
+			grown[pid] = struct{}{}
+		}
+	}
 
 	inputs, err := uc.loadInputs(ctx, today)
 	if err != nil {
@@ -187,21 +202,19 @@ func (uc *UseCase) RecalcAffected(ctx context.Context, now time.Time, productIDs
 	}
 	pairs := Evaluate(inputs, rates, today)
 
-	affected := make(map[string]struct{}, len(productIDs))
-	for _, pid := range productIDs {
-		affected[pid] = struct{}{}
-	}
-
 	writes := surplusWrites(pairs)
-	// Ступень по сроку — только у затронутых товаров (см. комментарий выше), и
-	// только на пустое место (решение владельца 28.09.2026), и только вне
-	// ТГ-дня: в ТГ-дни (вт/чт) ступень двигают план дня (14:00) и подъём
-	// (16:00). Иначе событие стока — в том числе подбор заказа, который
-	// списывает остаток пары, — подняло бы скидку сайта раньше рассылки, и
-	// подписчики увидели бы не то, о чём договорились (правило владельца
-	// 24.09.2026: до подъёма действуют старые значения).
+	// Ступень по сроку — только у затронутых товаров, у которых событие ПРИБАВИЛО
+	// остаток (MarkGrown: приёмка, возврат лота в остатки), только на пустое место
+	// (решение владельца 28.09.2026) и только вне ТГ-дня: в ТГ-дни (вт/чт)
+	// ступень двигают план дня (14:00) и подъём (16:00) — иначе событие стока
+	// подняло бы скидку сайта раньше рассылки, и подписчики увидели бы не то, о
+	// чём договорились (правило владельца 24.09.2026: до подъёма действуют старые
+	// значения). Подбор остаток списывает — роста нет, и ступень за ним не идёт:
+	// раньше он тоже заполнял пустое место, и кладовщик, подобравший заказ,
+	// ставил скидку на сайте в любой день недели (жалоба владельца 30.09.2026:
+	// среда, подбор соуса, «Поставить скидку 40%» без повода).
 	if !isTelegramDay(now) {
-		writes = append(writes, writesForProducts(expiryWritesOnEmpty(pairs), affected)...)
+		writes = append(writes, writesForProducts(expiryWritesOnEmpty(pairs), grown)...)
 	}
 	// Снятие по запрету менеджера — тоже только по товару события: ручную 0
 	// ставят через страницу «Сроки», а её запись дёргает пересчёт товара.
@@ -395,10 +408,17 @@ func inputProductIDs(inputs []discounts.Input) []string {
 // freshIDs — товары свежего оборота: события стока (их забирает takeDirty) и
 // пары в избытке, без повторов, в порядке появления.
 func (uc *UseCase) freshIDs(pairs []PairState) []string {
-	ids := uc.takeDirty()
-	seen := make(map[string]struct{}, len(ids))
-	for _, pid := range ids {
+	dirty := uc.takeDirty()
+	ids := make([]string, 0, len(dirty))
+	seen := make(map[string]struct{}, len(dirty))
+	// Метки событий стока: очередь сохраняет порядок карты (какой есть), рост
+	// товара здесь не важен — свежий оборот нужен всем одинаково.
+	for pid := range dirty {
+		if _, ok := seen[pid]; ok {
+			continue
+		}
 		seen[pid] = struct{}{}
+		ids = append(ids, pid)
 	}
 	for _, pid := range SurplusPairs(pairs) {
 		if _, ok := seen[pid]; ok {
@@ -407,6 +427,7 @@ func (uc *UseCase) freshIDs(pairs []PairState) []string {
 		seen[pid] = struct{}{}
 		ids = append(ids, pid)
 	}
+
 	return ids
 }
 

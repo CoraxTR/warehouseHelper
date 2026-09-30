@@ -158,7 +158,7 @@ func (uc *UseCase) runAffected(ctx context.Context, now time.Time) error {
 	}
 
 	if err := uc.RecalcAffected(ctx, now, dirty); err != nil {
-		uc.MarkDirty(dirty...)
+		uc.markAll(dirty)
 		return err
 	}
 
