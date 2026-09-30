@@ -20,7 +20,6 @@ import (
 	"sync"
 	"time"
 
-	"warehouseHelper/internal/daystate"
 	"warehouseHelper/internal/innercode"
 	"warehouseHelper/internal/metrics"
 	"warehouseHelper/internal/sitecheck"
@@ -332,14 +331,14 @@ func inStockLots(lots []stock.Lot) bool {
 
 // generalDiscountOfLots — скидка сайта позиции: максимум эффективного значения
 // канала general по лотам, как скидка дня в состояниях по дням
-// (daystate.DiscountFromLots). Эффективное значение пары считает
-// daystate.EffectiveDiscount — зеркало правила колонок product_stock: ручная
-// скидка перекрывает «простую» как есть, включая ручную 0 % («скидка 0 %»),
-// а ноль в простой колонке — «скидки нет». Ни у одного лота скидки нет — nil.
+// (daystate.DiscountFromLots). Эффективное значение пары считает effectiveDiscount
+// ниже — это правило НАШИХ колонок product_stock (см. AGENTS.md модуля), у
+// daystate и в SQL daystate_repo.go лежат его зеркала. Ни у одного лота скидки
+// нет — nil.
 func generalDiscountOfLots(lots []stock.Lot) *int16 {
 	var top *int16
 	for _, l := range lots {
-		v := daystate.EffectiveDiscount(l.GeneralManual, l.General)
+		v := effectiveDiscount(l.GeneralManual, l.General)
 		if v == nil {
 			continue
 		}
@@ -350,6 +349,23 @@ func generalDiscountOfLots(lots []stock.Lot) *int16 {
 	}
 
 	return top
+}
+
+// effectiveDiscount — effective-скидка канала из пары колонок product_stock:
+// ручная перекрывает «простую» как есть, включая ручную 0 % («скидка 0 %»), а
+// ноль в простой колонке — «скидки нет» (NULL). Держим копию у себя, а не
+// импортируем daystate: правило описывает наши колонки, и ради четырёх строк в
+// зависимостях стока не должен появляться модуль-сосед — границу сток держит
+// портами (см. DayStateRecorder рядом).
+func effectiveDiscount(manual, plain *int16) *int16 {
+	if manual != nil {
+		return manual
+	}
+	if plain == nil || *plain == 0 {
+		return nil
+	}
+
+	return plain
 }
 
 // SetManualDiscount записывает ручные скидки лота из UI (попап по количеству).

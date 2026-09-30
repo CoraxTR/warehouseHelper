@@ -1849,3 +1849,84 @@ func TestSetManualDiscountNotifiesManualListener(t *testing.T) {
 		t.Errorf("общее событие лотов: %v, want [p1]", ls.calls)
 	}
 }
+
+// TestEffectiveDiscount — правило effective-скидки колонок product_stock держим
+// копией у себя (зеркала: daystate.EffectiveDiscount и SQL daystate_repo.go):
+// ручная перекрывает простую как есть, включая ручную 0 %, а ноль в простой
+// колонке — «скидки нет».
+func TestEffectiveDiscount(t *testing.T) {
+	mv := func(v int16) *int16 { return &v }
+
+	tests := []struct {
+		name          string
+		manual, plain *int16
+		want          *int16
+	}{
+		{"ручная перекрывает простую", mv(15), mv(20), mv(15)},
+		{"ручная 0 — это скидка 0 %, а не «нет скидки»", mv(0), mv(20), mv(0)},
+		{"без ручной берём простую", nil, mv(20), mv(20)},
+		{"ноль в простой — скидки нет", nil, mv(0), nil},
+		{"обе пустые — скидки нет", nil, nil, nil},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := effectiveDiscount(tc.manual, tc.plain)
+			switch {
+			case tc.want == nil && got != nil:
+				t.Errorf("получено %d, want nil (скидки нет)", *got)
+			case tc.want != nil && (got == nil || *got != *tc.want):
+				t.Errorf("получено %v, want %d", got, *tc.want)
+			default:
+				// Значения совпали — проверять нечего.
+			}
+		})
+	}
+}
+
+// TestGeneralDiscountOfLots — скидка сайта позиции: максимум effective-значения
+// по лотам; лоты без скидки в максимум не попадают, позиция без скидок — nil.
+func TestGeneralDiscountOfLots(t *testing.T) {
+	mv := func(v int16) *int16 { return &v }
+
+	tests := []struct {
+		name string
+		lots []stock.Lot
+		want *int16
+	}{
+		{
+			name: "берём максимум по лотам",
+			lots: []stock.Lot{{GeneralManual: mv(20)}, {General: mv(5)}, {General: mv(0)}},
+			want: mv(20),
+		},
+		{
+			name: "ручная 0 перекрывает простую 20 — максимум 0",
+			lots: []stock.Lot{{GeneralManual: mv(0), General: mv(20)}},
+			want: mv(0),
+		},
+		{
+			name: "скидок нет ни у одного лота",
+			lots: []stock.Lot{{}, {General: mv(0)}},
+			want: nil,
+		},
+		{
+			name: "лотов нет",
+			lots: nil,
+			want: nil,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := generalDiscountOfLots(tc.lots)
+			switch {
+			case tc.want == nil && got != nil:
+				t.Errorf("получено %d, want nil (скидки нет)", *got)
+			case tc.want != nil && (got == nil || *got != *tc.want):
+				t.Errorf("получено %v, want %d", got, *tc.want)
+			default:
+				// Значения совпали — проверять нечего.
+			}
+		})
+	}
+}
