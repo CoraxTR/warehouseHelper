@@ -139,7 +139,7 @@ func withPosition(h *harness, discount *int16) {
 func TestTickSkipsOutsideWindow(t *testing.T) {
 	// 10:31 — окно часа (30 мин) уже истекло: фид сайт к этому времени собрал бы,
 	// опрашивать нечего до следующего часа.
-	h := newHarness(time.Date(2026, 9, 29, 10, 31, 0, 0, time.UTC), 60)
+	h := newHarness(time.Date(2026, time.September, 29, 10, 31, 0, 0, time.UTC), 60)
 	h.feed.queue = []fetchResult{{body: feedBody("2026-09-29 10:00")}}
 
 	if err := h.uc.tick(context.Background()); err != nil {
@@ -151,7 +151,7 @@ func TestTickSkipsOutsideWindow(t *testing.T) {
 }
 
 func TestTickProcessesFreshFeedOnce(t *testing.T) {
-	h := newHarness(time.Date(2026, 9, 29, 10, 0, 30, 0, time.UTC), 60)
+	h := newHarness(time.Date(2026, time.September, 29, 10, 0, 30, 0, time.UTC), 60)
 	d := int16(20)
 	withPosition(h, &d)
 	// Первый ответ — фид прошлого часа (сайт ещё не пересобрал), второй — свежий.
@@ -189,7 +189,7 @@ func TestTickProcessesFreshFeedOnce(t *testing.T) {
 }
 
 func TestTickReportsMismatchesAfterFreshFeed(t *testing.T) {
-	h := newHarness(time.Date(2026, 9, 29, 10, 0, 30, 0, time.UTC), 60)
+	h := newHarness(time.Date(2026, time.September, 29, 10, 0, 30, 0, time.UTC), 60)
 	h.feed.queue = []fetchResult{{body: feedBody("2026-09-29 10:00")}}
 	h.catalog.targets = []sitecheck.Target{
 		{ProductID: "p1", Name: "Рибай", SiteURL: "https://steakhome.ru/catalog/element/ribeye/"},
@@ -216,7 +216,7 @@ func TestTickReportsMismatchesAfterFreshFeed(t *testing.T) {
 func TestTickWarnsWarehouseAfterAttemptLimit(t *testing.T) {
 	// Лимит 3 попытки (окно 30 с × 3 = 1,5 мин → минута): свежего фида нет —
 	// одно сообщение в чат склада и стоп до следующего часа.
-	h := newHarness(time.Date(2026, 9, 29, 10, 0, 30, 0, time.UTC), 3)
+	h := newHarness(time.Date(2026, time.September, 29, 10, 0, 30, 0, time.UTC), 3)
 	h.feed.queue = []fetchResult{{body: feedBody("2026-09-29 09:00")}}
 
 	for i := 1; i <= 3; i++ {
@@ -244,7 +244,7 @@ func TestTickWarnsWarehouseAfterAttemptLimit(t *testing.T) {
 }
 
 func TestTickRetriesWhenCatalogFails(t *testing.T) {
-	h := newHarness(time.Date(2026, 9, 29, 10, 0, 30, 0, time.UTC), 60)
+	h := newHarness(time.Date(2026, time.September, 29, 10, 0, 30, 0, time.UTC), 60)
 	h.feed.queue = []fetchResult{{body: feedBody("2026-09-29 10:00")}}
 	withPosition(h, new(int16(20)))
 	h.catalog.err = errors.New("pg down")
@@ -268,7 +268,7 @@ func TestTickRetriesWhenCatalogFails(t *testing.T) {
 }
 
 func TestTickStartsNewCheckNextHour(t *testing.T) {
-	h := newHarness(time.Date(2026, 9, 29, 10, 0, 30, 0, time.UTC), 60)
+	h := newHarness(time.Date(2026, time.September, 29, 10, 0, 30, 0, time.UTC), 60)
 	d := int16(20)
 	withPosition(h, &d)
 	h.feed.queue = []fetchResult{
@@ -282,7 +282,7 @@ func TestTickStartsNewCheckNextHour(t *testing.T) {
 
 	// Следующий час — новый цикл проверки: фид запрашивается снова. Скидка та же
 	// (расхождение по скидке молчит), а остатка нет — позицию не убрали с сайта.
-	h.clock.t = time.Date(2026, 9, 29, 11, 0, 30, 0, time.UTC)
+	h.clock.t = time.Date(2026, time.September, 29, 11, 0, 30, 0, time.UTC)
 	h.stock.positions = []sitecheck.Position{{ProductID: "p1", InStock: false, Discount: &d}}
 	if err := h.uc.tick(context.Background()); err != nil {
 		t.Fatalf("tick 11:00: %v", err)
@@ -298,7 +298,7 @@ func TestTickStartsNewCheckNextHour(t *testing.T) {
 }
 
 func TestTickSurvivesFeedErrors(t *testing.T) {
-	h := newHarness(time.Date(2026, 9, 29, 10, 0, 30, 0, time.UTC), 5)
+	h := newHarness(time.Date(2026, time.September, 29, 10, 0, 30, 0, time.UTC), 5)
 	h.feed.queue = []fetchResult{
 		{err: errors.New("connection refused")},
 		{body: "<yml_catalog date="},

@@ -46,7 +46,7 @@ func TestParseFeed(t *testing.T) {
 		t.Fatalf("ParseFeed: %v", err)
 	}
 
-	want := time.Date(2026, 9, 29, 17, 23, 0, 0, time.UTC)
+	want := time.Date(2026, time.September, 29, 17, 23, 0, 0, time.UTC)
 	if !feed.CreatedAt.Equal(want) {
 		t.Errorf("CreatedAt = %s, want %s (время сайта в переданной зоне)", feed.CreatedAt, want)
 	}
