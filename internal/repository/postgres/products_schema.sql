@@ -16,7 +16,8 @@ CREATE TABLE products (
     pack_size      SMALLINT CHECK (pack_size > 0),   -- размер пачки, штук; NULL — не пачками (заказ/приёмка поштучно)
     inventory_type TEXT NOT NULL,  -- «Вид инвентаризации» из МС (копия строки); распределение по типам — логика инвентаризации
     short_list     BOOLEAN NOT NULL DEFAULT false,  -- показывать в короткой версии сроков
-    track_weekly   BOOLEAN NOT NULL DEFAULT false   -- учитывать в недельном обороте
+    track_weekly   BOOLEAN NOT NULL DEFAULT false,  -- учитывать в недельном обороте
+    site_url       TEXT                -- адрес позиции на сайте steakhome.ru; NULL — url не задан, сверка сайта позицию не видит. Пишет ТОЛЬКО карточка позиции (GoodsEditSave): синки из МС (выгрузка дерева, ресинк) колонку не трогают — иначе затирали бы ручной url
 );
 
 -- Тип учёта (штучный/весовой) не хранится колонкой: выводится из uom в коде

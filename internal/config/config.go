@@ -24,6 +24,7 @@ type Config struct {
 	*TelegramConfig
 	*QRConfig
 	*ComplaintsConfig
+	*SiteCheckConfig
 }
 
 // envFilePath возвращает абсолютный путь к .env: сначала ищет в текущем
@@ -79,6 +80,7 @@ func NewConfig() *Config {
 		TelegramConfig:   tgc,
 		QRConfig:         qrc,
 		ComplaintsConfig: cpc,
+		SiteCheckConfig:  loadSiteCheckConfig(),
 	}
 }
 
@@ -108,6 +110,56 @@ type AppConfig struct {
 	// заново каждый год, поэтому старые записи обязаны уходить — иначе поиск по
 	// номеру мог бы встретить прошлогоднего тёзку.
 	PickingRetention time.Duration
+}
+
+// SiteCheckConfig — модуль «Проверка сайта»: фид сайта и режим опроса.
+// FeedURL — адрес фида (пусто — модуль не запускается);
+// PollInterval — период опроса внутри часа (0 минут каждого часа ждём свежий
+// фид); MaxAttempts — сколько попыток за час, дальше чат склада и стоп.
+type SiteCheckConfig struct {
+	FeedURL      string
+	PollInterval time.Duration
+	MaxAttempts  int
+}
+
+// siteCheckFeedURL — фид сайта по умолчанию: поисковый фид Bitrix steakhome.ru
+// (url, price, oldprice, available). Адрес меняется APP_SITECHECK_FEED_URL; пустое
+// значение переменной выключает проверку совсем (модуль не создаётся).
+const siteCheckFeedURL = "https://steakhome.ru/bitrix/catalog_export/feed_for_search1.php"
+
+// siteCheckPollSeconds / siteCheckMaxAttempts — режим по умолчанию: раз в 30
+// секунд, 60 попыток (полчаса на то, чтобы сайт собрал фид).
+const (
+	siteCheckPollSeconds = 30
+	siteCheckMaxAttempts = 60
+)
+
+func loadSiteCheckConfig() *SiteCheckConfig {
+	c := &SiteCheckConfig{
+		FeedURL:      siteCheckFeedURL,
+		PollInterval: siteCheckPollSeconds * time.Second,
+		MaxAttempts:  siteCheckMaxAttempts,
+	}
+
+	// LookupEnv, а не Getenv: пустое значение переменной — это осознанное
+	// «проверку выключить», а не «не задано» (у незаданной работает адрес выше).
+	if feedURL, ok := os.LookupEnv("APP_SITECHECK_FEED_URL"); ok {
+		c.FeedURL = strings.TrimSpace(feedURL)
+	}
+
+	if secStr := os.Getenv("APP_SITECHECK_POLL_SECONDS"); secStr != "" {
+		if sec, err := strconv.Atoi(secStr); err == nil && sec > 0 {
+			c.PollInterval = time.Duration(sec) * time.Second
+		}
+	}
+
+	if nStr := os.Getenv("APP_SITECHECK_MAX_ATTEMPTS"); nStr != "" {
+		if n, err := strconv.Atoi(nStr); err == nil && n > 0 {
+			c.MaxAttempts = n
+		}
+	}
+
+	return c
 }
 
 // QRConfig — модуль «Честный знак»: фото кодов маркировки по заказам.

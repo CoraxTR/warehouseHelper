@@ -20,7 +20,7 @@ func TestScanProductNullableText(t *testing.T) {
 		{
 			name: "три TEXT-колонки NULL",
 			vals: []any{"p-1", nil, "Молоко", "шт", nil, nil, nil,
-				int16(14), int16(6), "Копейка", true, false},
+				int16(14), int16(6), "Копейка", true, false, nil},
 			want: domain.Product{
 				ID: "p-1", Name: "Молоко", UOM: "шт",
 				ShelfLife: new(int16(14)), PackSize: new(int16(6)),
@@ -28,13 +28,23 @@ func TestScanProductNullableText(t *testing.T) {
 			},
 		},
 		{
+			name: "url на сайте NULL — пустая строка",
+			vals: []any{"p-3", "00009999", "Стейк", "кг", "Мясо", "folder-9", nil,
+				nil, nil, "Копейка", false, false, nil},
+			want: domain.Product{
+				ID: "p-3", InternalCode: "00009999", Name: "Стейк", UOM: "кг",
+				GroupName: "Мясо", FolderID: "folder-9", InventoryType: "Копейка",
+			},
+		},
+		{
 			name: "значения есть — переносятся как есть",
 			vals: []any{"p-2", "00001234", "Сыр", "кг", "Молочка/Сыры", "folder-7", 0.35,
-				nil, nil, "Копейка", false, true},
+				nil, nil, "Копейка", false, true, "https://www.steakhome.ru/catalog/element/syr/"},
 			want: domain.Product{
 				ID: "p-2", InternalCode: "00001234", Name: "Сыр", UOM: "кг",
 				GroupName: "Молочка/Сыры", FolderID: "folder-7",
 				AverageWeight: new(0.35), InventoryType: "Копейка", TrackWeekly: true,
+				SiteURL: "https://www.steakhome.ru/catalog/element/syr/",
 			},
 		},
 	}

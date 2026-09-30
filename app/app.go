@@ -159,6 +159,7 @@ func (a *App) initDeps() {
 		a.initBotPoller,
 		a.initReturns,
 		a.initReserveWatch,
+		a.initSiteCheck,
 		a.initMSOrders,
 	}
 
@@ -243,6 +244,28 @@ func (a *App) initDayState() {
 
 	a.background("daystate: утренний снапшот", func() {
 		a.di.DayStateUC().Start(a.ctx, snapshotTime)
+	})
+}
+
+// initSiteCheck запускает поллер модуля «Проверка сайта»: в 0 минут каждого часа
+// опрос фида сайта каждые 30 секунд, обработка первого фида, составленного в
+// текущем часе, расхождения — задачами в общий канал. Фид не обновился за лимит
+// попыток — сообщение в чат склада и стоп до следующего часа (решение владельца,
+// 29.09.2026). Без заданного адреса фида (APP_SITECHECK_FEED_URL пусто) модуль не
+// запускается. Run блокируется до отмены ctx, поэтому идёт в фон под учётом wg.
+func (a *App) initSiteCheck() {
+	cfg := a.di.Config().SiteCheckConfig
+	if cfg.FeedURL == "" {
+		slog.Info("sitecheck: адрес фида не задан — модуль проверки сайта не запущен")
+
+		return
+	}
+
+	uc := a.di.SiteCheckUC()
+	a.background("sitecheck: сверка с сайтом", func() {
+		if err := uc.Run(a.ctx); err != nil {
+			slog.Info(fmt.Sprintf("sitecheck: поллер завершился: %v", err))
+		}
 	})
 }
 

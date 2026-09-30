@@ -14,29 +14,31 @@ import (
 // productColumns — колонки products в порядке SELECT/INSERT (без id в INSERT
 // не обойтись, но сканирование идёт в этом порядке).
 const productColumns = `id, internal_code, name, uom, group_name, folder_id, average_weight,
-    shelf_life, pack_size, inventory_type, short_list, track_weekly`
+    shelf_life, pack_size, inventory_type, short_list, track_weekly, site_url`
 
 // scanProduct сканирует строку в domain.Product (порядок productColumns).
 //
-// nullable TEXT-колонки каталога (internal_code, group_name, folder_id) читаются
-// через *string: pgx не кладёт NULL в string, а по схеме products эти колонки
-// nullable (код МС не задан, товар без папки) — прямая запись в string падала бы
-// на первом же таком товаре. Пустая строка = «не задано» (textValue).
+// nullable TEXT-колонки каталога (internal_code, group_name, folder_id,
+// site_url) читаются через *string: pgx не кладёт NULL в string, а по схеме
+// products эти колонки nullable (код МС не задан, товар без папки, url на сайте
+// не заполнен) — прямая запись в string падала бы на первом же таком товаре.
+// Пустая строка = «не задано» (textValue).
 func scanProduct(row pgx.Row) (*domain.Product, error) {
 	var (
-		p                                 domain.Product
-		internalCode, groupName, folderID *string
+		p                                          domain.Product
+		internalCode, groupName, folderID, siteURL *string
 	)
 	if err := row.Scan(
 		&p.ID, &internalCode, &p.Name, &p.UOM, &groupName, &folderID,
 		&p.AverageWeight, &p.ShelfLife, &p.PackSize,
-		&p.InventoryType, &p.ShortList, &p.TrackWeekly,
+		&p.InventoryType, &p.ShortList, &p.TrackWeekly, &siteURL,
 	); err != nil {
 		return nil, err
 	}
 	p.InternalCode = textValue(internalCode)
 	p.GroupName = textValue(groupName)
 	p.FolderID = textValue(folderID)
+	p.SiteURL = textValue(siteURL)
 
 	return &p, nil
 }
@@ -134,6 +136,36 @@ func (pg *PGClient) UpsertProduct(ctx context.Context, p *domain.Product) error 
 	return nil
 }
 
+// LoadProductsWithSiteURL — позиции каталога с заданным url на сайте
+// (products.site_url): вход сверки модуля «Проверка сайта». Позиции без url в
+// срез не попадают — их на сайте либо нет, либо адрес ещё не заполнен.
+func (pg *PGClient) LoadProductsWithSiteURL(ctx context.Context) ([]domain.Product, error) {
+	rows, err := pg.Pool.Query(ctx, `
+        SELECT `+productColumns+`
+        FROM products
+        WHERE site_url IS NOT NULL AND site_url <> ''
+        ORDER BY name`)
+	if err != nil {
+		return nil, fmt.Errorf("load products with site url: %w", err)
+	}
+	defer rows.Close()
+
+	products := make([]domain.Product, 0)
+	for rows.Next() {
+		p, err := scanProduct(rows)
+		if err != nil {
+			return nil, fmt.Errorf("load products with site url: %w", err)
+		}
+		products = append(products, *p)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("load products with site url: %w", err)
+	}
+
+	return products, nil
+}
+
 // SearchProducts ищет товары каталога: точное совпадение internal_code
 // или подстрока name (без учёта регистра). Результат по имени.
 func (pg *PGClient) SearchProducts(ctx context.Context, query string) ([]domain.Product, error) {
@@ -179,6 +211,26 @@ func (pg *PGClient) GetProduct(ctx context.Context, id string) (*domain.Product,
 	}
 
 	return p, nil
+}
+
+// SetProductSiteURL записывает адрес позиции на сайте (products.site_url) —
+// единственное место записи колонки: url задаёт человек в карточке позиции, а
+// синки из МС (выгрузка дерева, ресинк) колонку не трогают. Пустая строка
+// означает «url не задан» и пишется как NULL. Товара нет →
+// domain.ErrProductNotFound.
+func (pg *PGClient) SetProductSiteURL(ctx context.Context, productID, siteURL string) error {
+	tag, err := pg.Pool.Exec(ctx, `
+        UPDATE products SET site_url = NULLIF($2, '') WHERE id = $1
+    `, productID, siteURL)
+	if err != nil {
+		return fmt.Errorf("set product site url %s: %w", productID, err)
+	}
+
+	if tag.RowsAffected() == 0 {
+		return domain.ErrProductNotFound
+	}
+
+	return nil
 }
 
 // UpdateProductAverageWeight обновляет средний вес товара (кг) — вход модуля

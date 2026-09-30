@@ -32,6 +32,7 @@ import (
 	"warehouseHelper/internal/repository/postgres"
 	rwucase "warehouseHelper/internal/reservewatch/usecase"
 	retucase "warehouseHelper/internal/returns/usecase"
+	scucase "warehouseHelper/internal/sitecheck/usecase"
 	"warehouseHelper/internal/stock"
 	sucase "warehouseHelper/internal/stock/usecase"
 	stockws "warehouseHelper/internal/stock/ws"
@@ -80,6 +81,7 @@ type DIContainer struct {
 	msFormsUC       *mordersuc.FormsUseCase
 	returnsUC       *retucase.UseCase
 	reserveWatchUC  *rwucase.UseCase
+	siteCheckUC     *scucase.UseCase
 	stockUC         *sucase.StockUseCase
 	discountsUC     *ducase.UseCase
 	stockHub        *stockws.Hub
@@ -638,6 +640,28 @@ func (d *DIContainer) ReserveWatchUC() *rwucase.UseCase {
 	}
 
 	return d.reserveWatchUC
+}
+
+// SiteCheckUC — модуль «Проверка сайта»: в 0 минут каждого часа раз в 30 секунд
+// тянет фид сайта, обрабатывает первый фид текущего часа и сверяет позиции
+// каталога с url на сайте; расхождения уходят задачами в общий канал, сбой самой
+// проверки (фид не обновился) — сообщением в чат склада. HTTP-адаптер —
+// siteCheckFeed (app), каталог — goods (SiteCheckTargets), остатки и скидка
+// позиции — stock (SiteCheckPositions), задачи — tasks, чат склада — telegram.
+func (d *DIContainer) SiteCheckUC() *scucase.UseCase {
+	if d.siteCheckUC == nil {
+		cfg := d.Config().SiteCheckConfig
+		d.siteCheckUC = scucase.NewUseCase(
+			scucase.Config{PollInterval: cfg.PollInterval, MaxAttempts: cfg.MaxAttempts},
+			NewSiteCheckFeed(cfg.FeedURL),
+			d.GoodsUC(),
+			d.StockUC(),
+			d.TasksUC(),
+			d.TelegramNotifier(),
+		)
+	}
+
+	return d.siteCheckUC
 }
 
 func (d *DIContainer) Handler() *myhttp.Handler {

@@ -20,8 +20,10 @@ import (
 	"sync"
 	"time"
 
+	"warehouseHelper/internal/daystate"
 	"warehouseHelper/internal/innercode"
 	"warehouseHelper/internal/metrics"
+	"warehouseHelper/internal/sitecheck"
 	"warehouseHelper/internal/stock"
 )
 
@@ -286,6 +288,68 @@ func (uc *StockUseCase) Snapshot() []stock.Product {
 	})
 
 	return out
+}
+
+// SiteCheckPositions — состояние позиций для модуля «Проверка сайта»: остаток по
+// факту (есть ли лот с остатком) и скидка сайта позиции. Реализует шов
+// sitecheck.Stock, связка в di.go.
+//
+// Скидка сайта позиции — максимум эффективного значения канала general по лотам:
+// на сайте у позиции одно значение скидки, а не по сроку. Товары без лотов в срез
+// не попадают: у них ни остатка, ни скидки (вызывающий читает это как нулевое
+// состояние).
+func (uc *StockUseCase) SiteCheckPositions(_ context.Context) ([]sitecheck.Position, error) {
+	done := metrics.Track(trackPkg, "SiteCheckPositions")
+	defer done()
+
+	products := uc.Snapshot()
+	out := make([]sitecheck.Position, 0, len(products))
+	for _, p := range products {
+		if len(p.Lots) == 0 {
+			continue
+		}
+		out = append(out, sitecheck.Position{
+			ProductID: p.ID,
+			InStock:   inStockLots(p.Lots),
+			Discount:  generalDiscountOfLots(p.Lots),
+		})
+	}
+
+	return out, nil
+}
+
+// inStockLots — есть ли хоть один лот с остатком (то же правило, что в
+// состояниях по дням: daystate.InStockFromLots).
+func inStockLots(lots []stock.Lot) bool {
+	for _, l := range lots {
+		if l.Qty > 0 {
+			return true
+		}
+	}
+
+	return false
+}
+
+// generalDiscountOfLots — скидка сайта позиции: максимум эффективного значения
+// канала general по лотам, как скидка дня в состояниях по дням
+// (daystate.DiscountFromLots). Эффективное значение пары считает
+// daystate.EffectiveDiscount — зеркало правила колонок product_stock: ручная
+// скидка перекрывает «простую» как есть, включая ручную 0 % («скидка 0 %»),
+// а ноль в простой колонке — «скидки нет». Ни у одного лота скидки нет — nil.
+func generalDiscountOfLots(lots []stock.Lot) *int16 {
+	var top *int16
+	for _, l := range lots {
+		v := daystate.EffectiveDiscount(l.GeneralManual, l.General)
+		if v == nil {
+			continue
+		}
+		if top == nil || *v > *top {
+			val := *v
+			top = &val
+		}
+	}
+
+	return top
 }
 
 // SetManualDiscount записывает ручные скидки лота из UI (попап по количеству).
