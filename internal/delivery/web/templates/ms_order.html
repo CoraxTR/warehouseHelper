@@ -5,6 +5,7 @@
     <meta charset="UTF-8">
     <title>Заказ — МойСклад</title>
     <link rel="stylesheet" href="/static/raven-guard.css">
+    <script src="/static/theme.js"></script>
     <style>
         /* Подытог группы и итог заказа — мелким шрифтом; вне строк подбора. */
         tr.group-total td { font-size: 12px; color: #666; padding-top: 0; }
@@ -22,13 +23,44 @@
            подсвечены зелёным, как готовые строки подбора. */
         #ret-scan { width: 100%; }
         .child-row.done .cname { color: #9ccc65; }
+        /* Метка строки в подборе: закрыта вручную — янтарь, закрыта — мох.
+           Цвет живёт здесь, а не в JS: иначе дневная тема его не перекрасит. */
+        .mark--manual { color: #C8A65C; }
+        .mark--done { color: #9ccc65; }
+/* ===== DAY-THEME-START ===== */
+/* ДНЕВНАЯ ТЕМА «Любитель щурится» — локальные стили ms_order.html
+
+   ДНЕВНАЯ ТЕМА — сгенерировано: gen_day_theme.py (навык raven-guard-ui)
+   Активация: класс day на <html> (ставит /static/theme.js до отрисовки).
+   Палитра — карта PALETTE генератора; секция перегенерируется целиком.
+   ========================================================================== */
+html.day tr.group-total td { color: #6E7781; }
+html.day tr.order-total td { border-top: 2px solid #C6CDD5; }
+html.day .qty-pop { background: #F3F5F7; border: 1px solid #E0C97A; border-left: 3px solid #E0C97A; }
+html.day .qty-pop__q { color: #57606A; }
+html.day .qty-pop__row { color: #000000; }
+html.day .qty-pop__err { color: #B42318; }
+html.day .child-row.done .cname { color: #1A7F37; }
+html.day .mark--manual { color: #9A6700; }
+html.day .mark--done { color: #1A7F37; }
+/* ===== DAY-THEME-END ===== */
     </style>
 </head>
 
 <body>
     <header class="brandbar">
-        <a class="brandbar__brand" href="/"><svg class="brandbar__emblem" viewBox="0 0 64 64" aria-hidden="true"><circle cx="35" cy="25" r="14" fill="#F4F1E9"/><polygon points="6,26 30,17 28,27" fill="#F4F1E9"/><polygon points="13,35 28,27 26,36" fill="#F4F1E9"/><circle cx="34" cy="23" r="3.6" fill="#0A0A0D"/><circle cx="33" cy="22" r="1.1" fill="#C02832"/></svg><span class="brandbar__name">ВОРОН&nbsp;&middot;&nbsp;СКЛАД</span></a>
-        <span class="brandbar__motto">Приёмка или смерть</span>
+        <a class="brandbar__brand" href="/"><svg class="brandbar__emblem" viewBox="0 0 64 64" aria-hidden="true"><circle class="em__shade" cx="35" cy="25" r="14"/><polygon class="em__shade" points="6,26 30,17 28,27"/><polygon class="em__shade" points="13,35 28,27 26,36"/><circle class="em__eye" cx="34" cy="23" r="3.6"/><circle class="em__glint" cx="33" cy="22" r="1.1"/></svg><span class="brandbar__name">ВОРОН&nbsp;&middot;&nbsp;СКЛАД</span></a>
+        <div class="brandbar__right">
+            <span class="brandbar__motto">Приёмка или смерть</span>
+            <span class="themeswitch" id="theme-switch">
+                <span class="themeswitch__label" id="theme-label"><span class="themeswitch__label-night">Нормальная тема</span><span class="themeswitch__label-day">Любитель щурится</span></span>
+                <button class="themeswitch__track" id="theme-toggle" type="button"
+                 role="switch" aria-checked="false" aria-label="Тема оформления"
+                 title="Переключить на «Любитель щурится»">
+                    <span class="themeswitch__knob"></span>
+                </button>
+            </span>
+        </div>
     </header>
     {{template "nav"}}
 
@@ -934,12 +966,14 @@
                     exp.qtyText + ' · погашено ' + fmtAmt(got, exp.weighted) + ' · '));
                 if (exp.overridden) {
                     var markManual = document.createElement('b');
-                    markManual.style.color = '#C8A65C';
+                    // Цвет — из CSS (.mark--manual): тема перекрашивает его сама.
+                    markManual.className = 'mark--manual';
                     markManual.textContent = 'закрыта вручную (пересчёт сроков)';
                     right.appendChild(markManual);
                 } else if (closed) {
                     var markDone = document.createElement('b');
-                    markDone.style.color = '#9ccc65';
+                    // Цвет — из CSS (.mark--done): тема перекрашивает его сама.
+                    markDone.className = 'mark--done';
                     markDone.textContent = 'закрыта';
                     right.appendChild(markDone);
                 } else {

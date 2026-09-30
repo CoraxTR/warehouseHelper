@@ -11,6 +11,14 @@
    - Цвета жёсткими hex (без CSS-переменных); токен-карта внизу файла
    - Шрифты системные, без CDN (склад может быть офлайн)
 
+   ДВЕ ТЕМЫ (30.09.2026):
+   - тёмная (этот файл, «Нормальная тема») — база;
+   - дневная («Любитель щурится») — офисная, белый лист и чёрный шрифт.
+     Живёт секцией `html.day ...` в конце файла, включается классом day на
+     <html> (ставит /static/theme.js до отрисовки, per-device localStorage).
+     Секция СГЕНЕРИРОВАНА: /root/raven-guard-ui/gen_day_theme.py — править
+     палитру там, не руками в сгенерированных правилах.
+
    Токены:
    --bg0  #0A0A0D  фон страницы
    --bg1  #101014  панели/карточки
@@ -883,3 +891,255 @@ tr[data-href] { cursor: pointer; }
     .sidebar { width: 82%; }
 }
 
+/* ---------------- Переключатель темы (бренд-бар, правый край) ----------------
+   Подпись рядом — название ТЕКУЩЕЙ темы, ползунок влево = тёмная, вправо =
+   дневная. Выбор хранит /static/theme.js в localStorage («wh_theme» =
+   day|night), поэтому у каждого устройства своя тема.
+
+   Всё состояние ползунка читается из класса day на <html>, а не из JS-класса:
+   class ставится до первой отрисовки, поэтому и подпись, и положение кружка
+   верны с первого кадра (иначе подпись на миг показывала чужую тему). */
+.brandbar__right { display: flex; align-items: center; }
+.themeswitch { display: inline-block; white-space: nowrap; margin-left: 14px; }
+.themeswitch__label {
+    color: #66645C;
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-right: 8px;
+    vertical-align: middle;
+}
+.themeswitch__label-day { display: none; }
+.themeswitch__track {
+    position: relative;
+    display: inline-block;
+    width: 40px;
+    height: 20px;
+    padding: 0;
+    border: 1px solid #33333E;
+    border-radius: 10px;
+    background: #16161C;
+    line-height: 0;
+    vertical-align: middle;
+    cursor: pointer;
+}
+.themeswitch__track:hover { background: #1E1E26; border-color: #4A4A55; }
+.themeswitch__knob {
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #66645C;
+    transition: left 0.15s ease, background-color 0.15s ease;
+}
+
+/* Дневная тема: включённое состояние ползунка. Правила ниже дневные ПО
+   ПОСТРОЕНИЮ (селектор начинается с html.day), поэтому цвет задаётся здесь,
+   а не генератором — в палитре им делать нечего (см. SKIP в gen_day_theme.py). */
+html.day .themeswitch__label-night { display: none; }
+html.day .themeswitch__label-day { display: inline; }
+html.day .themeswitch__track { background: #1F2328; border-color: #1F2328; }
+html.day .themeswitch__track:hover { background: #000000; border-color: #000000; }
+html.day .themeswitch__knob { left: 22px; background: #FFFFFF; }
+
+/* ---------------- Эмблема ворона ----------------
+   Цвета фигур — только здесь (в разметке <svg> цвета не зашиты): иначе на
+   дневной теме костяные фигуры были бы белыми по белому. Дневную пару
+   генерирует gen_day_theme.py (fill = роль DECOR). */
+.brandbar__emblem .em__shade { fill: #F4F1E9; }
+.brandbar__emblem .em__eye { fill: #0A0A0D; }
+.brandbar__emblem .em__glint { fill: #C02832; }
+
+/* ===== DAY-THEME-START ===== */
+/* ДНЕВНАЯ ТЕМА «Любитель щурится» — офисная, чёрный шрифт
+
+   ДНЕВНАЯ ТЕМА — сгенерировано: gen_day_theme.py (навык raven-guard-ui)
+   Активация: класс day на <html> (ставит /static/theme.js до отрисовки).
+   Палитра — карта PALETTE генератора; секция перегенерируется целиком.
+   ========================================================================== */
+html.day body { background: #F6F8FA; color: #000000; }
+html.day ::selection { background: rgba(192, 40, 50, 0.22); color: #000000; }
+html.day a { color: #000000; }
+html.day a:hover { color: #000000; }
+html.day h1, html.day h2, html.day h3, html.day h4 { color: #000000; }
+html.day h2 { color: #57606A; border-bottom: 1px solid #D0D7DE; }
+html.day h3 { color: #57606A; }
+html.day .muted, html.day .meta { color: #6E7781; }
+html.day .blue { color: #0969DA; }
+html.day .yellow { color: #9A6700; }
+html.day ::-webkit-scrollbar-thumb { background: #C6CDD5; }
+html.day ::-webkit-scrollbar-thumb:hover { background: #AFB8C1; }
+html.day .brandbar { border-bottom: 1px solid #D0D7DE; }
+html.day .brandbar__name { color: #000000; }
+html.day .brandbar__motto { color: #6E7781; }
+html.day button, html.day .btn, html.day a.button, html.day input[type="button"], html.day input[type="submit"] { background: #F3F5F7; color: #000000; border: 1px solid #C6CDD5; }
+html.day button:hover, html.day .btn:hover, html.day a.button:hover { background: #E7EBEF; border-color: #AFB8C1; color: #000000; }
+html.day button[type="submit"], html.day .btn-green, html.day .btn-save, html.day .save-btn, html.day .add-btn, html.day a.button, html.day .export-btn, html.day .download a, html.day .menu-btn { background: #1F2328; color: #FFFFFF; border-color: #1F2328; }
+html.day button[type="submit"]:hover, html.day .btn-green:hover, html.day .btn-save:hover, html.day .save-btn:hover, html.day .add-btn:hover, html.day a.button:hover, html.day .export-btn:hover, html.day .download a:hover, html.day .menu-btn:hover { background: #000000; border-color: #000000; color: #FFFFFF; }
+html.day .btn-danger, html.day .btn-remove, html.day button.danger, html.day button.delete, html.day .delete-order-btn, html.day .rm { color: #B42318; border-color: #F0A8A8; }
+html.day .btn-danger:hover, html.day .btn-remove:hover, html.day button.danger:hover, html.day button.delete:hover, html.day .delete-order-btn:hover, html.day .rm:hover { background: #FDECEC; border-color: #E08C8C; color: #8E1F27; }
+html.day .resync-btn { color: #9A6700; border-color: #E0C97A; }
+html.day .resync-btn:hover { background: #FFF6D8; border-color: #BF9E5A; color: #9A6700; }
+html.day .btn-secondary, html.day .btn-cancel, html.day button.secondary, html.day .cancel, html.day .barcodes-toggle { color: #57606A; border-color: #C6CDD5; }
+html.day .btn-secondary:hover, html.day .btn-cancel:hover, html.day button.secondary:hover, html.day .cancel:hover, html.day .barcodes-toggle:hover { background: #F3F5F7; color: #000000; border-color: #AFB8C1; }
+html.day .back { color: #6E7781; }
+html.day .back:hover { color: #000000; }
+html.day table { background: #FFFFFF; }
+html.day th, html.day td { border: 1px solid #D0D7DE; }
+html.day th { background: #F3F5F7; color: #57606A; }
+html.day tr:nth-child(even) td { background: rgba(0, 0, 0, 0.03); }
+html.day tbody tr:hover td { background: #F3F5F7; }
+html.day .error-cell { background: #FDD8D8 !important; color: #8E1F27 !important; }
+html.day [contenteditable="true"] { background: #F3F5F7; color: #000000; }
+html.day [contenteditable="true"]:hover { background: #EFF2F5; }
+html.day [contenteditable="true"]:focus { background: #EBEFF3; }
+html.day form label { color: #57606A; }
+html.day label.field { color: #000000; }
+html.day .day-row label, html.day .days label, html.day .ms-list label, html.day .contact-row label, html.day .photo-block label, html.day .supplier-select label, html.day #scanner label, html.day .barcodes-add label { color: #57606A; }
+html.day input[type="text"], html.day input[type="number"], html.day input[type="date"], html.day input[type="search"], html.day input[type="tel"], html.day input[type="email"], html.day select, html.day textarea { background: #FFFFFF; border: 1px solid #C6CDD5; color: #000000; }
+html.day input:focus, html.day select:focus, html.day textarea:focus { border-color: #8C959F; box-shadow: 0 0 0 2px rgba(192, 40, 50, 0.20); }
+html.day input[readonly], html.day input[disabled], html.day select[disabled] { background: #F3F5F7; color: #6E7781; }
+html.day input[type="checkbox"], html.day input[type="radio"] { accent-color: #1F2328; }
+html.day .hint { color: #6E7781; }
+html.day .readonly-hint { color: #6E7781; }
+html.day .comment { color: #57606A; }
+html.day .card { background: #FFFFFF; border: 1px solid #D0D7DE; box-shadow: 0 6px 24px rgba(27, 31, 36, 0.10); }
+html.day #ws-status { color: #6E7781; }
+html.day #ws-status.online { color: #1A7F37; }
+html.day #ws-status.offline { color: #B42318; }
+html.day .toplinks { color: #6E7781; }
+html.day .error, html.day .err, html.day .error-banner, html.day .error-msg, html.day .errors-report, html.day .error-list li { background: #FDECEC; border: 1px solid #F0A8A8; color: #B42318; }
+html.day .errors-report h2 { color: #B42318; }
+html.day .banner { background: #F3F5F7; border: 1px solid #C6CDD5; }
+html.day .banner.ok, html.day .ok, html.day .msg { background: #E7F6EC; border: 1px solid #A8D5B5; color: #1A7F37; }
+html.day .banner.err { background: #FDECEC; border-color: #F0A8A8; color: #B42318; }
+html.day .chip { border: 1px solid #C6CDD5; color: #57606A; }
+html.day .chip:hover { background: #F3F5F7; border-color: #AFB8C1; color: #000000; }
+html.day .chip.active { background: #1F2328; border-color: #1F2328; color: #FFFFFF; }
+html.day .chip .chip-remove { color: #B42318; }
+html.day .chip.active .chip-remove { color: #FFFFFF; }
+html.day .badge { border: 1px solid #C6CDD5; color: #57606A; }
+html.day .badge-supplier { border-color: #B6CBE0; color: #0969DA; }
+html.day .badge-product { border-color: #A8D5B5; color: #1A7F37; }
+html.day .tab { background: #F3F5F7; border: 1px solid #C6CDD5; color: #57606A; }
+html.day .tab:hover { background: #E7EBEF; color: #000000; }
+html.day .tab.active { background: #1F2328; border-color: #1F2328; color: #FFFFFF; }
+html.day .overlay { background: rgba(27, 31, 36, 0.38); }
+html.day .modal { background: #FFFFFF; border: 1px solid #C6CDD5; box-shadow: 0 12px 40px rgba(27, 31, 36, 0.16); }
+html.day .modal-title { color: #000000; }
+html.day .modal-hint { color: #6E7781; }
+html.day tr.group-row td { background: #E4E9EE !important; color: #000000; }
+html.day tr.group-row td.col-toggle { color: #9A6700; }
+html.day tr.group-row td.col-toggle:hover { background: #FFE9A8; color: #3A2C06; }
+html.day td.col-name:hover { background: #E4E9EE; }
+html.day td.cell-pair.has-discount { background: #FFF6D8; color: #9A6700; }
+html.day td.cell-pair.only-surplus { background: #FBEAF0; color: #9E3B5C; }
+html.day td.cell-pair.expires-today { background: #E7F1FB; color: #0969DA; }
+html.day td.cell-pair:hover { outline: 1px solid #8C959F; }
+html.day td.cell-empty { background: #F3F5F7; color: #6E7781; }
+html.day .dates-search .hits { background: #FFFFFF; border: 1px solid #C6CDD5; box-shadow: 0 10px 30px rgba(27, 31, 36, 0.16); }
+html.day .dates-search .hit + .hit { border-top: 1px solid #E4E9EE; }
+html.day .dates-search .hit.sel { background: #DDE3E9; box-shadow: inset 3px 0 0 #9A6700; }
+html.day .dates-search .hit.sel .hit-name { color: #000000; }
+html.day .dates-search .hit.sel .hit-group { color: #6E7781; }
+html.day .dates-search .hit-name { color: #000000; }
+html.day .dates-search .hit-name b { color: #9A6700; }
+html.day .dates-search .hit-group { color: #6E7781; }
+html.day .dates-search .hit-none { color: #6E7781; }
+html.day td.col-name:focus { box-shadow: inset 0 0 0 2px #9A6700; }
+html.day .discount-table td, html.day .discount-table th { border: 1px solid #D0D7DE; }
+html.day .discount-table td.dl { background: #F3F5F7; }
+html.day .scan-card { background: #FFFFFF; border: 1px solid #D0D7DE; border-left: 4px solid #5A9E68; }
+html.day .scan-card.box { border-left-color: #6E8AA3; }
+html.day .scan-card.missing { border-left-color: #E0C97A; }
+html.day .scan-card.error-card { border-left-color: #C02832; }
+html.day .scan-card .name { color: #000000; }
+html.day .scan-card .meta { color: #6E7781; }
+html.day .children { border-left: 2px solid #D0D7DE; }
+html.day .child-row .cname { color: #000000; }
+html.day .child-row .cmeta { color: #6E7781; }
+html.day .mismatch { color: #B42318; }
+html.day #report table { background: #FFFFFF; }
+html.day .scan-row { background: #FFFFFF; border: 1px solid #D0D7DE; }
+html.day .scan-row .code { color: #000000; }
+html.day .constraint { color: #57606A; }
+html.day .counter { color: #6E7781; }
+html.day .folder-toggle { color: #57606A; }
+html.day .entry { border-bottom: 1px solid #E4E9EE; }
+html.day .entry-title { color: #000000; }
+html.day .entry-title:hover { color: #000000; }
+html.day .content img { border: 1px solid #D0D7DE; }
+html.day .photo-block img { border: 1px solid #D0D7DE; }
+html.day details.multi-select { border: 1px solid #C6CDD5; background: #FAFBFC; }
+html.day details.multi-select summary { color: #57606A; }
+html.day details.multi-select summary:hover { color: #000000; }
+html.day details.multi-select .ms-list { border-top: 1px solid #D0D7DE; }
+html.day details.multi-select .ms-empty { color: #6E7781; }
+html.day .mini-calendar td { border: 1px solid #D0D7DE; background: #FFFFFF; }
+html.day .mini-calendar td.day-on { background: #D9F2E1; color: #14532D; }
+html.day .barcodes-table th, html.day .barcodes-table td { border: 1px solid #D0D7DE; }
+html.day .barcode-row .barcode-results { background: #FAFBFC; border: 1px solid #D0D7DE; }
+html.day .barcode-row.bar-error .barcode-code, html.day .barcode-row.bar-error .product-search { border-color: #C02832; }
+html.day .product-hit { border-bottom: 1px solid #E4E9EE; color: #000000; }
+html.day .product-hit:hover { background: #F3F5F7; }
+html.day .thumbs img { border: 1px solid #D0D7DE; }
+html.day #preview img, html.day #preview canvas { border: 1px solid #D0D7DE; }
+html.day .photo-count { color: #57606A; }
+html.day .matches a { color: #000000; border-bottom: 1px solid #E4E9EE; }
+html.day .matches a:hover { color: #000000; background: #F0F2F5; }
+html.day .matches .code { color: #6E7781; }
+html.day .suppliers-list li { border-bottom: 1px solid #E4E9EE; }
+html.day .suppliers-list li a { color: #000000; }
+html.day .suppliers-list li a:hover { color: #000000; }
+html.day .rules-hint { color: #57606A; background: #FAFBFC; border: 1px solid #D0D7DE; }
+html.day .rules-hint code { background: #F3F5F7; color: #9A6700; }
+html.day .empty { background: #FFFFFF; border: 1px solid #D0D7DE; color: #6E7781; }
+html.day #drop-zone { border: 2px dashed #C6CDD5; background: #FAFBFC; }
+html.day #drop-zone:hover { background: #FDECEC; }
+html.day .month-nav__current { color: #000000; }
+html.day .month-nav a { color: #9A6700; }
+html.day .av-hint { color: #6E7781; }
+html.day .av-table th, html.day .av-table td { border: 1px solid #D0D7DE; }
+html.day .av-day { color: #6E7781; }
+html.day .av-day.today { background: #F3F5F7; }
+html.day .group-row td { background: #F3F5F7; color: #9A6700; }
+html.day .av-row .av-name { background: #FAFBFC; }
+html.day .av-cell.on { background: #FFFFFF; }
+html.day .av-cell.off { background: #DDE3E9; }
+html.day .av-cell.sel { outline: 2px solid #9A6700; }
+html.day .cell-empty { background: #FFFFFF; color: #6E7781; }
+html.day .product-results { background: #FAFBFC; border: 1px solid #D0D7DE; }
+html.day .complaint-photo img { border: 1px solid #D0D7DE; }
+html.day .picked { color: #1A7F37; }
+html.day .merge-row td { border-left: 3px solid #B07D0A; }
+html.day .row-done .cell-action { color: #1A7F37; }
+html.day .row-flash td { background: rgba(192, 40, 50, 0.12); }
+html.day .scan-card.block { border-left-color: #E0C97A; }
+html.day .scan-card.block.active { border-left-color: #C02832; }
+html.day .navtoggle { background: #FFFFFF; color: #000000; border: 1px solid #D0D7DE; }
+html.day .navtoggle:hover { color: #000000; }
+html.day .sidebar { background: #FFFFFF; border-right: 1px solid #D0D7DE; }
+html.day .sidebar__head { border-bottom: 1px solid #D0D7DE; }
+html.day .sidebar__title { color: #57606A; }
+html.day .sidebar__close { color: #6E7781; }
+html.day .sidebar__close:hover { color: #000000; }
+html.day .sidebar__group { border-bottom: 1px solid #E4E9EE; }
+html.day .sidebar__group--plain { border-bottom: 1px solid #E4E9EE; }
+html.day .sidebar__head-btn { color: #000000; }
+html.day .sidebar__head-btn:hover { color: #000000; }
+html.day .sidebar__group--sub > .sidebar__head-btn { color: #57606A; }
+html.day .sidebar__caret { color: #6E7781; }
+html.day .sidebar__group.expanded > .sidebar__head-btn { color: #000000; }
+html.day .sidebar__link { color: #424A53; }
+html.day .sidebar__link:hover { background: #F3F5F7; color: #000000; }
+html.day .sidebar__link.active { background: #F3F5F7; color: #000000; }
+html.day .sidebar__scrim { background: rgba(27, 31, 36, 0.35); }
+html.day .themeswitch__label { color: #6E7781; }
+html.day .themeswitch__track { border: 1px solid #C6CDD5; background: #F3F5F7; }
+html.day .themeswitch__track:hover { background: #E7EBEF; border-color: #AFB8C1; }
+html.day .themeswitch__knob { background: #6E7781; }
+html.day .brandbar__emblem .em__shade { fill: #1F2328; }
+html.day .brandbar__emblem .em__eye { fill: #FFFFFF; }
+/* ===== DAY-THEME-END ===== */
