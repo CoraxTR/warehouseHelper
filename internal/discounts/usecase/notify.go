@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"warehouseHelper/internal/domain"
@@ -30,19 +31,29 @@ func discountPercent(p *int16) int16 {
 
 // NotifyText — текст задачи о том, что человеку надо сделать со скидкой на
 // сайте (канал general), и вид этой задачи, по разнице эффективного значения
-// пары (товар, срок) до записи и после. ok=false — уведомлять нечего.
+// ПОЗИЦИИ до записи и после. ok=false — уведомлять нечего.
 //
 // Четыре типа события (черновик §15 / дизайн модуля, 14.09.2026):
 //
-//	0/NULL → >0       — «Поставить скидку X% на <имя> (до <дата>)»
+//	0/NULL → >0       — «Поставить скидку X% на <имя> сроки до: <даты>»
 //	>0     → больше   — «Поднять скидку до X% на ...»
 //	>0     → меньше>0 — «Понизить скидку до X% на ...»
-//	>0     → 0/NULL   — «Убрать скидку с: ...»
+//	>0     → 0/NULL   — «Убрать скидку с: <имя> сроки до: <даты>»
 //
 // Тексты переписаны 25.09.2026 (решение владельца): действие — в начало
 // строки, имя товара с датой — после него, как в задачах наличия
-// («Убрать с сайта: <имя>»). Вид задачи уходит в модуль «Внутренние задачи»
-// и на страницу ленты.
+// («Убрать с сайта: <имя>»).
+//
+// С 29.09.2026 (решение владельца) уведомление — ОДНО на позицию, а не на пару
+// (товар, срок): человеку на сайте надо выставить одно значение скидки на все
+// сроки товара, поэтому в тексте перечисляются сроки, к которым действие
+// относится («сроки до: 11.12, 28.02»), а не срок одной пары. Заодно это
+// убирает дубль сообщений, когда скидка встаёт сразу на оба срока.
+//
+// dates — сроки позиции для текста (их готовит реестр: при постановке/подъёме/
+// понижении — сроки лотов с новым значением, при «убрать» — сроки, где скидка
+// была). Пустой список — формат не ломается: сроки после двоеточия просто
+// пусты (лучше подсказать без даты, чем не показать действие).
 //
 // Ручная скидка (решение владельца, сентябрь 2026): 0 — «скидка 0 %», то есть
 // осознанная заморозка пары, а NULL — ручного применения нет. Для человека это
@@ -53,35 +64,46 @@ func discountPercent(p *int16) int16 {
 // Уведомляем не о входах/выходах в избыток, а только об изменении значения,
 // которое человек переносит на сайт. Значение не изменилось (в том числе
 // «нет → нет» и «ручная 0 % → ручную сняли») → ok=false.
-func NotifyText(name string, bestBefore time.Time, prev, next *int16) (text string, kind domain.TaskKind, ok bool) {
+func NotifyText(name string, dates []time.Time, prev, next *int16) (text string, kind domain.TaskKind, ok bool) {
 	was, now := discountPercent(prev), discountPercent(next)
-	date := bestBefore.Format(notifyLayout)
+	when := notifyDates(dates)
 	switch {
 	case was == now:
 		return "", "", false
 	case was == 0:
-		return fmt.Sprintf("Поставить скидку %d%% на %s (до %s)", now, name, date), domain.TaskKindDiscountPut, true
+		return fmt.Sprintf("Поставить скидку %d%% на %s сроки до: %s", now, name, when), domain.TaskKindDiscountPut, true
 	case now == 0:
-		return fmt.Sprintf("Убрать скидку с: %s (до %s)", name, date), domain.TaskKindDiscountRemove, true
+		return fmt.Sprintf("Убрать скидку с: %s сроки до: %s", name, when), domain.TaskKindDiscountRemove, true
 	case now > was:
-		return fmt.Sprintf("Поднять скидку до %d%% на %s (до %s)", now, name, date), domain.TaskKindDiscountRaise, true
+		return fmt.Sprintf("Поднять скидку до %d%% на %s сроки до: %s", now, name, when), domain.TaskKindDiscountRaise, true
 	default:
-		return fmt.Sprintf("Понизить скидку до %d%% на %s (до %s)", now, name, date), domain.TaskKindDiscountLower, true
+		return fmt.Sprintf("Понизить скидку до %d%% на %s сроки до: %s", now, name, when), domain.TaskKindDiscountLower, true
 	}
 }
 
-// notifyChanges — задачи об изменениях эффективной скидки канала сайта: по
-// каждому изменению (их считает реестр, registry.go) правилом NotifyText
-// собирается текст и вид, задача открывается швом TaskOpener (сообщение с
-// кнопкой отметки в общем канале + строка ленты). Неизменившиеся значения и
-// «нет → нет» задачи не дают.
+// notifyDates — сроки позиции в тексте: «02.01, 15.03». Список приходит из
+// реестра уже отсортированным по возрастанию даты.
+func notifyDates(dates []time.Time) string {
+	parts := make([]string, 0, len(dates))
+	for _, d := range dates {
+		parts = append(parts, d.Format(notifyLayout))
+	}
+	return strings.Join(parts, ", ")
+}
+
+// notifyChanges — задачи об изменениях скидки позиции: по каждому изменению (их
+// считает реестр, registry.go) правилом NotifyText собирается текст и вид,
+// задача открывается швом TaskOpener (сообщение с кнопкой отметки в общем
+// канале + строка ленты). Неизменившиеся значения и «нет → нет» задачи не дают,
+// а изменения одного товара уже склеены реестром в одну запись — в чат уходит
+// одно сообщение на позицию, а не по одному на срок.
 //
 // Ошибка открытия задачи пересчёт не роняет: изменение либо догонит ближайший
 // тик, либо останется в логе — важнее, чтобы запись скидок и снапшот расчёта
 // прошли. Шов не подключён (nil) — тексты только в лог.
 func (uc *UseCase) notifyChanges(ctx context.Context, changes []Change) {
 	for _, c := range changes {
-		text, kind, ok := NotifyText(c.Name, c.BestBefore, c.Prev, c.Next)
+		text, kind, ok := NotifyText(c.Name, c.Dates, c.Prev, c.Next)
 		if !ok {
 			continue
 		}
