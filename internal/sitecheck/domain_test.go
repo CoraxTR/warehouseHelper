@@ -41,14 +41,14 @@ func TestParseFeed(t *testing.T) {
 			offer("", "100", "", "true")+
 			offer("https://www.steakhome.ru/catalog/element/broken/", "abc", "900", "true"))
 
-	feed, err := ParseFeed([]byte(body))
+	feed, err := ParseFeed([]byte(body), time.UTC)
 	if err != nil {
 		t.Fatalf("ParseFeed: %v", err)
 	}
 
-	want := time.Date(2026, 9, 29, 17, 23, 0, 0, time.Local)
+	want := time.Date(2026, 9, 29, 17, 23, 0, 0, time.UTC)
 	if !feed.CreatedAt.Equal(want) {
-		t.Errorf("CreatedAt = %s, want %s (время сайта в локальной зоне процесса)", feed.CreatedAt, want)
+		t.Errorf("CreatedAt = %s, want %s (время сайта в переданной зоне)", feed.CreatedAt, want)
 	}
 
 	// Позиция без url в сверку не идёт вовсе: сравнивать нечего.
@@ -84,13 +84,13 @@ func TestParseFeed(t *testing.T) {
 }
 
 func TestParseFeedBrokenXML(t *testing.T) {
-	if _, err := ParseFeed([]byte("<yml_catalog date=")); err == nil {
+	if _, err := ParseFeed([]byte("<yml_catalog date="), time.UTC); err == nil {
 		t.Fatal("ожидалась ошибка разбора битого XML")
 	}
 }
 
 func TestParseFeedNoDate(t *testing.T) {
-	feed, err := ParseFeed([]byte(feedXML("", offer("https://www.steakhome.ru/catalog/element/x/", "100", "", "true"))))
+	feed, err := ParseFeed([]byte(feedXML("", offer("https://www.steakhome.ru/catalog/element/x/", "100", "", "true"))), time.UTC)
 	if err != nil {
 		t.Fatalf("ParseFeed: %v", err)
 	}

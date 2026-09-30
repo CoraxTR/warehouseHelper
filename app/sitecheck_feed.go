@@ -38,7 +38,7 @@ func NewSiteCheckFeed(url string) *siteCheckFeed {
 // FetchFeed загружает тело фида. Не-200 — ошибка с кодом: фид отдаётся статикой,
 // любой другой ответ означает, что сайт не готов (или адрес неверен).
 func (f *siteCheckFeed) FetchFeed(ctx context.Context) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, f.url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, f.url, http.NoBody)
 	if err != nil {
 		return nil, fmt.Errorf("sitecheck: запрос фида %s: %w", f.url, err)
 	}

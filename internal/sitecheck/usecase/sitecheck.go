@@ -160,7 +160,9 @@ func (uc *UseCase) tick(ctx context.Context) error {
 		return uc.miss(now, attempt, fmt.Errorf("запрос фида: %w", err))
 	}
 
-	feed, err := sitecheck.ParseFeed(data)
+	// Зона разбора — зона часов процесса: время в фиде местное (МСК на проде),
+	// сравнивать его с часовым окном можно только в этой же зоне.
+	feed, err := sitecheck.ParseFeed(data, uc.cfg.Now().Location())
 	if err != nil {
 		return uc.miss(now, attempt, err)
 	}

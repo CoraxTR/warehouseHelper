@@ -127,6 +127,8 @@ func Check(t Target, pos Position, idx Index) []Notice {
 		out = append(out, Notice{Kind: domain.TaskKindSiteDiscount, Text: fmt.Sprintf(ruleNotSet, base, t.Name)})
 	case item.OldPrice != nil && item.Discount() != base:
 		out = append(out, Notice{Kind: domain.TaskKindSiteDiscount, Text: fmt.Sprintf(ruleDiscount, t.Name)})
+	default:
+		// Скидка на сайте и по базе совпали — делать нечего.
 	}
 
 	if !item.Available {
@@ -225,16 +227,18 @@ const feedDateLayout = "2006-01-02 15:04"
 // зачёркнутой цены (скидку по ней просто не сверяем), а нечитаемое время
 // составления читается как нулевое — поллер по нему поймёт, что фид не свежий,
 // и продолжит опрос. Ошибку возвращаем только на битом XML.
-func ParseFeed(data []byte) (Feed, error) {
+func ParseFeed(data []byte, loc *time.Location) (Feed, error) {
 	var doc ymlCatalog
 	if err := xml.Unmarshal(data, &doc); err != nil {
 		return Feed{}, fmt.Errorf("разбор фида сайта: %w", err)
 	}
 
 	feed := Feed{Items: make([]FeedItem, 0, len(doc.Shop.Offers.Offers))}
-	// Время сайта локальное (МСК на проде): сравнивать его с часами процесса
-	// можно только в той же зоне, в UTC «17:23» не сошлось бы ни с чем.
-	if t, err := time.ParseInLocation(feedDateLayout, strings.TrimSpace(doc.Date), time.Local); err == nil {
+	// Время в шапке фида — местное для сайта (МСК): разбирать его надо в той же
+	// зоне, в которой идут часы процесса (их передаёт вызывающий), иначе «17:23»
+	// не сойдётся ни с одним часом и поллер будет ждать вечно. time.Local не
+	// используем: зона приходит параметром (линт проекта это правило держит).
+	if t, err := time.ParseInLocation(feedDateLayout, strings.TrimSpace(doc.Date), loc); err == nil {
 		feed.CreatedAt = t
 	}
 

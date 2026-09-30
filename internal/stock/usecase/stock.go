@@ -298,7 +298,7 @@ func (uc *StockUseCase) Snapshot() []stock.Product {
 // на сайте у позиции одно значение скидки, а не по сроку. Товары без лотов в срез
 // не попадают: у них ни остатка, ни скидки (вызывающий читает это как нулевое
 // состояние).
-func (uc *StockUseCase) SiteCheckPositions(ctx context.Context) ([]sitecheck.Position, error) {
+func (uc *StockUseCase) SiteCheckPositions(_ context.Context) ([]sitecheck.Position, error) {
 	done := metrics.Track(trackPkg, "SiteCheckPositions")
 	defer done()
 

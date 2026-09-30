@@ -262,7 +262,11 @@ func (a *App) initSiteCheck() {
 	}
 
 	uc := a.di.SiteCheckUC()
-	a.background("sitecheck: сверка с сайтом", func() { uc.Run(a.ctx) })
+	a.background("sitecheck: сверка с сайтом", func() {
+		if err := uc.Run(a.ctx); err != nil {
+			slog.Info(fmt.Sprintf("sitecheck: поллер завершился: %v", err))
+		}
+	})
 }
 
 // initComplaints запускает фоновые задачи модуля «Жалобы»:
