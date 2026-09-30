@@ -45,8 +45,8 @@ func TestRecalcAffectedStockEventReturnsExpiryOutOfExpiryDay(t *testing.T) {
 	}
 	h.tasks.texts, h.tasks.tries = nil, nil
 
-	// Событие стока: расформированный лот вернулся в остатки.
-	h.uc.MarkDirty("p-affected")
+	// Событие стока: расформированный лот вернулся в остатки — остаток вырос.
+	h.uc.MarkGrown("p-affected")
 	h.uc.runSteps(ctx, affectedSchedule())
 
 	if got := len(h.batches()); got != 1 {
@@ -76,11 +76,11 @@ func TestRecalcAffectedStockEventReturnsExpiryOutOfExpiryDay(t *testing.T) {
 	}
 }
 
-// Подбор заказа в ТГ-день (вт/чт): списание остатка — тоже событие стока, но
-// поднимать скидку сайта раньше рассылки оно не имеет права. Ступень по сроку
-// в ТГ-дни двигают план дня (14:00) и подъём (16:00), до них действуют старые
-// значения (правило владельца 24.09.2026): иначе подписчик увидел бы в рассылке
-// то, что сайт уже отдал покупателю.
+// Рост остатка в ТГ-день (вт/чт): приёмка вернула лот в остатки, ступень по
+// сроку на пустое место есть — но поднимать скидку сайта раньше рассылки
+// событие не имеет права. В ТГ-дни ступень двигают план дня (14:00) и подъём
+// (16:00), до них действуют старые значения (правило владельца 24.09.2026):
+// иначе подписчик увидел бы в рассылке то, что сайт уже отдал покупателю.
 func TestRecalcAffectedTelegramDayKeepsExpiryStill(t *testing.T) {
 	now := day(1).Add(8 * time.Hour) // вторник, 08:00 — ТГ-день
 	if !isTelegramDay(now) {
@@ -98,8 +98,8 @@ func TestRecalcAffectedTelegramDayKeepsExpiryStill(t *testing.T) {
 	}
 	h.tasks.texts, h.tasks.tries = nil, nil
 
-	// Событие стока: подбор заказа списал часть остатка пары.
-	h.uc.MarkDirty("p-affected")
+	// Событие стока: приёмка вернула остаток пары (рост).
+	h.uc.MarkGrown("p-affected")
 	h.uc.runSteps(ctx, affectedSchedule())
 
 	if got := h.batches(); len(got) != 0 {
@@ -121,7 +121,7 @@ func TestRecalcAffectedLeavesQuietProductsAlone(t *testing.T) {
 	)
 	ctx := context.Background()
 
-	h.uc.MarkDirty("p-event")
+	h.uc.MarkGrown("p-event")
 	h.uc.runSteps(ctx, affectedSchedule())
 
 	if got := len(h.batches()); got != 1 {
@@ -189,7 +189,7 @@ func TestRunStepsNoRecalcWithoutEvents(t *testing.T) {
 
 	// Событие стока в тот же час: пересчёт идёт сразу (ступень + уведомление),
 	// и час остаётся отмеченным — второго, полного пересчёта в проходе нет.
-	h.uc.MarkDirty("p-one")
+	h.uc.MarkGrown("p-one")
 	h.uc.runSteps(ctx, s)
 	if got := len(h.batches()); got != 1 {
 		t.Fatalf("проход с событием записал %d батчей, ожидался 1: %v", got, h.batches())
@@ -212,8 +212,9 @@ func TestRunAffectedKeepsEventOnError(t *testing.T) {
 	ctx := context.Background()
 	s := affectedSchedule()
 
-	// Событие пришло, а снапшот входа недоступен: шаг падает, записи нет.
-	h.uc.MarkDirty("p-one")
+	// Событие пришло (приёмка прибавила остаток), а снапшот входа недоступен:
+	// шаг падает, записи нет.
+	h.uc.MarkGrown("p-one")
 	h.turn.avgErr = errors.New("БД недоступна")
 	h.uc.runSteps(ctx, s)
 	if got := len(h.batches()); got != 0 {
@@ -251,8 +252,8 @@ func TestRecalcAffectedKeepsAppliedExpiryStill(t *testing.T) {
 	}
 	h.tasks.texts, h.tasks.tries = nil, nil
 
-	// Событие стока по обоим товарам: подбор заказа списал часть остатка.
-	h.uc.MarkDirty("p-applied", "p-empty")
+	// Событие стока по обоим товарам: приёмка прибавила остаток.
+	h.uc.MarkGrown("p-applied", "p-empty")
 	h.uc.runSteps(ctx, affectedSchedule())
 
 	if got := len(h.batches()); got != 1 {
@@ -278,5 +279,108 @@ func TestRecalcAffectedKeepsAppliedExpiryStill(t *testing.T) {
 	want := []string{"Поставить скидку 40% на Молоко сроки до: " + day(5).Format(notifyLayout)}
 	if !reflect.DeepEqual(h.tasks.texts, want) {
 		t.Errorf("уведомления %q, want %q", h.tasks.texts, want)
+	}
+}
+
+// Подбор заказа вне КТ-дня: остаток пары списан, и ступень по сроку расчёт НЕ
+// ставит — роста не было (решение владельца 30.09.2026). Кейс с сайта 30.09.2026
+// (среда): кладовщик подобрал соус в заказ, а в чат ушло «Поставить скидку 40%».
+// Контроль в том же тесте: под приёмкой (рост) та же пара ступень получает —
+// значит «ничего не записали» ниже означает запрет подбора, а не пустую фикстуру.
+func TestRecalcAffectedPickDoesNotFillEmptyPlace(t *testing.T) {
+	ctx := context.Background()
+	now := day(0).Add(8 * time.Hour) // понедельник, 08:00 — вне КТ-дней
+	if expiryDay(now) {
+		t.Fatalf("тест требует не-КТ день, а %s — КТ-день", now.Weekday())
+	}
+	fixture := func() *recalcHarness {
+		return newRecalcHarness(now,
+			lotInput("p-picked", "Соус", day(5), 20, shelfLifeInput(30)), // D = 5 → ступень 40
+		)
+	}
+
+	// Контроль: приёмка прибавила остаток — ступень 40 уходит на сайт.
+	hGrown := fixture()
+	hGrown.uc.MarkGrown("p-picked")
+	hGrown.uc.runSteps(ctx, affectedSchedule())
+	if got := len(hGrown.batches()); got != 1 {
+		t.Fatalf("под приёмкой батчей %d, ожидался 1: %v", got, hGrown.batches())
+	}
+	if w := hGrown.batches()[0][0]; w.General == nil || *w.General != 40 {
+		t.Errorf("под приёмкой правка: %+v, ожидалась ступень 40", w)
+	}
+
+	// Подбор: остаток списан, роста нет — ни записи, ни уведомления.
+	h := fixture()
+	if err := h.uc.RecalcSurplus(ctx, now); err != nil {
+		t.Fatalf("RecalcSurplus (наполнение): %v", err)
+	}
+	h.tasks.texts, h.tasks.tries = nil, nil
+	avgCalls := h.turn.avgCalls
+
+	h.uc.MarkDirty("p-picked")
+	h.uc.runSteps(ctx, affectedSchedule())
+
+	if got := h.batches(); len(got) != 0 {
+		t.Errorf("батчи записи: %+v, want ни одного: подбор ступень по сроку не ставит", got)
+	}
+	if len(h.tasks.texts) != 0 {
+		t.Errorf("уведомления %q, want тишину: подбор не даёт сайту новую скидку", h.tasks.texts)
+	}
+	// Событие не потерялось: оборот по товару спросили, значит пересчёт был.
+	if h.turn.avgCalls != avgCalls+1 {
+		t.Errorf("оборот спрашивали %d раз, ожидался %d: событие подбора должно пересчитываться",
+			h.turn.avgCalls, avgCalls+1)
+	}
+}
+
+// Ручная правка скидки на странице «Сроки» — событие БЕЗ роста: пустое место
+// соседней пары она ступенью не заполняет (вне КТ-дней ступень двигает план
+// дня, а не правка менеджера). Контроль: то же событие с ростом остатка ступень
+// на дальнюю пару пишет.
+func TestRecalcAffectedManualEditDoesNotFillEmptyPlace(t *testing.T) {
+	ctx := context.Background()
+	now := day(0).Add(8 * time.Hour)
+	fixture := func() *recalcHarness {
+		return newRecalcHarness(now,
+			// Ближняя пара: ручная скидка менеджера 15 — место занято.
+			lotInput("p-manual", "Творог", day(3), 10, shelfLifeInput(30), manualInput(15)),
+			// Дальняя пара того же товара: в канале сайта пусто.
+			lotInput("p-manual", "Творог", day(5), 10, shelfLifeInput(30)),
+		)
+	}
+
+	// Контроль: рост остатка — дальняя пара получает свою ступень 40.
+	hGrown := fixture()
+	hGrown.uc.MarkGrown("p-manual")
+	hGrown.uc.runSteps(ctx, affectedSchedule())
+	gotExpiry := 0
+	for _, b := range hGrown.batches() {
+		for _, w := range b {
+			if w.Source == discounts.SourceExpiry.String() {
+				gotExpiry++
+			}
+		}
+	}
+	if gotExpiry != 1 {
+		t.Fatalf("под приёмкой ступеней по сроку %d, ожидалась 1: %v", gotExpiry, hGrown.batches())
+	}
+
+	// Ручная правка: ступень на пустое место не пишется.
+	h := fixture()
+	if err := h.uc.RecalcSurplus(ctx, now); err != nil {
+		t.Fatalf("RecalcSurplus (наполнение): %v", err)
+	}
+	before := len(h.batches())
+
+	if err := h.uc.OnManualDiscountChanged(ctx, "p-manual"); err != nil {
+		t.Fatalf("OnManualDiscountChanged: %v", err)
+	}
+	for _, b := range h.batches()[before:] {
+		for _, w := range b {
+			if w.Source == discounts.SourceExpiry.String() {
+				t.Errorf("ручная правка поставила ступень по сроку: %+v", w)
+			}
+		}
 	}
 }

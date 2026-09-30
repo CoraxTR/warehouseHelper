@@ -9,6 +9,8 @@ import (
 
 // OnLotsChanged — лоты товара изменились: приёмка увеличила накопленный
 // остаток, подбор его уменьшил, со страницы «Сроки» поменяли ручную скидку.
+// grown — остаток вырос (приёмка, возврат лота в остатки): только по такому
+// событию пересчёт заполняет пустое место ступенью по сроку (см. MarkGrown).
 //
 // Событие только ОТМЕЧАЕТ товар: свежие оборот и решение он получит в
 // ближайшем тике избытка. Внутри нет ни обращений в МС, ни выборок из БД —
@@ -16,8 +18,8 @@ import (
 // ждать сети. Изменения скидок и уведомления о них считает тик по реестру:
 // скидку могли поднять и снять несколько раз подряд, сообщать о каждом шаге
 // незачем — человеку важно состояние, а не перебор.
-func (uc *UseCase) OnLotsChanged(_ context.Context, productID string) error {
-	uc.MarkDirty(productID)
+func (uc *UseCase) OnLotsChanged(_ context.Context, productID string, grown bool) error {
+	uc.markDirty(productID, grown)
 
 	return nil
 }
@@ -31,7 +33,9 @@ func (uc *UseCase) OnManualDiscountChanged(ctx context.Context, productID string
 	if productID == "" {
 		return nil
 	}
-	uc.MarkDirty(productID)
+	// Ручная правка остаток не прибавляет: метка без роста — ступень по сроку на
+	// пустое место такая правка не ставит (её двигает план КТ-дня).
+	uc.markDirty(productID, false)
 
-	return uc.RecalcAffected(ctx, uc.now(), []string{productID})
+	return uc.RecalcAffected(ctx, uc.now(), map[string]bool{productID: false})
 }
