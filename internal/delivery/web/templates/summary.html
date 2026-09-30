@@ -5,12 +5,23 @@
     <meta charset="UTF-8">
     <title>Результат выгрузки</title>
     <link rel="stylesheet" href="/static/raven-guard.css">
+    <script src="/static/theme.js"></script>
 </head>
 
 <body>
     <header class="brandbar">
-        <a class="brandbar__brand" href="/"><svg class="brandbar__emblem" viewBox="0 0 64 64" aria-hidden="true"><circle cx="35" cy="25" r="14" fill="#F4F1E9"/><polygon points="6,26 30,17 28,27" fill="#F4F1E9"/><polygon points="13,35 28,27 26,36" fill="#F4F1E9"/><circle cx="34" cy="23" r="3.6" fill="#0A0A0D"/><circle cx="33" cy="22" r="1.1" fill="#C02832"/></svg><span class="brandbar__name">ВОРОН&nbsp;&middot;&nbsp;СКЛАД</span></a>
-        <span class="brandbar__motto">Приёмка или смерть</span>
+        <a class="brandbar__brand" href="/"><svg class="brandbar__emblem" viewBox="0 0 64 64" aria-hidden="true"><circle class="em__shade" cx="35" cy="25" r="14"/><polygon class="em__shade" points="6,26 30,17 28,27"/><polygon class="em__shade" points="13,35 28,27 26,36"/><circle class="em__eye" cx="34" cy="23" r="3.6"/><circle class="em__glint" cx="33" cy="22" r="1.1"/></svg><span class="brandbar__name">ВОРОН&nbsp;&middot;&nbsp;СКЛАД</span></a>
+        <div class="brandbar__right">
+            <span class="brandbar__motto">Приёмка или смерть</span>
+            <span class="themeswitch" id="theme-switch">
+                <span class="themeswitch__label" id="theme-label"><span class="themeswitch__label-night">Нормальная тема</span><span class="themeswitch__label-day">Любитель щурится</span></span>
+                <button class="themeswitch__track" id="theme-toggle" type="button"
+                 role="switch" aria-checked="false" aria-label="Тема оформления"
+                 title="Переключить на «Любитель щурится»">
+                    <span class="themeswitch__knob"></span>
+                </button>
+            </span>
+        </div>
     </header>
     {{template "nav"}}
     <h1>Выгрузка выполнена</h1>
