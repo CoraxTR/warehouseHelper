@@ -49,8 +49,10 @@ type UseCase struct {
 	recalcMu sync.Mutex
 	// dirty — товары, по которым расчёт просит свежий оборот: события стока
 	// (приёмка изменила накопленный остаток, подбор, ручная скидка) и новые
-	// избытки, найденные в этом же тике.
-	dirty map[string]struct{}
+	// избытки, найденные в этом же тике. Значение — вырос ли по товару остаток:
+	// по этому признаку событийный пересчёт вправе заполнить ПУСТОЕ место
+	// ступенью по сроку вне КТ-дней (см. MarkGrown и RecalcAffected).
+	dirty map[string]bool
 }
 
 // NewUseCase собирает сценарии модуля. Все зависимости — швы (ports.go);
@@ -76,7 +78,7 @@ func NewUseCase(
 		warehouse: warehouse,
 		now:       now,
 		reg:       NewRegistry(),
-		dirty:     make(map[string]struct{}),
+		dirty:     make(map[string]bool),
 	}
 }
 
@@ -109,33 +111,62 @@ func (uc *UseCase) WindowCap() int {
 // (OnLotsChanged) сообщает о событии — приёмка увеличила накопленный остаток,
 // подбор или смена ручной скидки поменяли состояние пары. Вызывается из
 // обработчика события; следующий тик избытка обновит оборот по этим товарам.
+//
+// Метка БЕЗ роста: ступень по сроку на пустое место событие не ставит — её
+// ставит только MarkGrown (решение владельца 30.09.2026).
 func (uc *UseCase) MarkDirty(productIDs ...string) {
-	uc.mu.Lock()
-	defer uc.mu.Unlock()
-
 	for _, pid := range productIDs {
-		if pid == "" {
-			continue
-		}
-		uc.dirty[pid] = struct{}{}
+		uc.markDirty(pid, false)
 	}
 }
 
-// takeDirty забирает и очищает список товаров, которым нужен свежий оборот.
-func (uc *UseCase) takeDirty() []string {
+// MarkGrown — событие стока с РОСТОМ остатка (приёмка, возврат лота в остатки):
+// товар получает и свежий оборот, и право заполнить пустое место ступенью по
+// сроку вне КТ-дней. Подбор остаток списывает — роста нет, поэтому кладовщик,
+// подобравший заказ, скидку на сайте не получает (решение владельца
+// 30.09.2026: среда, подбор соуса, «Поставить скидку 40%» без повода).
+func (uc *UseCase) MarkGrown(productIDs ...string) {
+	for _, pid := range productIDs {
+		uc.markDirty(pid, true)
+	}
+}
+
+// markDirty ставит метку товара; grew — остаток вырос. Повторная метка в одном
+// окне роста не сбрасывает: товар могли и подобрать, и принять — рост есть.
+func (uc *UseCase) markDirty(productID string, grew bool) {
+	if productID == "" {
+		return
+	}
+	uc.mu.Lock()
+	defer uc.mu.Unlock()
+
+	uc.dirty[productID] = uc.dirty[productID] || grew
+}
+
+// markAll возвращает метки на место после неудачного прохода: событие не должно
+// потеряться из-за разового сбоя (признак роста возвращается вместе с товаром).
+func (uc *UseCase) markAll(events map[string]bool) {
+	uc.mu.Lock()
+	defer uc.mu.Unlock()
+
+	for pid, grew := range events {
+		uc.dirty[pid] = uc.dirty[pid] || grew
+	}
+}
+
+// takeDirty забирает и очищает метки событий стока: товары и признак роста по
+// каждому (true — остаток вырос).
+func (uc *UseCase) takeDirty() map[string]bool {
 	uc.mu.Lock()
 	defer uc.mu.Unlock()
 
 	if len(uc.dirty) == 0 {
 		return nil
 	}
-	ids := make([]string, 0, len(uc.dirty))
-	for pid := range uc.dirty {
-		ids = append(ids, pid)
-	}
-	uc.dirty = make(map[string]struct{})
+	out := uc.dirty
+	uc.dirty = make(map[string]bool)
 
-	return ids
+	return out
 }
 
 // Change — изменение скидки ПОЗИЦИИ: то, о чём надо уведомить человека

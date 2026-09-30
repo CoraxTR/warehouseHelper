@@ -1694,21 +1694,31 @@ func TestSetManualDiscountKeepsSource(t *testing.T) {
 	}
 }
 
+// lotEvent — вызов слушателя шва: товар и признак роста остатка (grown).
+type lotEvent struct {
+	productID string
+	grown     bool
+}
+
 // mockLotListener — слушатель-заглушка шва «лоты товара изменились»: копит
-// товары и умеет отдавать ошибку (проверка «ошибка слушателя не роняет запись»).
+// вызовы (товар + признак роста) и умеет отдавать ошибку (проверка «ошибка
+// слушателя не роняет запись»).
 type mockLotListener struct {
-	calls []string
+	calls []lotEvent
 	err   error
 }
 
-func (m *mockLotListener) OnLotsChanged(_ context.Context, productID string) error {
-	m.calls = append(m.calls, productID)
+func (m *mockLotListener) OnLotsChanged(_ context.Context, productID string, grown bool) error {
+	m.calls = append(m.calls, lotEvent{productID: productID, grown: grown})
 	return m.err
 }
 
 // Шов событий Task 10: после КАЖДОЙ успешной записи слушатель получает товар
 // (по разу на уникальный productID) — приёмка, списание, замена, ручная скидка
-// и «просто»-скидки. Прогрев кэша событием не считается.
+// и «просто»-скидки. Прогрев кэша событием не считается. Признак роста (grown)
+// есть только у приёмки и замены остатков вверх: по нему расчёт скидок вправе
+// заполнить пустое место ступенью по сроку, подбор такого права не даёт
+// (решение владельца 30.09.2026).
 func TestSetLotChangeListenerSeam(t *testing.T) {
 	repo := &mockRepo{
 		products: testStock(),
@@ -1758,7 +1768,14 @@ func TestSetLotChangeListenerSeam(t *testing.T) {
 		t.Fatalf("ReplaceStock: %v", err)
 	}
 
-	want := []string{"p1", "p2", "p1", "p1", "p2", "p1"}
+	want := []lotEvent{
+		{productID: "p1", grown: true}, // 1. приёмка прибавила остаток
+		{productID: "p2", grown: false},
+		{productID: "p1", grown: false},
+		{productID: "p1", grown: false},
+		{productID: "p2", grown: false},
+		{productID: "p1", grown: true}, // 5. сканы заменили лоты с ростом суммы
+	}
 	if len(ls.calls) != len(want) {
 		t.Fatalf("вызовы слушателя = %v, want %v", ls.calls, want)
 	}
@@ -1800,7 +1817,10 @@ func TestLotChangeListenerErrorDoesNotBreakWrites(t *testing.T) {
 		t.Errorf("кэш лота 03.09: telegram = %v, want 25", lot.Telegram)
 	}
 
-	want := []string{"p1", "p2"}
+	want := []lotEvent{
+		{productID: "p1", grown: true}, // приёмка
+		{productID: "p2", grown: false},
+	}
 	if len(ls.calls) != len(want) {
 		t.Fatalf("вызовы слушателя = %v, want %v", ls.calls, want)
 	}
@@ -1845,8 +1865,8 @@ func TestSetManualDiscountNotifiesManualListener(t *testing.T) {
 	if len(ls.manual) != 1 || ls.manual[0] != "p1" {
 		t.Errorf("немедленный пересчёт: %v, want [p1]", ls.manual)
 	}
-	if len(ls.calls) != 1 || ls.calls[0] != "p1" {
-		t.Errorf("общее событие лотов: %v, want [p1]", ls.calls)
+	if len(ls.calls) != 1 || ls.calls[0].productID != "p1" || ls.calls[0].grown {
+		t.Errorf("общее событие лотов: %v, want [p1 без роста: ручная правка остаток не прибавляет]", ls.calls)
 	}
 }
 

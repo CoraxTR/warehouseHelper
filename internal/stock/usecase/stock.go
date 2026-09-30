@@ -91,8 +91,14 @@ type WarehouseNotifier interface {
 // лотов, по одному разу на товар. nil — шов отключён (тесты). Ошибка слушателя
 // операцию стока не роняет — только лог (как у DayStateRecorder): в БД и кэше
 // изменения уже приняты, откатывать их из-за наблюдателя нельзя.
+//
+// grown — остаток товара ВЫРОС (приёмка, возврат лота в остатки, «Обновить
+// сроки» вверх), а не только списан подбором: по этому признаку расчёт скидок
+// вправе заполнить ПУСТОЕ место ступенью по сроку вне КТ-дней. Подбор остаток
+// списывает, и ступень за ним не идёт (решение владельца 30.09.2026: кладовщик,
+// подобравший заказ, не должен ставить скидку на сайте).
 type LotChangeListener interface {
-	OnLotsChanged(ctx context.Context, productID string) error
+	OnLotsChanged(ctx context.Context, productID string, grown bool) error
 }
 
 // ManualDiscountListener — необязательный шов того же наблюдателя: ручную скидку
@@ -162,11 +168,25 @@ func (uc *StockUseCase) SetLotChangeListener(l LotChangeListener) {
 	uc.lotListener = l
 }
 
-// notifyLotChange сообщает слушателю об изменении лотов товара — по разу на
-// уникальный productID (порядок первого появления). Ошибка слушателя только
-// логируется: БД и кэш уже записаны, ронять из-за наблюдателя операцию нельзя
-// (как у notifyDayState).
+// notifyLotGrown — остаток товара ВЫРОС (приёмка, возврат лота в остатки,
+// «Обновить сроки» вверх): расчёт скидок вправе заполнить пустое место ступенью
+// по сроку, не дожидаясь КТ-дня.
+func (uc *StockUseCase) notifyLotGrown(ctx context.Context, productIDs ...string) {
+	uc.notifyLotEvent(ctx, true, productIDs...)
+}
+
+// notifyLotChange — лоты товара изменились без роста остатка (подбор, смена
+// ручной скидки, записи самого расчёта): свежий оборот нужен, ступень по сроку
+// на пустое место — нет.
 func (uc *StockUseCase) notifyLotChange(ctx context.Context, productIDs ...string) {
+	uc.notifyLotEvent(ctx, false, productIDs...)
+}
+
+// notifyLotEvent сообщает слушателю об изменении лотов товара — по разу на
+// уникальный productID (порядок первого появления), grown — вырос ли остаток
+// (см. LotChangeListener). Ошибка слушателя только логируется: БД и кэш уже
+// записаны, ронять из-за наблюдателя операцию нельзя (как у notifyDayState).
+func (uc *StockUseCase) notifyLotEvent(ctx context.Context, grown bool, productIDs ...string) {
 	l := uc.lotListener
 	if l == nil {
 		return
@@ -180,7 +200,7 @@ func (uc *StockUseCase) notifyLotChange(ctx context.Context, productIDs ...strin
 			continue
 		}
 		seen[pid] = struct{}{}
-		if err := l.OnLotsChanged(ctx, pid); err != nil {
+		if err := l.OnLotsChanged(ctx, pid, grown); err != nil {
 			slog.Info(fmt.Sprintf("stock: lot listener %s: %v", pid, err))
 		}
 	}
@@ -719,9 +739,28 @@ func (uc *StockUseCase) applyReplacePlans(ctx context.Context, order []string, p
 	uc.mu.Unlock()
 	uc.publishReplaceEvents(order, plans)
 	uc.notifyDayState(ctx, order...)
-	uc.notifyLotChange(ctx, order...)
+	// Рост считаем по факту суммы остатков: сканы «Обновить сроки» могут и
+	// прибавить (свежая приёмка), и убрать (пересчёт вниз), поэтому признак — по
+	// товару, а не по операции.
+	for i, pid := range order {
+		uc.notifyLotEvent(ctx, grewByReplace(plans[i], byID[pid]), pid)
+	}
 
 	return nil
+}
+
+// grewByReplace — вырос ли остаток товара после замены лотов (сумма по лотам).
+// Товара не было в кэше — считаем рост: лотам неоткуда взяться, кроме приёмки.
+func grewByReplace(plan replacePlan, before stock.Product) bool {
+	var was, now int64
+	for _, l := range before.Lots {
+		was += l.Qty
+	}
+	for _, l := range plan.upserts {
+		now += l.Qty
+	}
+
+	return now > was
 }
 
 // replaceWrites собирает правки для репозитория.
@@ -906,7 +945,9 @@ func (uc *StockUseCase) AcceptStock(ctx context.Context, lots []stock.LotIn) err
 		ids = append(ids, l.ProductID)
 	}
 	uc.notifyDayState(ctx, ids...)
-	uc.notifyLotChange(ctx, ids...)
+	// Приёмка остаток прибавляет: это событие с ростом — расчёт вправе заполнить
+	// пустое место ступенью по сроку, не дожидаясь КТ-дня.
+	uc.notifyLotGrown(ctx, ids...)
 
 	return nil
 }
