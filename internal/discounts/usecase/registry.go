@@ -194,6 +194,9 @@ func addLot(a positionAgg, date time.Time, applied *int16) positionAgg {
 		a.top, a.dates = v, []time.Time{date}
 	case v == a.top:
 		a.dates = append(a.dates, date)
+	default:
+		// Лот ниже максимума: срок в текст не попадает (действие — по значению
+		// позиции, а не по каждому сроку).
 	}
 	return a
 }
