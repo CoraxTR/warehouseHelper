@@ -6,7 +6,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -503,14 +504,14 @@ func newID() (string, error) {
 }
 
 // chunkSum — отпечаток содержимого захода: по нему узнаём повторную отправку того
-// же захода. Длина каждой строки пишется в сумму, чтобы «12» и «1»+«2» не совпали.
+// же захода. Длина каждой строки идёт в сумму, чтобы «12» и «1»+«2» не совпали.
 func chunkSum(scans []json.RawMessage) string {
-	h := sha256.New()
-
+	parts := make([]string, 0, len(scans)*2)
 	for _, scan := range scans {
-		fmt.Fprintf(h, "%d:", len(scan))
-		h.Write(scan)
+		parts = append(parts, strconv.Itoa(len(scan)), string(scan))
 	}
 
-	return hex.EncodeToString(h.Sum(nil))
+	sum := sha256.Sum256([]byte(strings.Join(parts, ":")))
+
+	return hex.EncodeToString(sum[:])
 }
