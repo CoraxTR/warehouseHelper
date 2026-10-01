@@ -6,6 +6,8 @@ import (
 	"time"
 	asucase "warehouseHelper/internal/averagesales/usecase"
 	aucase "warehouseHelper/internal/avgweight/usecase"
+	"warehouseHelper/internal/collab"
+	ccase "warehouseHelper/internal/collab/usecase"
 	cphotos "warehouseHelper/internal/complaints/photostore"
 	cucase "warehouseHelper/internal/complaints/usecase"
 	"warehouseHelper/internal/config"
@@ -88,6 +90,7 @@ type DIContainer struct {
 	receiveBarcodes *rucase.BarcodeEditor
 	receivingUC     *rucase.ReceivingUseCase
 	avgWeightUC     *aucase.UseCase
+	collabUC        *ccase.UseCase
 
 	// Хэндлеры
 	mux      *http.ServeMux
@@ -394,6 +397,18 @@ func (d *DIContainer) ReceivingUC() *rucase.ReceivingUseCase {
 	return d.receivingUC
 }
 
+// CollabUC — сценарии совместного сканирования: комнаты, в которых одну приёмку
+// собирают с нескольких машин (хост + гости). Хранилище — в памяти процесса:
+// перезапуск приложения = гости подключаются заново (решение владельца
+// 01.10.2026, таблиц и миграций нет). Пустой TTL — дефолт модуля (6 часов).
+func (d *DIContainer) CollabUC() *ccase.UseCase {
+	if d.collabUC == nil {
+		d.collabUC = ccase.NewUseCase(collab.NewStore(time.Now), 0)
+	}
+
+	return d.collabUC
+}
+
 // StockHub — вебсокет-хаб модуля «Сроки» (клиенты обеих страниц).
 func (d *DIContainer) StockHub() *stockws.Hub {
 	if d.stockHub == nil {
@@ -666,7 +681,7 @@ func (d *DIContainer) SiteCheckUC() *scucase.UseCase {
 
 func (d *DIContainer) Handler() *myhttp.Handler {
 	if d.handlers == nil {
-		d.handlers = myhttp.NewHandler(d.SyncUC(), d.OrdersUC(), d.ExcelExportUC(), d.PdfExportUC(), d.BarcodeExportUC(), d.RefGoCheckAgainstUC(), d.WikiUC(), d.GoodsUC(), d.DayStateUC(), d.QRUC(), d.SuppliersUC(), d.StockUC(), d.StockHub(), d.ReceiveBarcodes(), d.ReceivingUC(), d.ComplaintsUC(), d.TasksUC(), d.MSOrdersUC(), d.MSFormsUC(), d.ReturnsUC(), d.DiscountsUC(), d.Config().DiscountWindowCap, d.Config().DiscountTelegramCap)
+		d.handlers = myhttp.NewHandler(d.SyncUC(), d.OrdersUC(), d.ExcelExportUC(), d.PdfExportUC(), d.BarcodeExportUC(), d.RefGoCheckAgainstUC(), d.WikiUC(), d.GoodsUC(), d.DayStateUC(), d.QRUC(), d.SuppliersUC(), d.StockUC(), d.StockHub(), d.ReceiveBarcodes(), d.ReceivingUC(), d.ComplaintsUC(), d.TasksUC(), d.MSOrdersUC(), d.MSFormsUC(), d.ReturnsUC(), d.CollabUC(), d.DiscountsUC(), d.Config().DiscountWindowCap, d.Config().DiscountTelegramCap)
 	}
 
 	return d.handlers

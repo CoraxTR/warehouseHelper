@@ -964,6 +964,23 @@ html.day .themeswitch__knob { left: 22px; background: #FFFFFF; }
 .brandbar__emblem .em__eye { fill: #0A0A0D; }
 .brandbar__emblem .em__glint { fill: #C02832; }
 
+/* ---------------- Совместная приёмка (модуль collab) ----------------
+   Панель комнаты над полями приёмки: хост видит подключённые машины и ждёт
+   готовности всех (по ней заблокирована кнопка сохранения), гость видит свою
+   карточку и сколько строк уже ушло. Плюс список открытых приёмок на выборе
+   поставщика. Дневную пару генерирует gen_day_theme.py. */
+.collab-panel { background: #101014; border: 1px solid #26262E; border-left: 4px solid #93A7BC; border-radius: 2px; padding: 8px 12px; margin: 10px 0; }
+.collab-panel .collab-line { color: #E9E6DD; font-size: 13.5px; margin: 3px 0; }
+.collab-panel .collab-line b { color: #F4F1E9; }
+.collab-panel .collab-guest button { margin-left: 8px; }
+.collab-panel .collab-far { color: #66645C; font-size: 12.5px; }
+.collab-panel .collab-ok { color: #A3B894; }
+.collab-panel .collab-wait { color: #C8A65C; }
+.collab-open { margin-top: 16px; }
+/* Кнопка главного действия, заблокированная до готовности гостей, должна
+   выглядеть заблокированной, а не «нажми меня». */
+button[disabled] { opacity: .45; cursor: default; }
+
 /* ===== DAY-THEME-START ===== */
 /* ДНЕВНАЯ ТЕМА «Любитель щурится» — офисная, чёрный шрифт
 
@@ -1154,4 +1171,10 @@ html.day .themeswitch__track:hover { background: #E7EBEF; border-color: #AFB8C1;
 html.day .themeswitch__knob { background: #6E7781; }
 html.day .brandbar__emblem .em__shade { fill: #1F2328; }
 html.day .brandbar__emblem .em__eye { fill: #FFFFFF; }
+html.day .collab-panel { background: #FFFFFF; border: 1px solid #D0D7DE; border-left: 4px solid #0969DA; }
+html.day .collab-panel .collab-line { color: #000000; }
+html.day .collab-panel .collab-line b { color: #000000; }
+html.day .collab-panel .collab-far { color: #6E7781; }
+html.day .collab-panel .collab-ok { color: #1A7F37; }
+html.day .collab-panel .collab-wait { color: #9A6700; }
 /* ===== DAY-THEME-END ===== */
