@@ -140,7 +140,6 @@ func TestFlow(t *testing.T) {
 	if _, err := uc.SetScanning(room.ID, guestID); err != nil {
 		t.Fatalf("SetScanning: %v", err)
 	}
-
 }
 
 // TestFlowNewChunkDropAndClose — отключение гостя выбрасывает его строки, закрытие

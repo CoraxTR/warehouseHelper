@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 )
@@ -143,13 +144,7 @@ func (s Session) Claimed() bool {
 
 // IsDropped сообщает, отключал ли хост эту машину от комнаты.
 func (s Session) IsDropped(guestID string) bool {
-	for _, id := range s.Dropped {
-		if id == guestID {
-			return true
-		}
-	}
-
-	return false
+	return slices.Contains(s.Dropped, guestID)
 }
 
 // Ready сообщает, можно ли сохранять: все подключённые гости прислали свои
