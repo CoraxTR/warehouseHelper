@@ -16,13 +16,6 @@ import (
 // строк по ~200 байт, 2 МБ хватает с запасом, а мусор в память не пролезет.
 const collabMaxBody = 2 << 20
 
-// collabOpenRequest — открыть комнату (хост).
-type collabOpenRequest struct {
-	Kind  string `json:"kind"`
-	Ref   string `json:"ref"`
-	Title string `json:"title"`
-}
-
 // collabGuestRequest — обращение к комнате: хост шлёт без guest_id, гость — со
 // своим идентификатором; scans — только при отправке чанка.
 type collabGuestRequest struct {
@@ -61,24 +54,6 @@ type collabSessionDTO struct {
 type collabStateResponse struct {
 	Session collabSessionDTO `json:"session"`
 	GuestID string           `json:"guest_id,omitempty"`
-}
-
-// CollabOpen — POST /ms/collab/open: открыть (или вернуть уже открытую) комнату
-// для работы. Хост вызывает при входе на страницу приёмки в режиме совместа.
-func (h *Handler) CollabOpen(w http.ResponseWriter, r *http.Request) {
-	var req collabOpenRequest
-	if !decodeCollabJSON(w, r, &req) {
-		return
-	}
-
-	session, err := h.collabUC.Open(collab.Kind(req.Kind), req.Ref, req.Title)
-	if err != nil {
-		collabError(w, err)
-
-		return
-	}
-
-	writeCollabJSON(w, collabStateResponse{Session: collabSessionDTOOf(session)})
 }
 
 // CollabState — GET /ms/collab/state?id=&guest_id=: состояние комнаты для опроса
@@ -144,19 +119,21 @@ func (h *Handler) CollabSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !validCollabScans(req.Scans) {
-		http.Error(w, "Сканы должны быть объектами", http.StatusBadRequest)
+		http.Error(w, "В отправленных строках нет ни кода, ни товара", http.StatusBadRequest)
 
 		return
 	}
 
-	session, err := h.collabUC.Submit(strings.TrimSpace(req.ID), strings.TrimSpace(req.GuestID), req.Scans)
+	guestID := strings.TrimSpace(req.GuestID)
+
+	session, err := h.collabUC.Submit(strings.TrimSpace(req.ID), guestID, req.Scans)
 	if err != nil {
 		collabError(w, err)
 
 		return
 	}
 
-	writeCollabJSON(w, collabStateResponse{Session: collabSessionDTOOf(session), GuestID: req.GuestID})
+	writeCollabJSON(w, collabStateResponse{Session: collabSessionDTOOf(session), GuestID: guestID})
 }
 
 // CollabScanning — POST /ms/collab/scanning: гость начал новый чанк, хост снова
@@ -167,14 +144,16 @@ func (h *Handler) CollabScanning(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	session, err := h.collabUC.SetScanning(strings.TrimSpace(req.ID), strings.TrimSpace(req.GuestID))
+	guestID := strings.TrimSpace(req.GuestID)
+
+	session, err := h.collabUC.SetScanning(strings.TrimSpace(req.ID), guestID)
 	if err != nil {
 		collabError(w, err)
 
 		return
 	}
 
-	writeCollabJSON(w, collabStateResponse{Session: collabSessionDTOOf(session), GuestID: req.GuestID})
+	writeCollabJSON(w, collabStateResponse{Session: collabSessionDTOOf(session), GuestID: guestID})
 }
 
 // CollabDrop — POST /ms/collab/drop: хост отключает гостя (обрыв связи): его
@@ -213,22 +192,22 @@ func (h *Handler) CollabClose(w http.ResponseWriter, r *http.Request) {
 	writeCollabJSON(w, collabStateResponse{Session: collabSessionDTOOf(session)})
 }
 
-// collabGuestScans — строки гостей для сохранения приёмки: проверяет гейт
-// готовности и отдаёт декодированные DTO в формате приёмки (порядок — хостовые
-// строки, затем гости в порядке подключения).
-func (h *Handler) collabGuestScans(sessionID string) ([]receiveSaveScan, error) {
-	waiting, err := h.collabUC.Waiting(sessionID)
-	if err != nil {
-		return nil, err
-	}
+// claimGuestScans забирает строки гостей на сохранение приёмки: одним вызовом
+// проверяет, что комната та же работа, не занята и все гости готовы, и отдаёт
+// строки в формате приёмки (хост склеивает их со своими). claimed=false — гостей
+// нет: комнату снёс перезапуск приложения или purge, и приёмка сохраняется из
+// одних хостовых строк (отказывать оператору из-за этого нельзя).
+func (h *Handler) claimGuestScans(sessionID, supplierID string) ([]receiveSaveScan, bool, error) {
+	races, err := h.collabUC.Claim(sessionID, supplierID)
 
-	if len(waiting) > 0 {
-		return nil, &collabWaitingError{names: waiting}
-	}
+	switch {
+	case errors.Is(err, collab.ErrNotFound), errors.Is(err, collab.ErrClosed):
+		slog.Info("collab: комнаты нет — сохраняю только хостовые строки",
+			"session_id", sessionID, "err", err)
 
-	races, err := h.collabUC.GuestScans(sessionID)
-	if err != nil {
-		return nil, err
+		return nil, false, nil
+	case err != nil:
+		return nil, false, err
 	}
 
 	out := make([]receiveSaveScan, 0, len(races))
@@ -236,21 +215,21 @@ func (h *Handler) collabGuestScans(sessionID string) ([]receiveSaveScan, error) 
 	for _, raw := range races {
 		var scan receiveSaveScan
 		if err := json.Unmarshal(raw, &scan); err != nil {
-			return nil, err
+			return nil, false, err
 		}
 
 		out = append(out, scan)
 	}
 
-	return out, nil
+	return out, true, nil
 }
 
-// collabWaitingError — гости, которых ждёт хост: гейт кнопки дублируется на
-// сервере, чтобы устаревшая страница не закрыла приёмку без чужих строк.
-type collabWaitingError struct{ names []string }
-
-func (e *collabWaitingError) Error() string {
-	return "не все гости готовы: " + strings.Join(e.names, ", ")
+// releaseRoom снимает «занята» после неудачного сохранения: строки гостей на
+// месте, хост может повторить (в т.ч. сохранить без гостей).
+func (h *Handler) releaseRoom(sessionID string) {
+	if err := h.collabUC.Release(sessionID); err != nil {
+		slog.Info("collab: комната не освобождена", "session_id", sessionID, "err", err)
+	}
 }
 
 // collabSessionDTOOf собирает состояние комнаты для страницы.
@@ -304,12 +283,42 @@ func decodeCollabJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 	return true
 }
 
-// validCollabScans проверяет, что каждый скан — JSON-объект: в памяти должны
-// лежать строки приёмки, а не что попало.
+// validCollabScans проверяет строки гостя: каждая — скан приёмки, то есть несёт
+// код (raw) или выбранный товар (manual_product_id). Пустой объект и мусор
+// отсекаем на входе: иначе они доедут до сохранения и сломают приёмку хосту.
 func validCollabScans(scans []json.RawMessage) bool {
 	for _, raw := range scans {
-		trimmed := strings.TrimSpace(string(raw))
-		if len(trimmed) < 2 || trimmed[0] != '{' || trimmed[len(trimmed)-1] != '}' {
+		if !validCollabScan(raw, 0) {
+			return false
+		}
+	}
+
+	return true
+}
+
+// validCollabScan — проверка одной строки; вложения коробки проверяются
+// рекурсивно (глубже «коробка → вложения» структуры у приёмки нет).
+func validCollabScan(raw json.RawMessage, depth int) bool {
+	if depth > 2 {
+		return false
+	}
+
+	var scan struct {
+		Raw             string            `json:"raw"`
+		ManualProductID string            `json:"manual_product_id"`
+		Children        []json.RawMessage `json:"children"`
+	}
+
+	if err := json.Unmarshal(raw, &scan); err != nil {
+		return false
+	}
+
+	if strings.TrimSpace(scan.Raw) == "" && strings.TrimSpace(scan.ManualProductID) == "" {
+		return false
+	}
+
+	for _, child := range scan.Children {
+		if !validCollabScan(child, depth+1) {
 			return false
 		}
 	}
@@ -328,9 +337,8 @@ func writeCollabJSON(w http.ResponseWriter, resp collabStateResponse) {
 
 // collabError переводит ошибки комнаты в коды и понятные оператору тексты.
 func collabError(w http.ResponseWriter, err error) {
-	var waiting *collabWaitingError
-	if errors.As(err, &waiting) {
-		http.Error(w, waiting.Error(), http.StatusConflict)
+	if notReady, ok := errors.AsType[*collab.NotReadyError](err); ok {
+		http.Error(w, notReady.Error(), http.StatusConflict)
 
 		return
 	}
@@ -342,6 +350,10 @@ func collabError(w http.ResponseWriter, err error) {
 		http.Error(w, "Совместная приёмка не найдена — её уже сохранили или закрыли", http.StatusNotFound)
 	case errors.Is(err, collab.ErrClosed):
 		http.Error(w, "Совместная приёмка уже закрыта", http.StatusConflict)
+	case errors.Is(err, collab.ErrBusy):
+		http.Error(w, "Совместная приёмка сохраняется — подождите пару секунд", http.StatusConflict)
+	case errors.Is(err, collab.ErrRefMismatch):
+		http.Error(w, "Комната открыта для другого поставщика", http.StatusConflict)
 	case errors.Is(err, collab.ErrEmpty):
 		http.Error(w, "Нет строк для отправки", http.StatusBadRequest)
 	case errors.Is(err, collab.ErrKind), errors.Is(err, ccase.ErrNeedRef):

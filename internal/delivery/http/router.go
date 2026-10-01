@@ -125,7 +125,6 @@ func NewRouter(h *Handler) *http.ServeMux {
 
 	// Совместная приёмка: комната, в которой одну приёмку собирают с нескольких
 	// машин — хост (открывает работу) и гости (сканируют у себя).
-	mux.HandleFunc("POST /ms/collab/open", h.CollabOpen)         // открыть/вернуть комнату (хост)
 	mux.HandleFunc("GET /ms/collab/state", h.CollabState)        // состояние комнаты (опрос обеих страниц)
 	mux.HandleFunc("POST /ms/collab/join", h.CollabJoin)         // подключить машину-гостя
 	mux.HandleFunc("POST /ms/collab/submit", h.CollabSubmit)     // гость прислал чанк сканов

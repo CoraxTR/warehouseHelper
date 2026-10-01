@@ -11,13 +11,14 @@ import (
 
 // newUC собирает сценарии на управляемых часах: TTL заброшенных комнат
 // проверяем без ожидания.
-func newUC(t *testing.T) (*UseCase, func(time.Duration)) {
+func newUC(t *testing.T) (uc *UseCase, advance func(time.Duration)) {
 	t.Helper()
 
-	now := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
+	now := time.Date(2026, time.October, 1, 9, 0, 0, 0, time.UTC)
 	store := collab.NewStore(func() time.Time { return now })
+	uc = NewUseCase(store, time.Hour)
 
-	return NewUseCase(store, time.Hour), func(d time.Duration) { now = now.Add(d) }
+	return uc, func(d time.Duration) { now = now.Add(d) }
 }
 
 func raw(v string) json.RawMessage {
@@ -100,8 +101,8 @@ func TestListPurgesStale(t *testing.T) {
 	}
 }
 
-// TestFlow — сквозной путь гостя через сценарии: подключение, отправка чанка,
-// новый чанк, отключение хостом.
+// TestFlow — сквозной путь гостя через сценарии: подключение, ожидание, отправка
+// чанка, склейка строк для сохранения.
 func TestFlow(t *testing.T) {
 	uc, _ := newUC(t)
 
@@ -138,6 +139,29 @@ func TestFlow(t *testing.T) {
 
 	if _, err := uc.SetScanning(room.ID, guestID); err != nil {
 		t.Fatalf("SetScanning: %v", err)
+	}
+
+}
+
+// TestFlowNewChunkDropAndClose — отключение гостя выбрасывает его строки, закрытие
+// комнаты закрывает вход.
+func TestFlowNewChunkDropAndClose(t *testing.T) {
+	uc, _ := newUC(t)
+
+	room, err := uc.Open(collab.KindReceive, "sup-1", "Ромашка")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	room, err = uc.Join(room.ID, "")
+	if err != nil {
+		t.Fatalf("Join: %v", err)
+	}
+
+	guestID := room.Guests[0].ID
+
+	if _, err := uc.Submit(room.ID, guestID, []json.RawMessage{raw("111")}); err != nil {
+		t.Fatalf("Submit: %v", err)
 	}
 
 	scans, err := uc.GuestScans(room.ID)

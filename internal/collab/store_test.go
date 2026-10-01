@@ -17,7 +17,7 @@ func (c *clock) now() time.Time      { return c.t }
 func (c *clock) add(d time.Duration) { c.t = c.t.Add(d) }
 
 func newClock() *clock {
-	return &clock{t: time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)}
+	return &clock{t: time.Date(2026, time.October, 1, 9, 0, 0, 0, time.UTC)}
 }
 
 // scan собирает строку скана в формате сохраняющего модуля.
@@ -343,6 +343,7 @@ func TestErrors(t *testing.T) {
 	open := mustOpen(t, s, "sup-1")
 
 	empty := mustOpen(t, s, "sup-2")
+	emptyGuest := join(t, s, empty.ID, "").Guests[0].ID
 	closed := mustOpen(t, s, "sup-3")
 	if _, err := s.Close(closed.ID); err != nil {
 		t.Fatalf("Close: %v", err)
@@ -357,15 +358,21 @@ func TestErrors(t *testing.T) {
 		{"Join без комнаты", func() error { _, err := s.Join("нет", ""); return err }, ErrNotFound},
 		{"GuestScans без комнаты", func() error { _, err := s.GuestScans("нет"); return err }, ErrNotFound},
 		{"Waiting без комнаты", func() error { _, err := s.Waiting("нет"); return err }, ErrNotFound},
-		{"пустой чанк", func() error { _, err := s.Submit(empty.ID, "кто-то", nil); return err }, ErrEmpty},
+		{"пустой чанк от живого гостя", func() error { _, err := s.Submit(empty.ID, emptyGuest, nil); return err }, ErrEmpty},
+		{"пустой чанк у незнакомого гостя", func() error { _, err := s.Submit(empty.ID, "кто-то", nil); return err }, ErrGuestGone},
 		{"Submit в закрытую", func() error {
 			_, err := s.Submit(closed.ID, "кто-то", []json.RawMessage{scan("111")})
 
 			return err
 		}, ErrClosed},
+		{"Submit в закрытую с пустым чанком", func() error { _, err := s.Submit(closed.ID, "кто-то", nil); return err }, ErrClosed},
 		{"Join в закрытую", func() error { _, err := s.Join(closed.ID, ""); return err }, ErrClosed},
 		{"Touch в закрытую", func() error { _, err := s.Touch(closed.ID, "кто-то"); return err }, ErrClosed},
 		{"SetScanning в закрытую", func() error { _, err := s.SetScanning(closed.ID, "кто-то"); return err }, ErrClosed},
+		{"Claim в закрытую", func() error { _, err := s.Claim(closed.ID, "sup-3"); return err }, ErrClosed},
+		{"Claim чужой работы", func() error { _, err := s.Claim(open.ID, "sup-9"); return err }, ErrRefMismatch},
+		{"GuestScans в закрытую", func() error { _, err := s.GuestScans(closed.ID); return err }, ErrClosed},
+		{"Waiting в закрытую", func() error { _, err := s.Waiting(closed.ID); return err }, ErrClosed},
 	}
 
 	for _, tt := range tests {
@@ -443,12 +450,8 @@ func TestConcurrentUse(t *testing.T) {
 
 	var wg sync.WaitGroup
 
-	for i := 0; i < guests; i++ {
-		wg.Add(1)
-
-		go func() {
-			defer wg.Done()
-
+	for range guests {
+		wg.Go(func() {
 			joined, err := s.Join(room.ID, "")
 			if err != nil {
 				t.Errorf("Join: %v", err)
@@ -458,7 +461,7 @@ func TestConcurrentUse(t *testing.T) {
 
 			guestID := joined.Guests[len(joined.Guests)-1].ID
 
-			for j := 0; j < 20; j++ {
+			for range 20 {
 				if _, err := s.Submit(room.ID, guestID, []json.RawMessage{scan("111")}); err != nil {
 					t.Errorf("Submit: %v", err)
 
@@ -477,7 +480,7 @@ func TestConcurrentUse(t *testing.T) {
 					return
 				}
 			}
-		}()
+		})
 	}
 
 	wg.Wait()
@@ -497,5 +500,169 @@ func TestConcurrentUse(t *testing.T) {
 
 	if !final.Ready() {
 		t.Error("после отправок комната готова к сохранению")
+	}
+}
+
+// TestClaimSavesOnce — строки гостей забираются на сохранение одним снимком:
+// двойной клик по «Сохранить приёмку» не сохранит приёмку дважды (находка ревью
+// 01.10.2026: проверка готовности и выдача строк были раздельными операциями).
+// Ошибку сохранения снимает Release, успех — Close.
+func TestClaimSavesOnce(t *testing.T) {
+	s := NewStore(newClock().now)
+
+	room := join(t, s, mustOpen(t, s, "sup-1").ID, "")
+	guestID := room.Guests[0].ID
+
+	if _, err := s.Submit(room.ID, guestID, []json.RawMessage{scan("111"), scan("222")}); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+
+	scans, err := s.Claim(room.ID, "sup-1")
+	if err != nil || len(scans) != 2 {
+		t.Fatalf("Claim: строк %d, err=%v", len(scans), err)
+	}
+
+	// Второй заход по той же комнате — уже занята: приёмка не сохранится дважды.
+	if _, err := s.Claim(room.ID, "sup-1"); !errors.Is(err, ErrBusy) {
+		t.Errorf("повторный Claim: %v, ожидалась ErrBusy", err)
+	}
+
+	// Пока комната занята, гости в неё не пишут.
+	if _, err := s.Submit(room.ID, guestID, []json.RawMessage{scan("333")}); !errors.Is(err, ErrBusy) {
+		t.Errorf("Submit в занятую: %v, ожидалась ErrBusy", err)
+	}
+
+	if _, err := s.Join(room.ID, ""); !errors.Is(err, ErrBusy) {
+		t.Errorf("Join в занятую: %v, ожидалась ErrBusy", err)
+	}
+
+	// Ошибка сохранения: хост освобождает комнату — строки на месте, повтор можно.
+	if err := s.Release(room.ID); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+
+	if scans, err := s.Claim(room.ID, "sup-1"); err != nil || len(scans) != 2 {
+		t.Errorf("Claim после Release: строк %d, err=%v", len(scans), err)
+	}
+
+	// Успех: комната закрыта, третий заход отбит.
+	if _, err := s.Close(room.ID); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	if _, err := s.Claim(room.ID, "sup-1"); !errors.Is(err, ErrClosed) {
+		t.Errorf("Claim после Close: %v, ожидалась ErrClosed", err)
+	}
+}
+
+// TestClaimGates — гейт готовности: неготового гостя не сохраняем, но комнату и
+// не занимаем (иначе хост не смог бы сохранить после того, как гость дослал).
+func TestClaimGates(t *testing.T) {
+	s := NewStore(newClock().now)
+
+	room := join(t, s, mustOpen(t, s, "sup-1").ID, "")
+	guestID := room.Guests[0].ID
+
+	_, err := s.Claim(room.ID, "sup-1")
+
+	var notReady *NotReadyError
+	if !errors.As(err, &notReady) {
+		t.Fatalf("Claim с неготовым гостем: %v, ожидалась NotReadyError", err)
+	}
+
+	if len(notReady.Names) != 1 || notReady.Names[0] != GuestName(1) {
+		t.Errorf("имена ожидаемых гостей = %v", notReady.Names)
+	}
+
+	if _, err := s.Submit(room.ID, guestID, []json.RawMessage{scan("111")}); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+
+	// Отбитый заход не занял комнату: после готовности сохранение проходит.
+	if scans, err := s.Claim(room.ID, "sup-1"); err != nil || len(scans) != 1 {
+		t.Errorf("Claim после готовности: строк %d, err=%v", len(scans), err)
+	}
+}
+
+// TestDropSticks — отключённый гость не возвращается сам (его страница опрашивает
+// состояние и зашла бы обратно), его строки выброшены, а действие хоста продлевает
+// жизнь комнаты.
+func TestDropSticks(t *testing.T) {
+	c := newClock()
+	s := NewStore(c.now)
+
+	room := join(t, s, mustOpen(t, s, "sup-1").ID, "")
+	guestID := room.Guests[0].ID
+
+	if _, err := s.Submit(room.ID, guestID, []json.RawMessage{scan("111")}); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+
+	c.add(2 * time.Hour)
+
+	dropped, err := s.Drop(room.ID, guestID)
+	if err != nil {
+		t.Fatalf("Drop: %v", err)
+	}
+
+	if len(dropped.Guests) != 0 || !dropped.IsDropped(guestID) {
+		t.Errorf("после Drop: гостей %d, отключённые %v", len(dropped.Guests), dropped.Dropped)
+	}
+
+	if _, err := s.Join(room.ID, guestID); !errors.Is(err, ErrGuestGone) {
+		t.Errorf("возврат отключённого гостя: %v, ожидалась ErrGuestGone", err)
+	}
+
+	if scans, err := s.GuestScans(room.ID); err != nil || len(scans) != 0 {
+		t.Errorf("строки отключённого идут в сохранение: %d, err=%v", len(scans), err)
+	}
+
+	// Отключение — действие хоста: комната не считается заброшенной.
+	if dropped.Stale(c.now(), time.Hour) {
+		t.Error("отключение гостя хостом должно продлевать жизнь комнаты")
+	}
+}
+
+// TestHeartbeatAndNewChunk — отклик готового гостя не сбивает готовность, а новый
+// заход не теряет отправленное раньше (инварианты, найденные ревью 01.10.2026).
+func TestHeartbeatAndNewChunk(t *testing.T) {
+	s := NewStore(newClock().now)
+
+	room := join(t, s, mustOpen(t, s, "sup-1").ID, "")
+	guestID := room.Guests[0].ID
+
+	if _, err := s.Submit(room.ID, guestID, []json.RawMessage{scan("111")}); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+
+	touched, err := s.Touch(room.ID, guestID)
+	if err != nil {
+		t.Fatalf("Touch: %v", err)
+	}
+
+	if !touched.Ready() || touched.Guests[0].Rows != 1 || touched.Guests[0].Chunks != 1 {
+		t.Errorf("отклик сбил состояние гостя: %+v", touched.Guests[0])
+	}
+
+	scanning, err := s.SetScanning(room.ID, guestID)
+	if err != nil {
+		t.Fatalf("SetScanning: %v", err)
+	}
+
+	if scanning.Ready() {
+		t.Error("новый заход должен снова закрывать кнопку хоста")
+	}
+
+	if _, err := s.Claim(room.ID, "sup-1"); err == nil {
+		t.Error("Claim с недосланным заходом не должен проходить")
+	}
+
+	after, err := s.Submit(room.ID, guestID, []json.RawMessage{scan("222")})
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+
+	if len(after.Guests[0].Scans) != 2 || after.Guests[0].Chunks != 2 || after.Guests[0].Rows != 2 || !after.Ready() {
+		t.Errorf("новый заход потерял отправленное: %+v", after.Guests[0])
 	}
 }

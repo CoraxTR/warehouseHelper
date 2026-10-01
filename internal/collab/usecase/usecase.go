@@ -150,6 +150,31 @@ func (uc *UseCase) GuestScans(id string) ([]json.RawMessage, error) {
 	return uc.store.GuestScans(id)
 }
 
+// Claim забирает строки гостей на сохранение: гейт «все готовы» и снимок строк —
+// одна операция под мутексом хранилища, поэтому двойной клик по «Сохранить
+// приёмку» не сохраняет работу дважды (повтор получает ErrBusy).
+func (uc *UseCase) Claim(id, ref string) ([]json.RawMessage, error) {
+	scans, err := uc.store.Claim(id, ref)
+	if err != nil {
+		return nil, err
+	}
+
+	slog.Info("collab: строки гостей забраны на сохранение", "session", id, "rows", len(scans))
+
+	return scans, nil
+}
+
+// Release снимает «занята» после неудачного сохранения: хост может повторить.
+func (uc *UseCase) Release(id string) error {
+	if err := uc.store.Release(id); err != nil {
+		return err
+	}
+
+	slog.Info("collab: комната освобождена после неудачного сохранения", "session", id)
+
+	return nil
+}
+
 // Waiting отдаёт имена гостей, которых ждёт хост. Непустой список — сохранять
 // нельзя (гейт кнопки у хоста и защита от устаревшей страницы на сервере).
 func (uc *UseCase) Waiting(id string) ([]string, error) {

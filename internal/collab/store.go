@@ -49,6 +49,18 @@ func (s *Store) Open(kind Kind, ref, title string) (Session, error) {
 		return Session{}, err
 	}
 
+	// 8 знаков — 4 млрд вариантов, но занятый id молча перезаписал бы чужую
+	// комнату: берём следующий свободный.
+	for {
+		if _, busy := s.sessions[id]; !busy {
+			break
+		}
+
+		if id, err = newID(); err != nil {
+			return Session{}, err
+		}
+	}
+
 	session := &Session{
 		ID:        id,
 		Kind:      kind,
@@ -112,7 +124,7 @@ func (s *Store) Join(id, guestID string) (Session, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	session, err := s.openLocked(id)
+	session, err := s.writableLocked(id)
 	if err != nil {
 		return Session{}, err
 	}
@@ -120,8 +132,15 @@ func (s *Store) Join(id, guestID string) (Session, error) {
 	now := s.now()
 
 	if guestID != "" {
-		if _, ok := session.guestLocked(guestID); ok {
-			session.touchLocked(guestID, now)
+		// Отключённого хостом гостя обратно не пускаем: иначе его страница
+		// зашла бы следующим же опросом и снова заблокировала кнопку хоста.
+		if session.IsDropped(guestID) {
+			return Session{}, ErrGuestGone
+		}
+
+		if _, ok := guestLocked(session, guestID); ok {
+			touchLocked(session, guestID, now)
+			activeLocked(session, now)
 
 			return session.Clone(), nil
 		}
@@ -140,6 +159,7 @@ func (s *Store) Join(id, guestID string) (Session, error) {
 		JoinedAt: now,
 		LastSeen: now,
 	})
+	activeLocked(session, now)
 
 	return session.Clone(), nil
 }
@@ -148,21 +168,23 @@ func (s *Store) Join(id, guestID string) (Session, error) {
 // статус становится «готов». Отправленное не меняется — новый чанк только
 // добавляет строки.
 func (s *Store) Submit(id, guestID string, scans []json.RawMessage) (Session, error) {
-	if len(scans) == 0 {
-		return Session{}, ErrEmpty
-	}
-
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	session, err := s.openLocked(id)
+	session, err := s.writableLocked(id)
 	if err != nil {
 		return Session{}, err
 	}
 
-	guest, ok := session.guestLocked(guestID)
+	guest, ok := guestLocked(session, guestID)
 	if !ok {
 		return Session{}, ErrGuestGone
+	}
+
+	// Пустой чанк проверяем после комнаты и гостя: иначе закрытая комната или
+	// отключённый гость получали бы «нечего отправлять» вместо причины.
+	if len(scans) == 0 {
+		return Session{}, ErrEmpty
 	}
 
 	now := s.now()
@@ -172,6 +194,7 @@ func (s *Store) Submit(id, guestID string, scans []json.RawMessage) (Session, er
 	guest.Status = GuestReady
 	guest.SubmittedAt = now
 	guest.LastSeen = now
+	activeLocked(session, now)
 
 	return session.Clone(), nil
 }
@@ -182,18 +205,19 @@ func (s *Store) SetScanning(id, guestID string) (Session, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	session, err := s.openLocked(id)
+	session, err := s.writableLocked(id)
 	if err != nil {
 		return Session{}, err
 	}
 
-	guest, ok := session.guestLocked(guestID)
+	guest, ok := guestLocked(session, guestID)
 	if !ok {
 		return Session{}, ErrGuestGone
 	}
 
 	guest.Status = GuestScanning
 	guest.LastSeen = s.now()
+	activeLocked(session, guest.LastSeen)
 
 	return session.Clone(), nil
 }
@@ -204,16 +228,18 @@ func (s *Store) Touch(id, guestID string) (Session, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	session, err := s.openLocked(id)
+	session, err := s.writableLocked(id)
 	if err != nil {
 		return Session{}, err
 	}
 
-	if _, ok := session.guestLocked(guestID); !ok {
+	if _, ok := guestLocked(session, guestID); !ok {
 		return Session{}, ErrGuestGone
 	}
 
-	session.touchLocked(guestID, s.now())
+	now := s.now()
+	touchLocked(session, guestID, now)
+	activeLocked(session, now)
 
 	return session.Clone(), nil
 }
@@ -224,7 +250,7 @@ func (s *Store) Drop(id, guestID string) (Session, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	session, err := s.openLocked(id)
+	session, err := s.writableLocked(id)
 	if err != nil {
 		return Session{}, err
 	}
@@ -232,6 +258,10 @@ func (s *Store) Drop(id, guestID string) (Session, error) {
 	for i, g := range session.Guests {
 		if g.ID == guestID {
 			session.Guests = append(session.Guests[:i], session.Guests[i+1:]...)
+			// Запоминаем отключённого: без этого машина вернулась бы в комнату
+			// следующим же опросом, а её строки уже выброшены.
+			session.Dropped = append(session.Dropped, guestID)
+			activeLocked(session, s.now())
 
 			return session.Clone(), nil
 		}
@@ -255,7 +285,60 @@ func (s *Store) Close(id string) (Session, error) {
 		session.ClosedAt = s.now()
 	}
 
+	session.ClaimedAt = time.Time{}
+	activeLocked(session, s.now())
+
 	return session.Clone(), nil
+}
+
+// Claim забирает строки гостей на сохранение: под мутексом проверяет готовность,
+// помечает комнату «занята» и отдаёт строки одним снимком. Это единственный вход
+// сохранения — иначе двойной клик по «Сохранить приёмку» сохранил бы приёмку
+// дважды (проверка готовности и выдача строк — две операции, между ними окно).
+//
+// Ошибку сохранения хост снимает Release (комната снова открыта для повтора).
+func (s *Store) Claim(id, ref string) ([]json.RawMessage, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	session, err := s.openLocked(id)
+	if err != nil {
+		return nil, err
+	}
+
+	if ref != "" && session.Ref != ref {
+		return nil, ErrRefMismatch
+	}
+
+	if session.Claimed() {
+		return nil, ErrBusy
+	}
+
+	if names := session.Waiting(); len(names) > 0 {
+		return nil, &NotReadyError{Names: names}
+	}
+
+	now := s.now()
+	session.ClaimedAt = now
+	activeLocked(session, now)
+
+	return guestScans(session), nil
+}
+
+// Release снимает «занята» после неудачного сохранения: приёмку можно повторить.
+func (s *Store) Release(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	session, ok := s.sessions[id]
+	if !ok {
+		return ErrNotFound
+	}
+
+	session.ClaimedAt = time.Time{}
+	activeLocked(session, s.now())
+
+	return nil
 }
 
 // GuestScans отдаёт строки всех гостей в порядке подключения (внутри гостя — в
@@ -265,17 +348,12 @@ func (s *Store) GuestScans(id string) ([]json.RawMessage, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	session, ok := s.sessions[id]
-	if !ok {
-		return nil, ErrNotFound
+	session, err := s.openLocked(id)
+	if err != nil {
+		return nil, err
 	}
 
-	var out []json.RawMessage
-	for _, g := range session.Guests {
-		out = append(out, g.Scans...)
-	}
-
-	return out, nil
+	return guestScans(session), nil
 }
 
 // Waiting отдаёт имена гостей, которых ждёт хост (пусто — сохранять можно).
@@ -283,9 +361,9 @@ func (s *Store) Waiting(id string) ([]string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	session, ok := s.sessions[id]
-	if !ok {
-		return nil, ErrNotFound
+	session, err := s.openLocked(id)
+	if err != nil {
+		return nil, err
 	}
 
 	return session.Waiting(), nil
@@ -337,16 +415,46 @@ func (s *Store) openLocked(id string) (*Session, error) {
 	return session, nil
 }
 
+// writableLocked — комната, в которую можно писать от лица гостя: открыта и не
+// занята сохранением. Под mu.
+func (s *Store) writableLocked(id string) (*Session, error) {
+	session, err := s.openLocked(id)
+	if err != nil {
+		return nil, err
+	}
+
+	if session.Claimed() {
+		return nil, ErrBusy
+	}
+
+	return session, nil
+}
+
+// guestScans собирает строки гостей в порядке подключения (внутри гостя — в
+// порядке отправки чанков). Под mu: снимок строк для сохранения.
+func guestScans(session *Session) []json.RawMessage {
+	var out []json.RawMessage
+
+	for _, g := range session.Guests {
+		out = append(out, g.Scans...)
+	}
+
+	return out
+}
+
 // guestLocked ищет гостя в комнате. Вызывать под mu: указатель смотрит внутрь
 // session.Guests — держать его через append в Guests нельзя.
-func (s *Session) guestLocked(guestID string) (*Guest, bool) {
+//
+// Функция, а не метод: методы Session объявлены на значении (правила комнаты
+// ничего не меняют), и линтер держит набор приёмников единым.
+func guestLocked(session *Session, guestID string) (*Guest, bool) {
 	if guestID == "" {
 		return nil, false
 	}
 
-	for i := range s.Guests {
-		if s.Guests[i].ID == guestID {
-			return &s.Guests[i], true
+	for i := range session.Guests {
+		if session.Guests[i].ID == guestID {
+			return &session.Guests[i], true
 		}
 	}
 
@@ -354,10 +462,16 @@ func (s *Session) guestLocked(guestID string) (*Guest, bool) {
 }
 
 // touchLocked обновляет отклик гостя. Под mu.
-func (s *Session) touchLocked(guestID string, now time.Time) {
-	if g, ok := s.guestLocked(guestID); ok {
+func touchLocked(session *Session, guestID string, now time.Time) {
+	if g, ok := guestLocked(session, guestID); ok {
 		g.LastSeen = now
 	}
+}
+
+// activeLocked отмечает активность комнаты: по ней комната считается свежей
+// (в т.ч. когда гостей нет, а хост работает). Под mu.
+func activeLocked(session *Session, now time.Time) {
+	session.ActiveAt = now
 }
 
 // newID — идентификатор комнаты: 8 шестнадцатеричных знаков. Это не «код для

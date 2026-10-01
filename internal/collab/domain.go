@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -58,7 +59,20 @@ var (
 	ErrGuestGone = errors.New("гость не найден")
 	// ErrKind — вид работы, который открывать не умеем.
 	ErrKind = errors.New("неизвестный вид совместной работы")
+	// ErrBusy — хост уже забирает строки на сохранение: второй раз брать нечего.
+	ErrBusy = errors.New("приёмка уже сохраняется")
+	// ErrRefMismatch — комната открыта для другой работы: строки чужого
+	// поставщика в текущее сохранение не попадут.
+	ErrRefMismatch = errors.New("комната открыта для другого поставщика")
 )
+
+// NotReadyError — сохранение не начинается: хост ещё ждёт гостей. Имена уходят
+// оператору в тексте ошибки как есть.
+type NotReadyError struct{ Names []string }
+
+func (e *NotReadyError) Error() string {
+	return "не все гости готовы: " + strings.Join(e.Names, ", ")
+}
 
 // Guest — подключённая к комнате машина.
 //
@@ -101,11 +115,41 @@ type Session struct {
 	ClosedAt  time.Time
 	GuestSeq  int
 	Guests    []Guest
+
+	// ActiveAt — последняя активность комнаты: действия гостей и хоста. Нужна,
+	// чтобы комната, где хост работает один (опросил, отключил гостя), не
+	// считалась заброшенной и не сносилась очисткой.
+	ActiveAt time.Time
+
+	// ClaimedAt — хост забрал строки на сохранение: второй Save по этой комнате
+	// не пойдёт (иначе двойной клик сохранил бы приёмку дважды). Снимается
+	// закрытием (успех) или Release (ошибка сохранения).
+	ClaimedAt time.Time
+
+	// Dropped — id отключённых хостом гостей: комната помнит их, иначе страница
+	// гостя зашла бы обратно следующим же опросом и снова заблокировала кнопку.
+	Dropped []string
 }
 
 // Closed сообщает, закрыта ли комната (сохранена работа).
 func (s Session) Closed() bool {
 	return !s.ClosedAt.IsZero()
+}
+
+// Claimed сообщает, что идёт сохранение по этой комнате.
+func (s Session) Claimed() bool {
+	return !s.ClaimedAt.IsZero()
+}
+
+// IsDropped сообщает, отключал ли хост эту машину от комнаты.
+func (s Session) IsDropped(guestID string) bool {
+	for _, id := range s.Dropped {
+		if id == guestID {
+			return true
+		}
+	}
+
+	return false
 }
 
 // Ready сообщает, можно ли сохранять: все подключённые гости прислали свои
@@ -144,10 +188,14 @@ func (s Session) RowsSent() int {
 	return total
 }
 
-// LastActive — время последней активности комнаты: создание, подключение,
-// отправка, отклик любого гостя.
+// LastActive — время последней активности комнаты: создание, действия хоста,
+// подключение, отправка, отклик любого гостя.
 func (s Session) LastActive() time.Time {
 	last := s.CreatedAt
+
+	if s.ActiveAt.After(last) {
+		last = s.ActiveAt
+	}
 
 	for _, g := range s.Guests {
 		if g.LastSeen.After(last) {
@@ -188,6 +236,11 @@ func (s Session) Clone() Session {
 				copy(cp.Guests[i].Scans, g.Scans)
 			}
 		}
+	}
+
+	if s.Dropped != nil {
+		cp.Dropped = make([]string, len(s.Dropped))
+		copy(cp.Dropped, s.Dropped)
 	}
 
 	return cp

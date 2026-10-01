@@ -30,6 +30,8 @@ func TestTemplatesRender(t *testing.T) {
 	const dir = "../internal/delivery/web/templates"
 
 	supplier := map[string]any{"ID": "1", "Name": "ООО Тест"}
+	room := collabRoom()
+
 	cases := []struct {
 		name string
 		file string
@@ -63,7 +65,7 @@ func TestTemplatesRender(t *testing.T) {
 			file: "receive.html",
 			data: map[string]any{
 				"Supplier": supplier, "Suppliers": []any{}, "Error": "",
-				"Room": roomPtr(collabRoom()), "IsGuest": false,
+				"Room": &room, "IsGuest": false,
 			},
 		},
 		{
@@ -71,7 +73,7 @@ func TestTemplatesRender(t *testing.T) {
 			file: "receive.html",
 			data: map[string]any{
 				"Supplier": supplier, "Suppliers": []any{}, "Error": "",
-				"Room": roomPtr(collabRoom()), "IsGuest": true,
+				"Room": &room, "IsGuest": true,
 			},
 		},
 	}
@@ -101,7 +103,7 @@ func collabRoom() collab.Session {
 		Kind:      collab.KindReceive,
 		Ref:       "1",
 		Title:     "ООО Тест",
-		CreatedAt: time.Date(2026, 10, 1, 9, 30, 0, 0, time.UTC),
+		CreatedAt: time.Date(2026, time.October, 1, 9, 30, 0, 0, time.UTC),
 		GuestSeq:  2,
 		Guests: []collab.Guest{
 			{ID: "g1", Name: "Гость 1", Status: collab.GuestReady, Chunks: 1, Rows: 12},
@@ -109,8 +111,6 @@ func collabRoom() collab.Session {
 		},
 	}
 }
-
-func roomPtr(s collab.Session) *collab.Session { return &s }
 
 // TestTemplatesParse — все шаблоны каталога должны разбираться: ловит поломку в
 // шаблонах, которые этот тест не исполняет (у них своя модель данных).

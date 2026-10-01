@@ -56,7 +56,7 @@ func (h *Handler) ReceivePage(w http.ResponseWriter, r *http.Request) {
 
 	id := strings.TrimSpace(query.Get("id"))
 	roomID := strings.TrimSpace(query.Get("c"))
-	hostMode := strings.TrimSpace(query.Get("collab")) != ""
+	hostMode := query.Get("collab") == "1"
 
 	// Страница гостя: комната пришла ссылкой из списка открытых приёмок.
 	if roomID != "" {
@@ -195,26 +195,35 @@ func (h *Handler) ReceiveSave(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sessionID := strings.TrimSpace(req.SessionID)
+	supplierID := strings.TrimSpace(req.SupplierID)
 	scans := req.Scans
+	claimed := false
 
 	if sessionID != "" {
-		guestScans, err := h.collabGuestScans(sessionID)
+		guestScans, taken, err := h.claimGuestScans(sessionID, supplierID)
 		if err != nil {
 			collabError(w, err)
 
 			return
 		}
 
+		claimed = taken
 		scans = append(scans, guestScans...)
 	}
 
 	saveReq := receiving.SaveRequest{
-		SupplierID: strings.TrimSpace(req.SupplierID),
+		SupplierID: supplierID,
 		Scans:      toScanEntries(scans),
 	}
 
 	result, err := h.receivingUC.Save(r.Context(), saveReq)
 	if err != nil {
+		// Приёмка не прошла — комнату освобождаем: строки гостей на месте, хост
+		// может повторить (в том числе сохранить без гостей).
+		if claimed {
+			h.releaseRoom(sessionID)
+		}
+
 		http.Error(w, err.Error(), http.StatusBadRequest)
 
 		return
