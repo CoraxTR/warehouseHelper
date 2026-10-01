@@ -39,17 +39,17 @@ func NewStore(now func() time.Time) *Store {
 // Open отдаёт открытую комнату по (kind, ref), а если её нет — создаёт новую.
 // Идемпотентно: возврат хоста на страницу (F5, «Продолжить хостить») не плодит
 // комнаты; для одного поставщика открытая комната всегда одна.
-func (s *Store) Open(kind Kind, ref, title string) (Session, error) {
+func (s *Store) Open(kind Kind, ref, title string) (Session, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if existing, ok := s.findLocked(kind, ref); ok {
-		return existing.Clone(), nil
+		return existing.Clone(), false, nil
 	}
 
 	id, err := newID()
 	if err != nil {
-		return Session{}, err
+		return Session{}, false, err
 	}
 
 	// 8 знаков — 4 млрд вариантов, но занятый id молча перезаписал бы чужую
@@ -60,8 +60,13 @@ func (s *Store) Open(kind Kind, ref, title string) (Session, error) {
 		}
 
 		if id, err = newID(); err != nil {
-			return Session{}, err
+			return Session{}, false, err
 		}
+	}
+
+	token, err := newToken()
+	if err != nil {
+		return Session{}, false, err
 	}
 
 	session := &Session{
@@ -69,11 +74,12 @@ func (s *Store) Open(kind Kind, ref, title string) (Session, error) {
 		Kind:      kind,
 		Ref:       ref,
 		Title:     title,
+		HostToken: token,
 		CreatedAt: s.now(),
 	}
 	s.sessions[id] = session
 
-	return session.Clone(), nil
+	return session.Clone(), true, nil
 }
 
 // Get возвращает комнату по идентификатору (копию).
@@ -208,6 +214,15 @@ func (s *Store) Submit(id, guestID string, scans []json.RawMessage, chunkID stri
 	guest.Scans = append(guest.Scans, scans...)
 	guest.Chunks++
 	guest.Rows += len(scans)
+
+	// Курсор строк: сколько номеров доехало до нас. Страница гостя сверит по нему
+	// своё состояние и после обрыва дошлёт только новое.
+	for _, scan := range scans {
+		if seq := rowSeq(scan); seq > guest.LastSeq {
+			guest.LastSeq = seq
+		}
+	}
+
 	guest.Status = GuestReady
 	guest.SubmittedAt = now
 	guest.LastSeen = now
@@ -287,9 +302,20 @@ func (s *Store) Drop(id, guestID string) (Session, error) {
 	return Session{}, ErrGuestGone
 }
 
-// Close закрывает комнату: работа сохранена, гости увидят это по состоянию.
-// Повторное закрытие — не ошибка.
+// Close закрывает комнату сохранением: работа сохранена, гости увидят это по
+// состоянию. Повторное закрытие — не ошибка (причину не переписываем).
 func (s *Store) Close(id string) (Session, error) {
+	return s.close(id, ClosedSaved)
+}
+
+// Cancel закрывает комнату отменой: совместная приёмка снята, свои строки хост
+// сохранить ещё может — поэтому причина отличается от сохранения.
+func (s *Store) Cancel(id string) (Session, error) {
+	return s.close(id, ClosedCancelled)
+}
+
+// close закрывает комнату с причиной: сохранение или отмена. Под mu.
+func (s *Store) close(id string, reason ClosedReason) (Session, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -300,6 +326,7 @@ func (s *Store) Close(id string) (Session, error) {
 
 	if session.ClosedAt.IsZero() {
 		session.ClosedAt = s.now()
+		session.ClosedReason = reason
 	}
 
 	session.ClaimedAt = time.Time{}
@@ -318,9 +345,19 @@ func (s *Store) Claim(id, ref string) ([]json.RawMessage, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	session, err := s.openLocked(id)
-	if err != nil {
-		return nil, err
+	session, ok := s.sessions[id]
+	if !ok {
+		return nil, ErrNotFound
+	}
+
+	// Закрытая приёмка: сохранённую не переписываем (повтор после потерянного
+	// ответа не должен создать вторую приёмку), отменённую — можно сохранить.
+	if session.Closed() {
+		if session.ClosedReason == ClosedSaved {
+			return nil, ErrAlreadySaved
+		}
+
+		return nil, ErrClosed
 	}
 
 	if ref != "" && session.Ref != ref {
@@ -491,6 +528,17 @@ func activeLocked(session *Session, now time.Time) {
 	session.ActiveAt = now
 }
 
+// newToken — ключ хозяина комнаты: 16 шестнадцатеричных знаков. Подделать его
+// сложнее, чем угадать идентификатор комнаты.
+func newToken() (string, error) {
+	buf := make([]byte, 8)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+
+	return hex.EncodeToString(buf), nil
+}
+
 // newID — идентификатор комнаты: 8 шестнадцатеричных знаков. Это не «код для
 // оператора» (кодов подключения у нас нет, решение владельца 01.10.2026), а
 // адрес комнаты в списке открытых работ и в ссылке страницы гостя.
@@ -501,6 +549,20 @@ func newID() (string, error) {
 	}
 
 	return hex.EncodeToString(buf), nil
+}
+
+// rowSeq — номер строки из отправленной записи (0 — страница номера не дала:
+// старый шаблон в кэше браузера, тогда курсор строк не работает).
+func rowSeq(raw json.RawMessage) int64 {
+	var probe struct {
+		Seq int64 `json:"seq"`
+	}
+
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		return 0
+	}
+
+	return probe.Seq
 }
 
 // chunkSum — отпечаток содержимого захода: по нему узнаём повторную отправку того

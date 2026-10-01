@@ -51,6 +51,18 @@ const (
 // первый и единственный владелец кнопки сохранения.
 const HostName = "Хост"
 
+// ClosedReason — почему комната закрыта. Разница важна сохранению: после «уже
+// сохранено» повтор не пропускаем (иначе вторая приёмка того же поставщика), а
+// после отмены приёмку сохранить можно — свои строки остались на странице.
+type ClosedReason string
+
+const (
+	// ClosedSaved — работа сохранена.
+	ClosedSaved ClosedReason = "saved"
+	// ClosedCancelled — хозяин отменил совместную приёмку.
+	ClosedCancelled ClosedReason = "cancelled"
+)
+
 var (
 	// ErrNotFound — комнаты нет (в т.ч. после перезапуска приложения).
 	ErrNotFound = errors.New("комната не найдена")
@@ -65,6 +77,10 @@ var (
 	// ErrRefMismatch — комната открыта для другой работы: строки чужого
 	// поставщика в текущее сохранение не попадут.
 	ErrRefMismatch = errors.New("комната открыта для другого поставщика")
+	// ErrAlreadySaved — приёмка по этой ссылке уже сохранена: повторное
+	// сохранение создало бы вторую приёмку того же поставщика (ответ прошлого
+	// раза мог не дойти до страницы — владелец, 01.10.2026).
+	ErrAlreadySaved = errors.New("приёмка по этой ссылке уже сохранена")
 )
 
 // NotReadyError — сохранение не начинается: хост ещё ждёт гостей. Имена уходят
@@ -95,6 +111,11 @@ type Guest struct {
 	// распознаётся и не задваивает строки приёмки.
 	LastChunk    string
 	LastChunkSum string
+
+	// LastSeq — наибольший номер строки, принятый от этого гостя. Страница
+	// гостя нумерует строки и по этому номеру понимает, что уже у хозяина:
+	// повтор после обрыва отправляет только новое (владелец, 01.10.2026).
+	LastSeq int64
 }
 
 // Sent сообщает, отправлял ли гость хоть что-то.
@@ -114,14 +135,24 @@ func (g Guest) IsReady() bool {
 // комната открывается идемпотентно. Title — человекочитаемое имя для списка
 // открытых работ (имя поставщика).
 type Session struct {
-	ID        string
-	Kind      Kind
-	Ref       string
-	Title     string
+	ID    string
+	Kind  Kind
+	Ref   string
+	Title string
+
+	// HostToken — ключ хозяина приёмки: приложение выдаёт его машине, открывшей
+	// приёмку, и та держит его у себя (cookie комнаты). По адресу машины хозяина
+	// не опознать — весь склад ходит через VPN (владелец, 01.10.2026), поэтому
+	// роль решает ключ. Хост не меняется: с чужим ключом страница — гость.
+	HostToken string
 	CreatedAt time.Time
 	ClosedAt  time.Time
-	GuestSeq  int
-	Guests    []Guest
+
+	// ClosedReason — сохранением комната закрыта или отменой: после сохранения
+	// повтор не пропускаем (ErrAlreadySaved), после отмены — сохранить можно.
+	ClosedReason ClosedReason
+	GuestSeq     int
+	Guests       []Guest
 
 	// ActiveAt — последняя активность комнаты: действия гостей и хоста. Нужна,
 	// чтобы комната, где хост работает один (опросил, отключил гостя), не
@@ -251,4 +282,29 @@ func (s Session) Clone() Session {
 // 01.10.2026: имена не вводим, склад маленький.
 func GuestName(seq int) string {
 	return fmt.Sprintf("Гость %d", seq)
+}
+
+// HostTokenMatches — пришёл ли запрос с ключом хозяина этой приёмки. Пустой ключ
+// хозяйским не считается: без ключа роль не выдаётся.
+func (s Session) HostTokenMatches(token string) bool {
+	return token != "" && s.HostToken != "" && token == s.HostToken
+}
+
+// hostCookiePrefix — начало имени cookie хозяина комнаты.
+const hostCookiePrefix = "collab_host_"
+
+// HostCookieName — имя cookie комнаты: у каждой приёмки своё, чтобы одна машина
+// могла вести две приёмки в разных вкладках.
+func HostCookieName(roomID string) string {
+	return hostCookiePrefix + roomID
+}
+
+// RoomIDFromHostCookie — идентификатор комнаты из имени cookie хозяина. Пусто —
+// cookie не про наш ключ (чужие cookie машины игнорируем).
+func RoomIDFromHostCookie(name string) string {
+	if !strings.HasPrefix(name, hostCookiePrefix) {
+		return ""
+	}
+
+	return strings.TrimPrefix(name, hostCookiePrefix)
 }

@@ -35,6 +35,10 @@ type collabGuestDTO struct {
 	Rows    int    `json:"rows"`
 	Chunks  int    `json:"chunks"`
 	IdleSec int    `json:"idle_sec"` // сколько секунд молчит (обрыв связи)
+
+	// LastSeq — номер последней принятой строки захода: по нему страница гостя
+	// понимает, что уже у хозяина, и после обрыва шлёт только новое.
+	LastSeq int64 `json:"last_seq"`
 }
 
 // collabSessionDTO — состояние комнаты для страницы хоста и страницы гостя.
@@ -183,7 +187,7 @@ func (h *Handler) CollabClose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	session, err := h.collabUC.Close(strings.TrimSpace(req.ID))
+	session, err := h.collabUC.Cancel(strings.TrimSpace(req.ID))
 	if err != nil {
 		collabError(w, err)
 
@@ -255,6 +259,7 @@ func collabSessionDTOOf(session collab.Session) collabSessionDTO {
 			Rows:    g.Rows,
 			Chunks:  g.Chunks,
 			IdleSec: idle,
+			LastSeq: g.LastSeq,
 		})
 	}
 
@@ -351,6 +356,9 @@ func collabError(w http.ResponseWriter, err error) {
 		http.Error(w, "Совместная приёмка не найдена — её уже сохранили или закрыли", http.StatusNotFound)
 	case errors.Is(err, collab.ErrClosed):
 		http.Error(w, "Совместная приёмка уже закрыта", http.StatusConflict)
+	case errors.Is(err, collab.ErrAlreadySaved):
+		http.Error(w, "Приёмка по этой ссылке уже сохранена — вторую не создаём. "+
+			"Проверьте приёмку в МойСклад.", http.StatusConflict)
 	case errors.Is(err, collab.ErrBusy):
 		http.Error(w, "Совместная приёмка сохраняется — подождите пару секунд", http.StatusConflict)
 	case errors.Is(err, collab.ErrRefMismatch):

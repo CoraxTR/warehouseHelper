@@ -28,7 +28,7 @@ func scan(raw string) json.RawMessage {
 func mustOpen(t *testing.T, s *Store, ref string) Session {
 	t.Helper()
 
-	session, err := s.Open(KindReceive, ref, "Поставщик "+ref)
+	session, _, err := s.Open(KindReceive, ref, "Поставщик "+ref)
 	if err != nil {
 		t.Fatalf("Open(%q): %v", ref, err)
 	}
@@ -81,6 +81,7 @@ func TestOpenIdempotent(t *testing.T) {
 	}
 
 	reopened := mustOpen(t, s, "sup-1")
+
 	if reopened.ID == first.ID {
 		t.Errorf("после закрытия комната не переоткрылась: %q", reopened.ID)
 	}
@@ -369,7 +370,7 @@ func TestErrors(t *testing.T) {
 		{"Join в закрытую", func() error { _, err := s.Join(closed.ID, ""); return err }, ErrClosed},
 		{"Touch в закрытую", func() error { _, err := s.Touch(closed.ID, "кто-то"); return err }, ErrClosed},
 		{"SetScanning в закрытую", func() error { _, err := s.SetScanning(closed.ID, "кто-то"); return err }, ErrClosed},
-		{"Claim в закрытую", func() error { _, err := s.Claim(closed.ID, "sup-3"); return err }, ErrClosed},
+		{"Claim в закрытую", func() error { _, err := s.Claim(closed.ID, "sup-3"); return err }, ErrAlreadySaved},
 		{"Claim чужой работы", func() error { _, err := s.Claim(open.ID, "sup-9"); return err }, ErrRefMismatch},
 		{"GuestScans в закрытую", func() error { _, err := s.GuestScans(closed.ID); return err }, ErrClosed},
 		{"Waiting в закрытую", func() error { _, err := s.Waiting(closed.ID); return err }, ErrClosed},
@@ -545,13 +546,13 @@ func TestClaimSavesOnce(t *testing.T) {
 		t.Errorf("Claim после Release: строк %d, err=%v", len(scans), err)
 	}
 
-	// Успех: комната закрыта, третий заход отбит.
+	// Успех: комната закрыта сохранением, третий заход отбит.
 	if _, err := s.Close(room.ID); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 
-	if _, err := s.Claim(room.ID, "sup-1"); !errors.Is(err, ErrClosed) {
-		t.Errorf("Claim после Close: %v, ожидалась ErrClosed", err)
+	if _, err := s.Claim(room.ID, "sup-1"); !errors.Is(err, ErrAlreadySaved) {
+		t.Errorf("Claim после Close: %v, ожидалась ErrAlreadySaved", err)
 	}
 }
 
@@ -703,5 +704,130 @@ func TestSubmitIsIdempotent(t *testing.T) {
 
 	if next.Guests[0].Chunks != 3 || next.Guests[0].Rows != 5 {
 		t.Errorf("заходы/строки = %d/%d, ожидалось 3/5", next.Guests[0].Chunks, next.Guests[0].Rows)
+	}
+}
+
+// TestHostToken — ключ хозяина комнаты: выдаётся при создании, переживает
+// переоткрытие, чужой и пустой ключ хозяйским не считается (владелец: склад ходит
+// через VPN, поэтому роль решает ключ, а не адрес машины).
+func TestHostToken(t *testing.T) {
+	s := NewStore(newClock().now)
+
+	first, created, err := s.Open(KindReceive, "sup-1", "Поставщик")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	if !created {
+		t.Error("первое открытие должно создавать комнату")
+	}
+
+	if first.HostToken == "" {
+		t.Fatal("у новой комнаты нет ключа хозяина")
+	}
+
+	again, created, err := s.Open(KindReceive, "sup-1", "Поставщик")
+	if err != nil {
+		t.Fatalf("повторный Open: %v", err)
+	}
+
+	if created {
+		t.Error("повторное открытие не должно создавать комнату")
+	}
+
+	if again.HostToken != first.HostToken {
+		t.Errorf("ключ хозяина изменился: %q → %q", first.HostToken, again.HostToken)
+	}
+
+	if !again.HostTokenMatches(first.HostToken) {
+		t.Error("свой ключ не опознан")
+	}
+
+	if again.HostTokenMatches("чужой") || again.HostTokenMatches("") {
+		t.Error("чужой или пустой ключ опознан как хозяйский")
+	}
+
+	name := HostCookieName(again.ID)
+	if name != "collab_host_"+again.ID {
+		t.Errorf("имя cookie комнаты = %q", name)
+	}
+
+	if got := RoomIDFromHostCookie(name); got != again.ID {
+		t.Errorf("идентификатор комнаты из cookie = %q, ожидался %q", got, again.ID)
+	}
+
+	if got := RoomIDFromHostCookie("session"); got != "" {
+		t.Errorf("чужая cookie принята за ключ хозяина: %q", got)
+	}
+}
+
+// TestCloseReasons — причина закрытия комнаты: сохранённую приёмку повтор не
+// пропускает (иначе вторая приёмка того же поставщика), отменённую — можно
+// сохранить, свои строки у хоста остались на странице.
+func TestCloseReasons(t *testing.T) {
+	s := NewStore(newClock().now)
+
+	saved := join(t, s, mustOpen(t, s, "sup-1").ID, "")
+	if _, err := s.Close(saved.ID); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	if _, err := s.Claim(saved.ID, "sup-1"); !errors.Is(err, ErrAlreadySaved) {
+		t.Errorf("Claim по сохранённой приёмке: %v, ожидалась ErrAlreadySaved", err)
+	}
+
+	cancelled := join(t, s, mustOpen(t, s, "sup-2").ID, "")
+	if _, err := s.Cancel(cancelled.ID); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+
+	if _, err := s.Claim(cancelled.ID, "sup-2"); !errors.Is(err, ErrClosed) {
+		t.Errorf("Claim по отменённой приёмке: %v, ожидалась ErrClosed", err)
+	}
+}
+
+// TestSubmitCursor — номер последней принятой строки: по нему страница гостя
+// понимает, что уже у хозяина, и после обрыва связи дошлёт только новое.
+func TestSubmitCursor(t *testing.T) {
+	s := NewStore(newClock().now)
+
+	room := join(t, s, mustOpen(t, s, "sup-1").ID, "")
+	guestID := room.Guests[0].ID
+
+	after, err := s.Submit(room.ID, guestID, []json.RawMessage{
+		json.RawMessage(`{"raw":"111","seq":1}`),
+		json.RawMessage(`{"raw":"222","seq":2}`),
+	}, "c-1")
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+
+	if got := after.Guests[0].LastSeq; got != 2 {
+		t.Errorf("LastSeq = %d, ожидалось 2", got)
+	}
+
+	// Досылка после обрыва: номера продолжаются, курсор растёт.
+	after, err = s.Submit(room.ID, guestID, []json.RawMessage{json.RawMessage(`{"raw":"333","seq":3}`)}, "c-2")
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+
+	if got := after.Guests[0].LastSeq; got != 3 {
+		t.Errorf("LastSeq = %d, ожидалось 3", got)
+	}
+
+	// Старый шаблон в кэше браузера: строки без номеров курсор не портят — просто
+	// не участвуют в нём (повторы в этом случае ловит номер захода).
+	after, err = s.Submit(room.ID, guestID, []json.RawMessage{scan("444")}, "c-3")
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+
+	if got := after.Guests[0].LastSeq; got != 3 {
+		t.Errorf("строка без номера сбила курсор: %d", got)
+	}
+
+	if got := after.Guests[0].Rows; got != 4 {
+		t.Errorf("принято строк %d, ожидалось 4", got)
 	}
 }
