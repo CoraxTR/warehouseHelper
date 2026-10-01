@@ -265,8 +265,21 @@ func (s Session) HostTokenMatches(token string) bool {
 	return token != "" && s.HostToken != "" && token == s.HostToken
 }
 
+// hostCookiePrefix — начало имени cookie хозяина комнаты.
+const hostCookiePrefix = "collab_host_"
+
 // HostCookieName — имя cookie комнаты: у каждой приёмки своё, чтобы одна машина
 // могла вести две приёмки в разных вкладках.
 func HostCookieName(roomID string) string {
-	return "collab_host_" + roomID
+	return hostCookiePrefix + roomID
+}
+
+// RoomIDFromHostCookie — идентификатор комнаты из имени cookie хозяина. Пусто —
+// cookie не про наш ключ (чужие cookie машины игнорируем).
+func RoomIDFromHostCookie(name string) string {
+	if !strings.HasPrefix(name, hostCookiePrefix) {
+		return ""
+	}
+
+	return strings.TrimPrefix(name, hostCookiePrefix)
 }

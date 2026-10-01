@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"warehouseHelper/internal/collab"
+	ccase "warehouseHelper/internal/collab/usecase"
 	"warehouseHelper/internal/domain"
 	"warehouseHelper/internal/receiving"
 )
@@ -31,6 +32,10 @@ type receivePageData struct {
 	// при ошибке открытия. IsGuest — эта машина не хост: сканы уходят хосту.
 	Room    *collab.Session
 	IsGuest bool
+
+	// Others — живые приёмки того же поставщика на других машинах: подсказка
+	// хозяину, иначе один поставщик примут дважды, каждый в своей приёмке.
+	Others []collab.Session
 }
 
 // ReceivePage — GET /ms/receive[?id=...]: выбор поставщика или страница
@@ -107,28 +112,79 @@ func (h *Handler) ReceivePage(w http.ResponseWriter, r *http.Request) {
 
 	data.Supplier = supplier
 
-	// Комната открывается (или берётся уже открытая — открытие идемпотентно)
-	// прямо при отрисовке: гости видят приёмку в списке сразу. Хозяин — та
-	// машина, что открыла её первой: с остальных страница работает гостем.
+	// Комната открывается прямо при отрисовке: гости видят приёмку в списке
+	// сразу. Своя приёмка — по ключу хозяина в cookie (перезагрузка страницы
+	// продолжает её же); если ключа нет, заводим новую, даже когда у поставщика
+	// висит чужая комната: её убьёт TTL, тупика «приёмку не начать» быть не должно.
 	if data.Room == nil {
-		room, created, err := h.collabUC.Open(collab.KindReceive, supplier.ID, supplier.Name)
+		room, _, err := h.openReceiveRoom(r, w, supplier.ID, supplier.Name)
 		if err != nil {
 			slog.Info("receive: открыть приёмку", "supplier_id", supplier.ID, "err", err)
 
 			data.Error = "не удалось открыть приёмку: " + err.Error()
 		} else {
 			data.Room = &room
-			data.IsGuest = !created && !roomHost(r, room)
-
-			// Ключ хозяина уезжает машине, которая открыла приёмку: с ним она
-			// остаётся хозяйкой и после перезагрузки страницы.
-			if created {
-				setRoomHostCookie(w, room)
-			}
+			data.IsGuest = false
+			data.Others = h.otherRooms(supplier.ID, room.ID)
 		}
 	}
 
 	h.renderReceive(w, data)
+}
+
+// openReceiveRoom выдаёт машине комнату приёмки: есть ключ живой приёмки этого
+// поставщика — отдаём её же (перезагрузка страницы не заводит вторую), нет —
+// заводим новую и выдаём ключ хозяина.
+func (h *Handler) openReceiveRoom(r *http.Request, w http.ResponseWriter, supplierID, title string) (collab.Session, bool, error) {
+	if room, ok := hostRoom(r, h.collabUC, supplierID); ok {
+		return room, false, nil
+	}
+
+	room, created, err := h.collabUC.Open(collab.KindReceive, supplierID, title)
+	if err != nil {
+		return collab.Session{}, false, err
+	}
+
+	if created {
+		setRoomHostCookie(w, room)
+	}
+
+	return room, created, nil
+}
+
+// hostRoom ищет живую приёмку этого поставщика, ключ которой есть у машины: ключ
+// лежит в cookie комнаты (HostCookieName).
+func hostRoom(r *http.Request, uc *ccase.UseCase, supplierID string) (collab.Session, bool) {
+	for _, cookie := range r.Cookies() {
+		roomID := collab.RoomIDFromHostCookie(cookie.Name)
+		if roomID == "" {
+			continue
+		}
+
+		room, err := uc.State(roomID)
+		if err != nil || room.Kind != collab.KindReceive || room.Ref != supplierID {
+			continue
+		}
+
+		if room.HostTokenMatches(cookie.Value) {
+			return room, true
+		}
+	}
+
+	return collab.Session{}, false
+}
+
+// otherRooms — живые приёмки того же поставщика с других машин.
+func (h *Handler) otherRooms(supplierID, ownRoomID string) []collab.Session {
+	var out []collab.Session
+
+	for _, room := range h.collabUC.List(collab.KindReceive) {
+		if room.ID != ownRoomID && room.Ref == supplierID {
+			out = append(out, room)
+		}
+	}
+
+	return out
 }
 
 // roomHost — пришёл ли запрос с ключом хозяина этой комнаты.

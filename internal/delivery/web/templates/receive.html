@@ -129,6 +129,11 @@ html.day .date-echo.temp.bad { color: #B42318; }
             {{else}}
             <div class="collab-line">Совместная приёмка: <b>вы хост</b> — результат собирается и печатается здесь.
                 Гости подключаются к этой приёмке на странице «Приёмка».</div>
+            {{if .Others}}
+            <div class="collab-line collab-wait">У этого поставщика уже идёт приёмка на другой машине:
+                {{range .Others}}<a href="/ms/receive?c={{.ID}}">подключиться гостем к ней</a> {{end}}
+                — иначе выйдут две приёмки одного поставщика.</div>
+            {{end}}
             <div id="collab-guests"></div>
             <div class="collab-line" id="collab-wait"></div>
             <div class="collab-line">

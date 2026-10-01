@@ -53,6 +53,10 @@ func (uc *UseCase) Open(kind collab.Kind, ref, title string) (collab.Session, bo
 		return collab.Session{}, false, ErrNeedRef
 	}
 
+	// Висящие комнаты убираем и здесь: их должно убивать время, а не чей-то
+	// заход в список открытых работ.
+	uc.store.Purge(uc.ttl)
+
 	session, created, err := uc.store.Open(kind, ref, strings.TrimSpace(title))
 	if err != nil {
 		return collab.Session{}, false, err
@@ -76,6 +80,9 @@ func (uc *UseCase) List(kind collab.Kind) []collab.Session {
 // State отдаёт состояние комнаты — им пользуются и хост, и гость (гость ещё и
 // отмечается в LastSeen — это heartbeat).
 func (uc *UseCase) State(id string) (collab.Session, error) {
+	// Опрос идёт с каждой страницы: он же и убирает заброшенные комнаты.
+	uc.store.Purge(uc.ttl)
+
 	return uc.store.Get(id)
 }
 

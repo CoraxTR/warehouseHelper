@@ -66,6 +66,7 @@ func TestTemplatesRender(t *testing.T) {
 			data: map[string]any{
 				"Supplier": supplier, "Suppliers": []any{}, "Error": "",
 				"Room": &room, "IsGuest": false,
+				"Others": []collab.Session{room},
 			},
 		},
 		{

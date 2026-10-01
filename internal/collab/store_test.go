@@ -747,7 +747,16 @@ func TestHostToken(t *testing.T) {
 		t.Error("чужой или пустой ключ опознан как хозяйский")
 	}
 
-	if got := HostCookieName(again.ID); got != "collab_host_"+again.ID {
-		t.Errorf("имя cookie комнаты = %q", got)
+	name := HostCookieName(again.ID)
+	if name != "collab_host_"+again.ID {
+		t.Errorf("имя cookie комнаты = %q", name)
+	}
+
+	if got := RoomIDFromHostCookie(name); got != again.ID {
+		t.Errorf("идентификатор комнаты из cookie = %q, ожидался %q", got, again.ID)
+	}
+
+	if got := RoomIDFromHostCookie("session"); got != "" {
+		t.Errorf("чужая cookie принята за ключ хозяина: %q", got)
 	}
 }
