@@ -193,7 +193,19 @@ body.menu { text-align: center; padding-top: 28px; }
 body.menu h1 { margin: 24px 0 10px; }
 body.menu .actions { justify-content: center; flex-wrap: wrap; }
 body.menu .btn { display: block; width: 100%; max-width: 360px; margin: 12px auto; padding: 16px; font-size: 16px; text-align: center; }
-body.menu button { display: block; margin: 12px auto; min-width: 240px; padding: 14px 30px; font-size: 16px; }
+/* Кнопки меню — крупные. Селектор обязан ИСКЛЮЧАТЬ хром бренд-бара и сайдбара
+   (.navtoggle, ползунок темы, крестик, заголовки разделов): у них своя геометрия,
+   а `body.menu button` бьёт их правила по специфичности (0,1,2 против 0,1,0).
+   Без исключений на меню-страницах гамбургер раздувался до min-width 240px с
+   паддингом 14/30 (иконка уезжала ниже кнопки), ползунок темы расползался в блок
+   240×48 (кружок застревал в углу), а сайдбар терял свои отступы. */
+body.menu button:not(.navtoggle):not(.themeswitch__track):not(.sidebar__close):not(.sidebar__head-btn) {
+    display: block;
+    margin: 12px auto;
+    min-width: 240px;
+    padding: 14px 30px;
+    font-size: 16px;
+}
 .menu-btn { display: block; max-width: 360px; margin: 12px auto; padding: 14px 30px; font-size: 16px; text-align: center; }
 .back { display: inline-block; margin-top: 20px; color: #66645C; font-size: 14px; }
 .back:hover { color: #E9E6DD; }
@@ -437,9 +449,9 @@ tr.group-row td.col-toggle:hover { background: #E0C47E; color: #1B1B21; }
 td.col-name { white-space: nowrap; min-width: 180px; cursor: pointer; }
 td.col-name:hover { background: #1B1B21; }
 td.cell-pair { text-align: center; cursor: pointer; white-space: nowrap; min-width: 56px; padding: 4px 6px; }
-td.cell-pair.has-discount { background: #241F12; color: #E0C47E; }
-/* только избыток (discount_source = surplus): нежно-розовая — младшая ступень, тише янтарной */
-td.cell-pair.only-surplus { background: #241A1F; color: #D9A7B6; }
+td.cell-pair.has-discount { background: #4A3A10; color: #F0D68C; }
+/* только избыток (discount_source = surplus): розовая — младшая ступень, тише янтарной */
+td.cell-pair.only-surplus { background: #4A2430; color: #EBBCCB; }
 /* срок годности заканчивается сегодня — пора замораживать (перебивает янтарную скидочную и розовую) */
 td.cell-pair.expires-today { background: #141B22; color: #93A7BC; }
 td.cell-pair:hover { outline: 1px solid #6E6E7A; outline-offset: -1px; }
@@ -1034,8 +1046,8 @@ html.day tr.group-row td { background: #E4E9EE !important; color: #000000; }
 html.day tr.group-row td.col-toggle { color: #9A6700; }
 html.day tr.group-row td.col-toggle:hover { background: #FFE9A8; color: #3A2C06; }
 html.day td.col-name:hover { background: #E4E9EE; }
-html.day td.cell-pair.has-discount { background: #FFF6D8; color: #9A6700; }
-html.day td.cell-pair.only-surplus { background: #FBEAF0; color: #9E3B5C; }
+html.day td.cell-pair.has-discount { background: #FFE79A; color: #7A5000; }
+html.day td.cell-pair.only-surplus { background: #F9C6D8; color: #8E2F4E; }
 html.day td.cell-pair.expires-today { background: #E7F1FB; color: #0969DA; }
 html.day td.cell-pair:hover { outline: 1px solid #8C959F; }
 html.day td.cell-empty { background: #F3F5F7; color: #6E7781; }
