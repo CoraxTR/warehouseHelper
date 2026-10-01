@@ -2,9 +2,11 @@ package collab
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 )
@@ -167,7 +169,7 @@ func (s *Store) Join(id, guestID string) (Session, error) {
 // Submit принимает чанк сканов гостя: строки дописываются к отправленным,
 // статус становится «готов». Отправленное не меняется — новый чанк только
 // добавляет строки.
-func (s *Store) Submit(id, guestID string, scans []json.RawMessage) (Session, error) {
+func (s *Store) Submit(id, guestID string, scans []json.RawMessage, chunkID string) (Session, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -187,7 +189,21 @@ func (s *Store) Submit(id, guestID string, scans []json.RawMessage) (Session, er
 		return Session{}, ErrEmpty
 	}
 
+	sum := chunkSum(scans)
+
+	// Повтор захода: ответ прошлого раза не дошёл, и гость жмёт кнопку снова.
+	// Строки уже приняты — второй раз не дописываем, иначе приёмка задвоится.
+	if chunkID != "" && chunkID == guest.LastChunk && sum == guest.LastChunkSum {
+		return session.Clone(), nil
+	}
+
 	now := s.now()
+
+	if chunkID != "" {
+		guest.LastChunk = chunkID
+		guest.LastChunkSum = sum
+	}
+
 	guest.Scans = append(guest.Scans, scans...)
 	guest.Chunks++
 	guest.Rows += len(scans)
@@ -484,4 +500,17 @@ func newID() (string, error) {
 	}
 
 	return hex.EncodeToString(buf), nil
+}
+
+// chunkSum — отпечаток содержимого захода: по нему узнаём повторную отправку того
+// же захода. Длина каждой строки пишется в сумму, чтобы «12» и «1»+«2» не совпали.
+func chunkSum(scans []json.RawMessage) string {
+	h := sha256.New()
+
+	for _, scan := range scans {
+		fmt.Fprintf(h, "%d:", len(scan))
+		h.Write(scan)
+	}
+
+	return hex.EncodeToString(h.Sum(nil))
 }

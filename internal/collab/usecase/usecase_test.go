@@ -125,7 +125,7 @@ func TestFlow(t *testing.T) {
 		t.Errorf("Waiting = %v (%v), ожидался [Гость 1]", waiting, err)
 	}
 
-	if _, err := uc.Submit(room.ID, guestID, []json.RawMessage{raw("111")}); err != nil {
+	if _, err := uc.Submit(room.ID, guestID, []json.RawMessage{raw("111")}, ""); err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
 
@@ -133,7 +133,7 @@ func TestFlow(t *testing.T) {
 		t.Errorf("Waiting = %v (%v), ожидался пустой список", waiting, err)
 	}
 
-	if _, err := uc.Submit(room.ID, guestID, nil); !errors.Is(err, collab.ErrEmpty) {
+	if _, err := uc.Submit(room.ID, guestID, nil, ""); !errors.Is(err, collab.ErrEmpty) {
 		t.Errorf("пустой чанк: %v, ожидалась ErrEmpty", err)
 	}
 
@@ -159,7 +159,7 @@ func TestFlowNewChunkDropAndClose(t *testing.T) {
 
 	guestID := room.Guests[0].ID
 
-	if _, err := uc.Submit(room.ID, guestID, []json.RawMessage{raw("111")}); err != nil {
+	if _, err := uc.Submit(room.ID, guestID, []json.RawMessage{raw("111")}, ""); err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
 

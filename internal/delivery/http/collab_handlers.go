@@ -22,6 +22,7 @@ type collabGuestRequest struct {
 	ID      string            `json:"id"`
 	GuestID string            `json:"guest_id"`
 	Scans   []json.RawMessage `json:"scans"`
+	ChunkID string            `json:"chunk_id,omitempty"`
 }
 
 // collabGuestDTO — участник для страницы. Сканы не отдаём: они нужны только
@@ -126,7 +127,7 @@ func (h *Handler) CollabSubmit(w http.ResponseWriter, r *http.Request) {
 
 	guestID := strings.TrimSpace(req.GuestID)
 
-	session, err := h.collabUC.Submit(strings.TrimSpace(req.ID), guestID, req.Scans)
+	session, err := h.collabUC.Submit(strings.TrimSpace(req.ID), guestID, req.Scans, strings.TrimSpace(req.ChunkID))
 	if err != nil {
 		collabError(w, err)
 

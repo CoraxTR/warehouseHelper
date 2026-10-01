@@ -89,6 +89,12 @@ type Guest struct {
 	JoinedAt    time.Time
 	LastSeen    time.Time
 	SubmittedAt time.Time
+
+	// Заход гостя опознаётся идентификатором, а содержимое — отпечатком строк:
+	// повторная отправка того же захода (оборвалась сеть, ответ не дошёл)
+	// распознаётся и не задваивает строки приёмки.
+	LastChunk    string
+	LastChunkSum string
 }
 
 // Sent сообщает, отправлял ли гость хоть что-то.

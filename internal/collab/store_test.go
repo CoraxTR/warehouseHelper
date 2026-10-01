@@ -50,7 +50,7 @@ func join(t *testing.T, s *Store, id, guestID string) Session {
 func submit(t *testing.T, s *Store, id, guestID string, scans ...json.RawMessage) Session {
 	t.Helper()
 
-	session, err := s.Submit(id, guestID, scans)
+	session, err := s.Submit(id, guestID, scans, "")
 	if err != nil {
 		t.Fatalf("Submit(%q, %q): %v", id, guestID, err)
 	}
@@ -287,7 +287,7 @@ func TestDropGuest(t *testing.T) {
 		t.Errorf("строки отключённого гостя попали в склейку: %v", scans)
 	}
 
-	if _, err := s.Submit(room.ID, guestID, []json.RawMessage{scan("222")}); !errors.Is(err, ErrGuestGone) {
+	if _, err := s.Submit(room.ID, guestID, []json.RawMessage{scan("222")}, ""); !errors.Is(err, ErrGuestGone) {
 		t.Errorf("Submit отключённого гостя: %v, ожидалась ErrGuestGone", err)
 	}
 
@@ -358,14 +358,14 @@ func TestErrors(t *testing.T) {
 		{"Join без комнаты", func() error { _, err := s.Join("нет", ""); return err }, ErrNotFound},
 		{"GuestScans без комнаты", func() error { _, err := s.GuestScans("нет"); return err }, ErrNotFound},
 		{"Waiting без комнаты", func() error { _, err := s.Waiting("нет"); return err }, ErrNotFound},
-		{"пустой чанк от живого гостя", func() error { _, err := s.Submit(empty.ID, emptyGuest, nil); return err }, ErrEmpty},
-		{"пустой чанк у незнакомого гостя", func() error { _, err := s.Submit(empty.ID, "кто-то", nil); return err }, ErrGuestGone},
+		{"пустой чанк от живого гостя", func() error { _, err := s.Submit(empty.ID, emptyGuest, nil, ""); return err }, ErrEmpty},
+		{"пустой чанк у незнакомого гостя", func() error { _, err := s.Submit(empty.ID, "кто-то", nil, ""); return err }, ErrGuestGone},
 		{"Submit в закрытую", func() error {
-			_, err := s.Submit(closed.ID, "кто-то", []json.RawMessage{scan("111")})
+			_, err := s.Submit(closed.ID, "кто-то", []json.RawMessage{scan("111")}, "")
 
 			return err
 		}, ErrClosed},
-		{"Submit в закрытую с пустым чанком", func() error { _, err := s.Submit(closed.ID, "кто-то", nil); return err }, ErrClosed},
+		{"Submit в закрытую с пустым чанком", func() error { _, err := s.Submit(closed.ID, "кто-то", nil, ""); return err }, ErrClosed},
 		{"Join в закрытую", func() error { _, err := s.Join(closed.ID, ""); return err }, ErrClosed},
 		{"Touch в закрытую", func() error { _, err := s.Touch(closed.ID, "кто-то"); return err }, ErrClosed},
 		{"SetScanning в закрытую", func() error { _, err := s.SetScanning(closed.ID, "кто-то"); return err }, ErrClosed},
@@ -462,7 +462,7 @@ func TestConcurrentUse(t *testing.T) {
 			guestID := joined.Guests[len(joined.Guests)-1].ID
 
 			for range 20 {
-				if _, err := s.Submit(room.ID, guestID, []json.RawMessage{scan("111")}); err != nil {
+				if _, err := s.Submit(room.ID, guestID, []json.RawMessage{scan("111")}, ""); err != nil {
 					t.Errorf("Submit: %v", err)
 
 					return
@@ -513,7 +513,7 @@ func TestClaimSavesOnce(t *testing.T) {
 	room := join(t, s, mustOpen(t, s, "sup-1").ID, "")
 	guestID := room.Guests[0].ID
 
-	if _, err := s.Submit(room.ID, guestID, []json.RawMessage{scan("111"), scan("222")}); err != nil {
+	if _, err := s.Submit(room.ID, guestID, []json.RawMessage{scan("111"), scan("222")}, ""); err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
 
@@ -528,7 +528,7 @@ func TestClaimSavesOnce(t *testing.T) {
 	}
 
 	// Пока комната занята, гости в неё не пишут.
-	if _, err := s.Submit(room.ID, guestID, []json.RawMessage{scan("333")}); !errors.Is(err, ErrBusy) {
+	if _, err := s.Submit(room.ID, guestID, []json.RawMessage{scan("333")}, ""); !errors.Is(err, ErrBusy) {
 		t.Errorf("Submit в занятую: %v, ожидалась ErrBusy", err)
 	}
 
@@ -574,7 +574,7 @@ func TestClaimGates(t *testing.T) {
 		t.Errorf("имена ожидаемых гостей = %v", notReady.Names)
 	}
 
-	if _, err := s.Submit(room.ID, guestID, []json.RawMessage{scan("111")}); err != nil {
+	if _, err := s.Submit(room.ID, guestID, []json.RawMessage{scan("111")}, ""); err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
 
@@ -594,7 +594,7 @@ func TestDropSticks(t *testing.T) {
 	room := join(t, s, mustOpen(t, s, "sup-1").ID, "")
 	guestID := room.Guests[0].ID
 
-	if _, err := s.Submit(room.ID, guestID, []json.RawMessage{scan("111")}); err != nil {
+	if _, err := s.Submit(room.ID, guestID, []json.RawMessage{scan("111")}, ""); err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
 
@@ -631,7 +631,7 @@ func TestHeartbeatAndNewChunk(t *testing.T) {
 	room := join(t, s, mustOpen(t, s, "sup-1").ID, "")
 	guestID := room.Guests[0].ID
 
-	if _, err := s.Submit(room.ID, guestID, []json.RawMessage{scan("111")}); err != nil {
+	if _, err := s.Submit(room.ID, guestID, []json.RawMessage{scan("111")}, ""); err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
 
@@ -657,12 +657,51 @@ func TestHeartbeatAndNewChunk(t *testing.T) {
 		t.Error("Claim с недосланным заходом не должен проходить")
 	}
 
-	after, err := s.Submit(room.ID, guestID, []json.RawMessage{scan("222")})
+	after, err := s.Submit(room.ID, guestID, []json.RawMessage{scan("222")}, "")
 	if err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
 
 	if len(after.Guests[0].Scans) != 2 || after.Guests[0].Chunks != 2 || after.Guests[0].Rows != 2 || !after.Ready() {
 		t.Errorf("новый заход потерял отправленное: %+v", after.Guests[0])
+	}
+}
+
+// TestSubmitIsIdempotent — повторная отправка того же захода (оборвалась сеть, ответ
+// не дошёл) не задваивает строки приёмки; новый заход дописывается как обычно.
+func TestSubmitIsIdempotent(t *testing.T) {
+	s := NewStore(newClock().now)
+
+	room := join(t, s, mustOpen(t, s, "sup-1").ID, "")
+	guestID := room.Guests[0].ID
+	chunk := []json.RawMessage{scan("111"), scan("222")}
+
+	if _, err := s.Submit(room.ID, guestID, chunk, "c-1"); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+
+	// Ответ до гостя не дошёл — он жмёт кнопку ещё раз с тем же заходом.
+	again, err := s.Submit(room.ID, guestID, chunk, "c-1")
+	if err != nil {
+		t.Fatalf("повторный Submit: %v", err)
+	}
+
+	if again.Guests[0].Rows != 2 || again.Guests[0].Chunks != 1 {
+		t.Errorf("повтор захода задвоил строки: %+v", again.Guests[0])
+	}
+
+	// Тот же номер захода, но содержимое другое (досканировал после обрыва) —
+	// дописываем: терять отсканированное хуже, чем показать его дважды.
+	if _, err := s.Submit(room.ID, guestID, []json.RawMessage{scan("333")}, "c-1"); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+
+	next, err := s.Submit(room.ID, guestID, chunk, "c-2")
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+
+	if next.Guests[0].Chunks != 3 || next.Guests[0].Rows != 5 {
+		t.Errorf("заходы/строки = %d/%d, ожидалось 3/5", next.Guests[0].Chunks, next.Guests[0].Rows)
 	}
 }

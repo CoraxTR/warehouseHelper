@@ -199,6 +199,8 @@ html.day .date-echo.temp.bad { color: #B42318; }
         var sentRows = 0;         // сколько строк всего ушло хосту
         var collabTimer = null;   // опрос состояния комнаты
         var collabLastRoom = null; // последнее состояние комнаты (для «Сохранить без гостей»)
+        var SENDING = false;      // запрос сохранения/отправки уже в пути — кнопка закрыта
+        var CHUNK_ID = '';        // номер текущего захода гостя (узнавание повтора на сервере)
 
         var scanInput = document.getElementById('scan-input');
         var scansBox = document.getElementById('scans');
@@ -1608,6 +1610,13 @@ html.day .date-echo.temp.bad { color: #B42318; }
             var xhr = new XMLHttpRequest();
             xhr.open('POST', url, true);
             xhr.setRequestHeader('Content-Type', 'application/json');
+            // Сеть на складе рвётся: без срока ожидания кнопка осталась бы
+            // «Отправляю…» навсегда. По таймауту считаем, что не доехало, и
+            // разрешаем повторить; повтор захода сервер узнаёт по chunk_id.
+            xhr.timeout = 15000;
+            xhr.ontimeout = function () {
+                if (onFail) { onFail(0, 'сервер не ответил за 15 секунд'); }
+            };
             xhr.onreadystatechange = function () {
                 if (xhr.readyState !== 4) { return; }
                 if (xhr.status === 200) {
@@ -1619,6 +1628,31 @@ html.day .date-echo.temp.bad { color: #B42318; }
                 if (onFail) { onFail(xhr.status, xhr.responseText); }
             };
             xhr.send(JSON.stringify(body));
+        }
+
+        // collabNewChunkID — номер захода: одинаковый у повторов одного и того же
+        // захода, новый после успешной отправки. Формат роли не играет — важна
+        // уникальность в пределах комнаты.
+        function collabNewChunkID() {
+            return 'c' + (new Date().getTime()) + '-' + Math.floor(Math.random() * 1000000);
+        }
+
+        // collabSendGuard закрывает кнопку «Сохранить приёмку» на время запроса:
+        // второй клик не уйдёт, пока не пришёл ответ — «доехало» (кнопка вернётся
+        // под следующий заход) или проблема с сетью (кнопка вернётся для повтора).
+        function collabSendGuard(on) {
+            SENDING = on;
+
+            var btn = document.getElementById('save-btn');
+            if (btn) {
+                btn.disabled = on || ROOM_CLOSED;
+                btn.textContent = on ? 'Отправляю…' : 'Сохранить приёмку';
+            }
+
+            // У хоста ворота — неготовые гости: после запроса возвращаем их сами.
+            if (!on && !ROOM_GUEST && !ROOM_CLOSED && collabLastRoom) {
+                collabWait(collabLastRoom);
+            }
         }
 
         // collabJoin — подключение к комнате: знакомый id гостя сохраняет
@@ -1806,15 +1840,25 @@ html.day .date-echo.temp.bad { color: #B42318; }
         // collabSubmit — гость отправляет заход хосту. Отправленное замирает:
         // строки очищаем и начинаем новый заход.
         function collabSubmit(scans) {
+            if (SENDING) { return; }   // второй клик, пока запрос в пути, не отправляем
+            if (!CHUNK_ID) { CHUNK_ID = collabNewChunkID(); }
+            collabSendGuard(true);
             statusLine.textContent = 'Отправляю сканы хосту…';
-            collabPost('/ms/collab/submit', {id: ROOM_ID, guest_id: GUEST_ID, scans: scans}, function (resp) {
-                var mine = collabFind(resp.session, GUEST_ID);
+            collabPost('/ms/collab/submit', {id: ROOM_ID, guest_id: GUEST_ID, chunk_id: CHUNK_ID, scans: scans}, function (resp) {
+                collabSendGuard(false);
+                // Заход ушёл — следующий получит новый номер (повтор стал бы
+                // неотличим от уже принятого).
+                CHUNK_ID = '';
+                var mine = (resp && resp.session) ? collabFind(resp.session, GUEST_ID) : null;
                 GUEST_READY = true;
                 sentRows = mine ? mine.rows : sentRows + scans.length;
                 collabClear();
                 collabGuestState('Отправлено хосту, всего строк: ' + sentRows +
                     '. Можно сканировать следующий заход.', true);
             }, function (status, text) {
+                // Не доехало: строки на странице остаются, кнопка снова доступна —
+                // повтор уйдёт с тем же номером захода, и сервер его не задвоит.
+                collabSendGuard(false);
                 GUEST_READY = false;
                 // 404 — хост отключил машину: строки не уходят и обратно мы не
                 // заходим (отключение должно держаться), они остаются на странице.
@@ -1823,7 +1867,7 @@ html.day .date-echo.temp.bad { color: #B42318; }
                     return;
                 }
                 alert('Не удалось отправить сканы хосту:\n' + text);
-                statusLine.textContent = 'Сканы не отправлены — повторите кнопкой «Сохранить приёмку»';
+                statusLine.textContent = 'Сканы не отправлены — нажмите «Сохранить приёмку» ещё раз';
             });
         }
 
@@ -2025,6 +2069,8 @@ html.day .date-echo.temp.bad { color: #B42318; }
         // «все готовы» дублируется на сервере, чтобы устаревшая страница не
         // закрыла приёмку без чужих сканов.
         function hostSave(scans) {
+            if (SENDING) { return; }   // второй клик, пока запрос в пути, не сохраняем повторно
+            collabSendGuard(true);
             var payload = JSON.stringify({
                 supplier_id: '{{.Supplier.ID}}',
                 scans: scans,
@@ -2033,21 +2079,39 @@ html.day .date-echo.temp.bad { color: #B42318; }
             var xhr = new XMLHttpRequest();
             xhr.open('POST', '/ms/receive/save', true);
             xhr.setRequestHeader('Content-Type', 'application/json');
+            xhr.timeout = 15000;
+            xhr.ontimeout = function () {
+                collabSendGuard(false);
+                alert('Сервер не ответил за 15 секунд.\nПриёмка могла не сохраниться — нажмите «Сохранить приёмку» ещё раз.');
+            };
             xhr.onreadystatechange = function () {
                 if (xhr.readyState !== 4) { return; }
                 if (xhr.status === 200) {
+                    collabSendGuard(false);
                     var resp;
-                    try { resp = JSON.parse(xhr.responseText); } catch (e) { return; }
+                    try { resp = JSON.parse(xhr.responseText); } catch (e) {
+                        alert('Приёмка сохранена, но ответ сервера не разобран — обновите страницу (F5).');
+                        return;
+                    }
                     if (ROOM_ID) { collabClosed('Приёмка сохранена'); }
                     showReport(resp);
                     return;
                 }
-                alert('Ошибка сохранения:\n' + xhr.responseText);
+                collabSendGuard(false);
+                alert('Ошибка сохранения:\n' + xhr.responseText + rejectHint());
                 // 409 — не все гости готовы: страница устарела, перечитываем
                 // состав комнаты и показываем, кого ждём.
                 if (ROOM_ID) { collabPoll(); }
             };
             xhr.send(payload);
+        }
+
+        // rejectHint — что делать хосту, если приёмка не сходится (чаще всего виновата
+        // строка гостя, которую не удалось распознать).
+        function rejectHint() {
+            if (!ROOM_ID) { return ''; }
+            return '\n\nЕсли не сходится строка гостя — попросите пересканировать её ' +
+                'или нажмите «Сохранить без гостей».';
         }
 
         function showReport(resp) {

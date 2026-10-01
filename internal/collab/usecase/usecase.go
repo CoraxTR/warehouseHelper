@@ -95,8 +95,8 @@ func (uc *UseCase) Join(id, guestID string) (collab.Session, error) {
 }
 
 // Submit принимает чанк сканов гостя.
-func (uc *UseCase) Submit(id, guestID string, scans []json.RawMessage) (collab.Session, error) {
-	session, err := uc.store.Submit(id, guestID, scans)
+func (uc *UseCase) Submit(id, guestID string, scans []json.RawMessage, chunkID string) (collab.Session, error) {
+	session, err := uc.store.Submit(id, guestID, scans, chunkID)
 	if err != nil {
 		return collab.Session{}, err
 	}
