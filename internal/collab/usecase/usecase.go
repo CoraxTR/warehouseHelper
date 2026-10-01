@@ -43,25 +43,26 @@ func NewUseCase(store *collab.Store, ttl time.Duration) *UseCase {
 
 // Open открывает комнату вида kind для работы ref (идемпотентно: одна открытая
 // комната на работу). title — имя для списка открытых работ.
-func (uc *UseCase) Open(kind collab.Kind, ref, title string) (collab.Session, error) {
+func (uc *UseCase) Open(kind collab.Kind, ref, title string) (collab.Session, bool, error) {
 	if !kind.Valid() {
-		return collab.Session{}, collab.ErrKind
+		return collab.Session{}, false, collab.ErrKind
 	}
 
 	ref = strings.TrimSpace(ref)
 	if ref == "" {
-		return collab.Session{}, ErrNeedRef
+		return collab.Session{}, false, ErrNeedRef
 	}
 
-	session, err := uc.store.Open(kind, ref, strings.TrimSpace(title))
+	session, created, err := uc.store.Open(kind, ref, strings.TrimSpace(title))
 	if err != nil {
-		return collab.Session{}, err
+		return collab.Session{}, false, err
 	}
 
 	slog.Info("collab: комната открыта",
-		"session", session.ID, "kind", session.Kind, "ref", ref, "title", session.Title)
+		"session", session.ID, "kind", session.Kind, "ref", ref, "title", session.Title,
+		"created", created)
 
-	return session, nil
+	return session, created, nil
 }
 
 // List отдаёт открытые работы вида kind (свежие первыми), попутно убирая

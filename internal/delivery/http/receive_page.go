@@ -27,8 +27,8 @@ type receivePageData struct {
 	// 01.10.2026).
 	Open []collab.Session
 
-	// Room — комната страницы: nil — обычная приёмка; иначе хост (IsGuest=false)
-	// или гость (IsGuest=true).
+	// Room — комната страницы: приёмка всегда идёт в комнате, поэтому nil только
+	// при ошибке открытия. IsGuest — эта машина не хост: сканы уходят хосту.
 	Room    *collab.Session
 	IsGuest bool
 }
@@ -37,8 +37,14 @@ type receivePageData struct {
 // сканирования (кеш приёмки клиент грузит отдельным JSON-запросом —
 // встраивать JSON в страницу нельзя: имена товаров пользовательские).
 //
-// Совместная приёмка: `?id=<поставщик>&collab=1` открывает комнату для этой
-// работы (хост), `?c=<комната>` заходит в уже открытую комнату как гость.
+// Приёмка всегда идёт в комнате: комната заводится на каждое начало приёмки, а
+// хозяином становится машина, которая открыла её первой (решение владельца
+// 01.10.2026). Отдельной кнопки «Совместная приёмка» нет, хозяин не меняется: с
+// чужой машины к идущей приёмке можно только подключиться гостем — `?c=<комната>`
+// или тем же `?id=<поставщик>`.
+//
+// Хозяин опознаётся по ключу комнаты (cookie `collab_host_<комната>`), а не по
+// адресу машины: весь склад ходит через VPN, и адрес у всех один.
 func (h *Handler) ReceivePage(w http.ResponseWriter, r *http.Request) {
 	data := receivePageData{}
 
@@ -56,8 +62,6 @@ func (h *Handler) ReceivePage(w http.ResponseWriter, r *http.Request) {
 
 	id := strings.TrimSpace(query.Get("id"))
 	roomID := strings.TrimSpace(query.Get("c"))
-	hostMode := query.Get("collab") == "1"
-
 	// Страница гостя: комната пришла ссылкой из списка открытых приёмок.
 	if roomID != "" {
 		room, err := h.collabUC.State(roomID)
@@ -72,7 +76,7 @@ func (h *Handler) ReceivePage(w http.ResponseWriter, r *http.Request) {
 
 		id = room.Ref
 		data.Room = &room
-		data.IsGuest = true
+		data.IsGuest = !roomHost(r, room)
 	}
 
 	if id == "" {
@@ -103,21 +107,55 @@ func (h *Handler) ReceivePage(w http.ResponseWriter, r *http.Request) {
 
 	data.Supplier = supplier
 
-	// Хост: комната открывается (или берётся уже открытая — открытие
-	// идемпотентно) прямо при отрисовке страницы, чтобы гости видели её в списке
-	// сразу, без отдельного нажатия.
-	if hostMode && data.Room == nil {
-		room, err := h.collabUC.Open(collab.KindReceive, supplier.ID, supplier.Name)
+	// Комната открывается (или берётся уже открытая — открытие идемпотентно)
+	// прямо при отрисовке: гости видят приёмку в списке сразу. Хозяин — та
+	// машина, что открыла её первой: с остальных страница работает гостем.
+	if data.Room == nil {
+		room, created, err := h.collabUC.Open(collab.KindReceive, supplier.ID, supplier.Name)
 		if err != nil {
-			slog.Info("receive: открыть совместную приёмку", "supplier_id", supplier.ID, "err", err)
+			slog.Info("receive: открыть приёмку", "supplier_id", supplier.ID, "err", err)
 
-			data.Error = "не удалось открыть совместную приёмку: " + err.Error()
+			data.Error = "не удалось открыть приёмку: " + err.Error()
 		} else {
 			data.Room = &room
+			data.IsGuest = !created && !roomHost(r, room)
+
+			// Ключ хозяина уезжает машине, которая открыла приёмку: с ним она
+			// остаётся хозяйкой и после перезагрузки страницы.
+			if created {
+				setRoomHostCookie(w, room)
+			}
 		}
 	}
 
 	h.renderReceive(w, data)
+}
+
+// roomHost — пришёл ли запрос с ключом хозяина этой комнаты.
+func roomHost(r *http.Request, room collab.Session) bool {
+	cookie, err := r.Cookie(collab.HostCookieName(room.ID))
+	if err != nil {
+		return false
+	}
+
+	return room.HostTokenMatches(cookie.Value)
+}
+
+// setRoomHostCookie отдаёт ключ хозяина машине, открывшей приёмку. Ключ живёт в
+// браузере этой машины: перезагрузка роль не снимает, а VPN, скрывающий адреса,
+// на него не влияет. Срок — с запасом к сроку жизни комнаты (12 ч против 6 ч).
+func setRoomHostCookie(w http.ResponseWriter, room collab.Session) {
+	// Приложение живёт в локальной сети по HTTP: Secure-cookie браузер по http не
+	// отправит, и хозяин приёмки потерял бы роль. Поэтому Secure не выставляем —
+	// вместо него HttpOnly (ключ не виден скриптам страницы) и SameSite.
+	http.SetCookie(w, &http.Cookie{ //nolint:gosec // локальная сеть, только HTTP
+		Name:     collab.HostCookieName(room.ID),
+		Value:    room.HostToken,
+		Path:     "/",
+		MaxAge:   int((12 * time.Hour).Seconds()),
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+	})
 }
 
 // renderReceive отдаёт страницу приёмки; ошибка исполнения уже не чинится (часть

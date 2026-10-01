@@ -39,17 +39,17 @@ func NewStore(now func() time.Time) *Store {
 // Open отдаёт открытую комнату по (kind, ref), а если её нет — создаёт новую.
 // Идемпотентно: возврат хоста на страницу (F5, «Продолжить хостить») не плодит
 // комнаты; для одного поставщика открытая комната всегда одна.
-func (s *Store) Open(kind Kind, ref, title string) (Session, error) {
+func (s *Store) Open(kind Kind, ref, title string) (Session, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if existing, ok := s.findLocked(kind, ref); ok {
-		return existing.Clone(), nil
+		return existing.Clone(), false, nil
 	}
 
 	id, err := newID()
 	if err != nil {
-		return Session{}, err
+		return Session{}, false, err
 	}
 
 	// 8 знаков — 4 млрд вариантов, но занятый id молча перезаписал бы чужую
@@ -60,8 +60,13 @@ func (s *Store) Open(kind Kind, ref, title string) (Session, error) {
 		}
 
 		if id, err = newID(); err != nil {
-			return Session{}, err
+			return Session{}, false, err
 		}
+	}
+
+	token, err := newToken()
+	if err != nil {
+		return Session{}, false, err
 	}
 
 	session := &Session{
@@ -69,11 +74,12 @@ func (s *Store) Open(kind Kind, ref, title string) (Session, error) {
 		Kind:      kind,
 		Ref:       ref,
 		Title:     title,
+		HostToken: token,
 		CreatedAt: s.now(),
 	}
 	s.sessions[id] = session
 
-	return session.Clone(), nil
+	return session.Clone(), true, nil
 }
 
 // Get возвращает комнату по идентификатору (копию).
@@ -489,6 +495,17 @@ func touchLocked(session *Session, guestID string, now time.Time) {
 // (в т.ч. когда гостей нет, а хост работает). Под mu.
 func activeLocked(session *Session, now time.Time) {
 	session.ActiveAt = now
+}
+
+// newToken — ключ хозяина комнаты: 16 шестнадцатеричных знаков. Подделать его
+// сложнее, чем угадать идентификатор комнаты.
+func newToken() (string, error) {
+	buf := make([]byte, 8)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+
+	return hex.EncodeToString(buf), nil
 }
 
 // newID — идентификатор комнаты: 8 шестнадцатеричных знаков. Это не «код для

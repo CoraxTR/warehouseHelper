@@ -30,15 +30,15 @@ func raw(v string) json.RawMessage {
 func TestOpenValidates(t *testing.T) {
 	uc, _ := newUC(t)
 
-	if _, err := uc.Open(collab.Kind("inventory"), "doc-1", "Инвентаризация"); !errors.Is(err, collab.ErrKind) {
+	if _, _, err := uc.Open(collab.Kind("inventory"), "doc-1", "Инвентаризация"); !errors.Is(err, collab.ErrKind) {
 		t.Errorf("неизвестный вид: %v, ожидалась ErrKind", err)
 	}
 
-	if _, err := uc.Open(collab.KindReceive, "   ", "Поставщик"); !errors.Is(err, ErrNeedRef) {
+	if _, _, err := uc.Open(collab.KindReceive, "   ", "Поставщик"); !errors.Is(err, ErrNeedRef) {
 		t.Errorf("пустая работа: %v, ожидалась ErrNeedRef", err)
 	}
 
-	session, err := uc.Open(collab.KindReceive, "sup-1", "  Поставщик Ромашка  ")
+	session, _, err := uc.Open(collab.KindReceive, "sup-1", "  Поставщик Ромашка  ")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -68,12 +68,12 @@ func TestTTLDefault(t *testing.T) {
 func TestListPurgesStale(t *testing.T) {
 	uc, advance := newUC(t)
 
-	live, err := uc.Open(collab.KindReceive, "sup-1", "Ромашка")
+	live, _, err := uc.Open(collab.KindReceive, "sup-1", "Ромашка")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 
-	old, err := uc.Open(collab.KindReceive, "sup-2", "Лютик")
+	old, _, err := uc.Open(collab.KindReceive, "sup-2", "Лютик")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -106,7 +106,7 @@ func TestListPurgesStale(t *testing.T) {
 func TestFlow(t *testing.T) {
 	uc, _ := newUC(t)
 
-	room, err := uc.Open(collab.KindReceive, "sup-1", "Ромашка")
+	room, _, err := uc.Open(collab.KindReceive, "sup-1", "Ромашка")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
@@ -147,7 +147,7 @@ func TestFlow(t *testing.T) {
 func TestFlowNewChunkDropAndClose(t *testing.T) {
 	uc, _ := newUC(t)
 
-	room, err := uc.Open(collab.KindReceive, "sup-1", "Ромашка")
+	room, _, err := uc.Open(collab.KindReceive, "sup-1", "Ромашка")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}

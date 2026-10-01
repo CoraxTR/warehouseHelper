@@ -28,7 +28,7 @@ func scan(raw string) json.RawMessage {
 func mustOpen(t *testing.T, s *Store, ref string) Session {
 	t.Helper()
 
-	session, err := s.Open(KindReceive, ref, "Поставщик "+ref)
+	session, _, err := s.Open(KindReceive, ref, "Поставщик "+ref)
 	if err != nil {
 		t.Fatalf("Open(%q): %v", ref, err)
 	}
@@ -81,6 +81,7 @@ func TestOpenIdempotent(t *testing.T) {
 	}
 
 	reopened := mustOpen(t, s, "sup-1")
+
 	if reopened.ID == first.ID {
 		t.Errorf("после закрытия комната не переоткрылась: %q", reopened.ID)
 	}
@@ -703,5 +704,50 @@ func TestSubmitIsIdempotent(t *testing.T) {
 
 	if next.Guests[0].Chunks != 3 || next.Guests[0].Rows != 5 {
 		t.Errorf("заходы/строки = %d/%d, ожидалось 3/5", next.Guests[0].Chunks, next.Guests[0].Rows)
+	}
+}
+
+// TestHostToken — ключ хозяина комнаты: выдаётся при создании, переживает
+// переоткрытие, чужой и пустой ключ хозяйским не считается (владелец: склад ходит
+// через VPN, поэтому роль решает ключ, а не адрес машины).
+func TestHostToken(t *testing.T) {
+	s := NewStore(newClock().now)
+
+	first, created, err := s.Open(KindReceive, "sup-1", "Поставщик")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	if !created {
+		t.Error("первое открытие должно создавать комнату")
+	}
+
+	if first.HostToken == "" {
+		t.Fatal("у новой комнаты нет ключа хозяина")
+	}
+
+	again, created, err := s.Open(KindReceive, "sup-1", "Поставщик")
+	if err != nil {
+		t.Fatalf("повторный Open: %v", err)
+	}
+
+	if created {
+		t.Error("повторное открытие не должно создавать комнату")
+	}
+
+	if again.HostToken != first.HostToken {
+		t.Errorf("ключ хозяина изменился: %q → %q", first.HostToken, again.HostToken)
+	}
+
+	if !again.HostTokenMatches(first.HostToken) {
+		t.Error("свой ключ не опознан")
+	}
+
+	if again.HostTokenMatches("чужой") || again.HostTokenMatches("") {
+		t.Error("чужой или пустой ключ опознан как хозяйский")
+	}
+
+	if got := HostCookieName(again.ID); got != "collab_host_"+again.ID {
+		t.Errorf("имя cookie комнаты = %q", got)
 	}
 }

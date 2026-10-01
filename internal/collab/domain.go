@@ -114,10 +114,16 @@ func (g Guest) IsReady() bool {
 // комната открывается идемпотентно. Title — человекочитаемое имя для списка
 // открытых работ (имя поставщика).
 type Session struct {
-	ID        string
-	Kind      Kind
-	Ref       string
-	Title     string
+	ID    string
+	Kind  Kind
+	Ref   string
+	Title string
+
+	// HostToken — ключ хозяина приёмки: приложение выдаёт его машине, открывшей
+	// приёмку, и та держит его у себя (cookie комнаты). По адресу машины хозяина
+	// не опознать — весь склад ходит через VPN (владелец, 01.10.2026), поэтому
+	// роль решает ключ. Хост не меняется: с чужим ключом страница — гость.
+	HostToken string
 	CreatedAt time.Time
 	ClosedAt  time.Time
 	GuestSeq  int
@@ -251,4 +257,16 @@ func (s Session) Clone() Session {
 // 01.10.2026: имена не вводим, склад маленький.
 func GuestName(seq int) string {
 	return fmt.Sprintf("Гость %d", seq)
+}
+
+// HostTokenMatches — пришёл ли запрос с ключом хозяина этой приёмки. Пустой ключ
+// хозяйским не считается: без ключа роль не выдаётся.
+func (s Session) HostTokenMatches(token string) bool {
+	return token != "" && s.HostToken != "" && token == s.HostToken
+}
+
+// HostCookieName — имя cookie комнаты: у каждой приёмки своё, чтобы одна машина
+// могла вести две приёмки в разных вкладках.
+func HostCookieName(roomID string) string {
+	return "collab_host_" + roomID
 }
