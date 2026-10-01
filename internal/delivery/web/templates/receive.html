@@ -81,9 +81,34 @@ html.day .date-echo.temp.bad { color: #B42318; }
                 {{end}}
             </select>
             <button type="submit">Начать приёмку</button>
+            <button type="submit" name="collab" value="1">Совместная приёмка (хост)</button>
         </form>
         <p class="hint">Перед приёмкой убедитесь, что у поставщика заведены правила вычитки и внешние коды
             (карточка поставщика → «Внешние коды»).</p>
+
+        {{if .Open}}
+        <div class="collab-open">
+            <h2>Открытые совместные приёмки</h2>
+            <p class="hint">Приёмку открыла машина-хост: она сохраняет результат целиком (включая этикетки).
+                Остальные машины подключаются гостем к этой же приёмке: свои сканы гость отправляет хосту,
+                а хост ждёт всех и только потом сохраняет.</p>
+            <table>
+                <tr><th>Поставщик</th><th>Участники</th><th>Строк от гостей</th><th>Открыта</th><th></th></tr>
+                {{range .Open}}
+                <tr>
+                    <td>{{.Title}}</td>
+                    <td>Хост{{range .Guests}}, {{.Name}} — {{if .IsReady}}готов{{else}}сканирует{{end}}{{end}}</td>
+                    <td>{{.RowsSent}}</td>
+                    <td>{{.CreatedAt.Format "15:04"}}</td>
+                    <td>
+                        <a href="/ms/receive?id={{.Ref}}&amp;collab=1">Хостить</a> |
+                        <a href="/ms/receive?c={{.ID}}">Подключиться гостем</a>
+                    </td>
+                </tr>
+                {{end}}
+            </table>
+        </div>
+        {{end}}
     </div>
 {{else}}
     <div class="toplinks">
@@ -95,6 +120,26 @@ html.day .date-echo.temp.bad { color: #B42318; }
     <div class="card wide">
         <h1>Приёмка: {{.Supplier.Name}}</h1>
         {{if .Error}}<div class="error">{{.Error}}</div>{{end}}
+
+        {{if .Room}}
+        <div class="collab-panel">
+            {{if .IsGuest}}
+            <div class="collab-line">Совместная приёмка: вы — <b id="collab-name">гость</b>. Сканы уходят на
+                машину-хост, сохраняет приёмку она. После «Сохранить приёмку» отправленные строки менять нельзя —
+                чтобы добрать, отсканируйте новый заход и отправьте ещё раз.</div>
+            <div class="collab-line collab-far" id="collab-state">Подключаюсь к приёмке…</div>
+            {{else}}
+            <div class="collab-line">Совместная приёмка: <b>вы хост</b> — результат собирается и печатается здесь.
+                Гости подключаются к этой приёмке на странице «Приёмка».</div>
+            <div id="collab-guests"></div>
+            <div class="collab-line" id="collab-wait"></div>
+            <div class="collab-line">
+                <button type="button" class="small" onclick="collabSaveWithoutGuests()">Сохранить без гостей</button>
+                <button type="button" class="small btn-remove" onclick="collabCancel()">Отменить приёмку</button>
+            </div>
+            {{end}}
+        </div>
+        {{end}}
 
         <div id="scanner" style="{{if .Error}}display:none;{{end}}">
             <div id="party-row">
@@ -127,7 +172,7 @@ html.day .date-echo.temp.bad { color: #B42318; }
                 <span class="hint">Новая партия сразу становится активной: свои даты и свой список строк.</span>
             </div>
 
-            <button id="save-btn" onclick="saveReceive()">Сохранить приёмку</button>
+            <button id="save-btn" onclick="saveReceive()"{{if .Room}}{{if not .IsGuest}} disabled{{end}}{{end}}>Сохранить приёмку</button>
         </div>
 
         <div id="report"></div>
@@ -143,6 +188,19 @@ html.day .date-echo.temp.bad { color: #B42318; }
         var lastUnits = [];       // принятые куски из ответа Save — для этикеток
         var lastBoxes = [];       // принятые коробки из ответа Save — для наклеек коробок
         var partySeq = 0;         // нумерация партий
+        // Совместная приёмка (комната на сервере): хост открыл приёмку, гости
+        // шлют свои чанки. GUEST_ID — карточка машины-гостя в комнате, живёт в
+        // localStorage, поэтому F5 не создаёт нового гостя.
+        var ROOM_ID = {{if .Room}}'{{.Room.ID}}'{{else}}''{{end}};
+        var ROOM_GUEST = {{if .IsGuest}}true{{else}}false{{end}};
+        var GUEST_ID = '';        // id нашей карточки гостя в комнате
+        var GUEST_READY = false;  // последний чанк отправлен, новых строк нет
+        var ROOM_CLOSED = false;  // хост сохранил приёмку — сканировать больше нечего
+        var sentRows = 0;         // сколько строк всего ушло хосту
+        var collabTimer = null;   // опрос состояния комнаты
+        var collabLastRoom = null; // последнее состояние комнаты (для «Сохранить без гостей»)
+        var SENDING = false;      // запрос сохранения/отправки уже в пути — кнопка закрыта
+        var CHUNK_ID = '';        // номер текущего захода гостя (узнавание повтора на сервере)
 
         var scanInput = document.getElementById('scan-input');
         var scansBox = document.getElementById('scans');
@@ -1524,8 +1582,380 @@ html.day .date-echo.temp.bad { color: #B42318; }
             return out;
         }
 
-        function saveReceive() {
-            var supplierId = '{{.Supplier.ID}}';
+        // ===== Совместная приёмка =====
+        // Комната живёт на сервере: хост открыл приёмку, гости подключились к
+        // ней и шлют свои чанки строк. Состояние читаем коротким опросом раз в
+        // 2 с, а не вебсокетом: Wi-Fi на складе рвётся, опрос сам заживает.
+
+        function collabKey() { return 'wh_collab_guest_' + ROOM_ID; }
+
+        // collabStoredGuest — наша карточка гостя из прошлого захода: по ней F5
+        // не создаёт в комнате нового гостя. localStorage может быть запрещён —
+        // тогда работаем как в первом заходе.
+        function collabStoredGuest() {
+            try { return window.localStorage.getItem(collabKey()) || ''; } catch (e) { return ''; }
+        }
+
+        function collabRememberGuest(gid) {
+            try { window.localStorage.setItem(collabKey(), gid); } catch (e) {}
+        }
+
+        // collabForgetGuest — забыть карточку гостя: хост отключил машину, старая
+        // карточка в комнате мертва.
+        function collabForgetGuest() {
+            try { window.localStorage.removeItem(collabKey()); } catch (e) {}
+        }
+
+        function collabPost(url, body, onOk, onFail) {
+            var xhr = new XMLHttpRequest();
+            xhr.open('POST', url, true);
+            xhr.setRequestHeader('Content-Type', 'application/json');
+            // Сеть на складе рвётся: без срока ожидания кнопка осталась бы
+            // «Отправляю…» навсегда. По таймауту считаем, что не доехало, и
+            // разрешаем повторить; повтор захода сервер узнаёт по chunk_id.
+            xhr.timeout = 15000;
+            xhr.ontimeout = function () {
+                if (onFail) { onFail(0, 'сервер не ответил за 15 секунд'); }
+            };
+            xhr.onreadystatechange = function () {
+                if (xhr.readyState !== 4) { return; }
+                if (xhr.status === 200) {
+                    var resp = null;
+                    try { resp = JSON.parse(xhr.responseText); } catch (e) { resp = null; }
+                    if (onOk) { onOk(resp); }
+                    return;
+                }
+                if (onFail) { onFail(xhr.status, xhr.responseText); }
+            };
+            xhr.send(JSON.stringify(body));
+        }
+
+        // collabNewChunkID — номер захода: одинаковый у повторов одного и того же
+        // захода, новый после успешной отправки. Формат роли не играет — важна
+        // уникальность в пределах комнаты.
+        function collabNewChunkID() {
+            return 'c' + (new Date().getTime()) + '-' + Math.floor(Math.random() * 1000000);
+        }
+
+        // collabSendGuard закрывает кнопку «Сохранить приёмку» на время запроса:
+        // второй клик не уйдёт, пока не пришёл ответ — «доехало» (кнопка вернётся
+        // под следующий заход) или проблема с сетью (кнопка вернётся для повтора).
+        function collabSendGuard(on) {
+            SENDING = on;
+
+            var btn = document.getElementById('save-btn');
+            if (btn) {
+                btn.disabled = on || ROOM_CLOSED;
+                btn.textContent = on ? 'Отправляю…' : 'Сохранить приёмку';
+            }
+
+            // У хоста ворота — неготовые гости: после запроса возвращаем их сами.
+            if (!on && !ROOM_GUEST && !ROOM_CLOSED && collabLastRoom) {
+                collabWait(collabLastRoom);
+            }
+        }
+
+        // collabJoin — подключение к комнате: знакомый id гостя сохраняет
+        // отправленное, новый — заводит карточку «Гость N».
+        function collabJoin() {
+            collabPost('/ms/collab/join', {id: ROOM_ID, guest_id: collabStoredGuest()}, function (resp) {
+                if (!resp || !resp.guest_id) {
+                    collabGuestState('Не удалось подключиться к приёмке', false);
+                    return;
+                }
+                GUEST_ID = resp.guest_id;
+                collabRememberGuest(GUEST_ID);
+                collabRender(resp.session);
+            }, function (status, text) {
+                collabGuestState(status === 404
+                    ? 'Приёмка уже сохранена или закрыта'
+                    : 'Ошибка подключения: ' + text, false);
+            });
+        }
+
+        // collabPoll — опрос состояния комнаты (обе роли). Запрос гостя для
+        // сервера ещё и отклик: по нему хост видит, у кого оборвалась связь.
+        function collabPoll() {
+            if (ROOM_CLOSED) { return; }
+            if (ROOM_GUEST && !GUEST_ID) { return; }
+            var url = '/ms/collab/state?id=' + encodeURIComponent(ROOM_ID);
+            if (ROOM_GUEST) { url += '&guest_id=' + encodeURIComponent(GUEST_ID); }
+            var xhr = new XMLHttpRequest();
+            xhr.open('GET', url, true);
+            xhr.onreadystatechange = function () {
+                if (xhr.readyState !== 4) { return; }
+                if (xhr.status === 404) {
+                    // Комнаты нет: у гостя это отключение хостом, у хоста — отменённая
+                    // или снесённая перезапуском приёмка.
+                    if (ROOM_GUEST) { collabKicked('Хост отключил вашу машину от приёмки'); }
+                    else { collabClosed('Совместная приёмка закрыта'); }
+                    return;
+                }
+                if (xhr.status !== 200) { return; }
+                var resp;
+                try { resp = JSON.parse(xhr.responseText); } catch (e) { return; }
+                collabRender(resp.session);
+            };
+            xhr.send();
+        }
+
+        // collabRender показывает состояние комнаты: хосту — участники и
+        // готовность (по ней заблокирована кнопка сохранения), гостю — своя
+        // карточка и сколько строк уже ушло.
+        function collabRender(room) {
+            if (!room) { return; }
+            if (room.closed) { collabClosed('Приёмка сохранена'); return; }
+
+            collabLastRoom = room;
+
+            if (ROOM_GUEST) {
+                var mine = collabFind(room, GUEST_ID);
+                if (!mine) {
+                    // Хост отключил нашу машину: сами не возвращаемся — иначе
+                    // отключение снималось бы следующим же опросом.
+                    collabKicked('Хост отключил вашу машину от приёмки');
+                    return;
+                }
+                GUEST_READY = !!mine.ready;
+                var nameEl = document.getElementById('collab-name');
+                if (nameEl) { nameEl.textContent = mine.name; }
+                collabGuestState(collabGuestText(mine), true);
+                return;
+            }
+
+            collabGuests(room);
+            collabWait(room);
+        }
+
+        function collabFind(room, gid) {
+            var list = room.guests || [], i;
+            for (i = 0; i < list.length; i++) {
+                if (list[i].id === gid) { return list[i]; }
+            }
+            return null;
+        }
+
+        function collabGuestText(g) {
+            var text = g.ready ? 'Отправлено хосту' : 'Сканы ещё не отправлены';
+            text += ', строк: ' + g.rows;
+            if (g.chunks > 1) { text += ' (' + g.chunks + ' захода)'; }
+            text += '. Кнопка «Сохранить приёмку» отправляет новый заход.';
+            return text;
+        }
+
+        // collabLine собирает строку панели: текст только через textContent,
+        // имена участников в разметку не подставляем.
+        function collabLine(text, cls) {
+            var el = document.createElement('div');
+            el.className = cls ? 'collab-line ' + cls : 'collab-line';
+            el.textContent = text;
+            return el;
+        }
+
+        function collabGuests(room) {
+            var box = document.getElementById('collab-guests');
+            if (!box) { return; }
+            while (box.firstChild) { box.removeChild(box.firstChild); }
+            var list = room.guests || [], i;
+            if (!list.length) {
+                box.appendChild(collabLine('Гостей нет — приёмку можно сохранять одному.', 'collab-far'));
+                return;
+            }
+            box.appendChild(collabLine('Подключены:'));
+            for (i = 0; i < list.length; i++) {
+                box.appendChild(collabGuestRow(list[i]));
+            }
+        }
+
+        function collabGuestRow(g) {
+            var row = document.createElement('div');
+            row.className = 'collab-line collab-guest';
+            var span = document.createElement('span');
+            span.className = g.ready ? 'collab-ok' : 'collab-wait';
+            span.textContent = g.name + ' — ' + (g.ready ? 'готов' : 'сканирует') +
+                (g.rows ? ', строк: ' + g.rows : '') +
+                (g.idle_sec > 0 ? ', молчит ' + g.idle_sec + ' с' : '');
+            row.appendChild(span);
+            var btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'small btn-remove';
+            btn.textContent = 'Отключить';
+            btn.onclick = function () { collabDrop(g.id); };
+            row.appendChild(btn);
+            return row;
+        }
+
+        // collabWait — гейт кнопки сохранения на хосте: ждём всех подключённых
+        // гостей. Отключённый гость (обрыв) из ожидания выпадает — за это
+        // отвечает кнопка «Отключить».
+        function collabWait(room) {
+            var wait = room.waiting || [];
+            var hint = document.getElementById('collab-wait');
+            if (hint) {
+                if (wait.length) {
+                    hint.className = 'collab-line collab-wait';
+                    hint.textContent = 'Ждём: ' + wait.join(', ') +
+                        ' — кнопка сохранения откроется, когда все пришлют сканы.';
+                } else {
+                    hint.className = 'collab-line collab-ok';
+                    hint.textContent = 'Гости готовы — можно сохранять.';
+                }
+            }
+            var btn = document.getElementById('save-btn');
+            if (btn) { btn.disabled = wait.length > 0; }
+        }
+
+        function collabGuestState(text, ok) {
+            var el = document.getElementById('collab-state');
+            if (el) {
+                el.className = ok ? 'collab-line collab-ok' : 'collab-line collab-wait';
+                el.textContent = text;
+            }
+            statusLine.textContent = text;
+        }
+
+        // collabClosed — приёмка сохранена хостом (или закрыта): сканировать
+        // больше нечего, опрос прекращаем.
+        function collabClosed(text) {
+            ROOM_CLOSED = true;
+            if (collabTimer) { window.clearInterval(collabTimer); collabTimer = null; }
+            collabGuestState(text, true);
+            var btn = document.getElementById('save-btn');
+            if (btn) { btn.disabled = true; }
+            scanInput.disabled = true;
+            scanInput.placeholder = 'Приёмка сохранена хостом';
+        }
+
+        // collabDrop — хост отключает гостя с оборвавшейся связью: его строки в
+        // сохранение не пойдут, из ожидания он выпадает.
+        function collabDrop(gid) {
+            if (!window.confirm('Отключить гостя от приёмки? Его присланные строки НЕ сохранятся.')) { return; }
+            collabPost('/ms/collab/drop', {id: ROOM_ID, guest_id: gid}, function (resp) {
+                collabRender(resp.session);
+            }, function (status, text) {
+                alert('Не удалось отключить: ' + text);
+            });
+        }
+
+        // collabSubmit — гость отправляет заход хосту. Отправленное замирает:
+        // строки очищаем и начинаем новый заход.
+        function collabSubmit(scans) {
+            if (SENDING) { return; }   // второй клик, пока запрос в пути, не отправляем
+            if (!CHUNK_ID) { CHUNK_ID = collabNewChunkID(); }
+            collabSendGuard(true);
+            statusLine.textContent = 'Отправляю сканы хосту…';
+            collabPost('/ms/collab/submit', {id: ROOM_ID, guest_id: GUEST_ID, chunk_id: CHUNK_ID, scans: scans}, function (resp) {
+                collabSendGuard(false);
+                // Заход ушёл — следующий получит новый номер (повтор стал бы
+                // неотличим от уже принятого).
+                CHUNK_ID = '';
+                var mine = (resp && resp.session) ? collabFind(resp.session, GUEST_ID) : null;
+                GUEST_READY = true;
+                sentRows = mine ? mine.rows : sentRows + scans.length;
+                collabClear();
+                collabGuestState('Отправлено хосту, всего строк: ' + sentRows +
+                    '. Можно сканировать следующий заход.', true);
+            }, function (status, text) {
+                // Не доехало: строки на странице остаются, кнопка снова доступна —
+                // повтор уйдёт с тем же номером захода, и сервер его не задвоит.
+                collabSendGuard(false);
+                GUEST_READY = false;
+                // 404 — хост отключил машину: строки не уходят и обратно мы не
+                // заходим (отключение должно держаться), они остаются на странице.
+                if (status === 404) {
+                    collabKicked('Хост отключил вашу машину от приёмки — строки не сохранены');
+                    return;
+                }
+                alert('Не удалось отправить сканы хосту:\n' + text);
+                statusLine.textContent = 'Сканы не отправлены — нажмите «Сохранить приёмку» ещё раз';
+            });
+        }
+
+        // collabKicked — машина отключена хостом (или комнаты уже нет): опрос
+        // останавливаем, кнопку и сканер гасим. Возврат — только вручную (F5), и
+        // это будет новый гость: иначе отключение снималось бы само.
+        function collabKicked(text) {
+            ROOM_CLOSED = true;
+            if (collabTimer) { window.clearInterval(collabTimer); collabTimer = null; }
+            collabForgetGuest();
+            GUEST_ID = '';
+            var el = document.getElementById('collab-state');
+            if (el) { el.className = 'collab-line collab-wait'; el.textContent = text; }
+            var btn = document.getElementById('save-btn');
+            if (btn) { btn.disabled = true; }
+            if (scanInput) { scanInput.disabled = true; }
+            statusLine.textContent = text;
+        }
+
+        // collabSaveWithoutGuests — «Сохранить без гостей»: хост отключает всех
+        // подключённых и сохраняет только свои строки. Выход для случая, когда
+        // строка гостя не резолвится и приёмку иначе не закрыть.
+        function collabSaveWithoutGuests() {
+            var list = (collabLastRoom && collabLastRoom.guests) ? collabLastRoom.guests.slice() : [];
+            if (!list.length) { saveReceive(); return; }
+            if (!window.confirm('Отключить всех гостей (' + list.length + ') и сохранить только ваши строки?')) { return; }
+            collabDropAll(list, 0, function () { saveReceive(); });
+        }
+
+        // collabDropAll отключает гостей по одному: роут отключает одну машину.
+        function collabDropAll(list, i, done) {
+            if (i >= list.length) { done(); return; }
+            collabPost('/ms/collab/drop', {id: ROOM_ID, guest_id: list[i].id}, function () {
+                collabDropAll(list, i + 1, done);
+            }, function (status, text) {
+                alert('Не удалось отключить гостя: ' + text);
+            });
+        }
+
+        // collabCancel — хост отменяет совместную приёмку: комната закрывается без
+        // сохранения, строки гостей пропадают. Свои строки хост сохранить может.
+        function collabCancel() {
+            if (!window.confirm('Отменить совместную приёмку? Строки гостей не сохранятся, комната закроется.')) { return; }
+            collabPost('/ms/collab/close', {id: ROOM_ID}, function () {
+                ROOM_CLOSED = true;
+                if (collabTimer) { window.clearInterval(collabTimer); collabTimer = null; }
+                var hint = document.getElementById('collab-wait');
+                if (hint) {
+                    hint.className = 'collab-line collab-wait';
+                    hint.textContent = 'Совместная приёмка отменена — строки гостей не сохранены.';
+                }
+                var box = document.getElementById('collab-guests');
+                if (box) { while (box.firstChild) { box.removeChild(box.firstChild); } }
+                statusLine.textContent = 'Совместная приёмка отменена: сохранить можно и одному';
+            }, function (status, text) {
+                alert('Не удалось отменить приёмку: ' + text);
+            });
+        }
+
+        // collabScanning — гость начал новый заход: хост снова его ждёт (иначе
+        // кнопка сохранения на хосте осталась бы открытой).
+        function collabScanning() {
+            GUEST_READY = false;
+            collabPost('/ms/collab/scanning', {id: ROOM_ID, guest_id: GUEST_ID}, null, null);
+        }
+
+        // collabClear — чистый лист после отправки захода: отправленное ушло,
+        // править его нельзя, а хост видит строки у себя.
+        function collabClear() {
+            items = [];
+            activeParty = null;
+            openBoxRef = null;
+            boxMode = false;
+            partySeq = 0;
+            addParty();
+            render();
+        }
+
+        // collabStart — подключение страницы к комнате при загрузке.
+        function collabStart() {
+            if (!ROOM_ID) { return; }
+            if (ROOM_GUEST) { collabJoin(); } else { collabPoll(); }
+            collabTimer = window.setInterval(collabPoll, 2000);
+        }
+
+        // collectAll собирает строки для сохранения и список проблем: один путь
+        // проверок для хоста и гостя — гость отправляет то же самое хосту.
+        function collectAll() {
             var scans = [];
             var i, j;
             var problems = [];
@@ -1615,27 +2045,73 @@ html.day .date-echo.temp.bad { color: #B42318; }
 
             }
 
-            if (problems.length) {
-                alert('Нужно исправить:\n- ' + problems.join('\n- '));
+            return {scans: scans, problems: problems};
+        }
+
+        function saveReceive() {
+            var c = collectAll();
+
+            if (c.problems.length) {
+                alert('Нужно исправить:\n- ' + c.problems.join('\n- '));
                 return;
             }
-            if (!scans.length) { alert('Нет принятых единиц'); return; }
+            if (!c.scans.length) { alert('Нет принятых единиц'); return; }
 
-            var payload = JSON.stringify({supplier_id: supplierId, scans: scans});
+            // Гость сам ничего не сохраняет: его заход уходит хосту и ждёт
+            // сохранения на машине-хосте.
+            if (ROOM_GUEST) { collabSubmit(c.scans); return; }
+
+            hostSave(c.scans);
+        }
+
+        // hostSave — сохранение приёмки на сервере. В совместной приёмке к
+        // хостовым строкам сервер дописывает строки гостей (session_id); гейт
+        // «все готовы» дублируется на сервере, чтобы устаревшая страница не
+        // закрыла приёмку без чужих сканов.
+        function hostSave(scans) {
+            if (SENDING) { return; }   // второй клик, пока запрос в пути, не сохраняем повторно
+            collabSendGuard(true);
+            var payload = JSON.stringify({
+                supplier_id: '{{.Supplier.ID}}',
+                scans: scans,
+                session_id: ROOM_ID
+            });
             var xhr = new XMLHttpRequest();
             xhr.open('POST', '/ms/receive/save', true);
             xhr.setRequestHeader('Content-Type', 'application/json');
+            xhr.timeout = 15000;
+            xhr.ontimeout = function () {
+                collabSendGuard(false);
+                alert('Сервер не ответил за 15 секунд.\nПриёмка могла не сохраниться — нажмите «Сохранить приёмку» ещё раз.');
+            };
             xhr.onreadystatechange = function () {
                 if (xhr.readyState !== 4) { return; }
                 if (xhr.status === 200) {
+                    collabSendGuard(false);
                     var resp;
-                    try { resp = JSON.parse(xhr.responseText); } catch (e) { return; }
+                    try { resp = JSON.parse(xhr.responseText); } catch (e) {
+                        alert('Приёмка сохранена, но ответ сервера не разобран — обновите страницу (F5).');
+                        return;
+                    }
+                    if (ROOM_ID) { collabClosed('Приёмка сохранена'); }
                     showReport(resp);
-                } else {
-                    alert('Ошибка сохранения:\n' + xhr.responseText);
+                    return;
                 }
+                collabSendGuard(false);
+                alert('Ошибка сохранения:\n' + xhr.responseText + rejectHint());
+                // 409 — не все гости готовы: страница устарела, перечитываем
+                // состав комнаты и показываем, кого ждём.
+                if (ROOM_ID) { collabPoll(); }
             };
             xhr.send(payload);
+        }
+
+        // rejectHint — что делать хосту, если приёмка не сходится (чаще всего виновата
+        // строка гостя, которую не удалось распознать).
+        function rejectHint() {
+            if (!ROOM_ID) { return ''; }
+            return '\n\nЕсли не сходится строка гостя — попросите пересканировать её ' +
+                'или нажмите «Сохранить без гостей».';
         }
 
         function showReport(resp) {
@@ -1779,7 +2255,12 @@ html.day .date-echo.temp.bad { color: #B42318; }
                 e.preventDefault();
                 var raw = scanInput.value.trim();
                 scanInput.value = '';
-                if (raw) { handleScan(raw); }
+                if (raw) {
+                    // Гость после отправки захода начинает новый: хост снова его
+                    // ждёт (иначе кнопка сохранения на хосте осталась бы открытой).
+                    if (ROOM_GUEST && GUEST_READY) { collabScanning(); }
+                    handleScan(raw);
+                }
             }
         });
 
@@ -1884,6 +2365,7 @@ html.day .date-echo.temp.bad { color: #B42318; }
         }
 
         render();
+        collabStart();
     </script>
 {{end}}
 </body>

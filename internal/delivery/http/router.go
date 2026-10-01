@@ -123,6 +123,15 @@ func NewRouter(h *Handler) *http.ServeMux {
 	mux.HandleFunc("GET /ms/receive/break-label", h.ReceiveBreakLabel)      // наклейка спец-кода 666 (xlsx)
 	mux.HandleFunc("GET /ms/receive/open-box-label", h.ReceiveOpenBoxLabel) // наклейка спец-кода 555 (xlsx)
 
+	// Совместная приёмка: комната, в которой одну приёмку собирают с нескольких
+	// машин — хост (открывает работу) и гости (сканируют у себя).
+	mux.HandleFunc("GET /ms/collab/state", h.CollabState)        // состояние комнаты (опрос обеих страниц)
+	mux.HandleFunc("POST /ms/collab/join", h.CollabJoin)         // подключить машину-гостя
+	mux.HandleFunc("POST /ms/collab/submit", h.CollabSubmit)     // гость прислал чанк сканов
+	mux.HandleFunc("POST /ms/collab/scanning", h.CollabScanning) // гость начал новый чанк (хост снова ждёт)
+	mux.HandleFunc("POST /ms/collab/drop", h.CollabDrop)         // хост отключил гостя (обрыв связи)
+	mux.HandleFunc("POST /ms/collab/close", h.CollabClose)       // хост закрыл комнату без сохранения
+
 	// Модуль «Сроки» (остатки по срокам годности).
 	mux.HandleFunc("GET /ms/dates", h.StockDatesPage)               // страница «Сроки»
 	mux.HandleFunc("GET /ms/dates/short", h.StockShortPage)         // страница «Шорт-лист»

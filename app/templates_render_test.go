@@ -8,6 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"warehouseHelper/internal/collab"
 )
 
 // TestTemplatesRender — страховка от «белого экрана».
@@ -27,6 +30,8 @@ func TestTemplatesRender(t *testing.T) {
 	const dir = "../internal/delivery/web/templates"
 
 	supplier := map[string]any{"ID": "1", "Name": "ООО Тест"}
+	room := collabRoom()
+
 	cases := []struct {
 		name string
 		file string
@@ -47,6 +52,30 @@ func TestTemplatesRender(t *testing.T) {
 			file: "receive.html",
 			data: map[string]any{"Supplier": nil, "Suppliers": []any{}, "Error": "поставщик не найден"},
 		},
+		{
+			name: "приёмка: открытые совместные приёмки",
+			file: "receive.html",
+			data: map[string]any{
+				"Supplier": nil, "Suppliers": []any{supplier}, "Error": "",
+				"Open": []collab.Session{collabRoom()},
+			},
+		},
+		{
+			name: "приёмка: хост совместной приёмки",
+			file: "receive.html",
+			data: map[string]any{
+				"Supplier": supplier, "Suppliers": []any{}, "Error": "",
+				"Room": &room, "IsGuest": false,
+			},
+		},
+		{
+			name: "приёмка: гость совместной приёмки",
+			file: "receive.html",
+			data: map[string]any{
+				"Supplier": supplier, "Suppliers": []any{}, "Error": "",
+				"Room": &room, "IsGuest": true,
+			},
+		},
 	}
 
 	for _, c := range cases {
@@ -63,6 +92,23 @@ func TestTemplatesRender(t *testing.T) {
 				t.Fatalf("%s: подозрительно короткий результат — %d байт (пустой экран?)", c.file, buf.Len())
 			}
 		})
+	}
+}
+
+// collabRoom — комната совместной приёмки для проверки страницы: два гостя,
+// первый заход отправил, второй ещё сканирует.
+func collabRoom() collab.Session {
+	return collab.Session{
+		ID:        "room1",
+		Kind:      collab.KindReceive,
+		Ref:       "1",
+		Title:     "ООО Тест",
+		CreatedAt: time.Date(2026, time.October, 1, 9, 30, 0, 0, time.UTC),
+		GuestSeq:  2,
+		Guests: []collab.Guest{
+			{ID: "g1", Name: "Гость 1", Status: collab.GuestReady, Chunks: 1, Rows: 12},
+			{ID: "g2", Name: "Гость 2", Status: collab.GuestScanning},
+		},
 	}
 }
 
