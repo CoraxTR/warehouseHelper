@@ -204,6 +204,8 @@ html.day .date-echo.temp.bad { color: #B42318; }
         var collabLastRoom = null; // последнее состояние комнаты (для «Сохранить без гостей»)
         var SENDING = false;      // запрос сохранения/отправки уже в пути — кнопка закрыта
         var CHUNK_ID = '';        // номер текущего захода гостя (узнавание повтора на сервере)
+        var rowSeq = 0;           // счётчик номеров строк этой машины (номер — метка «отправлено»)
+        var roomLastSeq = 0;      // до какого номера строки хозяин уже принял (из состояния комнаты)
 
         var scanInput = document.getElementById('scan-input');
         var scansBox = document.getElementById('scans');
@@ -1582,6 +1584,16 @@ html.day .date-echo.temp.bad { color: #B42318; }
             var bb = m.best_before || (party && party.bb) || '';
             if (pd) { out.manual_produced_on = pd; }
             if (bb) { out.manual_best_before = bb; }
+
+            // Номер строки: присваивается при первой отправке и остаётся у строки.
+            // По нему повтор после обрыва понимает, что хозяин уже принял
+            // (roomLastSeq), и не отправляет это второй раз.
+            if (!it.seq) {
+                if (rowSeq < roomLastSeq) { rowSeq = roomLastSeq; }
+                rowSeq = rowSeq + 1;
+                it.seq = rowSeq;
+            }
+            out.seq = it.seq;
             return out;
         }
 
@@ -1720,6 +1732,9 @@ html.day .date-echo.temp.bad { color: #B42318; }
                     return;
                 }
                 GUEST_READY = !!mine.ready;
+                // Что хозяин уже принял от нас: по этому номеру решаем, что
+                // отправлять после обрыва (номер переживает перезагрузку страницы).
+                roomLastSeq = Math.max(roomLastSeq, mine.last_seq || 0);
                 var nameEl = document.getElementById('collab-name');
                 if (nameEl) { nameEl.textContent = mine.name; }
                 collabGuestState(collabGuestText(mine), true);
@@ -1855,6 +1870,7 @@ html.day .date-echo.temp.bad { color: #B42318; }
                 var mine = (resp && resp.session) ? collabFind(resp.session, GUEST_ID) : null;
                 GUEST_READY = true;
                 sentRows = mine ? mine.rows : sentRows + scans.length;
+                if (mine) { roomLastSeq = Math.max(roomLastSeq, mine.last_seq || 0); }
                 collabClear();
                 collabGuestState('Отправлено хосту, всего строк: ' + sentRows +
                     '. Можно сканировать следующий заход.', true);
@@ -2062,9 +2078,32 @@ html.day .date-echo.temp.bad { color: #B42318; }
 
             // Гость сам ничего не сохраняет: его заход уходит хосту и ждёт
             // сохранения на машине-хосте.
-            if (ROOM_GUEST) { collabSubmit(c.scans); return; }
+            if (ROOM_GUEST) {
+                // После обрыва отправляем только то, чего у хозяина ещё нет:
+                // строки с номером не больше принятого уже у него.
+                var fresh = collabFreshScans(c.scans);
+                if (!fresh.length) {
+                    collabClear();
+                    collabGuestState('Все строки уже у хозяина — можно сканировать следующий заход', true);
+                    return;
+                }
+
+                collabSubmit(fresh);
+                return;
+            }
 
             hostSave(c.scans);
+        }
+
+        // collabFreshScans отбирает строки, которых у хозяина ещё нет. Номер строки
+        // присвоен при отправке (collectItem), а roomLastSeq — то, что хозяин уже
+        // принял: повтор после обрыва не задваивает ранее ушедшее и ничего не теряет.
+        function collabFreshScans(scans) {
+            var out = [], i;
+            for (i = 0; i < scans.length; i++) {
+                if (!scans[i].seq || scans[i].seq > roomLastSeq) { out.push(scans[i]); }
+            }
+            return out;
         }
 
         // hostSave — сохранение приёмки на сервере. В совместной приёмке к

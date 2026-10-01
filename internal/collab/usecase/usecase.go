@@ -152,6 +152,20 @@ func (uc *UseCase) Close(id string) (collab.Session, error) {
 	return session, nil
 }
 
+// Cancel закрывает комнату отменой: совместная приёмка снята, но свои строки
+// хозяин сохранить ещё может — поэтому причина закрытия отличается от сохранения.
+func (uc *UseCase) Cancel(id string) (collab.Session, error) {
+	session, err := uc.store.Cancel(id)
+	if err != nil {
+		return collab.Session{}, err
+	}
+
+	slog.Info("collab: совместная приёмка отменена хозяином",
+		"session", session.ID, "ref", session.Ref)
+
+	return session, nil
+}
+
 // GuestScans отдаёт строки всех гостей — модуль-владелец склеивает их со своими
 // и сохраняет одним вызовом.
 func (uc *UseCase) GuestScans(id string) ([]json.RawMessage, error) {
