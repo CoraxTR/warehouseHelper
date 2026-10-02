@@ -355,23 +355,26 @@ func surplusEntry(p PairState, plans map[discounts.LotKey]discounts.LotPlan) (di
 // ok = false — значение стоит по делу либо оно не наше (ступень по сроку,
 // владельца нет) — такие не понижаем.
 func ownerExit(p PairState, plans map[discounts.LotKey]discounts.LotPlan) (discounts.DiscountWrite, bool) {
-	switch {
+	switch p.GeneralOwner {
 	// Значение поставил человек (подъём ручной ТГ на сайт): пока его ручная ТГ
 	// стоит — движок не понижает; человек снял — понижаем до расчётного (не в
 	// пустоту: место может держать ступень по сроку или избыток).
-	case p.GeneralOwner == discounts.OwnerManual:
+	case discounts.OwnerManual:
 		if p.TelegramManual != nil {
 			return discounts.DiscountWrite{}, false // скидка человека стоит
 		}
 	// Своё значение (избыток движка, эскалация ТГ-дня): держим, пока основание
-	// есть. Ступень по сроку и значение без владельца не понижаем: срок важнее
-	// избытка, а чужое/неизвестное снимать опаснее, чем оставить.
-	case p.GeneralOwner == discounts.OwnerSurplus, p.GeneralOwner == discounts.OwnerEscalation:
+	// есть.
+	case discounts.OwnerSurplus, discounts.OwnerEscalation:
 		if holdsValue(p, plans) {
 			return discounts.DiscountWrite{}, false
 		}
-	default:
+	// Ступень по сроку и значение без владельца не понижаем: срок важнее
+	// избытка, а чужое/неизвестное снимать опаснее, чем оставить.
+	case discounts.OwnerNone, discounts.OwnerExpiry:
 		return discounts.DiscountWrite{}, false
+	default:
+		return discounts.DiscountWrite{}, false // недостижимо: владельцы перечислены выше
 	}
 
 	percent, owner := basisValue(p)
@@ -427,15 +430,23 @@ func valueWrite(p PairState, percent *int16, owner discounts.Owner) discounts.Di
 	w := writeFor(p)
 	w.General = percent
 	w.GeneralOwner = owner.String()
+	w.Source = sourceMark(owner)
+	return w
+}
+
+// sourceMark — метка источника значения по его владельцу: у ступени по сроку и
+// избытка владелец и метка совпадают по имени, остальным метку не пишем (снятие,
+// значение человека, значение ТГ-дня — его метку несёт причина позиции плана).
+func sourceMark(owner discounts.Owner) string {
 	switch owner {
 	case discounts.OwnerExpiry:
-		w.Source = discounts.SourceExpiry.String()
+		return discounts.SourceExpiry.String()
 	case discounts.OwnerSurplus:
-		w.Source = discounts.SourceSurplus.String()
+		return discounts.SourceSurplus.String()
 	case discounts.OwnerNone, discounts.OwnerEscalation, discounts.OwnerManual:
-		w.Source = "" // снятие или чужое значение: метки нет
+		return ""
 	}
-	return w
+	return "" // недостижимо: все владельцы перечислены выше
 }
 
 // escalationOver — основание скидки, поставленной ТГ-днём, кончилось: избытка
