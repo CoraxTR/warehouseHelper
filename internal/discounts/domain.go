@@ -215,18 +215,26 @@ const (
 	OwnerManual                  // значение поставлено человеком (подъём ручной ТГ на сайт)
 )
 
+// ownerEscalation — значение владельца «ТГ-день». Своей метки причины у него нет
+// (метка пишется из причины позиции плана), поэтому литерал живёт здесь один раз.
+const ownerEscalation = "escalation"
+
 // String — значение колонки product_stock.discount_*_owner: пустая строка =
-// владельца нет (в БД NULL).
+// владельца нет (в БД NULL). Имена владельцев «избыток» и «срок» совпадают с
+// метками причин (Reason*): это разные вопросы об одном основании — почему скидка
+// (метка) и кто поставил стоящее значение (владелец).
 func (o Owner) String() string {
 	switch o {
+	case OwnerNone:
+		return ""
 	case OwnerSurplus:
-		return "surplus"
+		return ReasonSurplus
 	case OwnerExpiry:
-		return "expiry"
+		return ReasonExpiry
 	case OwnerEscalation:
-		return "escalation"
+		return ownerEscalation
 	case OwnerManual:
-		return "manual"
+		return ReasonManual
 	}
 	return ""
 }
@@ -236,13 +244,13 @@ func (o Owner) String() string {
 // снимает: молча трактовать чужую метку как свою опаснее, чем оставить как есть.
 func ParseOwner(s string) Owner {
 	switch s {
-	case "surplus":
+	case ReasonSurplus:
 		return OwnerSurplus
-	case "expiry":
+	case ReasonExpiry:
 		return OwnerExpiry
-	case "escalation":
+	case ownerEscalation:
 		return OwnerEscalation
-	case "manual":
+	case ReasonManual:
 		return OwnerManual
 	}
 	return OwnerNone
