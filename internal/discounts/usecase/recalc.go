@@ -355,23 +355,7 @@ func surplusEntry(p PairState, plans map[discounts.LotKey]discounts.LotPlan) (di
 // ok = false — значение стоит по делу либо оно не наше (ступень по сроку,
 // владельца нет) — такие не понижаем.
 func ownerExit(p PairState, plans map[discounts.LotKey]discounts.LotPlan) (discounts.DiscountWrite, bool) {
-	switch p.GeneralOwner {
-	// Значение поставил человек (подъём ручной ТГ на сайт): пока его ручная ТГ
-	// стоит — движок не понижает; человек снял — понижаем до расчётного (не в
-	// пустоту: место может держать ступень по сроку или избыток).
-	case discounts.OwnerManual:
-		if p.TelegramManual != nil {
-			return discounts.DiscountWrite{}, false // скидка человека стоит
-		}
-	// Своё значение (избыток движка, эскалация ТГ-дня): держим, пока основание
-	// есть.
-	case discounts.OwnerSurplus, discounts.OwnerEscalation:
-		if holdsValue(p, plans) {
-			return discounts.DiscountWrite{}, false
-		}
-	// Ступень по сроку и значение без владельца не понижаем: срок важнее
-	// избытка, а чужое/неизвестное снимать опаснее, чем оставить.
-	case discounts.OwnerNone, discounts.OwnerExpiry:
+	if !valueGone(p, plans) {
 		return discounts.DiscountWrite{}, false
 	}
 
@@ -386,6 +370,24 @@ func ownerExit(p PairState, plans map[discounts.LotKey]discounts.LotPlan) (disco
 		w.Telegram = nil
 	}
 	return w, true
+}
+
+// valueGone — основание нашего значения ушло, пора снимать: владелец «избыток» —
+// избытка в группе больше нет (раскрытие влево посчитано applySurplusGroup);
+// владелец «эскалация» (ТГ-день) — рассылка не в силе (план добора выполнен или
+// избыток ушёл) и пару не ведёт ручная ТГ; владелец «человек» — человек снял свою
+// ручную ТГ. Ступень по сроку и значение без владельца не снимаем: срок важнее
+// избытка, а чужое/неизвестное трогать опаснее, чем оставить как есть.
+func valueGone(p PairState, plans map[discounts.LotKey]discounts.LotPlan) bool {
+	switch p.GeneralOwner {
+	case discounts.OwnerManual:
+		return p.TelegramManual == nil
+	case discounts.OwnerSurplus, discounts.OwnerEscalation:
+		return !holdsValue(p, plans)
+	case discounts.OwnerNone, discounts.OwnerExpiry:
+		return false
+	}
+	return false // недостижимо: все владельцы перечислены выше
 }
 
 // holdsValue — значение стоит по делу: избыток жив (владелец «избыток») либо
