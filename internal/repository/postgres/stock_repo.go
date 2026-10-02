@@ -17,7 +17,8 @@ const stockProductColumns = `
     ps.best_before, ps.qty, ps.produced_on,
     ps.discount_general, ps.discount_telegram,
     ps.discount_general_manual, ps.discount_telegram_manual,
-    ps.discount_source`
+    ps.discount_source,
+    ps.discount_general_owner, ps.discount_telegram_owner`
 
 // Даты в SQL: сравнение DATE-колонки с параметром-временем ОБЯЗАНО идти через
 // явный каст (`best_before = $N::date`). Без каста PostgreSQL выводит для
@@ -59,12 +60,14 @@ func (pg *PGClient) LoadAllStock(ctx context.Context) ([]stock.Product, error) {
 			general, telegram             *int16
 			generalManual, telegramManual *int16
 			discountSource                *string // NULL — метки нет
+			generalOwner, telegramOwner   *string // NULL — владельца нет
 		)
 		if err := rows.Scan(
 			&pID, &internalCode, &name, &groupName, &shortList,
 			&bestBefore, &qty, &producedOn,
 			&general, &telegram, &generalManual, &telegramManual,
 			&discountSource,
+			&generalOwner, &telegramOwner,
 		); err != nil {
 			return nil, fmt.Errorf("scan stock row: %w", err)
 		}
@@ -97,6 +100,8 @@ func (pg *PGClient) LoadAllStock(ctx context.Context) ([]stock.Product, error) {
 			GeneralManual:  generalManual,
 			TelegramManual: telegramManual,
 			DiscountSource: textValue(discountSource),
+			GeneralOwner:   textValue(generalOwner),
+			TelegramOwner:  textValue(telegramOwner),
 		})
 	}
 	if err := rows.Err(); err != nil {
@@ -143,8 +148,10 @@ func (pg *PGClient) SetManualDiscount(ctx context.Context, productID string, bes
 // SetDiscounts обновляет «просто»-скидки лотов (только plain-колонки,
 // ручные не трогаются) в одной транзакции. Строки нет — stock.ErrLotNotFound
 // (весь батч откатывается).
-// Метка источника (discount_source) пишется вместе со скидками: пустая строка
-// правки = NULL (метки нет) — так движок снимает свою метку при снятии скидки.
+// Метка источника (discount_source) и владельцы значений (discount_general_owner,
+// discount_telegram_owner) пишутся вместе со скидками: пустая строка правки =
+// NULL (владельца/метки нет) — так движок снимает своё значение вместе с
+// признаком «кто его поставил».
 func (pg *PGClient) SetDiscounts(ctx context.Context, writes []stock.DiscountWrite) error {
 	if len(writes) == 0 {
 		return nil
@@ -159,9 +166,12 @@ func (pg *PGClient) SetDiscounts(ctx context.Context, writes []stock.DiscountWri
 		tag, err := tx.Exec(ctx, `
                 UPDATE product_stock
                 SET discount_general = $3, discount_telegram = $4,
-                    discount_source = NULLIF($5, '')
+                    discount_source = NULLIF($5, ''),
+                    discount_general_owner = NULLIF($6, ''),
+                    discount_telegram_owner = NULLIF($7, '')
                 WHERE product_id = $1 AND best_before = $2::date`,
 			w.ProductID, w.BestBefore, w.General, w.Telegram, w.Source,
+			w.GeneralOwner, w.TelegramOwner,
 		)
 		if err != nil {
 			return fmt.Errorf("set discounts (%s, %s): %w", w.ProductID, w.BestBefore.Format(time.DateOnly), err)

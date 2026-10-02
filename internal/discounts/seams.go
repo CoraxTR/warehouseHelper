@@ -24,6 +24,13 @@ type DiscountWrite struct {
 	General    *int16
 	Telegram   *int16
 	Source     string
+	// GeneralOwner/TelegramOwner — владельцы записанных значений (колонки
+	// product_stock.discount_general_owner / discount_telegram_owner): кто
+	// поставил значение — движок по избытку/ступени по сроку или ТГ-день.
+	// Пустая строка = владельца нет (значение снято). Расчёт снимает значение
+	// по владельцу, а не по числу, поэтому владелец едет вместе с записью.
+	GeneralOwner  string
+	TelegramOwner string
 }
 
 // DayFlag — шаг модуля, который нужно выполнить один раз за день

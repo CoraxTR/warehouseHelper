@@ -199,6 +199,70 @@ func (s Source) String() string {
 	return "none" // недостижимо: все значения Source перечислены выше
 }
 
+// Owner — владелец стоящего значения колонки пары (product_stock
+// .discount_general_owner / .discount_telegram_owner): кто поставил значение.
+// Метка Source отвечает на «почему скидка», Owner — на «кто поставил это
+// значение»; расчёт снимает значение по владельцу, а не по числу (решение
+// владельца 02.10.2026). Порядок значений роли не играет.
+type Owner int
+
+// Владельцы значения.
+const (
+	OwnerNone       Owner = iota // владельца нет: значения нет либо он не известен
+	OwnerSurplus                 // значение поставлено движком по избытку
+	OwnerExpiry                  // значение поставлено ступенью по сроку годности
+	OwnerEscalation              // значение поставлено ТГ-днём (план 14:00, подъём 16:00)
+	OwnerManual                  // значение поставлено человеком (подъём ручной ТГ на сайт)
+)
+
+// String — значение колонки product_stock.discount_*_owner: пустая строка =
+// владельца нет (в БД NULL).
+func (o Owner) String() string {
+	switch o {
+	case OwnerSurplus:
+		return "surplus"
+	case OwnerExpiry:
+		return "expiry"
+	case OwnerEscalation:
+		return "escalation"
+	case OwnerManual:
+		return "manual"
+	}
+	return ""
+}
+
+// ParseOwner — владелец из значения колонки БД (CHECK в схеме). Неизвестное
+// значение читается как OwnerNone («владелец не наш») — такое значение расчёт не
+// снимает: молча трактовать чужую метку как свою опаснее, чем оставить как есть.
+func ParseOwner(s string) Owner {
+	switch s {
+	case "surplus":
+		return OwnerSurplus
+	case "expiry":
+		return OwnerExpiry
+	case "escalation":
+		return OwnerEscalation
+	case "manual":
+		return OwnerManual
+	}
+	return OwnerNone
+}
+
+// LotPlan — контроль продаж добора по паре из истории рассылок ТГ-дня: остаток
+// пары в момент плана и план продаж по ней (initial_qty/plan_qty позиции
+// рассылки). Задан только у добора из избытка — у сроковых позиций плана нет.
+type LotPlan struct {
+	Initial int64
+	Plan    int64
+}
+
+// Done — план продаж добора выполнен: остатка осталось не больше, чем
+// планировали продать за день (контроль вечернего подъёма, решение владельца
+// 24.09.2026). По нему выходит скидка, поставленная ТГ-днём.
+func (p LotPlan) Done(qty int64) bool {
+	return qty <= p.Initial-p.Plan
+}
+
 // Candidate — один претендент на скидку пары (лот, канал) от своего источника.
 // Percent == nil — источник скидку не дал.
 type Candidate struct {
@@ -255,6 +319,14 @@ type Input struct {
 	TelegramManual *int16
 	// DiscountSource — источник действующего plain-значения general
 	// (product_stock.discount_source): "expiry" | "surplus" | "" — не задан.
-	// Нужен, чтобы понимать, что снимать при уходе избытка, и для подсветки.
+	// Нужен для подсветки и подписи строки отчёта («почему скидка»).
 	DiscountSource string
+	// GeneralOwner — владелец стоящего значения колонки сайта
+	// (product_stock.discount_general_owner): "surplus" | "expiry" |
+	// "escalation" | "" — владельца нет. Отвечает на «кто поставил значение»:
+	// снятие работает по владельцу, а не по числу (решение владельца 02.10.2026).
+	GeneralOwner string
+	// TelegramOwner — владелец стоящего значения ТГ-колонки
+	// (product_stock.discount_telegram_owner): её пишет ТГ-день → "escalation".
+	TelegramOwner string
 }

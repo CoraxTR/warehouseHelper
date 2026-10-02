@@ -492,11 +492,13 @@ func (w discountsWriter) SetDiscounts(ctx context.Context, writes []discounts.Di
 	out := make([]stock.DiscountWrite, 0, len(writes))
 	for _, wr := range writes {
 		out = append(out, stock.DiscountWrite{
-			ProductID:  wr.ProductID,
-			BestBefore: wr.BestBefore,
-			General:    wr.General,
-			Telegram:   wr.Telegram,
-			Source:     wr.Source,
+			ProductID:     wr.ProductID,
+			BestBefore:    wr.BestBefore,
+			General:       wr.General,
+			Telegram:      wr.Telegram,
+			Source:        wr.Source,
+			GeneralOwner:  wr.GeneralOwner,
+			TelegramOwner: wr.TelegramOwner,
 		})
 	}
 

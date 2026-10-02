@@ -1274,12 +1274,22 @@ func normalizeDiscountWrites(writes []stock.DiscountWrite) ([]stock.DiscountWrit
 		if err := validateDiscountSource(source); err != nil {
 			return nil, err
 		}
+		generalOwner := strings.TrimSpace(w.GeneralOwner)
+		if err := validateDiscountOwner("скидка сайта (просто)", generalOwner); err != nil {
+			return nil, err
+		}
+		telegramOwner := strings.TrimSpace(w.TelegramOwner)
+		if err := validateDiscountOwner("скидка ТГ (просто)", telegramOwner); err != nil {
+			return nil, err
+		}
 		items = append(items, stock.DiscountWrite{
-			ProductID:  w.ProductID,
-			BestBefore: normalizeDate(w.BestBefore),
-			General:    cloneInt16(w.General),
-			Telegram:   cloneInt16(w.Telegram),
-			Source:     source,
+			ProductID:     w.ProductID,
+			BestBefore:    normalizeDate(w.BestBefore),
+			General:       cloneInt16(w.General),
+			Telegram:      cloneInt16(w.Telegram),
+			Source:        source,
+			GeneralOwner:  generalOwner,
+			TelegramOwner: telegramOwner,
 		})
 	}
 
@@ -1296,6 +1306,21 @@ func validateDiscountSource(source string) error {
 	}
 
 	return fmt.Errorf("скидки: неизвестный источник %q", source)
+}
+
+// validateDiscountOwner — владелец стоящего значения колонки: пустая строка
+// («владельца нет») или одно из значений, разрешённых CHECK-ом колонок
+// product_stock.discount_general_owner / discount_telegram_owner. Опечатка
+// движка не должна тихо лечь в БД как чужой владелец: от владельца зависит,
+// что расчёт снимает.
+func validateDiscountOwner(field, owner string) error {
+	switch owner {
+	case "", stock.DiscountOwnerSurplus, stock.DiscountOwnerExpiry,
+		stock.DiscountOwnerEscalation, stock.DiscountOwnerManual:
+		return nil
+	}
+
+	return fmt.Errorf("скидки: неизвестный владелец значения (%s) %q", field, owner)
 }
 
 // loadDiscountCatalog подгружает из каталога товары, которых нет в кэше
@@ -1358,6 +1383,10 @@ func (uc *StockUseCase) applyDiscountsCacheLocked(writes []stock.DiscountWrite, 
 		// Метка идёт вместе со скидками: пустая строка правки = метки нет
 		// (движок снял свою скидку) — кэш обязан совпасть с БД.
 		lot.DiscountSource = w.Source
+		// Владельцы значений идут тем же правилом: пустая строка правки =
+		// владельца нет (движок снял значение) — кэш обязан совпасть с БД.
+		lot.GeneralOwner = w.GeneralOwner
+		lot.TelegramOwner = w.TelegramOwner
 
 		updated := *lot
 		events = append(events, stock.Event{
