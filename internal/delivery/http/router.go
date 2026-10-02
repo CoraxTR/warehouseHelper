@@ -120,6 +120,7 @@ func NewRouter(h *Handler) *http.ServeMux {
 	mux.HandleFunc("POST /ms/receive/save", h.ReceiveSave)                  // сохранить приёмку (JSON) → отчёт
 	mux.HandleFunc("POST /ms/receive/labels", h.ReceiveLabels)              // этикетки принятых кусков (xlsx)
 	mux.HandleFunc("POST /ms/receive/box-labels", h.ReceiveBoxLabels)       // наклейки принятых коробок (xlsx)
+	mux.HandleFunc("POST /ms/receive/qr-labels", h.ReceiveQRLabels)         // QR-наклейки принятых кусков (xlsx)
 	mux.HandleFunc("GET /ms/receive/break-label", h.ReceiveBreakLabel)      // наклейка спец-кода 666 (xlsx)
 	mux.HandleFunc("GET /ms/receive/open-box-label", h.ReceiveOpenBoxLabel) // наклейка спец-кода 555 (xlsx)
 
