@@ -14,17 +14,20 @@ import (
 // discountInputColumns — колонки снапшота входа расчёта; порядок обязан
 // совпадать с порядком Scan в scanDiscountInput.
 //
-// Последние пять колонок — текущие скидки лота: «простые» (plain — их пишет
-// движок расчёта), ручные (manual — UI сроков) и метка источника plain-значения
-// (discount_source). Расчёту они нужны, чтобы знать, что уже стоит в БД:
-// general автоматика поднимает только вверх, ручная перекрывает plain, а по
-// метке видно, что снимать при уходе пары из избытка (`0 = NULL`: NULL здесь —
-// «скидка не задана»).
+// Последние семь колонок — текущие скидки лота: «простые» (plain — их пишет
+// движок расчёта), ручные (manual — UI сроков), метка источника plain-значения
+// (discount_source) и владельцы значений колонок
+// (discount_general_owner / discount_telegram_owner — кто поставил значение:
+// избыток, ступень по сроку или ТГ-день). Расчёту они нужны, чтобы знать, что
+// уже стоит в БД: general автоматика поднимает только вверх, ручная перекрывает
+// plain, а по владельцу видно, что снимать, когда основание ушло (`0 = NULL`:
+// NULL здесь — «скидка не задана»).
 const discountInputColumns = `
     s.product_id, p.name, p.group_name, p.short_list, p.shelf_life, p.track_weekly,
     s.best_before, s.qty,
     s.discount_general, s.discount_telegram,
-    s.discount_general_manual, s.discount_telegram_manual, s.discount_source`
+    s.discount_general_manual, s.discount_telegram_manual, s.discount_source,
+    s.discount_general_owner, s.discount_telegram_owner`
 
 // discountInputQuery — снапшот целиком: лоты стока с товарными признаками.
 //
@@ -112,16 +115,21 @@ func scanDiscountInput(row pgx.Row) (discounts.Input, error) {
 		in             discounts.Input
 		groupName      *string // NULL — товар без группы (products.group_name)
 		discountSource *string // NULL — метки источника нет (product_stock.discount_source)
+		generalOwner   *string // NULL — владельца значения нет
+		telegramOwner  *string // NULL — владельца значения нет
 	)
 	if err := row.Scan(
 		&in.ProductID, &in.Name, &groupName, &in.ShortList, &in.ShelfLife, &in.TrackWeekly,
 		&in.BestBefore, &in.Qty,
 		&in.GeneralPlain, &in.TelegramPlain, &in.GeneralManual, &in.TelegramManual, &discountSource,
+		&generalOwner, &telegramOwner,
 	); err != nil {
 		return discounts.Input{}, fmt.Errorf("scan discount input: %w", err)
 	}
 	in.GroupName = textValue(groupName)
 	in.DiscountSource = textValue(discountSource)
+	in.GeneralOwner = textValue(generalOwner)
+	in.TelegramOwner = textValue(telegramOwner)
 
 	in.PeriodDays = monthlyPeriodDays
 	if in.TrackWeekly {
@@ -236,6 +244,41 @@ func collectLotPairs(rows pgx.Rows) (map[discounts.LotKey]struct{}, error) {
 		return nil, fmt.Errorf("digest pairs: %w", err)
 	}
 	return pairs, nil
+}
+
+// LastPlanQty — план продаж добора по лотам: последняя позиция рассылки, у
+// которой задан контроль продаж (initial_qty/plan_qty — только добор из
+// избытка). Пары без плана в карту не попадают; у лота берём самую свежую
+// запись — по ней расчёт понимает, что план дня выполнен, и снимает скидку,
+// поставленную ТГ-днём (решение владельца 02.10.2026).
+func (pg *PGClient) LastPlanQty(ctx context.Context) (map[discounts.LotKey]discounts.LotPlan, error) {
+	rows, err := pg.Pool.Query(ctx, `
+        SELECT DISTINCT ON (product_id, best_before)
+               product_id, best_before, initial_qty, plan_qty
+        FROM discount_telegram_digest_item
+        WHERE initial_qty IS NOT NULL AND plan_qty IS NOT NULL
+        ORDER BY product_id, best_before, digest_id DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("last plan qty: %w", err)
+	}
+	defer rows.Close()
+
+	plans := make(map[discounts.LotKey]discounts.LotPlan)
+	for rows.Next() {
+		var (
+			key  discounts.LotKey
+			plan discounts.LotPlan
+		)
+		if err := rows.Scan(&key.ProductID, &key.BestBefore, &plan.Initial, &plan.Plan); err != nil {
+			return nil, fmt.Errorf("last plan qty scan: %w", err)
+		}
+		plans[key] = plan
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("last plan qty rows: %w", err)
+	}
+
+	return plans, nil
 }
 
 // scanLotPair сканирует строку выборки в discounts.LotKey (порядок

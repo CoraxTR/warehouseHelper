@@ -369,6 +369,9 @@ func dayPlanWrites(plan dayPlan) []discounts.DiscountWrite {
 		percent := s.percent
 		w := writeFor(s.pair)
 		w.Telegram = &percent
+		// Владелец ТГ-значения — ТГ-день: выход эскалации снимает и колонку
+		// сайта, поднятую под 16:00 (решение владельца 02.10.2026).
+		w.TelegramOwner = discounts.OwnerEscalation.String()
 		writes = append(writes, w)
 	}
 	for _, s := range plan.extra {
@@ -376,9 +379,28 @@ func dayPlanWrites(plan dayPlan) []discounts.DiscountWrite {
 		w := writeFor(s.pair)
 		w.General = &percent
 		w.Source = s.reason
+		// Лишние позиции ставят скидку канала сайта сразу: ступень по сроку —
+		// срок, избыток — движок, ручная — человек.
+		w.GeneralOwner = ownerForReason(s.reason).String()
 		writes = append(writes, w)
 	}
 	return writes
+}
+
+// ownerForReason — владелец значения по причине позиции плана: ступень по сроку —
+// срок, избыток — движок, ручная — человек. Неизвестная причина → владельца нет:
+// такое значение расчёт не понижает.
+func ownerForReason(reason string) discounts.Owner {
+	switch reason {
+	case discounts.ReasonExpiry:
+		return discounts.OwnerExpiry
+	case discounts.ReasonSurplus:
+		return discounts.OwnerSurplus
+	case discounts.ReasonManual:
+		return discounts.OwnerManual
+	}
+
+	return discounts.OwnerNone
 }
 
 // RunRaise — подъём скидки сайта по позициям сегодняшней ОТПРАВЛЕННОЙ рассылки
@@ -484,8 +506,12 @@ func raiseWrites(pairs []PairState, plan []discounts.SlotItem) ([]discounts.LotK
 		target := item.Percent
 		// Цель — эффективная скидка ТГ-колонки: ручная ТГ важнее плана (её ставит
 		// менеджер, а не движок — решение владельца 29.09.2026).
+		owner := discounts.OwnerEscalation
 		if tg := p.telegramValue(); tg != nil && *tg > target {
 			target = *tg
+			// Число назначил человек, а не план дня: пара держится за ручную ТГ,
+			// и выход эскалации её не понижает (решение владельца 02.10.2026).
+			owner = discounts.OwnerManual
 		}
 		if discountPercent(p.Applied) >= target {
 			continue // уже не ниже цели: не понижаем
@@ -493,6 +519,7 @@ func raiseWrites(pairs []PairState, plan []discounts.SlotItem) ([]discounts.LotK
 		general := target
 		p.AppliedPlain = &general
 		p.SourceRaw = item.Reason
+		p.GeneralOwner = owner
 		raised = append(raised, p.Key)
 		writes = append(writes, writeFor(*p))
 	}
@@ -519,6 +546,9 @@ func raiseWrites(pairs []PairState, plan []discounts.SlotItem) ([]discounts.LotK
 		general := target
 		p.AppliedPlain = &general
 		p.SourceRaw = discounts.ReasonManual
+		// Число поставил человек — владелец значения тоже он: движок понизит
+		// его только когда ручная ТГ будет снята.
+		p.GeneralOwner = discounts.OwnerManual
 		raised = append(raised, p.Key)
 		writes = append(writes, writeFor(*p))
 	}
@@ -669,5 +699,9 @@ func writeFor(p PairState) discounts.DiscountWrite {
 		General:    p.AppliedPlain,
 		Telegram:   p.TelegramPlain,
 		Source:     p.SourceRaw,
+		// Владельцы едут вместе со значениями: без них расчёт не знает, что
+		// снимать при уходе основания (решение владельца 02.10.2026).
+		GeneralOwner:  p.GeneralOwner.String(),
+		TelegramOwner: p.TelegramOwner.String(),
 	}
 }

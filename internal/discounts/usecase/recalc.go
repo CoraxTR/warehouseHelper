@@ -83,8 +83,12 @@ func (uc *UseCase) RecalcExpiry(ctx context.Context, now time.Time) error {
 	pairs := Evaluate(inputs, rates, today)
 
 	// Правки по сроку + снятие запрета менеджера (ручная 0): запрет обязан
-	// убрать с сайта ступень, поставленную движком до него.
-	writes := append(expiryWrites(pairs), banWrites(pairs)...)
+	// убрать с сайта ступень, поставленную движком до него. Выход скидок по
+	// владельцу значения — тот же общий шаг: утренний пересмотр идёт по всем
+	// парам, и снятие не должно ждать часового тика (решение владельца
+	// 02.10.2026: снимаем мгновенно).
+	writes := append(expiryWrites(pairs), ownerWrites(pairs, uc.planQty(ctx, pairs))...)
+	writes = append(writes, banWrites(pairs)...)
 
 	if err := uc.writeAndRegister(ctx, pairs, writes); err != nil {
 		return err
@@ -125,7 +129,7 @@ func (uc *UseCase) RecalcSurplus(ctx context.Context, now time.Time) error {
 		pairs = Evaluate(inputs, rates, today)
 	}
 
-	if err := uc.writeAndRegister(ctx, pairs, surplusWrites(pairs)); err != nil {
+	if err := uc.writeAndRegister(ctx, pairs, ownerWrites(pairs, uc.planQty(ctx, pairs))); err != nil {
 		return err
 	}
 
@@ -202,7 +206,7 @@ func (uc *UseCase) RecalcAffected(ctx context.Context, now time.Time, events map
 	}
 	pairs := Evaluate(inputs, rates, today)
 
-	writes := surplusWrites(pairs)
+	writes := ownerWrites(pairs, uc.planQty(ctx, pairs))
 	// Ступень по сроку — только у затронутых товаров, у которых событие ПРИБАВИЛО
 	// остаток (MarkGrown: приёмка, возврат лота в остатки), только на пустое место
 	// (решение владельца 28.09.2026) и только вне ТГ-дня: в ТГ-дни (вт/чт)
@@ -261,6 +265,9 @@ func expiryWrites(pairs []PairState) []discounts.DiscountWrite {
 			// значение передаём как есть, чтобы запись general её не затирала.
 			Telegram: p.TelegramPlain,
 			Source:   discounts.SourceExpiry.String(),
+			// Ступень по сроку — её и значение: владелец нужен, чтобы расчёт
+			// знал, что понижать нельзя (срок важнее избытка).
+			GeneralOwner: discounts.OwnerExpiry.String(),
 		})
 	}
 	return writes
@@ -283,47 +290,175 @@ func expiryWritesOnEmpty(pairs []PairState) []discounts.DiscountWrite {
 	return expiryWrites(empty)
 }
 
-// surplusWrites — правки по избытку.
+// ownerWrites — правки расчёта по значениям, которые поставил движок (решение
+// владельца 02.10.2026): вход скидки на пустое место и ВЫХОД по владельцу
+// значения. Метка источника говорит «почему скидка», владелец
+// (product_stock.discount_*_owner) — «кто поставил стоящее значение»; снятие
+// работает по владельцу, а не по числу (раньше снималось только ровно 10 %).
 //
-// Избыток — младший источник (ручная → срок → избыток), поэтому 10 % ставим
-// только на паре без ручной и без сроковой скидки и только на пустое место:
-// стоящее значение (в том числе подъём ТГ-дня до 20 %) автоматика не понижает.
-// Снятие (в БД NULL) — только у значения, поставленного избытком: чужую
-// ступень и метку источника пересчёт не убирает.
+//   - вход: избыток на пустом месте (места не занято, ручной и ступени нет) —
+//     десятка с владельцем «избыток»;
+//   - владелец «избыток»: избытка в группе больше нет (раскрытие на более
+//     близкие сроки уже посчитано applySurplusGroup) — значение понижаем до
+//     расчётного: ступень по сроку, иначе избыток, иначе снятие;
+//   - владелец «эскалация» (ТГ-день): избыток ушёл ИЛИ выполнен план продаж
+//     добора (заданный рассылкой) — то же понижение, плюс пустеет ТГ-колонка:
+//     её значение — то же обещание рассылки, и без снятия оно всплывает в
+//     отчёте меткой (ТГ);
+//   - владелец «ступень по сроку» и «владельца нет» — не трогаем: срок важнее
+//     избытка, а чужое/неизвестное значение понижать нельзя (строки до
+//     появления колонок владельца).
+//
+// Ручная важнее нашего значения: уступая ей, движок освобождает своё место —
+// кроме случая, когда то же значение держит ступень по сроку (тогда значение
+// остаётся за сроком).
+//
 // Пара, замороженная ручным нулём (0 %), из работы движка исключена совсем:
-// ни 10 %, ни снятия по ней не пишем — решение владельца, сентябрь 2026.
-func surplusWrites(pairs []PairState) []discounts.DiscountWrite {
+// ни десятки, ни снятия по ней не пишем — решение владельца, сентябрь 2026.
+func ownerWrites(pairs []PairState, plans map[discounts.LotKey]discounts.LotPlan) []discounts.DiscountWrite {
 	writes := make([]discounts.DiscountWrite, 0, len(pairs))
 	for _, p := range pairs {
 		if p.Frozen() {
 			continue // ручная 0 % — пара заморожена
 		}
-		switch {
-		case p.Manual == nil && p.Expiry == nil && p.HasSurplus:
-			if appliedTop(p) != 0 {
-				continue // место занято — избыток не понижает и не переписывает
-			}
+
+		// Вход: избыток на пустом месте.
+		if p.Manual == nil && p.Expiry == nil && p.HasSurplus && appliedTop(p) == 0 {
 			percent := discounts.SurplusPercent()
-			writes = append(writes, discounts.DiscountWrite{
-				ProductID:  p.ProductID,
-				BestBefore: p.BestBefore,
-				General:    &percent,
-				// Колонку ТГ ведёт ТГ-день: своё значение отдаём как есть.
-				Telegram: p.TelegramPlain,
-				Source:   discounts.SourceSurplus.String(),
-			})
-		case surplusLeft(p):
-			writes = append(writes, discounts.DiscountWrite{
-				ProductID:  p.ProductID,
-				BestBefore: p.BestBefore,
-				General:    nil, // снятие: движок пишет NULL, а не 0
-				Telegram:   p.TelegramPlain,
-			})
-		default:
-			// ни избытка, ни снятия — правок по паре нет
+			w := writeFor(p)
+			w.General = &percent
+			w.GeneralOwner = discounts.OwnerSurplus.String()
+			w.Source = discounts.SourceSurplus.String()
+			if clearTelegram(p, plans) {
+				w.Telegram = nil
+			}
+			writes = append(writes, w)
+			continue
 		}
+
+		// Значение поставил человек (подъём ручной ТГ на сайт): пока его ручная
+		// ТГ стоит — движок не понижает; человек снял — понижаем до расчётного
+		// (не в пустоту: место может держать ступень по сроку или избыток).
+		if p.GeneralOwner == discounts.OwnerManual {
+			if p.TelegramManual != nil {
+				continue // скидка человека стоит — движок её не трогает
+			}
+			percent, owner := basisValue(p)
+			w := valueWrite(p, percent, owner)
+			if clearTelegram(p, plans) {
+				w.Telegram = nil
+			}
+			writes = append(writes, w)
+			continue
+		}
+
+		// Понижаем только своё значение: ступень по сроку и значение без
+		// владельца остаются как есть.
+		if p.GeneralOwner != discounts.OwnerSurplus && p.GeneralOwner != discounts.OwnerEscalation {
+			continue
+		}
+		if p.Manual == nil {
+			if p.GeneralOwner == discounts.OwnerSurplus && p.HasSurplus {
+				continue // избыток жив — значение стоит по делу
+			}
+			// Живая ручная ТГ важнее выхода: пару ведёт человек, движок её
+			// скидку не понижает (решение владельца 02.10.2026).
+			if p.GeneralOwner == discounts.OwnerEscalation && (p.TelegramActive() || !escalationOver(p, plans)) {
+				continue // рассылка в силе: план не выполнен, избыток на месте
+			}
+		}
+
+		percent, owner := basisValue(p)
+		if p.Manual != nil && owner != discounts.OwnerExpiry {
+			// Ручная важнее нашего значения — место освобождаем (своё
+			// значение ручной стоит в своей колонке).
+			percent, owner = nil, discounts.OwnerNone
+		}
+		w := valueWrite(p, percent, owner)
+		if clearTelegram(p, plans) {
+			w.Telegram = nil
+		}
+		writes = append(writes, w)
 	}
 	return writes
+}
+
+// basisValue — что паре положено по расчёту сегодня (кандидат без ручной:
+// ступень по сроку → избыток → ничего) и кто владелец этого значения.
+func basisValue(p PairState) (*int16, discounts.Owner) {
+	switch {
+	case p.Expiry != nil && *p.Expiry > 0:
+		return copyDiscount(p.Expiry), discounts.OwnerExpiry
+	case p.Surplus != nil && *p.Surplus > 0:
+		return copyDiscount(p.Surplus), discounts.OwnerSurplus
+	}
+	return nil, discounts.OwnerNone
+}
+
+// valueWrite — правка колонки сайта: значение, метка источника и владелец едут
+// вместе (снятие — nil и пустая метка). ТГ-колонку правка несёт как есть: её
+// ведёт ТГ-день, обнулить её можно только явно (см. clearTelegram).
+func valueWrite(p PairState, percent *int16, owner discounts.Owner) discounts.DiscountWrite {
+	w := writeFor(p)
+	w.General = percent
+	w.GeneralOwner = owner.String()
+	switch owner {
+	case discounts.OwnerExpiry:
+		w.Source = discounts.SourceExpiry.String()
+	case discounts.OwnerSurplus:
+		w.Source = discounts.SourceSurplus.String()
+	default:
+		w.Source = "" // снятие: метки нет
+	}
+	return w
+}
+
+// escalationOver — основание скидки, поставленной ТГ-днём, кончилось: избытка
+// в группе больше нет либо выполнен план продаж добора (план задан рассылкой:
+// остаток опустился до initial − plan). Плана по паре нет — смотрим избыток.
+func escalationOver(p PairState, plans map[discounts.LotKey]discounts.LotPlan) bool {
+	if !p.HasSurplus {
+		return true
+	}
+	plan, ok := plans[p.Key]
+
+	return ok && plan.Done(p.Qty)
+}
+
+// clearTelegram — ТГ-колонку чистим, когда её значение поставил ТГ-день, а
+// основание кончилось: иначе зависшая скидка рассылки всплывёт в отчёте меткой
+// (ТГ) при пустой колонке сайта (дефект 02.10.2026).
+func clearTelegram(p PairState, plans map[discounts.LotKey]discounts.LotPlan) bool {
+	return p.TelegramOwner == discounts.OwnerEscalation && escalationOver(p, plans)
+}
+
+// planQty — план продаж добора по парам (шов репозитория): нужен только выходу
+// скидки, поставленной ТГ-днём, поэтому спрашиваем его, лишь когда такие пары
+// есть. Ошибка запроса тик не роняет: без плана не сработает только выход «план
+// выполнен» (снятие значения — запись, на неполных данных её не делаем), а
+// выход по ушедшему избытку работает и без плана.
+func (uc *UseCase) planQty(ctx context.Context, pairs []PairState) map[discounts.LotKey]discounts.LotPlan {
+	if !hasEscalation(pairs) {
+		return nil
+	}
+	plans, err := uc.repo.LastPlanQty(ctx)
+	if err != nil {
+		slog.Info(fmt.Sprintf("discounts: план продаж добора: %v", err))
+		return nil
+	}
+
+	return plans
+}
+
+// hasEscalation — есть ли среди пар значения, поставленные ТГ-днём.
+func hasEscalation(pairs []PairState) bool {
+	for _, p := range pairs {
+		if p.GeneralOwner == discounts.OwnerEscalation || p.TelegramOwner == discounts.OwnerEscalation {
+			return true
+		}
+	}
+
+	return false
 }
 
 // banWrites — снятие скидки с пар, накрытых запретом менеджера (ручная 0 на
@@ -346,24 +481,6 @@ func banWrites(pairs []PairState) []discounts.DiscountWrite {
 		})
 	}
 	return writes
-}
-
-// surplusLeft — значение plain-колонки поставлено избытком и больше не нужно:
-// избыток пропал или дорогу уступил ручной либо сроковой скидке. Узнаём по
-// значению и метке: ровно 10 % (discounts.SurplusPercent) без ступени по сроку
-// на сегодня, а метка источника (product_stock.discount_source), если она есть,
-// должна говорить «избыток».
-func surplusLeft(p PairState) bool {
-	if discountPercent(p.AppliedPlain) != discounts.SurplusPercent() {
-		return false // стоит не избыточное значение — не наше
-	}
-	if p.SourceRaw != "" && p.SourceRaw != discounts.SourceSurplus.String() {
-		return false // метка говорит: значение поставлено не избытком
-	}
-	if p.Expiry != nil {
-		return false // ступень по сроку держит это же значение — не снимаем
-	}
-	return p.Manual != nil || !p.HasSurplus
 }
 
 // freshTurnover — свежий оборот по товарам, где решение может уйти: события
@@ -480,6 +597,10 @@ func applyWrites(pairs []PairState, writes []discounts.DiscountWrite) {
 		pairs[i].AppliedPlain = copyDiscount(w.General)
 		pairs[i].Applied = effectiveDiscount(pairs[i].Manual, w.General)
 		pairs[i].SourceRaw = w.Source
+		// Владельцы значений — часть состояния пары: следующие шаги того же тика
+		// и снапшот реестра должны видеть, чьё значение стоит.
+		pairs[i].GeneralOwner = discounts.ParseOwner(w.GeneralOwner)
+		pairs[i].TelegramOwner = discounts.ParseOwner(w.TelegramOwner)
 		// План ТГ-колонки — часть состояния пары: по нему строка помечается
 		// каналом (ТГ) в сообщении складу, а 16:00 берёт его же целью подъёма.
 		pairs[i].TelegramPlain = copyDiscount(w.Telegram)
