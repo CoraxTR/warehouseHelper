@@ -373,8 +373,6 @@ func ownerExit(p PairState, plans map[discounts.LotKey]discounts.LotPlan) (disco
 	// избытка, а чужое/неизвестное снимать опаснее, чем оставить.
 	case discounts.OwnerNone, discounts.OwnerExpiry:
 		return discounts.DiscountWrite{}, false
-	default:
-		return discounts.DiscountWrite{}, false // недостижимо: владельцы перечислены выше
 	}
 
 	percent, owner := basisValue(p)
