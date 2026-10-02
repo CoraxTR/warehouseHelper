@@ -71,6 +71,9 @@ type fakeDiscountRepo struct {
 	loadErr   error
 	flagErr   error
 	markErr   error
+	// plans — план продаж добора по парам (LastPlanQty): выход скидки,
+	// поставленной ТГ-днём. Пустая карта = планов нет (пара держится избытком).
+	plans map[discounts.LotKey]discounts.LotPlan
 }
 
 func newFakeDiscountRepo(inputs ...discounts.Input) *fakeDiscountRepo {
@@ -83,7 +86,8 @@ func fakeFlagKey(date time.Time, f discounts.DayFlag) string {
 }
 
 // apply — правки расчёта ложатся в «БД» теста: general/telegram лота получают
-// значение правки (nil — NULL), метка источника — как её передал расчёт.
+// значение правки (nil — NULL), метка источника и владельцы значений — как их
+// передал расчёт.
 func (r *fakeDiscountRepo) apply(writes []discounts.DiscountWrite) {
 	for _, w := range writes {
 		for i := range r.inputs {
@@ -94,6 +98,8 @@ func (r *fakeDiscountRepo) apply(writes []discounts.DiscountWrite) {
 			in.GeneralPlain = copyDiscount(w.General)
 			in.TelegramPlain = copyDiscount(w.Telegram)
 			in.DiscountSource = w.Source
+			in.GeneralOwner = w.GeneralOwner
+			in.TelegramOwner = w.TelegramOwner
 		}
 	}
 }
@@ -148,6 +154,16 @@ func (r *fakeDiscountRepo) MarkDigestSent(context.Context, string, time.Time, ti
 
 func (r *fakeDiscountRepo) LastDigestPairs(context.Context) (map[discounts.LotKey]struct{}, error) {
 	return nil, errRepoMethodUnused
+}
+
+// LastPlanQty — план продаж добора: тесты выхода эскалации кладут его сами,
+// расчёту по избытку он нужен только когда среди пар есть значения ТГ-дня.
+func (r *fakeDiscountRepo) LastPlanQty(context.Context) (map[discounts.LotKey]discounts.LotPlan, error) {
+	if r.plans == nil {
+		return map[discounts.LotKey]discounts.LotPlan{}, nil
+	}
+
+	return r.plans, nil
 }
 
 func (r *fakeDiscountRepo) MarkGeneralRaised(context.Context, []discounts.LotKey, time.Time) error {
@@ -299,6 +315,18 @@ func telegramInput(v int16) func(*discounts.Input) {
 // sourceInput — метка источника plain-значения (product_stock.discount_source).
 func sourceInput(s string) func(*discounts.Input) {
 	return func(in *discounts.Input) { in.DiscountSource = s }
+}
+
+// ownerInput — владелец значения plain-колонки сайта
+// (product_stock.discount_general_owner): кто поставил стоящее значение.
+func ownerInput(owner string) func(*discounts.Input) {
+	return func(in *discounts.Input) { in.GeneralOwner = owner }
+}
+
+// telegramOwnerInput — владелец значения ТГ-колонки
+// (product_stock.discount_telegram_owner).
+func telegramOwnerInput(owner string) func(*discounts.Input) {
+	return func(in *discounts.Input) { in.TelegramOwner = owner }
 }
 
 // Пересмотр лестницы идёт только в КТ-дни (вт/чт/сб), и только в СУББОТУ утро
@@ -713,11 +741,14 @@ func TestRecalcSurplusLeavesForeignDiscounts(t *testing.T) {
 }
 
 // Избыток снимается и тогда, когда дорогу уступил ручной скидке: значение 10 %
-// осталось с прошлого тика, а ручная скидка стоит уже своя.
+// осталось с прошлого тика, а ручная скидка стоит уже своя. Владелец значения
+// («поставил избыток») приходит из БД — владелец решает, что снимать, метка
+// источника на это больше не влияет.
 func TestRecalcSurplusClearsOwnTenUnderManual(t *testing.T) {
 	h := newRecalcHarness(recalcNow(1),
 		lotInput("p1", "Колбаса", day(10), 100,
-			plainInput(10), manualInput(30), sourceInput(discounts.SourceSurplus.String())))
+			plainInput(10), manualInput(30), sourceInput(discounts.SourceSurplus.String()),
+			ownerInput(discounts.OwnerSurplus.String())))
 	h.turnover("p1", 30)
 
 	if err := h.uc.RecalcSurplus(context.Background(), h.now); err != nil {
@@ -926,5 +957,114 @@ func TestRecalcSurplusNoSalesNoExcess(t *testing.T) {
 	}
 	if h.turn.calls != 0 {
 		t.Errorf("свежий оборот по парам без избытка не спрашиваем, вызовов %d", h.turn.calls)
+	}
+}
+
+// manualTelegramInput — ручная скидка ТГ-канала лота (её ставит менеджер).
+func manualTelegramInput(v int16) func(*discounts.Input) {
+	return func(in *discounts.Input) { in.TelegramManual = &v }
+}
+
+// Дефект 02.10.2026: скидка, поставленная ТГ-днём (план 14:00 и подъём 16:00),
+// снимается, когда основание ушло — избытка нет или выполнен план продаж
+// добора. Значение сайта падает до расчётного, ТГ-колонка пустеет: иначе
+// зависшая 20 % живёт на паре навсегда и всплывает в отчёте меткой (ТГ) при
+// пустой колонке сайта. Раньше снятие работало только на ровно 10 %.
+func TestRecalcSurplusClearsEscalationWhenPlanDone(t *testing.T) {
+	h := newRecalcHarness(recalcNow(1),
+		lotInput("p1", "Мясник Праймбиф", day(10), 100,
+			plainInput(20), sourceInput(discounts.SourceSurplus.String()),
+			ownerInput(discounts.OwnerEscalation.String()),
+			telegramInput(20), telegramOwnerInput(discounts.OwnerEscalation.String())))
+	h.turnover("p1", 30) // избыток ещё есть: пару отпускает именно план
+	h.repo.plans = map[discounts.LotKey]discounts.LotPlan{
+		{ProductID: "p1", BestBefore: day(10)}: {Initial: 120, Plan: 10},
+	}
+
+	if err := h.uc.RecalcSurplus(context.Background(), h.now); err != nil {
+		t.Fatalf("RecalcSurplus: %v", err)
+	}
+	batches := h.batches()
+	if len(batches) != 1 || len(batches[0]) != 1 {
+		t.Fatalf("батчи правок: %+v", batches)
+	}
+	w := batches[0][0]
+	if w.General == nil || *w.General != discounts.SurplusPercent() {
+		t.Errorf("general правки %v, want %d (расчётное значение пары)",
+			w.General, discounts.SurplusPercent())
+	}
+	if w.GeneralOwner != discounts.OwnerSurplus.String() {
+		t.Errorf("владелец general %q, want %q", w.GeneralOwner, discounts.OwnerSurplus.String())
+	}
+	if w.Telegram != nil {
+		t.Errorf("ТГ-колонка правки %v, want NULL (обещание рассылки кончилось)", w.Telegram)
+	}
+}
+
+// Живая ручная ТГ важнее выхода (решение владельца 02.10.2026): пару ведёт
+// человек, движок её скидку не понижает — даже когда план добора выполнен.
+func TestRecalcSurplusKeepsEscalationUnderManualTelegram(t *testing.T) {
+	h := newRecalcHarness(recalcNow(1),
+		lotInput("p1", "Мясник Праймбиф", day(10), 100,
+			plainInput(20), sourceInput(discounts.SourceSurplus.String()),
+			ownerInput(discounts.OwnerEscalation.String()),
+			telegramInput(20), telegramOwnerInput(discounts.OwnerEscalation.String()),
+			manualTelegramInput(20)))
+	h.turnover("p1", 30)
+	h.repo.plans = map[discounts.LotKey]discounts.LotPlan{
+		{ProductID: "p1", BestBefore: day(10)}: {Initial: 120, Plan: 10},
+	}
+
+	if err := h.uc.RecalcSurplus(context.Background(), h.now); err != nil {
+		t.Fatalf("RecalcSurplus: %v", err)
+	}
+	if got := len(h.batches()); got != 0 {
+		t.Fatalf("батчей правок %d, want 0: %+v", got, h.batches())
+	}
+}
+
+// Значение без владельца (строки БД, которые легли до появления колонок) расчёт
+// не трогает: снять чужое или неизвестное опаснее, чем оставить как есть.
+// Такие значения оживают после бэкфилла владельцев.
+func TestRecalcSurplusKeepsValueWithoutOwner(t *testing.T) {
+	h := newRecalcHarness(recalcNow(1),
+		lotInput("p1", "Мясник Праймбиф", day(10), 100,
+			plainInput(10), sourceInput(discounts.SourceSurplus.String())))
+	h.turnover("p1", 400) // избытка нет
+
+	if err := h.uc.RecalcSurplus(context.Background(), h.now); err != nil {
+		t.Fatalf("RecalcSurplus: %v", err)
+	}
+	if got := len(h.batches()); got != 0 {
+		t.Fatalf("батчей правок %d, want 0: %+v", got, h.batches())
+	}
+	if got := h.repo.inputs[0].GeneralPlain; got == nil || *got != 10 {
+		t.Errorf("значение в БД %v, want 10 (владельца нет — не наше)", got)
+	}
+}
+
+// Значение, которое поставил человек (подъём ручной ТГ на сайт), движок держит,
+// пока ручная стоит, а снял человек — понижает до расчётного (не в NULL: место
+// может держать ступень по сроку или избыток).
+func TestRecalcSurplusClearsManualRaisedValue(t *testing.T) {
+	h := newRecalcHarness(recalcNow(1),
+		lotInput("p1", "Мясник Праймбиф", day(10), 100,
+			plainInput(20), sourceInput(discounts.ReasonManual),
+			ownerInput(discounts.OwnerManual.String())))
+	h.turnover("p1", 30) // избыток есть: расчётное — десятка
+
+	if err := h.uc.RecalcSurplus(context.Background(), h.now); err != nil {
+		t.Fatalf("RecalcSurplus: %v", err)
+	}
+	batches := h.batches()
+	if len(batches) != 1 || len(batches[0]) != 1 {
+		t.Fatalf("батчи правок: %+v", batches)
+	}
+	w := batches[0][0]
+	if w.General == nil || *w.General != discounts.SurplusPercent() {
+		t.Errorf("general правки %v, want %d", w.General, discounts.SurplusPercent())
+	}
+	if w.GeneralOwner != discounts.OwnerSurplus.String() {
+		t.Errorf("владелец general %q, want %q", w.GeneralOwner, discounts.OwnerSurplus.String())
 	}
 }

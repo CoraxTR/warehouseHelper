@@ -28,6 +28,9 @@ type fakeSlotRepo struct {
 	lastPairs map[discounts.LotKey]struct{}
 	raised    []discounts.LotKey
 	saveErr   error
+	// plans — план продаж добора по парам (LastPlanQty): тесты выхода скидки,
+	// поставленной ТГ-днём, кладут его сами.
+	plans map[discounts.LotKey]discounts.LotPlan
 }
 
 func (r *fakeSlotRepo) SaveDigest(_ context.Context, d discounts.DigestRecord, items []discounts.DigestItem) error {
@@ -55,6 +58,15 @@ func (r *fakeSlotRepo) LastDigestPairs(context.Context) (map[discounts.LotKey]st
 	}
 
 	return r.lastPairs, nil
+}
+
+// LastPlanQty — план продаж добора: пустая карта = планов нет.
+func (r *fakeSlotRepo) LastPlanQty(context.Context) (map[discounts.LotKey]discounts.LotPlan, error) {
+	if r.plans == nil {
+		return map[discounts.LotKey]discounts.LotPlan{}, nil
+	}
+
+	return r.plans, nil
 }
 
 func (r *fakeSlotRepo) MarkGeneralRaised(_ context.Context, pairs []discounts.LotKey, _ time.Time) error {

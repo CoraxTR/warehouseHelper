@@ -61,9 +61,16 @@ type PairState struct {
 	// То, что стоит в БД: Applied — эффективная скидка канала (ручная
 	// перекрывает plain), AppliedPlain — значение plain-колонки,
 	// SourceRaw — метка источника plain-значения (product_stock.discount_source).
-	Applied       *int16
-	AppliedPlain  *int16
-	SourceRaw     string
+	Applied      *int16
+	AppliedPlain *int16
+	SourceRaw    string
+	// GeneralOwner/TelegramOwner — владельцы стоящих значений колонок
+	// (product_stock.discount_general_owner / discount_telegram_owner): кто
+	// поставил значение — движок по избытку/ступени по сроку или ТГ-день
+	// (эскалация). По владельцу расчёт снимает своё значение, когда основание
+	// ушло; неизвестный владелец не трогается вовсе.
+	GeneralOwner  discounts.Owner
+	TelegramOwner discounts.Owner
 	TelegramPlain *int16 // план ТГ-колонки: её пишет только ТГ-день (14:00/16:00)
 	// TelegramManual — ручная скидка ТГ-канала: метка «ТГ» важнее plain — так же,
 	// как ручная сайта важнее его plain-колонки.
@@ -388,6 +395,8 @@ func evaluatePair(in discounts.Input, cumQty int64, rates map[string]float64, da
 		Applied:       effectiveDiscount(in.GeneralManual, in.GeneralPlain),
 		AppliedPlain:  positiveDiscount(in.GeneralPlain),
 		SourceRaw:     in.DiscountSource,
+		GeneralOwner:  discounts.ParseOwner(in.GeneralOwner),
+		TelegramOwner: discounts.ParseOwner(in.TelegramOwner),
 		TelegramPlain: positiveDiscount(in.TelegramPlain),
 		// Ручная скидка ТГ-канала: без этой строки движок её не видел вовсе
 		// (telegramValue падал на план), и пара с ручной ТГ не попадала в окно

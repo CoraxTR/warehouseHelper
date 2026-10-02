@@ -32,6 +32,15 @@ type Lot struct {
 	// пустая строка — метки нет (в БД NULL). Нужна клиенту для подсветки
 	// ячеек: сроковая/ручная скидка — жёлтая, только избыток — розовая.
 	DiscountSource string `json:"discount_source"`
+
+	// GeneralOwner/TelegramOwner — владельцы стоящих значений колонок
+	// (product_stock.discount_general_owner / discount_telegram_owner): кто
+	// поставил значение — движок по избытку/ступени по сроку или ТГ-день
+	// (эскалация). Метка DiscountSource отвечает на «почему скидка», владелец —
+	// на «кто поставил это значение»: расчёт снимает значение по владельцу.
+	// Пустая строка — владельца нет (значения нет либо он не известен).
+	GeneralOwner  string `json:"discount_general_owner"`
+	TelegramOwner string `json:"discount_telegram_owner"`
 }
 
 // Product — товар каталога с лотами остатков (кэш модуля «Сроки»).
@@ -92,12 +101,20 @@ type PickLotIn struct {
 // "expiry" (ступень по сроку), "surplus" (избыток), "manual"; пустая строка —
 // метки нет (в БД NULL). Движок скидок пишет expiry/surplus; ручная скидка
 // важнее — приоритет разбирает клиент (подсветка ячеек), не БД.
+//
+// GeneralOwner/TelegramOwner — владельцы значений колонок
+// (product_stock.discount_general_owner / discount_telegram_owner): кто поставил
+// стоящее значение — движок по избытку, ступень по сроку или ТГ-день (эскалация).
+// Пустая строка = владельца нет (значение снято либо он не известен). Метка
+// отвечает на «почему скидка», владелец — на «кто поставил значение».
 type DiscountWrite struct {
-	ProductID  string
-	BestBefore time.Time
-	General    *int16
-	Telegram   *int16
-	Source     string
+	ProductID     string
+	BestBefore    time.Time
+	General       *int16
+	Telegram      *int16
+	Source        string
+	GeneralOwner  string
+	TelegramOwner string
 }
 
 // Event — факт изменения остатков, публикуется владельцем данных (usecase)
@@ -121,6 +138,18 @@ const (
 	DiscountSourceManual  = "manual"  // скидка поставлена вручную (не движком)
 	DiscountSourceExpiry  = "expiry"  // ступень лестницы по сроку годности
 	DiscountSourceSurplus = "surplus" // скидка на избыток остатка
+)
+
+// Владельцы стоящих значений колонок лота — значения колонок
+// product_stock.discount_general_owner / discount_telegram_owner (CHECK в схеме).
+// Отвечают на вопрос «кто поставил это значение» (метка DiscountSource — «почему
+// скидка»): расчёт скидок снимает значение по владельцу, а не по числу.
+// Пустая строка = владельца нет (значения нет либо он не известен).
+const (
+	DiscountOwnerSurplus    = "surplus"    // значение поставлено движком по избытку
+	DiscountOwnerExpiry     = "expiry"     // значение поставлено ступенью по сроку
+	DiscountOwnerEscalation = "escalation" // значение поставлено ТГ-днём (план 14:00 / подъём 16:00)
+	DiscountOwnerManual     = "manual"     // значение поставлено человеком (подъём ручной ТГ на сайт)
 )
 
 // Ошибки домена.
