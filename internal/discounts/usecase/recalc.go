@@ -327,6 +327,16 @@ func ownerWrites(pairs []PairState, plans map[discounts.LotKey]discounts.LotPlan
 		}
 		if w, ok := ownerExit(p, plans); ok {
 			writes = append(writes, w)
+			continue
+		}
+		// ТГ-колонка живёт своей жизнью: её значение остаётся и тогда, когда
+		// колонка сайта не наша или пуста (пара без скидки сайта, ручная сайта).
+		// Чистим её по её собственному владельцу — иначе зависшая 20 % всплывает
+		// в отчёте меткой (ТГ) (дефект 02.10.2026, ближний лот мясника 12.10).
+		if p.TelegramPlain != nil && clearTelegram(p, plans) {
+			w := writeFor(p)
+			w.Telegram = nil
+			writes = append(writes, w)
 		}
 	}
 	return writes

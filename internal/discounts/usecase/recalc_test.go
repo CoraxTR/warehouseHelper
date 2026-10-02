@@ -1002,7 +1002,9 @@ func TestRecalcSurplusClearsEscalationWhenPlanDone(t *testing.T) {
 }
 
 // Живая ручная ТГ важнее выхода (решение владельца 02.10.2026): пару ведёт
-// человек, движок её скидку не понижает — даже когда план добора выполнен.
+// человек, движок значение сайта не понижает — даже когда план добора выполнен.
+// Зависший план в ТГ-колонке при этом уходит: его больше не обещают, а обещанную
+// скидку держит ручная (эффективная ТГ не меняется — уведомлений нет).
 func TestRecalcSurplusKeepsEscalationUnderManualTelegram(t *testing.T) {
 	h := newRecalcHarness(recalcNow(1),
 		lotInput("p1", "Мясник Праймбиф", day(10), 100,
@@ -1018,8 +1020,19 @@ func TestRecalcSurplusKeepsEscalationUnderManualTelegram(t *testing.T) {
 	if err := h.uc.RecalcSurplus(context.Background(), h.now); err != nil {
 		t.Fatalf("RecalcSurplus: %v", err)
 	}
-	if got := len(h.batches()); got != 0 {
-		t.Fatalf("батчей правок %d, want 0: %+v", got, h.batches())
+	batches := h.batches()
+	if len(batches) != 1 || len(batches[0]) != 1 {
+		t.Fatalf("батчи правок: %+v", batches)
+	}
+	w := batches[0][0]
+	if w.General == nil || *w.General != 20 {
+		t.Errorf("general правки %v, want 20 (живая ручная ТГ держит значение сайта)", w.General)
+	}
+	if w.GeneralOwner != discounts.OwnerEscalation.String() {
+		t.Errorf("владелец general %q, want %q", w.GeneralOwner, discounts.OwnerEscalation.String())
+	}
+	if w.Telegram != nil {
+		t.Errorf("ТГ-колонка правки %v, want NULL (план рассылки больше не в силе)", w.Telegram)
 	}
 }
 
@@ -1066,5 +1079,32 @@ func TestRecalcSurplusClearsManualRaisedValue(t *testing.T) {
 	}
 	if w.GeneralOwner != discounts.OwnerSurplus.String() {
 		t.Errorf("владелец general %q, want %q", w.GeneralOwner, discounts.OwnerSurplus.String())
+	}
+}
+
+// ТГ-колонка чистится по своему владельцу и тогда, когда колонка сайта движку не
+// принадлежит или пуста. Живой случай 02.10.2026: у ближнего лота мясника (12.10)
+// в ТГ стояла зависшая 20 % от прошлого плана, а на сайте — ручная, и вместе с
+// сайтом её никто не снимал.
+func TestRecalcSurplusClearsTelegramWithoutSiteValue(t *testing.T) {
+	h := newRecalcHarness(recalcNow(1),
+		lotInput("p1", "Мясник Праймбиф", day(10), 100,
+			telegramInput(20), telegramOwnerInput(discounts.OwnerEscalation.String()),
+			manualTelegramInput(10)))
+	h.turnover("p1", 400) // избытка нет: основание эскалации ушло
+
+	if err := h.uc.RecalcSurplus(context.Background(), h.now); err != nil {
+		t.Fatalf("RecalcSurplus: %v", err)
+	}
+	batches := h.batches()
+	if len(batches) != 1 || len(batches[0]) != 1 {
+		t.Fatalf("батчи правок: %+v", batches)
+	}
+	w := batches[0][0]
+	if w.Telegram != nil {
+		t.Errorf("ТГ-колонка правки %v, want NULL", w.Telegram)
+	}
+	if w.General != nil || w.GeneralOwner != "" {
+		t.Errorf("колонку сайта правка не трогает: general %v, владелец %q", w.General, w.GeneralOwner)
 	}
 }
