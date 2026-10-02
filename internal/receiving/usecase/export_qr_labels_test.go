@@ -83,9 +83,17 @@ func buildQRWorkbook(t *testing.T, units []receiving.Unit) (f *excelize.File, ra
 	return got, rawBytes, count
 }
 
-// rowBreakIDs вычитывает ручные отсечки страниц (горизонтальные) из XML листа:
-// id — индекс строки, ПЕРЕД которой начинается новая страница (0-based).
+// rowBreakIDs вычитывает ручные отсечки страниц по строкам: id — индекс строки,
+// ПЕРЕД которой начинается новая страница (0-based).
 func rowBreakIDs(t *testing.T, raw []byte) []int {
+	t.Helper()
+	rows, _ := pageBreakIDs(t, raw)
+	return rows
+}
+
+// pageBreakIDs вычитывает ручные отсечки страниц из XML листа — отдельно по
+// строкам и по столбцам: в excelize v2.10.1 они есть только в XML.
+func pageBreakIDs(t *testing.T, raw []byte) (rows, cols []int) {
 	t.Helper()
 	zr, err := zip.NewReader(bytes.NewReader(raw), int64(len(raw)))
 	if err != nil {
@@ -106,18 +114,33 @@ func rowBreakIDs(t *testing.T, raw []byte) []int {
 	}
 
 	var doc struct {
-		Breaks []struct {
-			ID  int  `xml:"id,attr"`
-			Man bool `xml:"man,attr"`
-		} `xml:"rowBreaks>brk"`
+		RowBreaks *xlsxBreakSet `xml:"rowBreaks"`
+		ColBreaks *xlsxBreakSet `xml:"colBreaks"`
 	}
 	if err := xml.Unmarshal(sheetXML, &doc); err != nil {
 		t.Fatalf("xml.Unmarshal листа: %v", err)
 	}
-	ids := make([]int, 0, len(doc.Breaks))
-	for _, b := range doc.Breaks {
+	return breakIDs(t, doc.RowBreaks, "строки"), breakIDs(t, doc.ColBreaks, "столбца")
+}
+
+// xlsxBreakSet — набор отсечек страниц одного вида (строки или столбцы).
+type xlsxBreakSet struct {
+	Breaks []struct {
+		ID  int  `xml:"id,attr"`
+		Man bool `xml:"man,attr"`
+	} `xml:"brk"`
+}
+
+// breakIDs собирает индексы ручных отсечек, заодно проверяя, что все они ручные.
+func breakIDs(t *testing.T, set *xlsxBreakSet, what string) []int {
+	t.Helper()
+	if set == nil {
+		return nil
+	}
+	ids := make([]int, 0, len(set.Breaks))
+	for _, b := range set.Breaks {
 		if !b.Man {
-			t.Errorf("отсечка строки %d не ручная", b.ID)
+			t.Errorf("отсечка %s %d не ручная", what, b.ID)
 		}
 		ids = append(ids, b.ID)
 	}

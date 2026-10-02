@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"time"
 
-	"warehouseHelper/internal/innercode"
 	"warehouseHelper/internal/metrics"
 	"warehouseHelper/internal/receiving"
 	"warehouseHelper/internal/tempdir"
@@ -82,16 +81,8 @@ func newQRLabelsWorkbook(units []receiving.Unit) (*excelize.File, int, error) {
 	labels := 0
 	lastRow := 0
 	for _, u := range units {
-		var produced time.Time
-		if u.ProducedOn != nil {
-			produced = *u.ProducedOn
-		}
-		weight := u.WeightG
-		if !u.Weighted || weight <= 0 {
-			weight = sentinelWeightG
-		}
-		code, err := innercode.EncodeItem(u.InternalCode, weight, produced, u.BestBefore)
-		if err != nil {
+		code, ok := labelUnitCode(u)
+		if !ok {
 			continue // полного внутреннего кода нет — наклейку не собрать
 		}
 
@@ -112,7 +103,7 @@ func newQRLabelsWorkbook(units []receiving.Unit) (*excelize.File, int, error) {
 		// Нижняя ячейка: пусто под картинку; у левой наклейки — с границей.
 		_ = f.SetCellStyle(sheet, imgAxis, imgAxis, imgStyle)
 
-		img, err := generateQRPNG(code)
+		img, err := generateQRPNG(code, qrCellW, qrCellH)
 		if err != nil {
 			return nil, 0, fmt.Errorf("QR-код %s: %w", code, err)
 		}
@@ -166,7 +157,7 @@ type qrStyles struct {
 // правую границу у левой наклейки (Style 1 — обычная тонкая линия).
 func newQRStyles(f *excelize.File) (qrStyles, error) {
 	font := &excelize.Font{Size: qrFontSize}
-	align := &excelize.Alignment{Horizontal: "center", Vertical: "center", WrapText: true}
+	align := &excelize.Alignment{Horizontal: alignCenter, Vertical: alignCenter, WrapText: true}
 	rightBorder := []excelize.Border{{Type: "right", Color: "000000", Style: 1}}
 
 	codeB, err := f.NewStyle(&excelize.Style{Font: font, Alignment: align, Border: rightBorder})
@@ -191,22 +182,22 @@ type qrImage struct {
 	Size int
 }
 
-// generateQRPNG создаёт PNG-байты QR-кода и его размер в пикселях. QR —
-// матричный код, поэтому масштаб берётся ЦЕЛЫМ числом модулей (при нецелом
-// модуль перестаёт быть квадратным и сканер картинку не прочитает): factor —
-// максимум, при котором код влезает в ячейку. Не целым остаётся только отступ —
+// generateQRPNG создаёт PNG-байты QR-кода и его размер в пикселях. QR — матричный
+// код, поэтому масштаб берётся ЦЕЛЫМ числом модулей (при нецелом модуль
+// перестаёт быть квадратным и сканер картинку не прочитает): factor — максимум,
+// при котором код влезает в ячейку cellW×cellH. Не целым остаётся только отступ —
 // центрирование делает вызывающий.
-func generateQRPNG(data string) (qrImage, error) {
+func generateQRPNG(data string, cellW, cellH int) (qrImage, error) {
 	code, err := qr.Encode(data, qr.M, qr.Auto)
 	if err != nil {
 		return qrImage{}, err
 	}
 
 	modules := code.Bounds().Dx()
-	factor := min(qrCellW/modules, qrCellH/modules)
+	factor := min(cellW/modules, cellH/modules)
 	if factor < 1 {
 		return qrImage{}, fmt.Errorf("код %d×%d модулей не влезает в ячейку %d×%d px",
-			modules, modules, qrCellW, qrCellH)
+			modules, modules, cellW, cellH)
 	}
 	size := modules * factor
 

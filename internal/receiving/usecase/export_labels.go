@@ -1,10 +1,8 @@
 package usecase
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
-	"image/png"
 	"path/filepath"
 	"strconv"
 	"time"
@@ -14,28 +12,32 @@ import (
 	"warehouseHelper/internal/receiving"
 	"warehouseHelper/internal/tempdir"
 
-	"github.com/boombuler/barcode"
-	"github.com/boombuler/barcode/code128"
 	"github.com/xuri/excelize/v2"
 )
 
-// Параметры листа этикеток — перенесены из рабочего прототипа печати наклеек
-// (формат файла для сканера этикеток): колонка B, шрифт 9 с переносом,
-// штрих-код 211×40 px со смещением внутри ячейки, строка картинки высотой 35,
-// ширина колонки 30. На каждую этикетку — блок из трёх строк: данные кода,
-// картинка Code128, подпись «название до срок вес: N»; страница рвётся после
-// каждого блока.
+// Параметры листа этикеток — числа владельца (02.10.2026). Этикетка занимает
+// три ячейки и ровно одну страницу печати:
+//
+//	B1 — 29-значный внутренний код куска текстом (ручной ввод, если сканер
+//	     не читает QR); высота 24,75 pt (33 px), ширина 20 символов (115 px);
+//	B2 — подпись «наименование … до ДД.ММ.ГГГГ вес: N» с переносом и прижатая
+//	     к низу ячейки; высота 49,50 pt (66 px);
+//	C1:C2 — объединённая ячейка 100×99 px с QR-кодом того же кода.
+//
+// Ширина столбцов: B 15,71 (115 px), C 13,57 (100 px). Отсечка страницы — после
+// каждой второй строки, то есть одна этикетка на страницу.
 const (
-	labelsFontSize = 9
-	labelsColWidth = 30.71
-	labelsImgRowH  = 35.0
-	// Ширина штрих-кода: barcode.Scale не ужимает Code128 ниже естественной
-	// ширины. Для 29-значного кода (Code128C) она 211 px — в прототипе было
-	// 189, но тот кодировал короткий код конкретного поставщика.
-	labelsBarcodeW   = 211
-	labelsBarcodeH   = 40
-	labelsImgOffsetX = 5
-	labelsImgOffsetY = 3
+	labelsFontSize  = 9
+	labelsColBWidth = 15.71 // ширина столбца в «символах» Excel: 7 px на символ + 5 px
+	labelsColCWidth = 13.57
+	// Высоты строк в pt: Excel хранит высоту в пунктах, не в пикселях
+	// (33 px = 24,75 pt, 66 px = 49,50 pt).
+	labelsCodeRowH = 24.75
+	labelsTextRowH = 49.5
+	// Стороны объединённой ячейки C1:C2 в пикселях: нужны для целого масштаба
+	// модуля QR и его центрирования (33 px + 66 px = 99 px высоты).
+	labelsQRCellW = 100
+	labelsQRCellH = 99
 )
 
 // errNoLabels — нет ни одного куска, из которого можно собрать этикетку.
@@ -44,14 +46,14 @@ var errNoLabels = errors.New("ни у одного куска нет полны�
 // sentinelWeightG — вес штучного товара в этикетке: 1 г. У штучных веса нет
 // (в данные идёт 0), но поле веса 29-значного кода не может быть пустым —
 // EncodeItem отвергает 0, и кусок остался бы без этикетки. Печатается только
-// в штрих-код: в данные приёмки, отчёт и статистику весов 1 г не попадает.
+// в код: в данные приёмки, отчёт и статистику весов 1 г не попадает.
 const sentinelWeightG int64 = 1
 
 // ExportLabels формирует xlsx-файл этикеток принятых кусков в tempdir и
-// возвращает путь к нему. В штрих-код этикетки кодируется полный внутренний
-// код куска (innercode.EncodeItem), чтобы этикетка сканировалась как обычный
-// кусок в заказы и расформирования. Куски без полных данных (нет даты
-// выработки, нулевой вес) пропускаются.
+// возвращает путь к нему. В QR-код этикетки кодируется полный внутренний код
+// куска (innercode.EncodeItem) — как раньше в штрих-код, чтобы этикетка
+// сканировалась как обычный кусок в заказы и расформирования. Куски без полных
+// данных (нет даты выработки) пропускаются.
 func (uc *ReceivingUseCase) ExportLabels(units []receiving.Unit) (string, error) {
 	done := metrics.Track(trackPkg, "ExportLabels")
 	defer done()
@@ -74,109 +76,144 @@ func (uc *ReceivingUseCase) ExportLabels(units []receiving.Unit) (string, error)
 }
 
 // newLabelsWorkbook собирает книгу этикеток (в памяти) и возвращает число
-// сформированных этикеток.
+// сформированных этикеток. Этикетка n (с нуля) занимает строки 1+2n и 2+2n:
+// в верхней — код, в нижней — подпись, в объединённой C-ячейке той же пары
+// строк — QR.
 func newLabelsWorkbook(units []receiving.Unit) (*excelize.File, int, error) {
 	f := excelize.NewFile()
 	sheet := f.GetSheetName(0)
 
-	style, err := f.NewStyle(&excelize.Style{
-		Font:      &excelize.Font{Size: labelsFontSize},
-		Alignment: &excelize.Alignment{WrapText: true},
-	})
+	styles, err := newLabelsStyles(f)
 	if err != nil {
 		return nil, 0, err
 	}
 
-	row := 1
 	labels := 0
 	for _, u := range units {
-		var produced time.Time
-		if u.ProducedOn != nil {
-			produced = *u.ProducedOn
-		}
-		weight := u.WeightG
-		if !u.Weighted || weight <= 0 {
-			weight = sentinelWeightG
-		}
-		code, err := innercode.EncodeItem(u.InternalCode, weight, produced, u.BestBefore)
-		if err != nil {
+		code, ok := labelUnitCode(u)
+		if !ok {
 			continue // полного внутреннего кода нет — этикетку не собрать
 		}
-
-		pngBytes, err := generateBarcodePNG(code, labelsBarcodeW, labelsBarcodeH)
+		img, err := generateQRPNG(code, labelsQRCellW, labelsQRCellH)
 		if err != nil {
-			return nil, 0, fmt.Errorf("штрих-код %s: %w", code, err)
+			return nil, 0, fmt.Errorf("QR-код %s: %w", code, err)
 		}
 
-		// Строка 1: данные кода (визуальный контроль при наклейке).
-		axis := fmt.Sprintf("B%d", row)
-		_ = f.SetCellValue(sheet, axis, code)
-		_ = f.SetCellStyle(sheet, axis, axis, style)
-		row++
+		topRow, bottomRow := 1+2*labels, 2+2*labels
+		codeAxis := fmt.Sprintf("B%d", topRow)
+		textAxis := fmt.Sprintf("B%d", bottomRow)
+		qrAxis := fmt.Sprintf("C%d", topRow)
 
-		// Строка 2: картинка штрих-кода.
-		axis = fmt.Sprintf("B%d", row)
-		_ = f.AddPictureFromBytes(sheet, axis, &excelize.Picture{
+		_ = f.SetCellValue(sheet, codeAxis, code)
+		_ = f.SetCellStyle(sheet, codeAxis, codeAxis, styles.code)
+		_ = f.SetCellValue(sheet, textAxis, labelCaption(u))
+		_ = f.SetCellStyle(sheet, textAxis, textAxis, styles.caption)
+
+		// Картинка кладётся после объединения: Excel якорит её по левой
+		// верхней ячейке объединённого диапазона.
+		_ = f.MergeCell(sheet, qrAxis, fmt.Sprintf("C%d", bottomRow))
+		_ = f.AddPictureFromBytes(sheet, qrAxis, &excelize.Picture{
 			Extension: ".png",
-			File:      pngBytes,
+			File:      img.PNG,
 			Format: &excelize.GraphicOptions{
 				ScaleX:      1.0,
 				ScaleY:      1.0,
-				OffsetX:     labelsImgOffsetX,
-				OffsetY:     labelsImgOffsetY,
+				OffsetX:     (labelsQRCellW - img.Size) / 2,
+				OffsetY:     (labelsQRCellH - img.Size) / 2,
 				Positioning: "oneCell",
 			},
 		})
-		_ = f.SetRowHeight(sheet, row, labelsImgRowH)
-		row++
-
-		// Строка 3: подпись «название до срок вес: N».
-		axis = fmt.Sprintf("B%d", row)
-		_ = f.SetCellValue(sheet, axis, labelCaption(u))
-		_ = f.SetCellStyle(sheet, axis, axis, style)
-		row++
 
 		labels++
 	}
 
-	_ = f.SetColWidth(sheet, "B", "B", labelsColWidth)
+	_ = f.SetColWidth(sheet, "B", "B", labelsColBWidth)
+	_ = f.SetColWidth(sheet, "C", "C", labelsColCWidth)
+	for n := 0; n < labels; n++ {
+		_ = f.SetRowHeight(sheet, 1+2*n, labelsCodeRowH)
+		_ = f.SetRowHeight(sheet, 2+2*n, labelsTextRowH)
+	}
+
 	if labels > 0 {
-		printArea := fmt.Sprintf("%s!$B$1:$B$%d", sheet, row-1)
+		lastRow := 2 * labels
+		printArea := fmt.Sprintf("%s!$B$1:$C$%d", sheet, lastRow)
 		_ = f.SetDefinedName(&excelize.DefinedName{
 			Name:     "_xlnm.Print_Area",
 			RefersTo: printArea,
 			Scope:    sheet,
 		})
-		// Разрыв страницы после каждого блока этикетки (строки 1-3, 4-6, ...).
-		for r := 4; r <= row; r += 3 {
-			_ = f.InsertPageBreak(sheet, fmt.Sprintf("B%d", r))
+		// Отсечка страницы после каждой второй строки (страницы — строки 1-2,
+		// 3-4, ...). Ссылка на столбец A — не «B»: excelize по ссылке заводит
+		// ещё и отсечку по столбцу, а она тут лишняя.
+		for row := 3; row <= lastRow; row += 2 {
+			_ = f.InsertPageBreak(sheet, fmt.Sprintf("A%d", row))
 		}
 	}
 	return f, labels, nil
 }
 
-// labelCaption — подпись под штрих-кодом (как в прототипе печати наклеек).
+// Выравнивание в стилях ячеек excelize — общее для обоих билдеров наклеек:
+// строки держим константами (goconst), иначе «center» повторяется литералом.
+const (
+	alignCenter = "center"
+	alignLeft   = "left"
+	alignBottom = "bottom"
+)
+
+// labelsStyles — стили ячеек этикетки.
+type labelsStyles struct {
+	code    int // B1: код по центру, с переносом (29 цифр в 115 px — две строки)
+	caption int // B2: подпись с переносом, прижата к низу ячейки
+}
+
+// newLabelsStyles заводит стили этикетки: шрифт 9 и перенос по словам у обоих
+// текстовых полей.
+func newLabelsStyles(f *excelize.File) (labelsStyles, error) {
+	font := &excelize.Font{Size: labelsFontSize}
+
+	code, err := f.NewStyle(&excelize.Style{
+		Font:      font,
+		Alignment: &excelize.Alignment{Horizontal: alignCenter, Vertical: alignCenter, WrapText: true},
+	})
+	if err != nil {
+		return labelsStyles{}, err
+	}
+	caption, err := f.NewStyle(&excelize.Style{
+		Font:      font,
+		Alignment: &excelize.Alignment{Horizontal: alignLeft, Vertical: alignBottom, WrapText: true},
+	})
+	if err != nil {
+		return labelsStyles{}, err
+	}
+	return labelsStyles{code: code, caption: caption}, nil
+}
+
+// labelUnitCode собирает полный внутренний код куска для этикетки. У штучного
+// товара веса нет — в код уходит sentinelWeightG, иначе EncodeItem отвергнет
+// нулевой вес и кусок остался бы без этикетки. Второй результат — false, когда
+// полного кода нет (нет даты выработки): этикетку из такого куска не собрать.
+func labelUnitCode(u receiving.Unit) (string, bool) {
+	var produced time.Time
+	if u.ProducedOn != nil {
+		produced = *u.ProducedOn
+	}
+	weight := u.WeightG
+	if !u.Weighted || weight <= 0 {
+		weight = sentinelWeightG
+	}
+	code, err := innercode.EncodeItem(u.InternalCode, weight, produced, u.BestBefore)
+	if err != nil {
+		return "", false
+	}
+	return code, true
+}
+
+// labelCaption — подпись под кодом: наименование, срок и вес (у штучного веса
+// нет — как и раньше на этикетке со штрих-кодом).
 func labelCaption(u receiving.Unit) string {
 	caption := u.ProductName + " до " + u.BestBefore.Format("02.01.2006")
 	if u.Weighted {
 		caption += " вес: " + strconv.FormatInt(u.WeightG, 10)
 	}
 	return caption
-}
-
-// generateBarcodePNG создаёт PNG-байты штрих-кода Code128.
-func generateBarcodePNG(data string, width, height int) ([]byte, error) {
-	bc, err := code128.Encode(data)
-	if err != nil {
-		return nil, err
-	}
-	scaled, err := barcode.Scale(bc, width, height)
-	if err != nil {
-		return nil, err
-	}
-	var buf bytes.Buffer
-	if err := png.Encode(&buf, scaled); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
 }
