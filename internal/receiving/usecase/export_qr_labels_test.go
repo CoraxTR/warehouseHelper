@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"encoding/xml"
+	"fmt"
 	"image/png"
 	"io"
 	"testing"
@@ -14,29 +15,72 @@ import (
 	"github.com/xuri/excelize/v2"
 )
 
+// Ожидаемые 29-значные коды фикстуры (код + вес + выработка + срок):
+// стейк весом 1250 г и фарш весом 1 г — тот же код, что даёт sentinel-вес
+// штучного товара. qrImagePx — сторона картинки QR: 21 модуль × масштаб 3.
+const (
+	qrCodeSteak  = "00210003012502908202629092026"
+	qrCodeMinced = "10210003000012908202629092026"
+	qrImagePx    = 63
+)
+
+// qrUnits — фикстура тестов: два куска с полными данными и один без даты
+// выработки (наклейка из него не собирается и раскладку соседних не сдвигает).
+// Меньший вес у куска без выработки — данные куска, не код: кода у него нет.
+func qrUnits() []receiving.Unit {
+	prod := time.Date(2026, time.August, 29, 0, 0, 0, 0, time.UTC)
+	exp := time.Date(2026, time.September, 29, 0, 0, 0, 0, time.UTC)
+	return []receiving.Unit{
+		{
+			InternalCode: "00210003",
+			ProductName:  "Стейк Рибай",
+			Weighted:     true,
+			WeightG:      1250,
+			ProducedOn:   &prod,
+			BestBefore:   exp,
+		},
+		{
+			InternalCode: "00210003",
+			ProductName:  "Стейк Рибай",
+			Weighted:     true,
+			WeightG:      980,
+			ProducedOn:   nil,
+			BestBefore:   exp,
+		},
+		{
+			InternalCode: "10210003",
+			ProductName:  "Фарш",
+			Weighted:     true,
+			WeightG:      1,
+			ProducedOn:   &prod,
+			BestBefore:   exp,
+		},
+	}
+}
+
 // buildQRWorkbook собирает книгу QR-наклеек и открывает её обратно — так же, как
 // это делает Excel: проверяются сохранённые значения, картинки и параметры
 // печати, а не объекты в памяти. Рядом возвращаются сырые байты xlsx: отсечки
 // страниц в excelize v2.10.1 читаются только из XML листа.
-func buildQRWorkbook(t *testing.T, units []receiving.Unit) (*excelize.File, []byte, int) {
+func buildQRWorkbook(t *testing.T, units []receiving.Unit) (f *excelize.File, raw []byte, labels int) {
 	t.Helper()
-	f, labels, err := newQRLabelsWorkbook(units)
+	book, count, err := newQRLabelsWorkbook(units)
 	if err != nil {
 		t.Fatalf("newQRLabelsWorkbook error: %v", err)
 	}
-	defer func() { _ = f.Close() }()
+	defer func() { _ = book.Close() }()
 
-	buf, err := f.WriteToBuffer()
+	buf, err := book.WriteToBuffer()
 	if err != nil {
 		t.Fatalf("WriteToBuffer error: %v", err)
 	}
-	raw := buf.Bytes()
-	got, err := excelize.OpenReader(bytes.NewReader(raw))
+	rawBytes := buf.Bytes()
+	got, err := excelize.OpenReader(bytes.NewReader(rawBytes))
 	if err != nil {
 		t.Fatalf("OpenReader error: %v", err)
 	}
 	t.Cleanup(func() { _ = got.Close() })
-	return got, raw, labels
+	return got, rawBytes, count
 }
 
 // rowBreakIDs вычитывает ручные отсечки страниц (горизонтальные) из XML листа:
@@ -52,18 +96,13 @@ func rowBreakIDs(t *testing.T, raw []byte) []int {
 		if zf.Name != "xl/worksheets/sheet1.xml" {
 			continue
 		}
-		rc, err := zf.Open()
-		if err != nil {
-			t.Fatalf("open %s: %v", zf.Name, err)
-		}
-		sheetXML, err = io.ReadAll(rc)
-		_ = rc.Close()
+		sheetXML, err = readZipFile(zf)
 		if err != nil {
 			t.Fatalf("read %s: %v", zf.Name, err)
 		}
 	}
 	if sheetXML == nil {
-		t.Fatal("xl/worksheets/sheet1.xml не найден в файле")
+		t.Fatal("в файле нет xl/worksheets/sheet1.xml")
 	}
 
 	var doc struct {
@@ -85,6 +124,42 @@ func rowBreakIDs(t *testing.T, raw []byte) []int {
 	return ids
 }
 
+// readZipFile читает файл из xlsx-архива.
+func readZipFile(zf *zip.File) ([]byte, error) {
+	rc, err := zf.Open()
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rc.Close() }()
+	return io.ReadAll(rc)
+}
+
+// printArea — область печати листа (определённое имя _xlnm.Print_Area).
+func printArea(t *testing.T, f *excelize.File) string {
+	t.Helper()
+	for _, dn := range f.GetDefinedName() {
+		if dn.Name == "_xlnm.Print_Area" {
+			return dn.RefersTo
+		}
+	}
+	t.Fatal("область печати в книге не задана")
+	return ""
+}
+
+// cellStyle — стиль ячейки (для проверки границ).
+func cellStyle(t *testing.T, f *excelize.File, sheet, axis string) *excelize.Style {
+	t.Helper()
+	id, err := f.GetCellStyle(sheet, axis)
+	if err != nil {
+		t.Fatalf("GetCellStyle(%s) error: %v", axis, err)
+	}
+	st, err := f.GetStyle(id)
+	if err != nil {
+		t.Fatalf("GetStyle(%s) error: %v", axis, err)
+	}
+	return st
+}
+
 // hasRightBorder — задана ли у стиля правая граница (Style > 0 = видимая линия).
 func hasRightBorder(borders []excelize.Border) bool {
 	for _, b := range borders {
@@ -96,54 +171,31 @@ func hasRightBorder(borders []excelize.Border) bool {
 }
 
 func TestNewQRLabelsWorkbook_TwoPerPage(t *testing.T) {
-	prod := time.Date(2026, time.August, 29, 0, 0, 0, 0, time.UTC)
-	exp := time.Date(2026, time.September, 29, 0, 0, 0, 0, time.UTC)
-
-	f, raw, labels := buildQRWorkbook(t, []receiving.Unit{
-		{
-			InternalCode: "00210003",
-			ProductName:  "Стейк Рибай",
-			Weighted:     true,
-			WeightG:      1250,
-			ProducedOn:   &prod,
-			BestBefore:   exp,
-		},
-		{
-			// Куска без даты выработки быть не должно (при приёмке данные
-			// достраиваются вручную), но QR-наклейку для него не собрать —
-			// пропускаем, не ломая раскладку соседних.
-			InternalCode: "00210003",
-			ProductName:  "Стейк Рибай",
-			Weighted:     true,
-			WeightG:      980,
-			ProducedOn:   nil,
-			BestBefore:   exp,
-		},
-		{
-			InternalCode: "10210003",
-			ProductName:  "Фарш",
-			Weighted:     true,
-			WeightG:      1,
-			ProducedOn:   &prod,
-			BestBefore:   exp,
-		},
-	})
+	f, _, labels := buildQRWorkbook(t, qrUnits())
 	if labels != 2 {
-		t.Fatalf("labels = %d, want 2", labels)
+		t.Fatalf("labels = %d, want 2 (кусок без выработки пропущен)", labels)
 	}
 
+	// Первая наклейка — столбец B, вторая — C той же пары строк; за ними пусто.
+	sheet := f.GetSheetName(0)
+	cells := map[string]string{
+		"B1": qrCodeSteak,
+		"C1": qrCodeMinced,
+		"B3": "",
+		"C3": "",
+	}
+	for axis, want := range cells {
+		if v, _ := f.GetCellValue(sheet, axis); v != want {
+			t.Errorf("%s = %q, want %q", axis, v, want)
+		}
+	}
+}
+
+func TestNewQRLabelsWorkbook_Markup(t *testing.T) {
+	f, _, _ := buildQRWorkbook(t, qrUnits())
 	sheet := f.GetSheetName(0)
 
-	// Верхние ячейки пары — внутренний код товара (текстовой информации о
-	// товаре в наклейке нет).
-	if v, _ := f.GetCellValue(sheet, "B1"); v != "00210003012502908202629092026" {
-		t.Errorf("B1 = %q, want внутренний код", v)
-	}
-	if v, _ := f.GetCellValue(sheet, "C1"); v != "10210003000012908202629092026" {
-		t.Errorf("C1 = %q, want внутренний код второго куска", v)
-	}
-
-	// Нижние ячейки — картинка QR-кода (по одной на наклейку).
+	// В нижней ячейке каждой наклейки пары — картинка QR (63×63 px).
 	for _, axis := range []string{"B2", "C2"} {
 		pics, err := f.GetPictures(sheet, axis)
 		if err != nil {
@@ -159,77 +211,55 @@ func TestNewQRLabelsWorkbook_TwoPerPage(t *testing.T) {
 		if err != nil {
 			t.Fatalf("png.DecodeConfig(%s) error: %v", axis, err)
 		}
-		// 21 модуль QR × целый масштаб 3 = 63 px (ячейка 110 × 79 px).
-		if cfg.Width != 63 || cfg.Height != 63 {
-			t.Errorf("picture %s = %d×%d px, want 63×63", axis, cfg.Width, cfg.Height)
+		if cfg.Width != qrImagePx || cfg.Height != qrImagePx {
+			t.Errorf("picture %s = %d×%d px, want %d×%d", axis, cfg.Width, cfg.Height, qrImagePx, qrImagePx)
 		}
 	}
 
-	// Правая граница у левой наклейки: обе её ячейки отделены от правой
-	// наклейки пары (по этой линии режут лист при печати).
+	// Правая граница обеих ячеек левой наклейки — линия разреза при печати.
 	for _, axis := range []string{"B1", "B2"} {
-		id, err := f.GetCellStyle(sheet, axis)
-		if err != nil {
-			t.Fatalf("GetCellStyle(%s) error: %v", axis, err)
-		}
-		st, err := f.GetStyle(id)
-		if err != nil {
-			t.Fatalf("GetStyle(%s) error: %v", axis, err)
-		}
-		if !hasRightBorder(st.Border) {
+		if !hasRightBorder(cellStyle(t, f, sheet, axis).Border) {
 			t.Errorf("у ячейки %s нет правой границы", axis)
 		}
 	}
-	// У правой наклейки границы нет — она последняя в паре.
-	id, err := f.GetCellStyle(sheet, "C1")
-	if err != nil {
-		t.Fatalf("GetCellStyle(C1) error: %v", err)
-	}
-	st, err := f.GetStyle(id)
-	if err != nil {
-		t.Fatalf("GetStyle(C1) error: %v", err)
-	}
-	if hasRightBorder(st.Border) {
+	// У правой наклейки пары границы нет — она последняя в паре.
+	if hasRightBorder(cellStyle(t, f, sheet, "C1").Border) {
 		t.Error("у правой наклейки (C1) не должно быть правой границы")
 	}
+}
+
+func TestNewQRLabelsWorkbook_PrintLayout(t *testing.T) {
+	f, raw, _ := buildQRWorkbook(t, qrUnits())
+	sheet := f.GetSheetName(0)
 
 	// Высоты строк: верхняя 33 px = 24,75 pt, нижняя 79 px = 59,25 pt.
-	for _, want := range []struct {
-		row  int
-		high float64
-	}{{1, qrCodeRowH}, {2, qrImgRowH}} {
-		got, err := f.GetRowHeight(sheet, want.row)
+	heights := map[int]float64{1: qrCodeRowH, 2: qrImgRowH}
+	for row, want := range heights {
+		got, err := f.GetRowHeight(sheet, row)
 		if err != nil {
-			t.Fatalf("GetRowHeight(%d) error: %v", want.row, err)
+			t.Fatalf("GetRowHeight(%d) error: %v", row, err)
 		}
-		if got != want.high {
-			t.Errorf("row %d height = %v, want %v", want.row, got, want.high)
+		if got != want {
+			t.Errorf("row %d height = %v, want %v", row, got, want)
 		}
 	}
 
-	// Ширина обоих столбцов наклеек.
+	// Ширина обоих столбцов — 15 символов (110 px).
 	for _, col := range []string{"B", "C"} {
-		w, err := f.GetColWidth(sheet, col)
+		width, err := f.GetColWidth(sheet, col)
 		if err != nil {
 			t.Fatalf("GetColWidth(%s) error: %v", col, err)
 		}
-		if w != qrColWidth {
-			t.Errorf("col %s width = %v, want %v", col, w, qrColWidth)
+		if width != qrColWidth {
+			t.Errorf("col %s width = %v, want %v", col, width, qrColWidth)
 		}
 	}
 
-	// Область печати — оба столбца пары строк.
-	var printArea string
-	for _, dn := range f.GetDefinedName() {
-		if dn.Name == "_xlnm.Print_Area" {
-			printArea = dn.RefersTo
-		}
+	// Область печати — оба столбца; две наклейки уложились в одну страницу,
+	// то есть отсечек нет.
+	if got, want := printArea(t, f), sheet+"!$B$1:$C$2"; got != want {
+		t.Errorf("print area = %q, want %q", got, want)
 	}
-	if printArea != sheet+"!$B$1:$C$2" {
-		t.Errorf("print area = %q, want %q", printArea, sheet+"!$B$1:$C$2")
-	}
-
-	// Одна пара строк — одна страница: отсечек больше не нужно.
 	if ids := rowBreakIDs(t, raw); len(ids) != 0 {
 		t.Errorf("отсечки строк = %v, want пусто (одна страница)", ids)
 	}
@@ -239,10 +269,12 @@ func TestNewQRLabelsWorkbook_PageBreakEverySecondRow(t *testing.T) {
 	prod := time.Date(2026, time.August, 29, 0, 0, 0, 0, time.UTC)
 	exp := time.Date(2026, time.September, 29, 0, 0, 0, 0, time.UTC)
 
-	units := make([]receiving.Unit, 0, 6)
-	for _, code := range []string{"00210001", "00210002", "00210003", "00210004", "00210005", "00210006"} {
+	// Пять кусков — три страницы (строки 1-2, 3-4, 5-6), на каждой по две
+	// наклейки, кроме последней (пятая наклейка одна — столбец B).
+	units := make([]receiving.Unit, 0, 5)
+	for i := 1; i <= 5; i++ {
 		units = append(units, receiving.Unit{
-			InternalCode: code,
+			InternalCode: fmt.Sprintf("0021000%d", i),
 			ProductName:  "Стейк Рибай",
 			Weighted:     true,
 			WeightG:      1250,
@@ -252,33 +284,25 @@ func TestNewQRLabelsWorkbook_PageBreakEverySecondRow(t *testing.T) {
 	}
 
 	f, raw, labels := buildQRWorkbook(t, units)
-	if labels != 6 {
-		t.Fatalf("labels = %d, want 6", labels)
+	if labels != 5 {
+		t.Fatalf("labels = %d, want 5", labels)
 	}
-	sheet := f.GetSheetName(0)
-
-	// Третья пара наклеек — строки 5-6: раскладка B/C повторяется на каждой паре.
-	if v, _ := f.GetCellValue(sheet, "B5"); v != "00210005012502908202629092026" {
+	if v, _ := f.GetCellValue(f.GetSheetName(0), "B5"); v != "00210005012502908202629092026" {
 		t.Errorf("B5 = %q, want код пятого куска", v)
 	}
-	if v, _ := f.GetCellValue(sheet, "C6"); v != "" {
-		t.Errorf("C6 = %q, want пусто (в нижней ячейке картинка)", v)
-	}
-	if v, _ := f.GetCellValue(sheet, "B7"); v != "" {
-		t.Errorf("B7 = %q, want пусто (за последней наклейкой)", v)
-	}
 
-	var printArea string
-	for _, dn := range f.GetDefinedName() {
-		if dn.Name == "_xlnm.Print_Area" {
-			printArea = dn.RefersTo
+	sheet := f.GetSheetName(0)
+	cells := map[string]string{"B7": "", "C6": ""}
+	for axis, want := range cells {
+		if v, _ := f.GetCellValue(sheet, axis); v != want {
+			t.Errorf("%s = %q, want %q (за последней наклейкой)", axis, v, want)
 		}
 	}
-	if printArea != sheet+"!$B$1:$C$6" {
-		t.Errorf("print area = %q, want %q", printArea, sheet+"!$B$1:$C$6")
+	if got, want := printArea(t, f), sheet+"!$B$1:$C$6"; got != want {
+		t.Errorf("print area = %q, want %q", got, want)
 	}
 
-	// Отсечка после каждой второй строки: страницы — строки 1-2, 3-4, 5-6.
+	// Отсечка после каждой второй строки: страницы начинаются с 3-й и 5-й.
 	if ids := rowBreakIDs(t, raw); len(ids) != 2 || ids[0] != 2 || ids[1] != 4 {
 		t.Errorf("отсечки строк = %v, want [2 4] (перед строками 3 и 5)", ids)
 	}
@@ -288,7 +312,7 @@ func TestNewQRLabelsWorkbook_PieceGoodsWeightSentinel(t *testing.T) {
 	prod := time.Date(2026, time.August, 29, 0, 0, 0, 0, time.UTC)
 	exp := time.Date(2026, time.September, 29, 0, 0, 0, 0, time.UTC)
 
-	// Штучный товар принимается без веса (WeightG 0): в QR уходит sentinel-вес
+	// Штучный товар принимается без веса (WeightG 0): в код уходит sentinel-вес
 	// 1 г (общий с этикетками) — иначе EncodeItem отвергнет код и кусок остался
 	// бы без наклейки.
 	f, _, labels := buildQRWorkbook(t, []receiving.Unit{
@@ -305,7 +329,7 @@ func TestNewQRLabelsWorkbook_PieceGoodsWeightSentinel(t *testing.T) {
 		t.Fatalf("labels = %d, want 1", labels)
 	}
 	if v, _ := f.GetCellValue(f.GetSheetName(0), "B1"); v != "00210010000012908202629092026" {
-		t.Errorf("B1 = %q, want внутренний код штучного товара", v)
+		t.Errorf("B1 = %q, want код со sentinel-весом 1 г", v)
 	}
 }
 
@@ -320,6 +344,6 @@ func TestNewQRLabelsWorkbook_AllSkipped(t *testing.T) {
 	}
 	defer func() { _ = f.Close() }()
 	if labels != 0 {
-		t.Errorf("labels = %d, want 0", labels)
+		t.Errorf("labels = %d, want 0 (ни одного куска с выработкой)", labels)
 	}
 }

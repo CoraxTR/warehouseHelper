@@ -18,40 +18,34 @@ import (
 	"github.com/xuri/excelize/v2"
 )
 
-// Геометрия QR-наклейки — числа образца, принятого владельцем (02.10.2026):
-// наклейка = две ячейки одного столбца (верхняя — код текстом, нижняя —
-// картинка QR), ширина ячейки 15 симв. (110 px), верхняя строка 33 px
-// (24,75 pt), нижняя 79 px (59,25 pt). На страницу печати идут ДВЕ наклейки —
-// столбцы B и C одной пары строк, — поэтому в область печати входят оба
-// столбца, а отсечка страницы ставится после каждой второй строки.
+// Параметры листа QR-наклеек — числа владельца (02.10.2026): на страницу печати
+// две наклейки (столбцы B и C одной пары строк), наклейка — две ячейки: верхняя
+// с кодом куска, нижняя с картинкой QR. Ширина ячейки 15 символов (110 px),
+// верхняя строка 33 px, нижняя 79 px, отсечка страницы после каждой второй
+// строки. У левой наклейки пары правая граница — по этой линии лист режут.
 const (
-	qrColWidth = 15.0
-	// Высоты строк Excel задаются в пунктах, а размеры образца — в пикселях
-	// (1 px = 0,75 pt при 96 dpi).
+	qrColWidth = 15.0 // ширина столбца в «символах» Excel: 15 → 110 px
+	// Высоты строк в pt: Excel хранит высоту в пунктах, не в пикселях
+	// (33 px = 24,75 pt, 79 px = 59,25 pt).
 	qrCodeRowH = 24.75
 	qrImgRowH  = 59.25
-	// Размер ячейки в пикселях — для центрирования картинки QR внутри нижней
-	// ячейки: 15 симв. ширины дают 110 px, высота нижней строки 79 px.
+	// Шрифт надписи 9 с переносом: 29 цифр кода в 110 px в одну строку не
+	// влезают — при шрифте 9 это ≈18 цифр на строку, то есть две строки.
+	qrFontSize = 9
+	// Стороны ячейки в пикселях: нужны для целого масштаба модуля QR и его
+	// центрирования в нижней ячейке.
 	qrCellW = 110
 	qrCellH = 79
-	// Шрифт верхней ячейки — 9 с переносом, как на этикетке кусков: в ней
-	// 29-значный код целиком, а в одну строку при ширине 110 px он не влезает
-	// (29 цифр шрифтом 12 — около 220 px). Шрифт 9 даёт ~19 цифр в строке, то
-	// есть две строки в ячейке высотой 24,75 pt.
-	qrFontSize = 9
-	// Товарная текстовая информация (наименование, вес, даты) в наклейку не
-	// входит — по требованию владельца её убрали.
 )
 
-// errNoQRLabels — нет ни одного куска, из которого можно собрать QR-наклейку.
+// errNoQRLabels — ни одного куска, из которого можно собрать QR-наклейку.
 var errNoQRLabels = errors.New("ни у одного куска нет полных данных для QR-наклейки (нужна дата выработки)")
 
 // ExportQRLabels формирует xlsx-файл QR-наклеек принятых кусков в tempdir и
-// возвращает путь к нему. QR-наклейка — замена Code128-этикетки: в QR и в
-// надпись над ним идёт один и тот же полный внутренний код куска
-// (innercode.EncodeItem), чтобы скан шёл в заказы и расформирования так же, как
-// со штрих-кода. Куски без полных данных (нет даты выработки, нулевой вес)
-// пропускаются.
+// возвращает путь к нему. В QR и в надпись над ним идёт один и тот же полный
+// внутренний код куска (innercode.EncodeItem) — как на этикетке с Code128, чтобы
+// скан шёл в заказы и расформирования. Куски без полных данных (нет даты
+// выработки) пропускаются.
 func (uc *ReceivingUseCase) ExportQRLabels(units []receiving.Unit) (string, error) {
 	done := metrics.Track(trackPkg, "ExportQRLabels")
 	defer done()
@@ -73,53 +67,9 @@ func (uc *ReceivingUseCase) ExportQRLabels(units []receiving.Unit) (string, erro
 	return path, nil
 }
 
-// qrStyles — стили ячеек наклейки. У ЛЕВОЙ наклейки (столбец B) обе ячейки
-// имеют обычную правую границу — при печати она отделяет левую наклейку от
-// правой, по ней и режут лист. У правой наклейки границы нет.
-type qrStyles struct {
-	codeLeft  int // верхняя ячейка левой наклейки: код + правая граница
-	codeRight int // верхняя ячейка правой наклейки: только код
-	imgLeft   int // нижняя ячейка левой наклейки: пусто + правая граница
-}
-
-// newQRStyles заводит стили наклейки: код — по центру ячейки с переносом
-// длинного значения на две строки, граница — тонкая чёрная справа
-// (Style 1 = thin).
-func newQRStyles(f *excelize.File) (qrStyles, error) {
-	newStyle := func(style *excelize.Style) (int, error) {
-		return f.NewStyle(style)
-	}
-	align := &excelize.Alignment{Horizontal: "center", Vertical: "center", WrapText: true}
-	rightBorder := []excelize.Border{{Type: "right", Color: "000000", Style: 1}}
-
-	var styles qrStyles
-	var err error
-	styles.codeLeft, err = newStyle(&excelize.Style{
-		Font:      &excelize.Font{Size: qrFontSize},
-		Alignment: align,
-		Border:    rightBorder,
-	})
-	if err != nil {
-		return qrStyles{}, err
-	}
-	styles.codeRight, err = newStyle(&excelize.Style{
-		Font:      &excelize.Font{Size: qrFontSize},
-		Alignment: align,
-	})
-	if err != nil {
-		return qrStyles{}, err
-	}
-	styles.imgLeft, err = newStyle(&excelize.Style{Border: rightBorder})
-	if err != nil {
-		return qrStyles{}, err
-	}
-	return styles, nil
-}
-
 // newQRLabelsWorkbook собирает книгу QR-наклеек (в памяти) и возвращает число
-// сформированных наклеек. Раскладка: наклейки идут парами — чётная в столбец B,
-// нечётная в столбец C, — пара занимает две строки (верхняя — код, нижняя —
-// картинка) и печатается на отдельной странице.
+// сформированных наклеек. Раскладка: наклейка n (с нуля) — столбец B при чётном
+// n и C при нечётном, строка пары — 1 + 2*(n/2).
 func newQRLabelsWorkbook(units []receiving.Unit) (*excelize.File, int, error) {
 	f := excelize.NewFile()
 	sheet := f.GetSheetName(0)
@@ -129,9 +79,8 @@ func newQRLabelsWorkbook(units []receiving.Unit) (*excelize.File, int, error) {
 		return nil, 0, err
 	}
 
-	topRow := 1 // верхняя строка текущей пары
-	lastRow := 1
 	labels := 0
+	lastRow := 0
 	for _, u := range units {
 		var produced time.Time
 		if u.ProducedOn != nil {
@@ -146,100 +95,128 @@ func newQRLabelsWorkbook(units []receiving.Unit) (*excelize.File, int, error) {
 			continue // полного внутреннего кода нет — наклейку не собрать
 		}
 
-		// Наклейки идут парами: чётная — левая (столбец B), нечётная — правая (C).
 		col := "B"
 		if labels%2 == 1 {
 			col = "C"
 		}
-		topAxis := fmt.Sprintf("%s%d", col, topRow)
-		imgAxis := fmt.Sprintf("%s%d", col, topRow+1)
+		topAxis := fmt.Sprintf("%s%d", col, 1+2*(labels/2))
+		imgAxis := fmt.Sprintf("%s%d", col, 2+2*(labels/2))
 
-		// Верхняя ячейка: 29-значный код куска текстом — тот же, что и в QR
-		// (как на этикетке: визуальный контроль и ручной ввод, если сканер не
-		// читает картинку).
+		// Верхняя ячейка: код куска текстом (ручной ввод, если сканер не читает).
+		codeStyle, imgStyle := styles.codeC, 0
+		if col == "B" {
+			codeStyle, imgStyle = styles.codeB, styles.imgB
+		}
 		_ = f.SetCellValue(sheet, topAxis, code)
-		// Нижняя ячейка: картинка QR-кода.
-		pngBytes, size, err := generateQRPNG(code, qrCellW, qrCellH)
+		_ = f.SetCellStyle(sheet, topAxis, topAxis, codeStyle)
+		// Нижняя ячейка: пусто под картинку; у левой наклейки — с границей.
+		_ = f.SetCellStyle(sheet, imgAxis, imgAxis, imgStyle)
+
+		img, err := generateQRPNG(code)
 		if err != nil {
 			return nil, 0, fmt.Errorf("QR-код %s: %w", code, err)
 		}
 		_ = f.AddPictureFromBytes(sheet, imgAxis, &excelize.Picture{
 			Extension: ".png",
-			File:      pngBytes,
+			File:      img.PNG,
 			Format: &excelize.GraphicOptions{
-				ScaleX:  1.0,
-				ScaleY:  1.0,
-				OffsetX: (qrCellW - size) / 2,
-				OffsetY: (qrCellH - size) / 2,
-				// Positioning: "oneCell" — картинка не растягивается вместе с
-				// ячейкой; размер задан пикселями PNG.
+				ScaleX:      1.0,
+				ScaleY:      1.0,
+				OffsetX:     (qrCellW - img.Size) / 2,
+				OffsetY:     (qrCellH - img.Size) / 2,
 				Positioning: "oneCell",
 			},
 		})
 
-		if col == "B" {
-			_ = f.SetCellStyle(sheet, topAxis, topAxis, styles.codeLeft)
-			_ = f.SetCellStyle(sheet, imgAxis, imgAxis, styles.imgLeft)
-		} else {
-			_ = f.SetCellStyle(sheet, topAxis, topAxis, styles.codeRight)
-		}
-
-		lastRow = topRow + 1
 		labels++
-		if labels%2 == 0 {
-			topRow += 2 // пара строк заполнена — следующая страница
-		}
+		// lastRow — строка картинки последней наклейки: ряд пары 1 + 2*(n/2).
+		lastRow = 2 + 2*((labels-1)/2)
 	}
 
-	// Высоты строк — по образцу: верхняя 24,75 pt (33 px), нижняя 59,25 pt (79 px).
-	for r := 1; r <= lastRow; r += 2 {
-		_ = f.SetRowHeight(sheet, r, qrCodeRowH)
-		_ = f.SetRowHeight(sheet, r+1, qrImgRowH)
-	}
 	_ = f.SetColWidth(sheet, "B", "C", qrColWidth)
-
+	for row := 1; row <= lastRow; row += 2 {
+		_ = f.SetRowHeight(sheet, row, qrCodeRowH)
+		_ = f.SetRowHeight(sheet, row+1, qrImgRowH)
+	}
 	if labels > 0 {
-		// В область печати входят оба столбца наклеек.
 		printArea := fmt.Sprintf("%s!$B$1:$C$%d", sheet, lastRow)
 		_ = f.SetDefinedName(&excelize.DefinedName{
 			Name:     "_xlnm.Print_Area",
 			RefersTo: printArea,
 			Scope:    sheet,
 		})
-		// Отсечка страницы после каждой второй строки: страница = пара наклеек
-		// (строки 1-2, 3-4, ...).
-		for r := 3; r <= lastRow; r += 2 {
-			_ = f.InsertPageBreak(sheet, fmt.Sprintf("B%d", r))
+		// Отсечка страницы после каждой второй строки (страницы — строки 1-2,
+		// 3-4, ...): новая страница начинается с третьей строки и далее через две.
+		for row := 3; row <= lastRow; row += 2 {
+			_ = f.InsertPageBreak(sheet, fmt.Sprintf("B%d", row))
 		}
 	}
 	return f, labels, nil
 }
 
-// generateQRPNG создаёт PNG-байты QR-кода и возвращает его размер в пикселях.
-// QR — матричный код, поэтому масштаб берётся ЦЕЛЫМ числом (модуль кода должен
-// оставаться квадратным, иначе сканер не прочитает картинку): factor —
-// максимум, при котором код влезает в ячейку. Не целой остаётся величина
-// отступа — центрирование делает вызывающий (OffsetX/OffsetY картинки).
-func generateQRPNG(data string, cellW, cellH int) ([]byte, int, error) {
+// qrStyles — стили ячеек наклейки. У левой наклейки пары (столбец B) правая
+// граница отделяет её от правой наклейки — по этой линии лист режут при печати.
+type qrStyles struct {
+	codeB int // верхняя ячейка левой наклейки: код и правая граница.
+	codeC int // верхняя ячейка правой наклейки: код без границы.
+	imgB  int // нижняя ячейка левой наклейки: пусто и правая граница.
+}
+
+// newQRStyles заводит стили ячеек наклейки: шрифт с переносом для 29 цифр кода и
+// правую границу у левой наклейки (Style 1 — обычная тонкая линия).
+func newQRStyles(f *excelize.File) (qrStyles, error) {
+	font := &excelize.Font{Size: qrFontSize}
+	align := &excelize.Alignment{Horizontal: "center", Vertical: "center", WrapText: true}
+	rightBorder := []excelize.Border{{Type: "right", Color: "000000", Style: 1}}
+
+	codeB, err := f.NewStyle(&excelize.Style{Font: font, Alignment: align, Border: rightBorder})
+	if err != nil {
+		return qrStyles{}, err
+	}
+	codeC, err := f.NewStyle(&excelize.Style{Font: font, Alignment: align})
+	if err != nil {
+		return qrStyles{}, err
+	}
+	imgB, err := f.NewStyle(&excelize.Style{Border: rightBorder})
+	if err != nil {
+		return qrStyles{}, err
+	}
+	return qrStyles{codeB: codeB, codeC: codeC, imgB: imgB}, nil
+}
+
+// qrImage — готовая картинка QR-кода: PNG-байты и сторона квадрата в пикселях
+// (нужна вызывающему, чтобы отцентрировать картинку в ячейке).
+type qrImage struct {
+	PNG  []byte
+	Size int
+}
+
+// generateQRPNG создаёт PNG-байты QR-кода и его размер в пикселях. QR —
+// матричный код, поэтому масштаб берётся ЦЕЛЫМ числом модулей (при нецелом
+// модуль перестаёт быть квадратным и сканер картинку не прочитает): factor —
+// максимум, при котором код влезает в ячейку. Не целым остаётся только отступ —
+// центрирование делает вызывающий.
+func generateQRPNG(data string) (qrImage, error) {
 	code, err := qr.Encode(data, qr.M, qr.Auto)
 	if err != nil {
-		return nil, 0, err
+		return qrImage{}, err
 	}
-	bounds := code.Bounds()
-	modules := bounds.Dx()
-	factor := min(cellW/modules, cellH/modules)
+
+	modules := code.Bounds().Dx()
+	factor := min(qrCellW/modules, qrCellH/modules)
 	if factor < 1 {
-		return nil, 0, fmt.Errorf("код %d×%d модулей не влезает в ячейку %d×%d px", modules, modules, cellW, cellH)
+		return qrImage{}, fmt.Errorf("код %d×%d модулей не влезает в ячейку %d×%d px",
+			modules, modules, qrCellW, qrCellH)
 	}
 	size := modules * factor
 
 	scaled, err := barcode.Scale(code, size, size)
 	if err != nil {
-		return nil, 0, err
+		return qrImage{}, err
 	}
 	var buf bytes.Buffer
 	if err := png.Encode(&buf, scaled); err != nil {
-		return nil, 0, err
+		return qrImage{}, err
 	}
-	return buf.Bytes(), size, nil
+	return qrImage{PNG: buf.Bytes(), Size: size}, nil
 }
