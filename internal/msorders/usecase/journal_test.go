@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"warehouseHelper/internal/msclient/client"
 	"warehouseHelper/internal/msorders"
 )
 
@@ -19,13 +20,17 @@ import (
 // проверить, что сценарий пишет ровно то, что должен, и не пишет лишнего.
 // Чтение журнала (/sroki) здесь не проверяется — им занят fakeShelfLifeJournal.
 type fakeJournal struct {
-	replaces   []msorders.PickingReplace
-	appends    [][]msorders.PickingUnit
-	removals   []msorders.PickingReturn
-	clears     []journalClear
-	clearProds []journalClearProducts
-	cleanups   []time.Time
-	cleanupN   int64
+	replaces []msorders.PickingReplace
+	appends  [][]msorders.PickingUnit
+	removals []msorders.PickingReturn
+	clears   []journalClear
+	cleanups []time.Time
+	cleanupN int64
+
+	// units — строки журнала для чтения (OrderPickingByOrder): нужны
+	// расформированию, которое ищет мёртвые позиции по журналу и заказу.
+	units    []msorders.PickingUnit
+	unitsErr error
 
 	replaceErr error
 	appendErr  error
@@ -43,12 +48,6 @@ type fakeJournal struct {
 type journalClear struct {
 	orderID     string
 	positionIDs []string
-}
-
-// journalClearProducts — вызов ClearOrderPickingProducts (orderID + товары).
-type journalClearProducts struct {
-	orderID    string
-	productIDs []string
 }
 
 func (f *fakeJournal) ReplaceOrderPicking(_ context.Context, r msorders.PickingReplace) error {
@@ -75,12 +74,6 @@ func (f *fakeJournal) ClearOrderPicking(_ context.Context, orderID string, posit
 	return f.clearErr
 }
 
-func (f *fakeJournal) ClearOrderPickingProducts(_ context.Context, orderID string, productIDs []string) error {
-	f.clearProds = append(f.clearProds, journalClearProducts{orderID: orderID, productIDs: productIDs})
-
-	return f.clearErr
-}
-
 func (f *fakeJournal) CleanupOrderPicking(_ context.Context, olderThan time.Time) (int64, error) {
 	f.cleanups = append(f.cleanups, olderThan)
 	if f.cleanupCh != nil {
@@ -93,9 +86,10 @@ func (f *fakeJournal) CleanupOrderPicking(_ context.Context, olderThan time.Time
 	return f.cleanupN, f.cleanupErr
 }
 
-// OrderPickingByOrder — чтение журнала: сценарии записи его не трогают.
+// OrderPickingByOrder — чтение журнала: сценарии записи его не трогают,
+// расформированию отдаёт заданные строки (units).
 func (f *fakeJournal) OrderPickingByOrder(context.Context, string) ([]msorders.PickingUnit, error) {
-	return nil, errors.New("OrderPickingByOrder не нужен в тестах записи журнала")
+	return f.units, f.unitsErr
 }
 
 // jDay — UTC-полночь дня 2026 года: ожидания дат журнала (bb — срок годности,
@@ -470,69 +464,135 @@ func TestSubmitManualClearsJournalPositions(t *testing.T) {
 }
 
 // ClearShelfLife — очистка по расформированию заказа: пустой productIDs —
-// весь заказ, непустой — только товары (позиций в событии аудита нет); журнал
-// не подключён — чистить нечего, ошибки нет (расформирование не страдает).
+// весь заказ (отмена); непустой — только строки позиций, которых в заказе уже
+// нет. Одинаковые товары живут отдельными позициями, поэтому удаление одной
+// позиции НЕ должно трогать даты остальных (прод-баг 04.10.2026, заказ 07189:
+// убрали строку Вырезки 2,125 кг — из ответа /sroki пропали все три строки
+// Вырезки, две из них оставались в заказе).
 func TestClearShelfLife(t *testing.T) {
-	orderID := "00023557-7e97-11e7-7a34-5acf0020c748"
+	const (
+		orderID   = "00023557-7e97-11e7-7a34-5acf0020c748"
+		vyrezkaID = "10da451f-a1b1-11e6-7a31-d0fd000e9e27"
+		otherID   = "9cc41a2b-ca87-11e6-7a34-5acf000f11f4"
+	)
 
-	cases := []struct {
-		name        string
-		journal     bool
-		orderID     string
-		productIDs  []string
-		wantErr     error
-		wantClears  int
-		wantProds   int
-		wantOrderID string
-	}{
-		{name: "журнал не подключён", journal: false, orderID: orderID},
-		{name: "журнал не подключён, пустой id", journal: false, orderID: ""},
-		{name: "весь заказ", journal: true, orderID: orderID, wantClears: 1, wantOrderID: orderID},
-		{name: "только товары", journal: true, orderID: orderID, productIDs: []string{"p1", "p2"},
-			wantProds: 1, wantOrderID: orderID},
-		{name: "пустой id — отказ", journal: true, orderID: "   ", wantErr: ErrEmptyOrderID},
+	posFixture := func(id, productID string) client.MSPosition {
+		p := client.MSPosition{ID: id}
+		p.Assortment.Meta.HREF = "https://api.moysklad.ru/api/remap/1.2/entity/product/" + productID
+
+		return p
+	}
+	unitLine := func(positionID, productID string) msorders.PickingUnit {
+		return msorders.PickingUnit{OrderID: orderID, PositionID: positionID, ProductID: productID}
 	}
 
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			uc := NewUseCase(&fakeOrderDetail{}, &fakeCatalog{}, nil, nil, nil)
-			var j *fakeJournal
-			if c.journal {
-				j = &fakeJournal{}
-				uc.SetPickingJournal(j)
-			}
+	t.Run("журнал не подключён", func(t *testing.T) {
+		uc := NewUseCase(&fakeOrderDetail{}, &fakeCatalog{}, nil, nil, nil)
 
-			err := uc.ClearShelfLife(context.Background(), c.orderID, c.productIDs)
-			if c.wantErr != nil {
-				if !errors.Is(err, c.wantErr) {
-					t.Fatalf("ClearShelfLife err = %v, want %v", err, c.wantErr)
-				}
+		if err := uc.ClearShelfLife(context.Background(), orderID, []string{vyrezkaID}); err != nil {
+			t.Fatalf("ClearShelfLife: %v", err)
+		}
+	})
 
-				return
-			}
-			if err != nil {
-				t.Fatalf("ClearShelfLife: %v", err)
-			}
-			if j == nil {
-				return
-			}
+	t.Run("пустой id — отказ", func(t *testing.T) {
+		j := &fakeJournal{}
+		uc := NewUseCase(&fakeOrderDetail{}, &fakeCatalog{}, nil, nil, nil)
+		uc.SetPickingJournal(j)
 
-			if len(j.clears) != c.wantClears || len(j.clearProds) != c.wantProds {
-				t.Fatalf("clears=%d clearProds=%d, want %d и %d: %+v / %+v",
-					len(j.clears), len(j.clearProds), c.wantClears, c.wantProds, j.clears, j.clearProds)
-			}
-			if len(j.clears) == 1 {
-				checkClear(t, j.clears, c.wantOrderID, c.productIDs)
-			}
-			if len(j.clearProds) == 1 {
-				cw := j.clearProds[0]
-				if cw.orderID != c.wantOrderID || !slices.Equal(cw.productIDs, c.productIDs) {
-					t.Errorf("ClearOrderPickingProducts = {%s %v}, want {%s %v}",
-						cw.orderID, cw.productIDs, c.wantOrderID, c.productIDs)
-				}
-			}
-		})
-	}
+		err := uc.ClearShelfLife(context.Background(), "   ", []string{vyrezkaID})
+		if !errors.Is(err, ErrEmptyOrderID) {
+			t.Fatalf("ClearShelfLife err = %v, want %v", err, ErrEmptyOrderID)
+		}
+		if len(j.clears) != 0 {
+			t.Errorf("ClearOrderPicking вызовов = %d, want 0: %+v", len(j.clears), j.clears)
+		}
+	})
+
+	t.Run("весь заказ", func(t *testing.T) {
+		j := &fakeJournal{}
+		uc := NewUseCase(&fakeOrderDetail{}, &fakeCatalog{}, nil, nil, nil)
+		uc.SetPickingJournal(j)
+
+		if err := uc.ClearShelfLife(context.Background(), orderID, nil); err != nil {
+			t.Fatalf("ClearShelfLife: %v", err)
+		}
+		checkClear(t, j.clears, orderID, nil)
+	})
+
+	t.Run("удалённая позиция — чистим только её", func(t *testing.T) {
+		// Три позиции одного товара и одна чужая; журнал помнит все четыре,
+		// в заказе остались pos-2, pos-3 и pos-9 — удалена только pos-1.
+		j := &fakeJournal{units: []msorders.PickingUnit{
+			unitLine("pos-1", vyrezkaID),
+			unitLine("pos-2", vyrezkaID),
+			unitLine("pos-3", vyrezkaID),
+			unitLine("pos-9", otherID),
+		}}
+		ms := &fakeOrderDetail{order: &client.MSOrder{ID: orderID}, positions: []client.MSPosition{
+			posFixture("pos-2", vyrezkaID),
+			posFixture("pos-3", vyrezkaID),
+			posFixture("pos-9", otherID),
+		}}
+		uc := NewUseCase(ms, &fakeCatalog{}, nil, nil, nil)
+		uc.SetPickingJournal(j)
+
+		if err := uc.ClearShelfLife(context.Background(), orderID, []string{vyrezkaID}); err != nil {
+			t.Fatalf("ClearShelfLife: %v", err)
+		}
+		checkClear(t, j.clears, orderID, []string{"pos-1"})
+	})
+
+	t.Run("товар заменён в строке — старые строки уходят", func(t *testing.T) {
+		// Позиция жива, но держит уже другой товар: менеджер заменил ассортимент
+		// в строке, МС пишет это правкой позиции — строки прежнего товара мёртвы.
+		j := &fakeJournal{units: []msorders.PickingUnit{unitLine("pos-1", vyrezkaID)}}
+		ms := &fakeOrderDetail{order: &client.MSOrder{ID: orderID}, positions: []client.MSPosition{
+			posFixture("pos-1", otherID),
+		}}
+		uc := NewUseCase(ms, &fakeCatalog{}, nil, nil, nil)
+		uc.SetPickingJournal(j)
+
+		if err := uc.ClearShelfLife(context.Background(), orderID, []string{vyrezkaID}); err != nil {
+			t.Fatalf("ClearShelfLife: %v", err)
+		}
+		checkClear(t, j.clears, orderID, []string{"pos-1"})
+	})
+
+	t.Run("чужие товары не трогаем", func(t *testing.T) {
+		// Мёртвая позиция чужого товара (не из события) остаётся в журнале:
+		// состав возврата даёт событие, за его пределами чистить нечего.
+		j := &fakeJournal{units: []msorders.PickingUnit{unitLine("pos-9", otherID)}}
+		ms := &fakeOrderDetail{order: &client.MSOrder{ID: orderID}}
+		uc := NewUseCase(ms, &fakeCatalog{}, nil, nil, nil)
+		uc.SetPickingJournal(j)
+
+		if err := uc.ClearShelfLife(context.Background(), orderID, []string{vyrezkaID}); err != nil {
+			t.Fatalf("ClearShelfLife: %v", err)
+		}
+		if len(j.clears) != 0 {
+			t.Errorf("ClearOrderPicking вызовов = %d, want 0: %+v", len(j.clears), j.clears)
+		}
+	})
+
+	t.Run("заказ не получен — строки не трогаем", func(t *testing.T) {
+		// Состав заказа неизвестен: молча снести даты живых позиций нельзя,
+		// ошибка уходит наверх, журнал остаётся как есть.
+		j := &fakeJournal{units: []msorders.PickingUnit{unitLine("pos-1", vyrezkaID)}}
+		ms := &fakeOrderDetail{
+			order:        &client.MSOrder{ID: orderID},
+			positionsErr: errors.New("МС недоступен"),
+		}
+		uc := NewUseCase(ms, &fakeCatalog{}, nil, nil, nil)
+		uc.SetPickingJournal(j)
+
+		if err := uc.ClearShelfLife(context.Background(), orderID, []string{vyrezkaID}); err == nil {
+			t.Fatal("ClearShelfLife = nil, want ошибку чтения позиций заказа")
+		}
+		if len(j.clears) != 0 {
+			t.Errorf("ClearOrderPicking вызовов = %d, want 0 (позиции не получены): %+v",
+				len(j.clears), j.clears)
+		}
+	})
 }
 
 // Ретеншен: без журнала и без ретеншена чистка не запускается; с ретеншеном

@@ -163,9 +163,6 @@ func TestPickingEmptyInputSkipsDB(t *testing.T) {
 	if err := pg.AppendOrderPicking(ctx, []msorders.PickingUnit{}); err != nil {
 		t.Errorf("AppendOrderPicking(пустой) = %v, want nil", err)
 	}
-	if err := pg.ClearOrderPickingProducts(ctx, "ord-1", nil); err != nil {
-		t.Errorf("ClearOrderPickingProducts(nil) = %v, want nil", err)
-	}
 	// Count 0 — «вернулось ноль единиц»: удалять нечего, запрос не нужен.
 	if err := pg.RemoveOrderPickingUnits(ctx, msorders.PickingReturn{OrderID: "ord-1"}); err != nil {
 		t.Errorf("RemoveOrderPickingUnits(count=0) = %v, want nil", err)
@@ -201,11 +198,6 @@ func TestOrderPickingSQL(t *testing.T) {
 			name: "очистка заказа",
 			sql:  orderPickingDeleteOrderSQL,
 			want: []string{"order_id = $1"},
-		},
-		{
-			name: "очистка по товарам",
-			sql:  orderPickingDeleteByProductsSQL,
-			want: []string{"order_id = $1", "product_id = ANY($2)"},
 		},
 		{
 			name: "возврат единиц в сроки",

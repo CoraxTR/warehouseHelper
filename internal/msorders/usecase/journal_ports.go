@@ -27,12 +27,11 @@ type PickingJournal interface {
 	RemoveOrderPickingUnits(ctx context.Context, r msorders.PickingReturn) error
 	// ClearOrderPicking — очистка журнала заказа: positionIDs пусто — весь
 	// заказ (отмена/расформирование), иначе только перечисленные позиции
-	// (позиция удалена из заказа, ручное закрытие строки).
+	// (позиция удалена из заказа, ручное закрытие строки). Позицию удаления
+	// сценарий вычисляет сам, сверяя журнал с живыми позициями МС.
 	ClearOrderPicking(ctx context.Context, orderID string, positionIDs []string) error
-	// ClearOrderPickingProducts — очистка журнала по товарам заказа (позиции
-	// удалены из заказа, известны только uuid товаров из диффа аудита МС).
-	ClearOrderPickingProducts(ctx context.Context, orderID string, productIDs []string) error
-	// OrderPickingByOrder — строки журнала заказа (для ответа на /sroki).
+	// OrderPickingByOrder — строки журнала заказа (для ответа на /sroki и для
+	// поиска мёртвых позиций при расформировании).
 	OrderPickingByOrder(ctx context.Context, orderID string) ([]msorders.PickingUnit, error)
 	// CleanupOrderPicking — удалить строки старше olderThan, вернуть число
 	// удалённых (ретеншен журнала: номер заказа повторяется каждый год).
