@@ -46,7 +46,7 @@ func TestRecalcAffectedStockEventReturnsExpiryOutOfExpiryDay(t *testing.T) {
 	h.tasks.texts, h.tasks.tries = nil, nil
 
 	// Событие стока: расформированный лот вернулся в остатки — остаток вырос.
-	h.uc.MarkGrown("p-affected")
+	h.uc.MarkGrown("p-affected", day(5))
 	h.uc.runSteps(ctx, affectedSchedule())
 
 	if got := len(h.batches()); got != 1 {
@@ -99,7 +99,7 @@ func TestRecalcAffectedTelegramDayKeepsExpiryStill(t *testing.T) {
 	h.tasks.texts, h.tasks.tries = nil, nil
 
 	// Событие стока: приёмка вернула остаток пары (рост).
-	h.uc.MarkGrown("p-affected")
+	h.uc.MarkGrown("p-affected", day(5))
 	h.uc.runSteps(ctx, affectedSchedule())
 
 	if got := h.batches(); len(got) != 0 {
@@ -121,7 +121,7 @@ func TestRecalcAffectedLeavesQuietProductsAlone(t *testing.T) {
 	)
 	ctx := context.Background()
 
-	h.uc.MarkGrown("p-event")
+	h.uc.MarkGrown("p-event", day(5))
 	h.uc.runSteps(ctx, affectedSchedule())
 
 	if got := len(h.batches()); got != 1 {
@@ -189,7 +189,7 @@ func TestRunStepsNoRecalcWithoutEvents(t *testing.T) {
 
 	// Событие стока в тот же час: пересчёт идёт сразу (ступень + уведомление),
 	// и час остаётся отмеченным — второго, полного пересчёта в проходе нет.
-	h.uc.MarkGrown("p-one")
+	h.uc.MarkGrown("p-one", day(5))
 	h.uc.runSteps(ctx, s)
 	if got := len(h.batches()); got != 1 {
 		t.Fatalf("проход с событием записал %d батчей, ожидался 1: %v", got, h.batches())
@@ -214,7 +214,7 @@ func TestRunAffectedKeepsEventOnError(t *testing.T) {
 
 	// Событие пришло (приёмка прибавила остаток), а снапшот входа недоступен:
 	// шаг падает, записи нет.
-	h.uc.MarkGrown("p-one")
+	h.uc.MarkGrown("p-one", day(5))
 	h.turn.avgErr = errors.New("БД недоступна")
 	h.uc.runSteps(ctx, s)
 	if got := len(h.batches()); got != 0 {
@@ -253,7 +253,8 @@ func TestRecalcAffectedKeepsAppliedExpiryStill(t *testing.T) {
 	h.tasks.texts, h.tasks.tries = nil, nil
 
 	// Событие стока по обоим товарам: приёмка прибавила остаток.
-	h.uc.MarkGrown("p-applied", "p-empty")
+	h.uc.MarkGrown("p-applied", day(5))
+	h.uc.MarkGrown("p-empty", day(5))
 	h.uc.runSteps(ctx, affectedSchedule())
 
 	if got := len(h.batches()); got != 1 {
@@ -301,7 +302,7 @@ func TestRecalcAffectedPickDoesNotFillEmptyPlace(t *testing.T) {
 
 	// Контроль: приёмка прибавила остаток — ступень 40 уходит на сайт.
 	hGrown := fixture()
-	hGrown.uc.MarkGrown("p-picked")
+	hGrown.uc.MarkGrown("p-picked", day(5))
 	hGrown.uc.runSteps(ctx, affectedSchedule())
 	if got := len(hGrown.batches()); got != 1 {
 		t.Fatalf("под приёмкой батчей %d, ожидался 1: %v", got, hGrown.batches())
@@ -504,7 +505,7 @@ func TestRecalcAffectedManualEditDoesNotFillEmptyPlace(t *testing.T) {
 
 	// Контроль: рост остатка — дальняя пара получает свою ступень 40.
 	hGrown := fixture()
-	hGrown.uc.MarkGrown("p-manual")
+	hGrown.uc.MarkGrown("p-manual", day(5))
 	hGrown.uc.runSteps(ctx, affectedSchedule())
 	gotExpiry := 0
 	for _, b := range hGrown.batches() {
@@ -534,5 +535,72 @@ func TestRecalcAffectedManualEditDoesNotFillEmptyPlace(t *testing.T) {
 				t.Errorf("ручная правка поставила ступень по сроку: %+v", w)
 			}
 		}
+	}
+}
+
+// Приёмка ДАЛЬНЕГО лота не даёт права на ступень ближнему (решение владельца
+// 05.10.2026, кейс с сайта): лот 12.10 стоял на остатках без скидки, приехал лот
+// 25.10 — и минутный проход вне КТ-дня поставил 30 % на 12.10, которого приёмка
+// не касалась. Право роста адресное: пустое место заполняется только у пары,
+// чей остаток вырос. Контроль в том же тесте: приёмка САМОГО лота ступень ему
+// ставит — значит тишина выше это запрет чужого роста, а не пустая фикстура.
+func TestRecalcAffectedReceiptOfFarLotLeavesNearLotAlone(t *testing.T) {
+	now := day(0).Add(8 * time.Hour) // понедельник, 08:00 — вне КТ-дней
+	if expiryDay(now) {
+		t.Fatalf("тест требует не-КТ день, а %s — КТ-день", now.Weekday())
+	}
+	ctx := context.Background()
+	fixture := func() *recalcHarness {
+		return newRecalcHarness(now,
+			// Ближний лот на остатках: D = 7 → ступень 30 %, скидки нет.
+			lotInput("p-recv", "Стейк Филе-Миньон", day(7), 3, shelfLifeInput(30)),
+			// Принятая партия с дальним сроком: D = 20, ступени на сегодня нет.
+			lotInput("p-recv", "Стейк Филе-Миньон", day(20), 10, shelfLifeInput(30)),
+		)
+	}
+
+	// Приёмка дальнего лота: ближний не тронут — ни записи, ни уведомления.
+	h := fixture()
+	if err := h.uc.RecalcSurplus(ctx, now); err != nil {
+		t.Fatalf("RecalcSurplus (наполнение): %v", err)
+	}
+	h.tasks.texts, h.tasks.tries = nil, nil
+
+	h.uc.MarkGrown("p-recv", day(20))
+	h.uc.runSteps(ctx, affectedSchedule())
+
+	if got := h.batches(); len(got) != 0 {
+		t.Errorf("батчи записи: %+v, want ни одного: приёмка лота дальнего срока не даёт права на ступень ближнему", got)
+	}
+	if len(h.tasks.texts) != 0 {
+		t.Errorf("уведомления %q, want тишину", h.tasks.texts)
+	}
+	for _, in := range h.repo.inputs {
+		if in.BestBefore.Equal(day(7)) && in.GeneralPlain != nil {
+			t.Errorf("general ближнего лота стал %d, want пусто", *in.GeneralPlain)
+		}
+	}
+
+	// Контроль: приёмка самого ближнего лота право даёт — ступень 30 уходит паре.
+	hNear := fixture()
+	if err := hNear.uc.RecalcSurplus(ctx, now); err != nil {
+		t.Fatalf("RecalcSurplus (наполнение): %v", err)
+	}
+	hNear.tasks.texts, hNear.tasks.tries = nil, nil
+
+	hNear.uc.MarkGrown("p-recv", day(7))
+	hNear.uc.runSteps(ctx, affectedSchedule())
+
+	batches := hNear.batches()
+	if len(batches) != 1 || len(batches[0]) != 1 {
+		t.Fatalf("батчи приёмки ближнего лота: %+v", batches)
+	}
+	if w := batches[0][0]; !w.BestBefore.Equal(day(7)) || w.General == nil || *w.General != 30 ||
+		w.Source != discounts.SourceExpiry.String() {
+		t.Errorf("правка приёмки: %+v, ожидалась ступень 30 у ближней пары", w)
+	}
+	want := []string{"Поставить скидку 30% на Стейк Филе-Миньон сроки до: " + day(7).Format(notifyLayout)}
+	if !reflect.DeepEqual(hNear.tasks.texts, want) {
+		t.Errorf("уведомления %q, want %q", hNear.tasks.texts, want)
 	}
 }
