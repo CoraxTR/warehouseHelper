@@ -214,9 +214,15 @@ func returnRowPositions(rows []PickReturnRow) []string {
 
 // ClearShelfLife — очистка журнала сроков по расформированному заказу (шов
 // модуля «Возврат в продажу»): productIDs пусто — весь заказ (заказ отменён
-// целиком), иначе — только позиции этих товаров (менеджер убрал их из заказа).
-// Идентификаторы позиций в событии аудита не приходят, поэтому чистим по uuid
-// товаров; журнал не подключён — чистить нечего, расформирование не страдает.
+// целиком); иначе — только строки позиций, которых в заказе УЖЕ НЕТ.
+//
+// Одинаковые товары живут в заказе отдельными позициями (у каждой свой вес и
+// свои сроки), поэтому чистить по uuid товара нельзя: удаление одной позиции
+// сносило даты остальных живых позиций того же товара (прод-баг 04.10.2026,
+// заказ 07189 — из ответа /sroki пропали все три строки Вырезки, две из них
+// оставались в заказе). Границу «живая/мёртвая» даёт сам заказ: id позиций в
+// событии аудита не приходят, но их отдаёт МС, а журнал хранит position_id.
+// Журнал не подключён — чистить нечего, расформирование не страдает.
 func (uc *UseCase) ClearShelfLife(ctx context.Context, orderID string, productIDs []string) error {
 	if uc.journal == nil {
 		return nil
@@ -228,7 +234,104 @@ func (uc *UseCase) ClearShelfLife(ctx context.Context, orderID string, productID
 		return uc.journal.ClearOrderPicking(ctx, orderID, nil)
 	}
 
-	return uc.journal.ClearOrderPickingProducts(ctx, orderID, productIDs)
+	dead, err := uc.deadJournalPositions(ctx, orderID, productIDs)
+	if err != nil {
+		// Состав заказа не получен — строки НЕ трогаем: потерять даты живых
+		// позиций хуже, чем оставить лишние (их видно в /sroki и на странице).
+		slog.Error("msorders: журнал сроков не очищен — позиции заказа не получены",
+			"order", orderID, "err", err)
+
+		return err
+	}
+	if len(dead) == 0 {
+		return nil
+	}
+
+	if err := uc.journal.ClearOrderPicking(ctx, orderID, dead); err != nil {
+		return err
+	}
+	slog.Info("msorders: журнал сроков очищен по удалённым позициям заказа",
+		"order", orderID, "positions", len(dead))
+
+	return nil
+}
+
+// deadJournalPositions — позиции журнала, которых в заказе уже нет (только по
+// товарам события: чужие товары не трогаем). Строка журнала мёртвая, если её
+// позиции нет среди живых ИЛИ та же позиция теперь держит другой товар
+// (менеджер заменил товар в строке — МС пишет это правкой позиции, а не
+// удалением). Пустой список — удалять нечего.
+func (uc *UseCase) deadJournalPositions(ctx context.Context, orderID string, productIDs []string) ([]string, error) {
+	units, err := uc.journal.OrderPickingByOrder(ctx, orderID)
+	if err != nil {
+		return nil, fmt.Errorf("журнал заказа %s: %w", orderID, err)
+	}
+	if len(units) == 0 {
+		return nil, nil
+	}
+
+	live, err := uc.livePositions(ctx, orderID)
+	if err != nil {
+		return nil, err
+	}
+
+	wanted := make(map[string]struct{}, len(productIDs))
+	for _, id := range productIDs {
+		wanted[id] = struct{}{}
+	}
+
+	dead := make([]string, 0, len(units))
+	seen := make(map[string]struct{}, len(units))
+	for i := range units {
+		u := &units[i]
+		if _, ok := wanted[u.ProductID]; !ok {
+			continue // товар не из события — его позиции не наши
+		}
+		if u.PositionID == "" {
+			continue // строка без позиции (старые записи) — удалять не по чему
+		}
+		if product, alive := live[u.PositionID]; alive && product == u.ProductID {
+			continue // позиция жива и держит тот же товар — строки не наши
+		}
+		if _, dup := seen[u.PositionID]; dup {
+			continue
+		}
+		seen[u.PositionID] = struct{}{}
+		dead = append(dead, u.PositionID)
+	}
+
+	return dead, nil
+}
+
+// livePositions — живые позиции заказа: id позиции → uuid товара (последний
+// сегмент assortment.meta.href). Нужны, чтобы отличить строки журнала удалённых
+// позиций от строк позиций, оставшихся в заказе.
+func (uc *UseCase) livePositions(ctx context.Context, orderID string) (map[string]string, error) {
+	order, _, err := uc.ms.FetchOrderByID(ctx, orderID)
+	if err != nil {
+		return nil, fmt.Errorf("заказ %s: %w", orderID, err)
+	}
+
+	positions, _, err := uc.ms.FetchOrderPositionsByHREF(ctx, order)
+	if err != nil {
+		return nil, fmt.Errorf("позиции заказа %s: %w", orderID, err)
+	}
+
+	out := make(map[string]string, len(positions))
+	for i := range positions {
+		id := strings.TrimSpace(positions[i].ID)
+		if id == "" {
+			continue
+		}
+		href := positions[i].Assortment.Meta.HREF
+		product := href
+		if i := strings.LastIndex(href, "/"); i >= 0 {
+			product = href[i+1:]
+		}
+		out[id] = product
+	}
+
+	return out, nil
 }
 
 // RunShelfLifeCleanup чистит журнал подбора старше ретеншена — фоновой задачей:

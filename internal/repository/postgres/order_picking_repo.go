@@ -39,12 +39,6 @@ const orderPickingDeleteOrderSQL = `
     DELETE FROM order_picking
     WHERE order_id = $1`
 
-// orderPickingDeleteByProductsSQL — очистка журнала по товарам заказа: позиции уже
-// удалены из заказа, из диффа аудита МС известны только uuid товаров.
-const orderPickingDeleteByProductsSQL = `
-    DELETE FROM order_picking
-    WHERE order_id = $1 AND product_id = ANY($2)`
-
 // orderPickingRemoveUnitsSQL — возврат единиц в «Сроки»: снимаем РОВНО $5 последних
 // строк, совпавших по коду склада, сроку годности и весу (весовой кусок возвращается
 // тот же, штучных может вернуться несколько). Свежие строки удаляются первыми —
@@ -162,20 +156,7 @@ func (pg *PGClient) ClearOrderPicking(ctx context.Context, orderID string, posit
 	return nil
 }
 
-// ClearOrderPickingProducts чистит журнал по товарам заказа (позиции удалены, известны
-// только uuid товаров из диффа аудита МС). Пустой список — nil без запроса.
-func (pg *PGClient) ClearOrderPickingProducts(ctx context.Context, orderID string, productIDs []string) error {
-	if len(productIDs) == 0 {
-		return nil
-	}
-
-	if _, err := pg.Pool.Exec(ctx, orderPickingDeleteByProductsSQL, orderID, productIDs); err != nil {
-		return fmt.Errorf("clear order picking products (%s): %w", orderID, err)
-	}
-	return nil
-}
-
-// OrderPickingByOrder отдаёт строки журнала заказа (для ответа на /sroki): единицы
+// OrderPickingByOrder отдаёт строки журнала заказа (для ответа на /sroki и поиска
 // подряд по внутреннему коду, внутри товара — по сроку годности.
 func (pg *PGClient) OrderPickingByOrder(ctx context.Context, orderID string) ([]msorders.PickingUnit, error) {
 	rows, err := pg.Pool.Query(ctx, orderPickingByOrderSQL, orderID)

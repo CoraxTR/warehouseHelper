@@ -53,10 +53,6 @@ func (f *fakeShelfLifeJournal) ClearOrderPicking(context.Context, string, []stri
 	return errors.New("ClearOrderPicking не нужен в тестах /sroki")
 }
 
-func (f *fakeShelfLifeJournal) ClearOrderPickingProducts(context.Context, string, []string) error {
-	return errors.New("ClearOrderPickingProducts не нужен в тестах /sroki")
-}
-
 func (f *fakeShelfLifeJournal) CleanupOrderPicking(context.Context, time.Time) (int64, error) {
 	return 0, errors.New("CleanupOrderPicking не нужен в тестах /sroki")
 }
