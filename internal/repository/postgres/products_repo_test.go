@@ -150,21 +150,30 @@ func TestScanProductColumnCount(t *testing.T) {
 }
 
 // TestUpsertProductSQL — три ценовые колонки обязаны быть и в INSERT, и в
-// ON CONFLICT (id) DO UPDATE SET ... = EXCLUDED.…: цены синк перезаписывает
-// всегда (иначе они никогда не появятся в базе), в отличие от ручного site_url,
-// которого в этом запросе быть НЕ должно.
+// ON CONFLICT (id) DO UPDATE SET, но через COALESCE: если МС поля не отдала,
+// прежнее значение в базе обязано остаться (решение владельца «МС не отдал цену
+// — не обнуляем запись»). Ручного site_url в этом запросе быть НЕ должно.
 func TestUpsertProductSQL(t *testing.T) {
 	for _, frag := range []string{
 		"buy_price, sale_price, effective_vat",
 		"$13, $14, $15",
-		"buy_price     = EXCLUDED.buy_price",
-		"sale_price    = EXCLUDED.sale_price",
-		"effective_vat = EXCLUDED.effective_vat",
+		"buy_price     = COALESCE(EXCLUDED.buy_price, products.buy_price)",
+		"sale_price    = COALESCE(EXCLUDED.sale_price, products.sale_price)",
+		"effective_vat = COALESCE(EXCLUDED.effective_vat, products.effective_vat)",
 	} {
 		if !strings.Contains(upsertProductSQL, frag) {
 			t.Errorf("upsertProductSQL: нет фрагмента %q", frag)
 		}
 	}
+
+	// Ни одна цена не должна присваиваться из ответа МС НАПРЯМУЮ: иначе NULL из
+	// ответа затрёт сохранённое значение. Регуляркой, а не подстрокой — чтобы
+	// проверка не зависела от выравнивания пробелами.
+	direct := regexp.MustCompile(`(?m)^\s*(buy_price|sale_price|effective_vat)\s*=\s*EXCLUDED\.`)
+	if direct.MatchString(upsertProductSQL) {
+		t.Error("upsertProductSQL: цена пишется из EXCLUDED напрямую — NULL из ответа МС затрёт сохранённое значение (нужен COALESCE)")
+	}
+
 	if strings.Contains(upsertProductSQL, "site_url") {
 		t.Error("upsertProductSQL: site_url не должен перезаписываться синком (ручной url карточки)")
 	}

@@ -115,9 +115,13 @@ func (pg *PGClient) LoadAllProducts(ctx context.Context) ([]domain.Product, erro
 }
 
 // upsertProductSQL — INSERT ... ON CONFLICT (id) DO UPDATE товара каталога.
-// Цены (buy_price/sale_price/effective_vat) синк ПЕРЕЗАПИСЫВАЕТ всегда: в
-// отличие от ручного site_url (его здесь нет — пишет только карточка позиции,
-// см. SetProductSiteURL), иначе они никогда не появятся в базе.
+// Цены (buy_price/sale_price/effective_vat) при конфликте НЕ затираются пустым
+// значением: COALESCE оставляет прежнее, если МС поля не отдала (у товара нет
+// цены, НДС наследуется от группы) — решение владельца «МС не отдал цену — не
+// обнуляем запись в БД». Для нового товара прежнего значения нет, поэтому
+// вставляется NULL. Остальные поля товара синк по-прежнему перезаписывает
+// снимком. `site_url` в запросе нет вовсе: это ручное поле карточки позиции
+// (SetProductSiteURL), синк его не трогает.
 const upsertProductSQL = `
         INSERT INTO products (
             id, internal_code, name, uom, group_name, folder_id, average_weight,
@@ -136,9 +140,9 @@ const upsertProductSQL = `
             inventory_type = EXCLUDED.inventory_type,
             short_list    = EXCLUDED.short_list,
             track_weekly  = EXCLUDED.track_weekly,
-            buy_price     = EXCLUDED.buy_price,
-            sale_price    = EXCLUDED.sale_price,
-            effective_vat = EXCLUDED.effective_vat
+            buy_price     = COALESCE(EXCLUDED.buy_price, products.buy_price),
+            sale_price    = COALESCE(EXCLUDED.sale_price, products.sale_price),
+            effective_vat = COALESCE(EXCLUDED.effective_vat, products.effective_vat)
     `
 
 // UpsertProduct создаёт или обновляет товар каталога (upsert по id).
