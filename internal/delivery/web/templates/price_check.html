@@ -29,6 +29,12 @@
 
     <div class="av-hint">«Текущая наценка» — по значениям базы. Ввели «Входящий НДС» и нажали Enter — значение ушло в каталог, наценка пересчитана. «Рассчитать наценку» открывает песочницу: там те же четыре значения можно менять (Enter пересчитывает), в каталог они НЕ пишутся и живут отдельно — вернутся, когда снова откроете строку.</div>
 
+    <div class="dates-search">
+        <input type="text" id="pc-search" placeholder="Поиск позиции по названию" autocomplete="off" spellcheck="false">
+        <div id="pc-hits" class="hits hidden"></div>
+    </div>
+    <span id="pc-search-status" class="hint"></span>
+
     <table id="pc-table">
         <thead>
             <tr>
@@ -51,7 +57,7 @@
             {{end}}
             <tr class="pc-row group-hidden" data-pid="{{$p.ProductID}}" data-group="{{$p.GroupName}}">
                 <td class="col-toggle"></td>
-                <td>{{$p.Name}}{{if $p.InternalCode}} <span class="muted small">{{$p.InternalCode}}</span>{{end}}</td>
+                <td class="js-name" data-role="name" tabindex="-1" data-name="{{$p.Name}}">{{$p.Name}}{{if $p.InternalCode}} <span class="muted small">{{$p.InternalCode}}</span>{{end}}</td>
                 <td class="js-markup">{{if $p.Missing}}<span class="hint">не хватает: {{$p.Missing}}</span>{{else}}{{$p.Markup}} %{{end}}</td>
                 <td><input class="pc-input js-vat" type="number" min="0" max="100" step="1" value="{{$p.VatIn}}" title="Enter — сохранить в каталог"></td>
                 <td><button type="button" class="btn-secondary small js-sbox-toggle">Рассчитать наценку</button></td>
@@ -263,6 +269,385 @@
                 var box = sboxRow(row.getAttribute('data-pid'));
                 if (box) { toggleHidden(box); }
             }, false);
+
+            // --- поиск позиции (образец — страница «Сроки») -------------------
+            // Оператор набирает часть названия: под полем появляются похожие
+            // позиции, стрелки/мышь выбирают, Enter раскрывает группу, ставит
+            // фокус на строку и мигает ею. Очки, «похожее» (буквы по порядку) и
+            // мигание перенесены со «Сроков» один в один — образец владельца.
+            // Отличие: строки у нас отрисованы сервером и не перерисовываются,
+            // поэтому фокус ставим сразу, а не через PENDING_FOCUS.
+            var SEARCH = { hits: [], sel: -1 };
+            var SEARCH_LIMIT = 12;    // сколько подсказок показываем
+            var SEARCH_MIN_FUZZY = 3; // запрос короче — только точная подстрока
+            var PRODUCTS = [];        // [{id, name, group, row}] — собираем по строкам
+
+            function collectProducts() {
+                var out = [];
+                var rows = TABLE.getElementsByTagName('TR');
+                for (var i = 0; i < rows.length; i++) {
+                    if (!hasClass(rows[i], 'pc-row')) { continue; }
+                    var cell = rows[i].getElementsByClassName('js-name')[0];
+                    if (!cell) { continue; }
+                    out.push({
+                        id: rows[i].getAttribute('data-pid'),
+                        name: cell.getAttribute('data-name') || '',
+                        group: rows[i].getAttribute('data-group') || '',
+                        row: rows[i]
+                    });
+                }
+                return out;
+            }
+            function initSearch() {
+                var input = document.getElementById('pc-search');
+                if (!input) { return; }
+                PRODUCTS = collectProducts();
+                input.addEventListener('input', onSearchInput);
+                input.addEventListener('keydown', onSearchKey);
+                // Клик по подсказке: прячем список с паузой, иначе blur успевает
+                // убрать его до того, как клик дойдёт до пункта.
+                input.addEventListener('blur', function () { setTimeout(hideHits, 150); });
+                document.getElementById('pc-hits').addEventListener('click', onHitClick);
+            }
+            function searchInput() { return document.getElementById('pc-search'); }
+            function setSearchStatus(text) {
+                var el = document.getElementById('pc-search-status');
+                if (el) { el.textContent = text || ''; }
+            }
+            function trimmed(s) { return String(s == null ? '' : s).replace(/^\s+|\s+$/g, ''); }
+
+            function onSearchInput() {
+                var q = searchInput().value;
+                if (trimmed(q) === '') {
+                    SEARCH.hits = [];
+                    SEARCH.sel = -1;
+                    hideHits();
+                    setSearchStatus('');
+                    return;
+                }
+                SEARCH.hits = searchProducts(q);
+                SEARCH.sel = SEARCH.hits.length ? 0 : -1; // лучший вариант подсвечен сразу
+                setSearchStatus('');
+                renderHits();
+            }
+
+            // Стрелки — выбор, Enter — переход, Esc — закрыть список.
+            // keyCode читаем вместе с key: старые браузеры склада знают только keyCode.
+            function onSearchKey(ev) {
+                var kc = ev.keyCode || ev.which || 0;
+                var key = ev.key || '';
+                if (kc === 40 || key === 'ArrowDown' || key === 'Down') {
+                    ev.preventDefault();
+                    moveSel(1);
+                } else if (kc === 38 || key === 'ArrowUp' || key === 'Up') {
+                    ev.preventDefault();
+                    moveSel(-1);
+                } else if (kc === 13 || key === 'Enter') {
+                    ev.preventDefault();
+                    activateHit();
+                } else if (kc === 27 || key === 'Escape' || key === 'Esc') {
+                    hideHits();
+                }
+            }
+
+            function moveSel(step) {
+                var n = SEARCH.hits.length;
+                if (!n) { return; }
+                var i = SEARCH.sel + step;
+                if (i < 0) { i = n - 1; }
+                if (i >= n) { i = 0; }
+                SEARCH.sel = i;
+                renderHits();
+                scrollHitIntoView(i);
+            }
+
+            // Подсвеченный пункт не должен уехать за границу прокручиваемого списка.
+            function scrollHitIntoView(i) {
+                var box = document.getElementById('pc-hits');
+                var item = box.getElementsByTagName('div')[i];
+                if (!item) { return; }
+                var top = item.offsetTop;
+                var bottom = top + item.offsetHeight;
+                if (top < box.scrollTop) {
+                    box.scrollTop = top;
+                } else if (bottom > box.scrollTop + box.clientHeight) {
+                    box.scrollTop = bottom - box.clientHeight;
+                }
+            }
+
+            function onHitClick(ev) {
+                var box = document.getElementById('pc-hits');
+                var el = ev.target || ev.srcElement;
+                while (el && el !== box && el.nodeType === 1) {
+                    var idx = el.getAttribute ? el.getAttribute('data-hit') : null;
+                    if (idx !== null && idx !== undefined && idx !== '') {
+                        SEARCH.sel = parseInt(idx, 10);
+                        activateHit();
+                        return;
+                    }
+                    el = el.parentNode;
+                }
+            }
+
+            // Enter (или клик): раскрыть группу позиции, показать и подсветить строку.
+            function activateHit() {
+                if (!SEARCH.hits.length) {
+                    setSearchStatus(trimmed(searchInput().value) === ''
+                        ? 'поиск: начните вводить название позиции'
+                        : 'поиск: ничего не найдено — уточните название');
+                    return;
+                }
+                if (SEARCH.sel < 0) { SEARCH.sel = 0; } // Enter без стрелок — самый похожий
+                var p = SEARCH.hits[SEARCH.sel];
+                hideHits();
+                revealProduct(p.id);
+            }
+
+            function revealProduct(id) {
+                var p = findProduct(id);
+                if (!p) {
+                    setSearchStatus('позиция не найдена — обновите страницу и повторите поиск');
+                    return;
+                }
+                // группа позиции — раскрыть (в «Сроках»: STOCK.collapsed[...] = false)
+                var head = groupHead(p.group);
+                if (head && head.getAttribute('data-collapsed') === '1') {
+                    setGroupCollapsed(head, false);
+                }
+                setSearchStatus('');
+                blinkStart(id);
+                var cell = nameCell(p.row);
+                if (cell && cell.focus) {
+                    try { cell.focus(); } catch (e) { /* браузер может отказать — мигания хватит */ }
+                }
+                scrollRowIntoView(p.row);
+            }
+
+            function findProduct(id) {
+                for (var i = 0; i < PRODUCTS.length; i++) {
+                    if (PRODUCTS[i].id === id) { return PRODUCTS[i]; }
+                }
+                return null;
+            }
+            function groupHead(group) {
+                var rows = TABLE.getElementsByTagName('TR');
+                for (var i = 0; i < rows.length; i++) {
+                    if (hasClass(rows[i], 'group-row') && rows[i].getAttribute('data-group') === group) {
+                        return rows[i];
+                    }
+                }
+                return null;
+            }
+            function nameCell(row) { return row.getElementsByClassName('js-name')[0]; }
+
+            // Мигание найденной строки — inline-фоном по ячейкам: CSS-анимация на td
+            // старыми браузерами склада не отрисовывалась (вывод со «Сроков»).
+            var BLINK_STEPS = 6;     // сколько раз мигнуть
+            var BLINK_HALF_MS = 200; // половина цикла вкл/выкл (6 * 2 * 200 мс = 2.4 с)
+            var BLINK_COLOR = '#7A1B22';
+            var BLINK = { product: null, left: 0, on: false, timer: 0 };
+
+            function blinkStart(id) {
+                blinkStop();
+                BLINK.product = id;
+                BLINK.left = BLINK_STEPS;
+                BLINK.on = false;
+                blinkTick();
+            }
+            function blinkStop() {
+                if (BLINK.timer) {
+                    clearTimeout(BLINK.timer);
+                    BLINK.timer = 0;
+                }
+                if (BLINK.product) { blinkPaint(BLINK.product, ''); }
+                BLINK.product = null;
+                BLINK.left = 0;
+                BLINK.on = false;
+            }
+            function blinkPaint(id, color) {
+                var p = findProduct(id);
+                if (!p) { return; }
+                var tds = p.row.getElementsByTagName('td');
+                for (var i = 0; i < tds.length; i++) {
+                    tds[i].style.backgroundColor = color;
+                }
+            }
+            function blinkTick() {
+                var id = BLINK.product;
+                if (!id || BLINK.left <= 0) {
+                    blinkStop();
+                    return;
+                }
+                BLINK.on = !BLINK.on;
+                blinkPaint(id, BLINK.on ? BLINK_COLOR : '');
+                if (BLINK.on) { BLINK.left = BLINK.left - 1; }
+                BLINK.timer = setTimeout(blinkTick, BLINK_HALF_MS);
+            }
+
+            // Строку ставим не под самый верх экрана, а с запасом: над ней должны
+            // остаться шапка таблицы и пояснение — иначе непонятно, где мы.
+            function scrollRowIntoView(row) {
+                var rect = row.getBoundingClientRect();
+                var top = (window.pageYOffset || document.documentElement.scrollTop || document.body.scrollTop || 0) + rect.top;
+                var y = top - 120;
+                if (y < 0) { y = 0; }
+                window.scrollTo(0, y);
+            }
+
+            function hideHits() {
+                var box = document.getElementById('pc-hits');
+                if (box) { box.className = 'hits hidden'; }
+            }
+            function renderHits() {
+                var box = document.getElementById('pc-hits');
+                if (!SEARCH.hits.length) {
+                    box.innerHTML = '<div class="hit-none">ничего не найдено — уточните название</div>';
+                    box.className = 'hits';
+                    return;
+                }
+                var html = '';
+                for (var i = 0; i < SEARCH.hits.length; i++) {
+                    var h = SEARCH.hits[i];
+                    html += '<div class="hit' + (i === SEARCH.sel ? ' sel' : '') + '" data-hit="' + i + '" data-product="' + esc(h.id) + '">' +
+                        '<span class="hit-name">' + h.html + '</span>' +
+                        '<span class="hit-group">' + esc(groupLabel(h.group)) + '</span>' +
+                        '</div>';
+                }
+                box.innerHTML = html;
+                box.className = 'hits';
+            }
+
+            // Похожие позиции: подстрока (начало названия — выше), затем «все слова
+            // запроса», затем буквы запроса по порядку (опечатки/пропуски). Скорее
+            // всего нужный товар — первым: сортировка по очкам, при равенстве — короткое имя.
+            function searchProducts(query) {
+                var q = fold(query);
+                if (norm(q) === '') { return []; }
+                var out = [];
+                for (var i = 0; i < PRODUCTS.length; i++) {
+                    var p = PRODUCTS[i];
+                    var name = p.name || '';
+                    var score = scoreName(name, q);
+                    if (score > 0) {
+                        out.push({ id: p.id, group: p.group, score: score, name: name, html: highlightName(name, q) });
+                    }
+                }
+                out.sort(function (a, b) {
+                    if (a.score !== b.score) { return b.score - a.score; }
+                    if (a.name.length !== b.name.length) { return a.name.length - b.name.length; }
+                    return a.name < b.name ? -1 : (a.name > b.name ? 1 : 0);
+                });
+                if (out.length > SEARCH_LIMIT) { out = out.slice(0, SEARCH_LIMIT); }
+                return out;
+            }
+
+            function scoreName(name, q) {
+                var n = fold(name);
+                if (q === '') { return 0; }
+                if (n === q) { return 1000; }
+                var idx = n.indexOf(q);
+                if (idx === 0) { return 950 - Math.min(60, n.length - q.length); }
+                if (idx > 0) { return (isWordStart(n, idx) ? 850 : 780) - Math.min(80, idx); }
+
+                // все слова запроса (в любом порядке) есть в названии подстрокой
+                var qw = splitWords(q);
+                var nw = splitWords(n);
+                var hit = 0;
+                var first = -1;
+                var last = -1;
+                for (var i = 0; i < qw.length; i++) {
+                    for (var j = 0; j < nw.length; j++) {
+                        if (nw[j].indexOf(qw[i]) !== -1) {
+                            hit++;
+                            if (first < 0) { first = j; }
+                            last = j;
+                            break;
+                        }
+                    }
+                }
+                if (qw.length > 1 && hit === qw.length) { return 600 - 4 * (last - first); }
+
+                // «похожее»: буквы запроса идут по порядку, часть букв пропущена
+                var qc = q.replace(/\s+/g, '');
+                if (qc.length >= SEARCH_MIN_FUZZY) {
+                    var sub = subsequence(n, qc);
+                    if (sub >= 0) { return sub; }
+                }
+                return 0;
+            }
+
+            // Очки за «буквы по порядку»: чем длиннее непрерывный кусок совпадения и
+            // меньше пропусков, тем выше. -1 — запрос не проходит по порядку.
+            function subsequence(s, q) {
+                var qi = 0;
+                var gaps = 0;
+                var run = 0;
+                var best = 0;
+                for (var si = 0; si < s.length && qi < q.length; si++) {
+                    if (s.charAt(si) === q.charAt(qi)) {
+                        qi++;
+                        run++;
+                        if (run > best) { best = run; }
+                    } else if (run > 0) {
+                        gaps++;
+                        run = 0;
+                    }
+                }
+                if (qi < q.length) { return -1; }
+                var score = 60 + best * 20 - gaps * 10;
+                if (score < 0) { return 0; }
+                return score > 200 ? 200 : score;
+            }
+
+            // Приведение к нижнему регистру БЕЗ изменения длины (индексы годятся для
+            // подсветки), ё → е: «филе» находит «ФИЛЕ», «ёж» — «еж».
+            function fold(s) {
+                return String(s == null ? '' : s).toLowerCase().replace(/ё/g, 'е');
+            }
+            // Нормализация для сравнения слов: знаки препинания и лишние пробелы не значимы.
+            function norm(s) {
+                return fold(s).replace(/[^0-9a-zа-я]+/g, ' ').replace(/^\s+|\s+$/g, '');
+            }
+            function splitWords(s) {
+                var parts = norm(s).split(' ');
+                var out = [];
+                for (var i = 0; i < parts.length; i++) {
+                    if (parts[i] !== '') { out.push(parts[i]); }
+                }
+                return out;
+            }
+            // Совпадение на границе слова («кур» в «филе кур/бедро») весит больше,
+            // чем совпадение внутри слова.
+            function isWordStart(s, i) {
+                if (i === 0) { return true; }
+                var c = s.charAt(i - 1);
+                return c === ' ' || c === '-' || c === '(' || c === ',' || c === '/';
+            }
+            // Последний сегмент пути группы — та же подпись, что в заголовке группы.
+            function groupLabel(g) {
+                var s = String(g || '');
+                var i = s.lastIndexOf('/');
+                if (i >= 0) { s = s.slice(i + 1); }
+                return s.replace(/^\s+|\s+$/g, '');
+            }
+            // Подсветка найденного куска (только для точной подстроки: при «похожем»
+            // подсвечивать нечего). Экранирование по частям — HTML из названия не пройдёт.
+            function esc(s) {
+                return String(s)
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;')
+                    .replace(/"/g, '&quot;');
+            }
+            function highlightName(name, q) {
+                var n = fold(name);
+                var idx = n.indexOf(q);
+                if (q === '' || idx < 0) { return esc(name); }
+                return esc(name.slice(0, idx)) + '<b>' + esc(name.slice(idx, idx + q.length)) + '</b>' +
+                    esc(name.slice(idx + q.length));
+            }
+
+            initSearch();
         })();
     </script>
 </body>
