@@ -160,6 +160,7 @@ func (a *App) initDeps() {
 		a.initReturns,
 		a.initReserveWatch,
 		a.initSiteCheck,
+		a.initPrices,
 		a.initMSOrders,
 	}
 
@@ -265,6 +266,21 @@ func (a *App) initSiteCheck() {
 	a.background("sitecheck: сверка с сайтом", func() {
 		if err := uc.Run(a.ctx); err != nil {
 			slog.Info(fmt.Sprintf("sitecheck: поллер завершился: %v", err))
+		}
+	})
+}
+
+// initPrices запускает фоновый обновитель цен товаров (модуль каталога): полный
+// проход по всем товарам при первом запуске и раз в календарный день (МСК),
+// между ними — инкремент правок цен каждые APP_PRICES_POLL_SECONDS (10 минут).
+// Запросы к МС идут через воркерпул (ретраи с бэкоффом там же): не получили после
+// ретраев — тик логируется и пропускается, поллер не падает. Run блокируется до
+// отмены ctx, поэтому идёт в фон под учётом wg.
+func (a *App) initPrices() {
+	uc := a.di.PricesPoller()
+	a.background("goods: обновление цен из МС", func() {
+		if err := uc.Run(a.ctx); err != nil {
+			slog.Info(fmt.Sprintf("goods: обновитель цен завершился: %v", err))
 		}
 	})
 }

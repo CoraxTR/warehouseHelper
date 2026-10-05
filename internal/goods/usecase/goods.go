@@ -666,6 +666,17 @@ func (uc *GoodsUseCase) buildProduct(ctx context.Context, ms client.MSProduct, g
 		prod.PackSize = &v
 	}
 
+	// Цены и НДС — через общий хелпер msProductPrice (то же правило маппинга,
+	// что и в фоновом обновителе цен, чтобы правило не разъехалось). nil —
+	// МС не отдала значение. В жёсткую валидацию ниже цены/НДС НЕ входят:
+	// товар без заполненной закупочной цены обязан выгружаться как раньше
+	// (правило «пропуск поля → товар не пишется» — только для обязательных
+	// полей каталога).
+	price := msProductPrice(ms)
+	prod.BuyPrice = price.BuyPrice
+	prod.SalePrice = price.SalePrice
+	prod.EffectiveVat = price.EffectiveVat
+
 	// Жёсткая проверка заполненности: всё, что могло остаться пустым.
 	var missing []string
 	if prod.InternalCode == "" {

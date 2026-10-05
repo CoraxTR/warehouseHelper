@@ -170,6 +170,7 @@ type MSCounterparty struct {
 
 // MSProduct — товар МойСклад (entity/product), срез для каталога:
 // идентификация (id, code, name), единица измерения и кастомные атрибуты.
+// Цены и НДС заполняются только у выборок синка прайса (FetchProductPrices*).
 type MSProduct struct {
 	ID   string `json:"id"`
 	Code string `json:"code"`
@@ -180,6 +181,16 @@ type MSProduct struct {
 		} `json:"meta"`
 	} `json:"uom"`
 	Attributes []MSAttribute `json:"attributes"`
+
+	// Цены и НДС. Все поля необязательные: у товара без цен в ответе их может
+	// не быть. Поля НДС — УКАЗАТЕЛИ: при useParentVat=true МС НЕ отдаёт
+	// vat/vatEnabled/effectiveVat/effectiveVatEnabled вовсе (НДС наследуется
+	// от группы) — отсутствие ключа не должно ронять разбор.
+	BuyPrice            *MSBuyPrice   `json:"buyPrice"`            // закупочная цена — ОДИН объект, не массив
+	SalePrices          []MSSalePrice `json:"salePrices"`          // по одному элементу на тип цены
+	EffectiveVat        *int          `json:"effectiveVat"`        // реальная ставка, %; (0,false) — «без НДС»
+	EffectiveVatEnabled *bool         `json:"effectiveVatEnabled"` // nil — поля в ответе нет
+	UseParentVat        bool          `json:"useParentVat"`        // true — НДС от группы, полей НДС нет
 }
 
 // MSAttribute — кастомный атрибут товара. Type — тип атрибута из метаданных
@@ -199,6 +210,36 @@ type MSProductList struct {
 		Offset int `json:"offset"`
 	} `json:"meta"`
 	Rows []MSProduct `json:"rows"`
+}
+
+// MSBuyPrice — закупочная цена товара (buyPrice — ОДИН объект, НЕ массив
+// buyPrices). Value — КОПЕЙКИ (JSON Float, но целое).
+type MSBuyPrice struct {
+	Value    float64    `json:"value"`
+	Currency *MSMetaRef `json:"currency"`
+}
+
+// MSSalePrice — цена продажи из массива salePrices: по одному элементу на тип
+// цены (у нас тип ровно один — «Цена продажи»). Value — КОПЕЙКИ.
+type MSSalePrice struct {
+	Value     float64     `json:"value"`
+	Currency  *MSMetaRef  `json:"currency"`
+	PriceType MSPriceType `json:"priceType"`
+}
+
+// MSPriceType — тип цены (priceType): id/name + meta-ссылка на справочник
+// типов цен.
+type MSPriceType struct {
+	ID   string              `json:"id"`
+	Name string              `json:"name"`
+	Meta MSSalePriceTypeMeta `json:"meta"`
+}
+
+// MSSalePriceTypeMeta — meta типа цены (href/type/mediaType).
+type MSSalePriceTypeMeta struct {
+	Href      string `json:"href"`
+	Type      string `json:"type"`
+	MediaType string `json:"mediaType"`
 }
 
 // ProfitFilter — фильтры отчёта прибыльности (report/profit/byproduct).
