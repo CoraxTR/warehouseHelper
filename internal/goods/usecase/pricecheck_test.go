@@ -10,9 +10,6 @@ import (
 	"warehouseHelper/internal/domain"
 )
 
-func mkop(v int64) *int64 { return &v }
-func mpct(v int16) *int16 { return &v }
-
 // TestComputeMarkup — формула наценки владельца (05.10.2026):
 //
 //	(цена продажи − (НДС исходящий − НДС входящий) − закупочная) / закупочная × 100.
@@ -30,47 +27,47 @@ func TestComputeMarkup(t *testing.T) {
 	}{
 		{
 			name: "100₽/60₽, НДС 20/20 — наценка по ценам без НДС",
-			sale: mkop(10000), buy: mkop(6000), vatOut: mpct(20), vatIn: mpct(20),
+			sale: new(int64(10000)), buy: new(int64(6000)), vatOut: new(int16(20)), vatIn: new(int16(20)),
 			wantPercent: 160.0 / 3.0, // 3200/6000*100
 		},
 		{
 			name: "входящий НДС 0 — вычет не учитывается",
-			sale: mkop(10000), buy: mkop(6000), vatOut: mpct(20), vatIn: mpct(0),
+			sale: new(int64(10000)), buy: new(int64(6000)), vatOut: new(int16(20)), vatIn: new(int16(0)),
 			wantPercent: 100.0 / 3.0, // 2000/6000*100
 		},
 		{
 			name: "наш НДС -1 («без НДС») — считаем как 0 %, данные НЕ считаем неполными",
-			sale: mkop(10000), buy: mkop(6000), vatOut: mpct(-1), vatIn: mpct(20),
+			sale: new(int64(10000)), buy: new(int64(6000)), vatOut: new(int16(-1)), vatIn: new(int16(20)),
 			wantPercent: 260.0 / 3.0, // 5200/6000*100
 		},
 		{
 			name: "наш НДС 10, входящий 20 — вычет больше начисленного",
-			sale: mkop(10000), buy: mkop(6000), vatOut: mpct(10), vatIn: mpct(20),
+			sale: new(int64(10000)), buy: new(int64(6000)), vatOut: new(int16(10)), vatIn: new(int16(20)),
 			wantPercent: 70,
 		},
 		{
 			name: "нет цены продажи",
-			sale: nil, buy: mkop(6000), vatOut: mpct(20), vatIn: mpct(20),
+			sale: nil, buy: new(int64(6000)), vatOut: new(int16(20)), vatIn: new(int16(20)),
 			wantMissing: []string{"цена продажи"},
 		},
 		{
 			name: "закупочная NULL — делить не на что",
-			sale: mkop(10000), buy: nil, vatOut: mpct(20), vatIn: mpct(20),
+			sale: new(int64(10000)), buy: nil, vatOut: new(int16(20)), vatIn: new(int16(20)),
 			wantMissing: []string{"закупочная цена"},
 		},
 		{
 			name: "закупочная 0 — тоже неполные данные",
-			sale: mkop(10000), buy: mkop(0), vatOut: mpct(20), vatIn: mpct(20),
+			sale: new(int64(10000)), buy: new(int64(0)), vatOut: new(int16(20)), vatIn: new(int16(20)),
 			wantMissing: []string{"закупочная цена"},
 		},
 		{
 			name: "наш НДС NULL (МС не отдала — товар наследует НДС группы)",
-			sale: mkop(10000), buy: mkop(6000), vatOut: nil, vatIn: mpct(20),
+			sale: new(int64(10000)), buy: new(int64(6000)), vatOut: nil, vatIn: new(int16(20)),
 			wantMissing: []string{"наш НДС"},
 		},
 		{
 			name: "входящий НДС не задан — человек его ещё не вводил",
-			sale: mkop(10000), buy: mkop(6000), vatOut: mpct(20), vatIn: nil,
+			sale: new(int64(10000)), buy: new(int64(6000)), vatOut: new(int16(20)), vatIn: nil,
 			wantMissing: []string{"входящий НДС"},
 		},
 		{
@@ -103,16 +100,16 @@ func TestPriceCheckList(t *testing.T) {
 		search: []domain.Product{
 			{
 				ID: "p-1", Name: "Сыр", GroupName: "Молочка",
-				SalePrice: mkop(10000), BuyPrice: mkop(6000),
-				EffectiveVat: mpct(20), VATIncoming: mpct(20),
+				SalePrice: new(int64(10000)), BuyPrice: new(int64(6000)),
+				EffectiveVat: new(int16(20)), VATIncoming: new(int16(20)),
 			},
 			{ID: "p-2", Name: "Пустой", GroupName: "Молочка"},
 		},
 		sandboxes: map[string]domain.PriceSandbox{
 			"p-1": {
 				ProductID: "p-1",
-				SalePrice: mkop(20000), BuyPrice: mkop(6000),
-				EffectiveVat: mpct(20), VATIncoming: mpct(20),
+				SalePrice: new(int64(20000)), BuyPrice: new(int64(6000)),
+				EffectiveVat: new(int16(20)), VATIncoming: new(int16(20)),
 			},
 		},
 	}
@@ -151,14 +148,14 @@ func TestSetIncomingVAT(t *testing.T) {
 	uc := NewGoodsUseCase(nil, nil, repo, nil)
 	ctx := context.Background()
 
-	if err := uc.SetIncomingVAT(ctx, "p-1", mpct(20)); err != nil {
+	if err := uc.SetIncomingVAT(ctx, "p-1", new(int16(20))); err != nil {
 		t.Fatalf("SetIncomingVAT: %v", err)
 	}
 	if got := repo.incomingVAT["p-1"]; got == nil || *got != 20 {
 		t.Fatalf("записано %v, want 20", got)
 	}
 
-	if err := uc.SetIncomingVAT(ctx, "p-1", mpct(101)); !errors.Is(err, ErrVATOutOfRange) {
+	if err := uc.SetIncomingVAT(ctx, "p-1", new(int16(101))); !errors.Is(err, ErrVATOutOfRange) {
 		t.Fatalf("НДС 101: err = %v, want ErrVATOutOfRange", err)
 	}
 	if got := repo.incomingVAT["p-1"]; got == nil || *got != 20 {
@@ -181,8 +178,8 @@ func TestSavePriceSandbox(t *testing.T) {
 	ctx := context.Background()
 
 	box := domain.PriceSandbox{
-		ProductID: "p-1", SalePrice: mkop(10000), BuyPrice: mkop(6000),
-		EffectiveVat: mpct(20), VATIncoming: mpct(0),
+		ProductID: "p-1", SalePrice: new(int64(10000)), BuyPrice: new(int64(6000)),
+		EffectiveVat: new(int16(20)), VATIncoming: new(int16(0)),
 	}
 	res, err := uc.SavePriceSandbox(ctx, box)
 	if err != nil {
@@ -195,7 +192,7 @@ func TestSavePriceSandbox(t *testing.T) {
 		t.Fatalf("снапшот не сохранён: %+v", repo.savedSandbox)
 	}
 
-	if _, err := uc.SavePriceSandbox(ctx, domain.PriceSandbox{ProductID: "p-1", BuyPrice: mkop(-1)}); !errors.Is(err, ErrPriceNegative) {
+	if _, err := uc.SavePriceSandbox(ctx, domain.PriceSandbox{ProductID: "p-1", BuyPrice: new(int64(-1))}); !errors.Is(err, ErrPriceNegative) {
 		t.Errorf("отрицательная цена: err = %v, want ErrPriceNegative", err)
 	}
 	if _, err := uc.SavePriceSandbox(ctx, domain.PriceSandbox{EffectiveVat: nil}); !errors.Is(err, domain.ErrProductNotFound) {
