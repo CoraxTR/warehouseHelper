@@ -49,10 +49,11 @@ type UseCase struct {
 	recalcMu sync.Mutex
 	// dirty — товары, по которым расчёт просит свежий оборот: события стока
 	// (приёмка изменила накопленный остаток, подбор, ручная скидка) и новые
-	// избытки, найденные в этом же тике. Значение — вырос ли по товару остаток:
-	// по этому признаку событийный пересчёт вправе заполнить ПУСТОЕ место
-	// ступенью по сроку вне КТ-дней (см. MarkGrown и RecalcAffected).
-	dirty map[string]bool
+	// избытки, найденные в этом же тике. Значение — СРОКИ ЛОТОВ, у которых вырос
+	// остаток: по ним событийный пересчёт вправе заполнить ПУСТОЕ место
+	// ступенью по сроку вне КТ-дней (см. MarkGrown и RecalcAffected). Пустой
+	// список — роста не было.
+	dirty map[string][]time.Time
 }
 
 // NewUseCase собирает сценарии модуля. Все зависимости — швы (ports.go);
@@ -78,7 +79,7 @@ func NewUseCase(
 		warehouse: warehouse,
 		now:       now,
 		reg:       NewRegistry(),
-		dirty:     make(map[string]bool),
+		dirty:     make(map[string][]time.Time),
 	}
 }
 
@@ -116,47 +117,51 @@ func (uc *UseCase) WindowCap() int {
 // ставит только MarkGrown (решение владельца 30.09.2026).
 func (uc *UseCase) MarkDirty(productIDs ...string) {
 	for _, pid := range productIDs {
-		uc.markDirty(pid, false)
+		uc.markDirty(pid, nil)
 	}
 }
 
 // MarkGrown — событие стока с РОСТОМ остатка (приёмка, возврат лота в остатки):
 // товар получает и свежий оборот, и право заполнить пустое место ступенью по
-// сроку вне КТ-дней. Подбор остаток списывает — роста нет, поэтому кладовщик,
-// подобравший заказ, скидку на сайте не получает (решение владельца
-// 30.09.2026: среда, подбор соуса, «Поставить скидку 40%» без повода).
-func (uc *UseCase) MarkGrown(productIDs ...string) {
-	for _, pid := range productIDs {
-		uc.markDirty(pid, true)
-	}
+// сроку вне КТ-дней. bestBefores — сроки лотов, у которых остаток вырос: право
+// принадлежит ИМ, а не товару целиком (решение владельца 05.10.2026 — приёмка
+// лота 25.10 ставила скидку лоту 12.10, которого не касалась). Пустой список —
+// роста по паре не было: это уже MarkDirty.
+//
+// Подбор остаток списывает — роста нет, поэтому кладовщик, подобравший заказ,
+// скидку на сайте не получает (решение владельца 30.09.2026: среда, подбор
+// соуса, «Поставить скидку 40%» без повода).
+func (uc *UseCase) MarkGrown(productID string, bestBefores ...time.Time) {
+	uc.markDirty(productID, bestBefores)
 }
 
-// markDirty ставит метку товара; grew — остаток вырос. Повторная метка в одном
-// окне роста не сбрасывает: товар могли и подобрать, и принять — рост есть.
-func (uc *UseCase) markDirty(productID string, grew bool) {
+// markDirty ставит метку товара; grownLots — сроки выросших лотов (пусто —
+// роста не было). Повторная метка в одном окне роста не сбрасывает: товар могли
+// и подобрать, и принять — сроки роста складываются.
+func (uc *UseCase) markDirty(productID string, grownLots []time.Time) {
 	if productID == "" {
 		return
 	}
 	uc.mu.Lock()
 	defer uc.mu.Unlock()
 
-	uc.dirty[productID] = uc.dirty[productID] || grew
+	uc.dirty[productID] = append(uc.dirty[productID], grownLots...)
 }
 
 // markAll возвращает метки на место после неудачного прохода: событие не должно
-// потеряться из-за разового сбоя (признак роста возвращается вместе с товаром).
-func (uc *UseCase) markAll(events map[string]bool) {
+// потеряться из-за разового сбоя (сроки роста возвращаются вместе с товаром).
+func (uc *UseCase) markAll(events map[string][]time.Time) {
 	uc.mu.Lock()
 	defer uc.mu.Unlock()
 
-	for pid, grew := range events {
-		uc.dirty[pid] = uc.dirty[pid] || grew
+	for pid, grownLots := range events {
+		uc.dirty[pid] = append(uc.dirty[pid], grownLots...)
 	}
 }
 
-// takeDirty забирает и очищает метки событий стока: товары и признак роста по
-// каждому (true — остаток вырос).
-func (uc *UseCase) takeDirty() map[string]bool {
+// takeDirty забирает и очищает метки событий стока: товары и сроки выросших
+// лотов по каждому (пустой список — роста не было).
+func (uc *UseCase) takeDirty() map[string][]time.Time {
 	uc.mu.Lock()
 	defer uc.mu.Unlock()
 
@@ -164,7 +169,7 @@ func (uc *UseCase) takeDirty() map[string]bool {
 		return nil
 	}
 	out := uc.dirty
-	uc.dirty = make(map[string]bool)
+	uc.dirty = make(map[string][]time.Time)
 
 	return out
 }

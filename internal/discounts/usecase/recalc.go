@@ -166,9 +166,12 @@ func (uc *UseCase) RecalcSurplus(ctx context.Context, now time.Time) error {
 // снапшот реестра, и без оборота из него выпали бы избыточные пары (пустая
 // очередь на странице, «Позиции с избытком: нет» в дайджесте) — урок ревью
 // 14.09 про шаги, заменяющие снапшот.
-// events — товары события стока и признак роста по каждому (true — остаток
-// вырос): рост даёт право заполнить пустое место ступенью по сроку вне КТ-дней.
-func (uc *UseCase) RecalcAffected(ctx context.Context, now time.Time, events map[string]bool) error {
+// events — товары события стока и СРОКИ ЛОТОВ, у которых вырос остаток (пустой
+// список — роста не было): рост даёт право заполнить пустое место ступенью по
+// сроку вне КТ-дней, и только у этих пар. Приёмка дальнего лота не даёт права на
+// ступень ближнему, которого она не касалась (жалоба владельца 05.10.2026:
+// приняли лот 25.10 — скидка 30 % легла на лот 12.10).
+func (uc *UseCase) RecalcAffected(ctx context.Context, now time.Time, events map[string][]time.Time) error {
 	// Точечный пересчёт сериализован: сюда приходят и тик расписания, и ручная
 	// правка скидки (OnManualDiscountChanged) — оба пишут снапшот реестра.
 	uc.recalcMu.Lock()
@@ -176,16 +179,16 @@ func (uc *UseCase) RecalcAffected(ctx context.Context, now time.Time, events map
 
 	today := beginningOfDay(now)
 
-	// Товары события: affected — кому расчёт вправе писать вообще, grown — у кого
-	// остаток вырос (только им событие ставит ступень по сроку).
+	// Товары события: affected — кому расчёт вправе писать вообще, grown — сроки
+	// лотов, чей остаток вырос (только им событие ставит ступень по сроку).
 	productIDs := make([]string, 0, len(events))
 	affected := make(map[string]struct{}, len(events))
-	grown := make(map[string]struct{}, len(events))
-	for pid, grew := range events {
+	grown := make(map[string]grownSet, len(events))
+	for pid, lots := range events {
 		productIDs = append(productIDs, pid)
 		affected[pid] = struct{}{}
-		if grew {
-			grown[pid] = struct{}{}
+		if len(lots) > 0 {
+			grown[pid] = newGrownSet(lots)
 		}
 	}
 
@@ -223,7 +226,7 @@ func (uc *UseCase) RecalcAffected(ctx context.Context, now time.Time, events map
 	// ставил скидку на сайте в любой день недели (жалоба владельца 30.09.2026:
 	// среда, подбор соуса, «Поставить скидку 40%» без повода).
 	if !isTelegramDay(now) {
-		writes = append(writes, writesForProducts(expiryWritesOnEmpty(pairs), grown)...)
+		writes = append(writes, writesForProducts(expiryWritesOnEmpty(pairs, grown), affected)...)
 	}
 	// Снятие по запрету менеджера — тоже только по товару события: ручную 0
 	// ставят через страницу «Сроки», а её запись дёргает пересчёт товара.
@@ -278,17 +281,46 @@ func expiryWrites(pairs []PairState) []discounts.DiscountWrite {
 	return writes
 }
 
-// expiryWritesOnEmpty — ступень по сроку только на ПУСТОЕ место пары: скидки в
-// канале сайта у неё нет вовсе (appliedTop == 0). Правки для пересчёта по
-// событиям стока (решение владельца 28.09.2026, см. RecalcAffected): вернуть
-// скидку паре, которая осталась без неё, событие обязано, а поднять стоящее
-// значение — нет, это работа планового пересмотра. Остальные правила те же, что
-// у expiryWrites: пара, замороженная ручным нулём, и пара без ступени на сегодня
+// grownSet — сроки лотов товара, остаток которых вырос (начала суток UTC):
+// право заполнить пустое место ступенью по сроку событие даёт ИМ, а не товару
+// целиком (решение владельца 05.10.2026).
+type grownSet map[time.Time]struct{}
+
+// newGrownSet собирает сроки роста: даты — к началу суток (ключ пары), дубли
+// (товар отметили событием дважды) схлопываются.
+func newGrownSet(lots []time.Time) grownSet {
+	out := make(grownSet, len(lots))
+	for _, d := range lots {
+		out[beginningOfDay(d)] = struct{}{}
+	}
+
+	return out
+}
+
+// pairGrown — вырос ли остаток ИМЕННО этой пары: у товара без роста в карте
+// пусто, значит ступень по сроку событие ему не ставит (подбор, ручная правка).
+func pairGrown(grown map[string]grownSet, p PairState) bool {
+	s, ok := grown[p.ProductID]
+	if !ok {
+		return false
+	}
+	_, ok = s[beginningOfDay(p.BestBefore)]
+
+	return ok
+}
+
+// expiryWritesOnEmpty — ступень по сроку только на ПУСТОЕ место пары и только у
+// той, чей остаток вырос событием стока. Правки для пересчёта по событиям
+// (решения владельца 28.09.2026 и 05.10.2026, см. RecalcAffected): вернуть скидку
+// паре, которая осталась без неё, событие обязано — но лишь той, которую оно
+// касается (приёмка лота 25.10 не ставит скидку лоту 12.10), а поднять стоящее
+// значение — нет, это работа планового пересмотра. Остальные правила те же, что у
+// expiryWrites: пара, замороженная ручным нулём, и пара без ступени на сегодня
 // в правки не попадают.
-func expiryWritesOnEmpty(pairs []PairState) []discounts.DiscountWrite {
+func expiryWritesOnEmpty(pairs []PairState, grown map[string]grownSet) []discounts.DiscountWrite {
 	empty := make([]PairState, 0, len(pairs))
 	for _, p := range pairs {
-		if appliedTop(p) == 0 {
+		if appliedTop(p) == 0 && pairGrown(grown, p) {
 			empty = append(empty, p)
 		}
 	}

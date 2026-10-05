@@ -1697,7 +1697,7 @@ func TestSetManualDiscountKeepsSource(t *testing.T) {
 // lotEvent — вызов слушателя шва: товар и признак роста остатка (grown).
 type lotEvent struct {
 	productID string
-	grown     bool
+	grown     []time.Time // сроки лотов, у которых остаток вырос
 }
 
 // mockLotListener — слушатель-заглушка шва «лоты товара изменились»: копит
@@ -1708,9 +1708,24 @@ type mockLotListener struct {
 	err   error
 }
 
-func (m *mockLotListener) OnLotsChanged(_ context.Context, productID string, grown bool) error {
-	m.calls = append(m.calls, lotEvent{productID: productID, grown: grown})
+func (m *mockLotListener) OnLotsChanged(_ context.Context, productID string, grownLots []time.Time) error {
+	m.calls = append(m.calls, lotEvent{productID: productID, grown: grownLots})
 	return m.err
+}
+
+// sameLotEvent — сравнение события слушателя: сроки роста сравниваем по
+// содержимому и порядку (приёмка шлёт сроки в порядке записи лотов).
+func sameLotEvent(a, b lotEvent) bool {
+	differ := a.productID != b.productID || len(a.grown) != len(b.grown)
+	if differ {
+		return false
+	}
+	for i := range a.grown {
+		if !a.grown[i].Equal(b.grown[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 // Шов событий Task 10: после КАЖДОЙ успешной записи слушатель получает товар
@@ -1769,18 +1784,18 @@ func TestSetLotChangeListenerSeam(t *testing.T) {
 	}
 
 	want := []lotEvent{
-		{productID: "p1", grown: true}, // 1. приёмка прибавила остаток
-		{productID: "p2", grown: false},
-		{productID: "p1", grown: false},
-		{productID: "p1", grown: false},
-		{productID: "p2", grown: false},
-		{productID: "p1", grown: true}, // 5. сканы заменили лоты с ростом суммы
+		{productID: "p1", grown: []time.Time{d(2026, 9, 5), d(2026, 9, 20)}}, // 1. приёмка прибавила остаток
+		{productID: "p2"},
+		{productID: "p1"},
+		{productID: "p1"},
+		{productID: "p2"},
+		{productID: "p1", grown: []time.Time{d(2026, 9, 25)}}, // 5. сканы: вырос только срок 25.09
 	}
 	if len(ls.calls) != len(want) {
 		t.Fatalf("вызовы слушателя = %v, want %v", ls.calls, want)
 	}
 	for i := range want {
-		if ls.calls[i] != want[i] {
+		if !sameLotEvent(ls.calls[i], want[i]) {
 			t.Fatalf("вызовы слушателя = %v, want %v", ls.calls, want)
 		}
 	}
@@ -1818,14 +1833,14 @@ func TestLotChangeListenerErrorDoesNotBreakWrites(t *testing.T) {
 	}
 
 	want := []lotEvent{
-		{productID: "p1", grown: true}, // приёмка
-		{productID: "p2", grown: false},
+		{productID: "p1", grown: []time.Time{d(2026, 9, 5)}}, // приёмка
+		{productID: "p2"},
 	}
 	if len(ls.calls) != len(want) {
 		t.Fatalf("вызовы слушателя = %v, want %v", ls.calls, want)
 	}
 	for i := range want {
-		if ls.calls[i] != want[i] {
+		if !sameLotEvent(ls.calls[i], want[i]) {
 			t.Fatalf("вызовы слушателя = %v, want %v", ls.calls, want)
 		}
 	}
@@ -1865,7 +1880,7 @@ func TestSetManualDiscountNotifiesManualListener(t *testing.T) {
 	if len(ls.manual) != 1 || ls.manual[0] != "p1" {
 		t.Errorf("немедленный пересчёт: %v, want [p1]", ls.manual)
 	}
-	if len(ls.calls) != 1 || ls.calls[0].productID != "p1" || ls.calls[0].grown {
+	if len(ls.calls) != 1 || ls.calls[0].productID != "p1" || len(ls.calls[0].grown) != 0 {
 		t.Errorf("общее событие лотов: %v, want [p1 без роста: ручная правка остаток не прибавляет]", ls.calls)
 	}
 }

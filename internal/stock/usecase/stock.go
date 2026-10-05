@@ -92,13 +92,16 @@ type WarehouseNotifier interface {
 // операцию стока не роняет — только лог (как у DayStateRecorder): в БД и кэше
 // изменения уже приняты, откатывать их из-за наблюдателя нельзя.
 //
-// grown — остаток товара ВЫРОС (приёмка, возврат лота в остатки, «Обновить
-// сроки» вверх), а не только списан подбором: по этому признаку расчёт скидок
-// вправе заполнить ПУСТОЕ место ступенью по сроку вне КТ-дней. Подбор остаток
-// списывает, и ступень за ним не идёт (решение владельца 30.09.2026: кладовщик,
-// подобравший заказ, не должен ставить скидку на сайте).
+// grownLots — сроки лотов товара, у которых остаток ВЫРОС (приёмка, возврат
+// лота в остатки, «Обновить сроки» вверх), а не только списан подбором: по этому
+// признаку расчёт скидок вправе заполнить ПУСТОЕ место ступенью по сроку вне
+// КТ-дней — и только у ЭТИХ пар. Подбор остаток списывает, и ступень за ним не
+// идёт (решение владельца 30.09.2026: кладовщик, подобравший заказ, не должен
+// ставить скидку на сайте). Пустой список — роста не было: приёмка дальнего
+// срока не даёт права на ступень ближнему лоту, которого она не касалась
+// (решение владельца 05.10.2026: приняли лот 25.10, а скидка легла на 12.10).
 type LotChangeListener interface {
-	OnLotsChanged(ctx context.Context, productID string, grown bool) error
+	OnLotsChanged(ctx context.Context, productID string, grownLots []time.Time) error
 }
 
 // ManualDiscountListener — необязательный шов того же наблюдателя: ручную скидку
@@ -168,25 +171,27 @@ func (uc *StockUseCase) SetLotChangeListener(l LotChangeListener) {
 	uc.lotListener = l
 }
 
-// notifyLotGrown — остаток товара ВЫРОС (приёмка, возврат лота в остатки,
-// «Обновить сроки» вверх): расчёт скидок вправе заполнить пустое место ступенью
-// по сроку, не дожидаясь КТ-дня.
-func (uc *StockUseCase) notifyLotGrown(ctx context.Context, productIDs ...string) {
-	uc.notifyLotEvent(ctx, true, productIDs...)
+// notifyLotGrown — сроки лотов, у которых остаток ВЫРОС (приёмка, возврат лота
+// в остатки, «Обновить сроки» вверх), по товарам: расчёт скидок вправе заполнить
+// пустое место ступенью по сроку, не дожидаясь КТ-дня, — и только у этих пар.
+// grown — сроки по товару; товар вне карты роста не имеет.
+func (uc *StockUseCase) notifyLotGrown(ctx context.Context, grown map[string][]time.Time, productIDs ...string) {
+	uc.notifyLotEvent(ctx, grown, productIDs...)
 }
 
 // notifyLotChange — лоты товара изменились без роста остатка (подбор, смена
 // ручной скидки, записи самого расчёта): свежий оборот нужен, ступень по сроку
 // на пустое место — нет.
 func (uc *StockUseCase) notifyLotChange(ctx context.Context, productIDs ...string) {
-	uc.notifyLotEvent(ctx, false, productIDs...)
+	uc.notifyLotEvent(ctx, nil, productIDs...)
 }
 
 // notifyLotEvent сообщает слушателю об изменении лотов товара — по разу на
-// уникальный productID (порядок первого появления), grown — вырос ли остаток
-// (см. LotChangeListener). Ошибка слушателя только логируется: БД и кэш уже
-// записаны, ронять из-за наблюдателя операцию нельзя (как у notifyDayState).
-func (uc *StockUseCase) notifyLotEvent(ctx context.Context, grown bool, productIDs ...string) {
+// уникальный productID (порядок первого появления), grown — сроки выросших
+// лотов (nil — роста нет, см. LotChangeListener). Ошибка слушателя только
+// логируется: БД и кэш уже записаны, ронять из-за наблюдателя операцию нельзя
+// (как у notifyDayState).
+func (uc *StockUseCase) notifyLotEvent(ctx context.Context, grown map[string][]time.Time, productIDs ...string) {
 	l := uc.lotListener
 	if l == nil {
 		return
@@ -200,7 +205,7 @@ func (uc *StockUseCase) notifyLotEvent(ctx context.Context, grown bool, productI
 			continue
 		}
 		seen[pid] = struct{}{}
-		if err := l.OnLotsChanged(ctx, pid, grown); err != nil {
+		if err := l.OnLotsChanged(ctx, pid, grown[pid]); err != nil {
 			slog.Info(fmt.Sprintf("stock: lot listener %s: %v", pid, err))
 		}
 	}
@@ -739,28 +744,41 @@ func (uc *StockUseCase) applyReplacePlans(ctx context.Context, order []string, p
 	uc.mu.Unlock()
 	uc.publishReplaceEvents(order, plans)
 	uc.notifyDayState(ctx, order...)
-	// Рост считаем по факту суммы остатков: сканы «Обновить сроки» могут и
-	// прибавить (свежая приёмка), и убрать (пересчёт вниз), поэтому признак — по
-	// товару, а не по операции.
+	// Право на ступень по сроку считаем по КАЖДОЙ паре: сканы «Обновить сроки»
+	// могут и прибавить (свежая приёмка), и убрать (пересчёт вниз), поэтому
+	// признак — по росту остатка пары, а не по операции.
 	for i, pid := range order {
-		uc.notifyLotEvent(ctx, grewByReplace(plans[i], byID[pid]), pid)
+		grown := replaceGrownLots(plans[i], byID[pid])
+		if len(grown) == 0 {
+			uc.notifyLotChange(ctx, pid)
+			continue
+		}
+		uc.notifyLotGrown(ctx, map[string][]time.Time{pid: grown}, pid)
 	}
 
 	return nil
 }
 
-// grewByReplace — вырос ли остаток товара после замены лотов (сумма по лотам).
-// Товара не было в кэше — считаем рост: лотам неоткуда взяться, кроме приёмки.
-func grewByReplace(plan replacePlan, before stock.Product) bool {
-	var was, now int64
+// replaceGrownLots — сроки лотов, остаток которых вырос после замены (сумма по
+// каждому сроку до и после). Товара не было в кэше — считаем рост по всем
+// непустым лотам плана: им неоткуда взяться, кроме приёмки.
+func replaceGrownLots(plan replacePlan, before stock.Product) []time.Time {
+	was := make(map[time.Time]int64, len(before.Lots))
 	for _, l := range before.Lots {
-		was += l.Qty
+		was[normalizeDate(l.BestBefore)] += l.Qty
 	}
+	var grown []time.Time
 	for _, l := range plan.upserts {
-		now += l.Qty
+		if l.Qty <= 0 {
+			continue
+		}
+		bb := normalizeDate(l.BestBefore)
+		if l.Qty > was[bb] {
+			grown = append(grown, bb)
+		}
 	}
 
-	return now > was
+	return grown
 }
 
 // replaceWrites собирает правки для репозитория.
@@ -941,13 +959,16 @@ func (uc *StockUseCase) AcceptStock(ctx context.Context, lots []stock.LotIn) err
 		}
 	}
 	ids := make([]string, 0, len(lots))
+	grown := make(map[string][]time.Time, len(lots))
 	for _, l := range lots {
 		ids = append(ids, l.ProductID)
+		grown[l.ProductID] = append(grown[l.ProductID], normalizeDate(l.BestBefore))
 	}
 	uc.notifyDayState(ctx, ids...)
-	// Приёмка остаток прибавляет: это событие с ростом — расчёт вправе заполнить
-	// пустое место ступенью по сроку, не дожидаясь КТ-дня.
-	uc.notifyLotGrown(ctx, ids...)
+	// Приёмка остаток прибавляет: право на ступень по сроку получают ровно
+	// принятые пары (принятый лот 25.10 не даёт права на скидку лоту 12.10,
+	// которого приёмка не касалась — решение владельца 05.10.2026).
+	uc.notifyLotGrown(ctx, grown, ids...)
 
 	return nil
 }
