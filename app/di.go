@@ -74,6 +74,7 @@ type DIContainer struct {
 	refGoCheckUC    *rgucase.RefGoCheckAgainstUseCase
 	wikiUC          *wucase.WikiUseCase
 	goodsUC         *gucase.GoodsUseCase
+	pricesPoller    *gucase.PricesPoller
 	averageSalesUC  *asucase.UseCase
 	orderCoeffUC    *oucase.UseCase
 	dayStateUC      *ducecase.UseCase
@@ -302,6 +303,21 @@ func (d *DIContainer) GoodsUC() *gucase.GoodsUseCase {
 	}
 
 	return d.goodsUC
+}
+
+// PricesPoller — фоновый обновитель цен каталога: полный проход по всем товарам
+// (первый запуск и раз в календарный день, МСК) плюс инкремент правок по updated.
+// MSClient реализует gucase.ProductPriceClient, PGClient — gucase.PricesRepository.
+func (d *DIContainer) PricesPoller() *gucase.PricesPoller {
+	if d.pricesPoller == nil {
+		d.pricesPoller = gucase.NewPricesPoller(
+			gucase.PricesConfig{PollInterval: d.Config().PricesConfig.PollInterval},
+			d.OrdersRepository(),
+			d.MSClient(),
+		)
+	}
+
+	return d.pricesPoller
 }
 
 // AverageSalesUC — сценарии «Средние продажи»: обороты из отчёта прибыльности МС

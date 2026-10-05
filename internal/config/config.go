@@ -25,6 +25,7 @@ type Config struct {
 	*QRConfig
 	*ComplaintsConfig
 	*SiteCheckConfig
+	*PricesConfig
 }
 
 // envFilePath возвращает абсолютный путь к .env: сначала ищет в текущем
@@ -67,6 +68,7 @@ func NewConfig() *Config {
 	tgc := loadTelegramConfig()
 	qrc := loadQRConfig()
 	cpc := loadComplaintsConfig()
+	prc := loadPricesConfig()
 
 	if os.Getenv("RG_LATESTORDER") == "" {
 		panic("RG_LATESTORDER does not exist")
@@ -81,6 +83,7 @@ func NewConfig() *Config {
 		QRConfig:         qrc,
 		ComplaintsConfig: cpc,
 		SiteCheckConfig:  loadSiteCheckConfig(),
+		PricesConfig:     prc,
 	}
 }
 
@@ -156,6 +159,32 @@ func loadSiteCheckConfig() *SiteCheckConfig {
 	if nStr := os.Getenv("APP_SITECHECK_MAX_ATTEMPTS"); nStr != "" {
 		if n, err := strconv.Atoi(nStr); err == nil && n > 0 {
 			c.MaxAttempts = n
+		}
+	}
+
+	return c
+}
+
+// PricesConfig — модуль каталога: фоновый обновитель цен товаров.
+// PollInterval — период ИНКРЕМЕНТА (правки цен с момента последнего прохода).
+// Полный проход по всем товарам идёт при первом запуске и раз в календарный
+// день (МСК) — своему интервалу он не подчиняется: привязка к календарю, а не
+// к времени старта процесса (иначе рестарты сдвигали бы время прохода).
+type PricesConfig struct {
+	PollInterval time.Duration
+}
+
+// pricesPollSeconds — период инкремента по умолчанию: 10 минут (решение
+// владельца 05.10.2026 — правки цен в МС видны в каталоге максимум через 10
+// минут).
+const pricesPollSeconds = 600
+
+func loadPricesConfig() *PricesConfig {
+	c := &PricesConfig{PollInterval: pricesPollSeconds * time.Second}
+
+	if secStr := os.Getenv("APP_PRICES_POLL_SECONDS"); secStr != "" {
+		if sec, err := strconv.Atoi(secStr); err == nil && sec > 0 {
+			c.PollInterval = time.Duration(sec) * time.Second
 		}
 	}
 
