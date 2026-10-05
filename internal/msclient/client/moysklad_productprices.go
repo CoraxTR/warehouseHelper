@@ -260,11 +260,14 @@ func parseMSProductPrice(row json.RawMessage) (MSProductPrice, error) {
 		return MSProductPrice{}, fmt.Errorf("failed to unmarshal product row: %w", err)
 	}
 
-	return msProductPriceFrom(p), nil
+	return ProductPriceFrom(p), nil
 }
 
-// msProductPriceFrom переносит модель товара в плоскую цену для синка.
-func msProductPriceFrom(p MSProduct) MSProductPrice {
+// ProductPriceFrom переносит модель товара МС в плоскую цену для синка: одно
+// правило «где в карточке лежат цены и НДС» на все пути — им пользуется и
+// фоновый обновитель, и выгрузка дерева/ресинк каталога (goods). Экспортирована
+// намеренно: дубликат правила в двух пакетах молча разъехался бы.
+func ProductPriceFrom(p MSProduct) MSProductPrice {
 	price := MSProductPrice{
 		ID:                  p.ID,
 		EffectiveVat:        p.EffectiveVat,

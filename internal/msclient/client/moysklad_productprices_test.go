@@ -188,6 +188,64 @@ func TestMSProductPriceRounding(t *testing.T) {
 	}
 }
 
+// TestProductPriceFrom — экспортированное правило «сырой товар МС → копейки»:
+// им пользуются и фоновый обновитель (через parseMSProductPrice), и выгрузка
+// каталога goods. Проверяем не разбор JSON, а саму модель: округление до
+// копеек, nil у отсутствующих цен, выбор первого salePrices и перенос НДС.
+func TestProductPriceFrom(t *testing.T) {
+	vat, vatEnabled := 22, true
+
+	t.Run("копейки, округление и НДС", func(t *testing.T) {
+		src := MSProduct{
+			ID:                  priceID1,
+			BuyPrice:            &MSBuyPrice{Value: 315000.5},
+			SalePrices:          []MSSalePrice{{Value: 549000.4}},
+			EffectiveVat:        &vat,
+			EffectiveVatEnabled: &vatEnabled,
+		}
+
+		got := ProductPriceFrom(src)
+
+		if got.ID != priceID1 {
+			t.Errorf("ID = %q, want %q", got.ID, priceID1)
+		}
+		if got.BuyPrice == nil || *got.BuyPrice != 315001 {
+			t.Errorf("BuyPrice = %v, want 315001 (round 315000.5)", got.BuyPrice)
+		}
+		if got.SalePrice == nil || *got.SalePrice != 549000 {
+			t.Errorf("SalePrice = %v, want 549000 (round 549000.4)", got.SalePrice)
+		}
+		if got.EffectiveVat == nil || *got.EffectiveVat != 22 {
+			t.Errorf("EffectiveVat = %v, want 22", got.EffectiveVat)
+		}
+		if got.EffectiveVatEnabled == nil || !*got.EffectiveVatEnabled {
+			t.Errorf("EffectiveVatEnabled = %v, want true", got.EffectiveVatEnabled)
+		}
+	})
+
+	t.Run("нет цен → nil, разбор не падает", func(t *testing.T) {
+		got := ProductPriceFrom(MSProduct{ID: priceID2, UseParentVat: true})
+
+		if got.BuyPrice != nil || got.SalePrice != nil {
+			t.Errorf("BuyPrice/SalePrice = %v/%v, want nil (полей нет)", got.BuyPrice, got.SalePrice)
+		}
+		if got.EffectiveVat != nil || got.EffectiveVatEnabled != nil {
+			t.Errorf("НДС = %v/%v, want nil (useParentVat — полей нет)", got.EffectiveVat, got.EffectiveVatEnabled)
+		}
+		if !got.UseParentVat {
+			t.Error("UseParentVat потерян при переносе")
+		}
+	})
+
+	t.Run("несколько salePrices → берём первый (у нас один тип цены)", func(t *testing.T) {
+		got := ProductPriceFrom(MSProduct{SalePrices: []MSSalePrice{{Value: 100}, {Value: 200}}})
+
+		if got.SalePrice == nil || *got.SalePrice != 100 {
+			t.Errorf("SalePrice = %v, want 100 (первый элемент)", got.SalePrice)
+		}
+	})
+}
+
 // TestFetchProductPricesByIDsEmpty — пустой список id: запроса к МС нет вовсе.
 func TestFetchProductPricesByIDsEmpty(t *testing.T) {
 	requests := 0

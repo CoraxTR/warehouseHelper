@@ -45,8 +45,9 @@ type stubPricesRepo struct {
 	ids       []string
 	idsErr    error
 	updateErr error
-	// updateN > 0 — принудительное число обновлённых строк (для проверки J<K);
-	// 0 — вернуть len(prices).
+	// updateN > 0 — принудительное число РЕАЛЬНО обновлённых строк (холостые
+	// UPDATE отсеяны); 0 — вернуть len(prices). J<K штатен (обновились не все
+	// цены) и WARN не выставляет — проверяем это отдельно.
 	updateN int
 
 	cursor       time.Time
@@ -219,13 +220,20 @@ func assertCursorWrite(t *testing.T, repo *stubPricesRepo, wantNext time.Time, w
 
 // TestPriceTickCalendar — календарная привязка полного прохода (МСК): решение
 // «батч или инкремент» принимает ОДИН тик по МСК-дате последнего полного
-// прохода, прочитанной из БД. Закрепляем:
+// прохода, прочитанной из БД. Условие прохода — lastFullScan != сегодня (НЕ
+// «< сегодня»): дата из будущего при «<» подавляла бы проход НАВСЕГДА.
+// Закрепляем:
 //   - нет строки курсора → полный проход сразу + запись курсора (next=now,
 //     дата=сегодня МСК); при падении запроса курсор НЕ пишем — следующий тик
 //     повторит проход (инкременту опираться не на что);
 //   - дата = сегодня МСК → полного прохода нет, инкремент;
-//   - дата < сегодня МСК → полный проход, дата перезаписана СТРОГО (даже если
-//     запрос цен упал — ошибка наружу, но SetPriceCursor вызван);
+//   - дата != сегодня МСК (вчера ИЛИ будущее) → полный проход, дата
+//     перезаписана СТРОГО (даже если запрос цен упал — ошибка наружу, но
+//     SetPriceCursor вызван);
+//   - при падении полного прохода в новый день дата всё равно двигается на
+//     сегодня, а next_scan_at остаётся СТАРЫМ: окно [старый курсор..now]
+//     остаётся открытым, и следующий инкремент доберёт пропущенное (при
+//     успехе next_scan_at = now);
 //   - сутки считаются по МСК, а не UTC (граница полуночи).
 func TestPriceTickCalendar(t *testing.T) {
 	ids := []string{"p1", "p2"}
@@ -288,10 +296,12 @@ func TestPriceTickCalendar(t *testing.T) {
 			wantErr:  true,
 		},
 		{
-			// Строгая перезапись на новом дне: даже упавший запрос не
+			// Строгая перезапись ДАТЫ на новом дне: даже упавший запрос не
 			// оставляет вчерашнюю дату — иначе тик за тиком крутил бы полный
-			// проход; недостающее доберёт инкремент.
-			name:         "новый день, запрос цен упал → дата всё равно перезаписана",
+			// проход. Но next_scan_at остаётся СТАРЫМ (прежним курсором): окно
+			// [старый курсор..now] не закрывается, и следующий инкремент
+			// доберёт всё, что изменилось за время простоя.
+			name:         "новый день, запрос цен упал → дата перезаписана, next остаётся старым",
 			cursorOK:     true,
 			cursor:       time.Date(2026, time.October, 4, 9, 0, 0, 0, time.UTC),
 			lastFullScan: "2026-10-04",
@@ -299,9 +309,23 @@ func TestPriceTickCalendar(t *testing.T) {
 			fetchErr:     errMC,
 			wantFull:     true,
 			wantWrites:   1,
-			wantNext:     time.Date(2026, time.October, 5, 10, 0, 0, 0, time.UTC),
+			wantNext:     time.Date(2026, time.October, 4, 9, 0, 0, 0, time.UTC), // окно не закрыто
 			wantFullDate: "2026-10-05",
 			wantErr:      true,
+		},
+		{
+			// Регресс условия «!= сегодня»: дата из БУДУЩЕГО (разъехались часы
+			// сервера / ручная правка БД) при прежнем «<» навсегда подавляла
+			// полный проход. Теперь проход идёт, а дата нормализуется на сегодня.
+			name:         "дата в будущем → полный проход, а не вечное подавление",
+			cursorOK:     true,
+			cursor:       time.Date(2026, time.October, 5, 9, 0, 0, 0, time.UTC),
+			lastFullScan: "2026-10-09",
+			now:          time.Date(2026, time.October, 5, 10, 0, 0, 0, time.UTC),
+			wantFull:     true,
+			wantWrites:   1,
+			wantNext:     time.Date(2026, time.October, 5, 10, 0, 0, 0, time.UTC),
+			wantFullDate: "2026-10-05",
 		},
 		{
 			// МСК-полночь: 21:30 UTC — это уже 00:30 СЛЕДУЮЩЕГО дня в МСК,
@@ -387,6 +411,51 @@ func TestPriceTickCalendar(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestPriceFullScanFallbackWindow — провал полного прохода в новый день НЕ
+// закрывает окно инкремента: дата двигается на сегодня, а next_scan_at остаётся
+// старым, и следующий тик (дата уже сегодня → инкремент) спрашивает МС со
+// СТАРОГО курсора, добирая всё, что изменилось за простой. Ровно ради этого
+// окно [старый курсор..now] оставляют открытым.
+func TestPriceFullScanFallbackWindow(t *testing.T) {
+	now := time.Date(2026, time.October, 5, 10, 0, 0, 0, time.UTC)
+	staleCursor := time.Date(2026, time.October, 4, 9, 0, 0, 0, time.UTC)
+
+	repo := &stubPricesRepo{ids: []string{"a", "b"}, cursor: staleCursor, cursorOK: true, lastFullScan: "2026-10-04"}
+	cl := &stubPriceClient{byIDsErr: errMC}
+	p := NewPricesPoller(PricesConfig{Now: func() time.Time { return now }}, repo, cl)
+
+	// Тик 1: новый день, полный проход падает.
+	if err := p.tick(context.Background()); err == nil {
+		t.Fatal("тик 1: ожидалась ошибка полного прохода")
+	}
+	// Дата перезаписана на сегодня, время — старое (окно осталось открытым).
+	cur, date, ok := repo.cursorNow()
+	if !ok || !cur.Equal(staleCursor) || date != "2026-10-05" {
+		t.Fatalf("курсор после падения: next=%v date=%q (ok=%v), want next=%v date=2026-10-05",
+			cur, date, ok, staleCursor)
+	}
+
+	// Тик 2: дата = сегодня → инкремент, и запрошен СТАРЫЙ курсор (окно не закрыто).
+	if err := p.tick(context.Background()); err != nil {
+		t.Fatalf("тик 2 (инкремент): %v", err)
+	}
+	since := cl.sinceTimes()
+	if len(since) != 1 || !since[0].Equal(staleCursor) {
+		t.Fatalf("инкремент запрошен с %v, want %v (окно [старый курсор..now] должно остаться открытым)",
+			since, staleCursor)
+	}
+
+	// Успешный инкремент закрывает окно: next двигается на now.
+	writes := repo.writes()
+	if len(writes) != 2 {
+		t.Fatalf("записей курсора: %d, want 2: %+v", len(writes), writes)
+	}
+	if !writes[1].next.Equal(now) || writes[1].lastFullScan != "2026-10-05" {
+		t.Errorf("после инкремента next=%v date=%q, want next=%v date=2026-10-05",
+			writes[1].next, writes[1].lastFullScan, now)
 	}
 }
 
@@ -540,22 +609,49 @@ func TestPriceBatchLogs(t *testing.T) {
 	}
 }
 
-// TestPriceBatchShortfallWarns — K<M или J<K (мёртвые id / цены не легли) → WARN.
+// TestPriceBatchShortfallWarns — WARN о «расхождении» ровно при returned <
+// requested (МС не отдала часть запрошенных id — потеря покрытия, лечится
+// ресинком каталога). J<K (UpdateProductPrices вернул меньше присланного) —
+// ШТАТНО: метод возвращает число ИЗМЕНИВШИХСЯ строк, холостые UPDATE отсеяны
+// по IS DISTINCT FROM, поэтому WARN по нему не выставляется.
 func TestPriceBatchShortfallWarns(t *testing.T) {
-	buf := captureSlog(t)
+	t.Run("returned < requested → WARN", func(t *testing.T) {
+		buf := captureSlog(t)
 
-	repo := &stubPricesRepo{ids: []string{"a", "b", "c"}, updateN: 1} // вернулось 3, легло 1
-	cl := &stubPriceClient{}
-	p := NewPricesPoller(PricesConfig{}, repo, cl)
+		// Спросили три id, МС вернула две строки — расхождение.
+		repo := &stubPricesRepo{ids: []string{"a", "b", "c"}}
+		cl := &stubPriceClient{byIDsResp: func([]string) []client.MSProductPrice {
+			return []client.MSProductPrice{{ID: "a"}, {ID: "b"}}
+		}}
+		p := NewPricesPoller(PricesConfig{}, repo, cl)
 
-	if err := p.tickBatch(context.Background()); err != nil {
-		t.Fatalf("tickBatch: %v", err)
-	}
+		if err := p.tickBatch(context.Background()); err != nil {
+			t.Fatalf("tickBatch: %v", err)
+		}
 
-	log := buf.String()
-	if !strings.Contains(log, "расхождение") || !strings.Contains(log, "level=WARN") {
-		t.Errorf("ожидался WARN о расхождении: %s", log)
-	}
+		log := buf.String()
+		if !strings.Contains(log, "расхождение") || !strings.Contains(log, "level=WARN") {
+			t.Errorf("ожидался WARN о расхождении: %s", log)
+		}
+	})
+
+	t.Run("J<K (цены не изменились) → без WARN", func(t *testing.T) {
+		buf := captureSlog(t)
+
+		// Вернулось 3, легло 1: холостые UPDATE отсеяны, покрытие полное.
+		repo := &stubPricesRepo{ids: []string{"a", "b", "c"}, updateN: 1}
+		cl := &stubPriceClient{}
+		p := NewPricesPoller(PricesConfig{}, repo, cl)
+
+		if err := p.tickBatch(context.Background()); err != nil {
+			t.Fatalf("tickBatch: %v", err)
+		}
+
+		log := buf.String()
+		if strings.Contains(log, "расхождение") || strings.Contains(log, "level=WARN") {
+			t.Errorf("J<K штатен, WARN не ожидался: %s", log)
+		}
+	})
 }
 
 // TestPriceIncrementFetchErrorDoesNotStopPoller — ошибка тика залогирована, но Run

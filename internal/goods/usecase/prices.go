@@ -23,7 +23,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"math"
 	"time"
 
 	"warehouseHelper/internal/domain"
@@ -142,12 +141,24 @@ func (p *PricesPoller) tick(ctx context.Context) error {
 		return nil
 	}
 
-	if lastFullScan < today {
-		// Новый календарный день: полный проход. Дата перезаписывается СТРОГО —
-		// даже когда запрос к МС упал (ретраи уже отработали в воркерпуле, дальше
-		// по стандарту: логируем и пропускаем; недостающее доберёт инкремент).
+	if lastFullScan != today {
+		// Новый календарный день — полный проход. Сравнение строго на НЕРАВЕНСТВО
+		// (не «<»): дата в курсоре из будущего — сдвиг часов сервера или ручная
+		// правка БД — при «<» навсегда подавила бы полный проход.
+		//
+		// ДАТУ перезаписываем строго даже при падении запроса — иначе упавший
+		// проход ретраился бы каждые 10 минут. А время следующего инкремента при
+		// падении НЕ двигаем: окно [старый курсор..now] осталось непрочитанным, и
+		// инкремент следующим тиком закроет пропущенное сам. Иначе правки,
+		// сделанные между старым курсором и now, не увидел бы никто до завтра.
 		batchErr := p.tickBatch(ctx)
-		if err := p.products.SetPriceCursor(ctx, now, today); err != nil {
+
+		nextScan := now
+		if batchErr != nil {
+			nextScan = next
+		}
+
+		if err := p.products.SetPriceCursor(ctx, nextScan, today); err != nil {
 			return fmt.Errorf("цены: запись курсора после полного прохода: %w", err)
 		}
 
@@ -159,8 +170,10 @@ func (p *PricesPoller) tick(ctx context.Context) error {
 
 // tickBatch — полный проход: все id каталога пачками по BatchSize. Своего sleep
 // между чанками нет — рейт-лимит уже держит воркерпул МС. В лог INFO идёт
-// «запросили M id → вернулось K → обновили J»; K<M или J<K — WARN (мёртвые id
-// или расхождение данных, чинится ресинком каталога).
+// «запросили M id → вернулось K → обновили J»; K<M — МС не отдала часть
+// запрошенных id (мёртвые/устаревшие), это WARN и лечится ресинком каталога.
+// J<K — НЕ расхождение: UpdateProductPrices возвращает число реально
+// изменившихся строк, а постоянные цены не пишутся вообще.
 func (p *PricesPoller) tickBatch(ctx context.Context) error {
 	ids, err := p.products.ProductIDs(ctx)
 	if err != nil {
@@ -189,9 +202,10 @@ func (p *PricesPoller) tickBatch(ctx context.Context) error {
 
 	slog.Info("goods: обновление цен (батч)",
 		"запросили", requested, "вернулось", returned, "обновили", updated)
-	// K<M — часть id не отдаётся МС (мёртвые/устаревшие); J<K — часть цен не
-	// легла. Оба случая — признак расхождения, показываем WARN.
-	if returned < requested || updated < returned {
+	// K<M — МС не отдала часть запрошенных id (мёртвые/устаревшие): признак
+	// расхождения. J<K проверять нельзя: J — число ИЗМЕНИВШИХСЯ строк, поэтому
+	// на установившемся каталоге он меньше K штатно и давал бы ложный WARN.
+	if returned < requested {
 		slog.Warn("goods: обновление цен (батч): расхождение",
 			"запросили", requested, "вернулось", returned, "обновили", updated)
 	}
@@ -241,54 +255,33 @@ func (p *PricesPoller) tickIncrement(ctx context.Context, now, cursor time.Time,
 }
 
 // msProductPrice собирает domain.ProductPrice из полного ответа МС по товару
-// (выгрузка дерева и ресинк). Единое правило маппинга цен/НДС — вызывается из
-// buildProduct, чтобы правило не разъехалось с фоновым обновителем.
+// (выгрузка дерева и ресинк). Перевод «сырой МС → цены в копейках» живёт в
+// клиенте МС (client.ProductPriceFrom) — та же функция, которой пользуется
+// фоновый обновитель: правило маппинга одно на оба пути, разъехаться не может.
+// Здесь добавляется только наше решение по НДС.
 func msProductPrice(ms client.MSProduct) domain.ProductPrice {
+	return msPriceToDomain(client.ProductPriceFrom(ms))
+}
+
+// msPriceToDomain — цены одного товара из ответа МС в домен: копейки посчитаны
+// клиентом (*int64), здесь — решение по НДС (resolveVat).
+func msPriceToDomain(p client.MSProductPrice) domain.ProductPrice {
 	return domain.ProductPrice{
-		ID:           ms.ID,
-		BuyPrice:     buyPriceKopecks(ms.BuyPrice),
-		SalePrice:    salePriceKopecks(ms.SalePrices),
-		EffectiveVat: resolveVat(ms.EffectiveVat, ms.EffectiveVatEnabled, ms.UseParentVat),
+		ID:           p.ID,
+		BuyPrice:     p.BuyPrice,
+		SalePrice:    p.SalePrice,
+		EffectiveVat: resolveVat(p.EffectiveVat, p.EffectiveVatEnabled, p.UseParentVat),
 	}
 }
 
-// msPricesToDomain переводит ответ МС (батч/инкремент) в domain.ProductPrice.
-// У client.MSProductPrice цены уже в копейках (*int64) — округление float→int
-// делает клиент МС; здесь только решение по НДС.
+// msPricesToDomain — то же для пачки (батч и инкремент обновителя).
 func msPricesToDomain(prices []client.MSProductPrice) []domain.ProductPrice {
 	out := make([]domain.ProductPrice, 0, len(prices))
 	for _, p := range prices {
-		out = append(out, domain.ProductPrice{
-			ID:           p.ID,
-			BuyPrice:     p.BuyPrice,
-			SalePrice:    p.SalePrice,
-			EffectiveVat: resolveVat(p.EffectiveVat, p.EffectiveVatEnabled, p.UseParentVat),
-		})
+		out = append(out, msPriceToDomain(p))
 	}
 
 	return out
-}
-
-// buyPriceKopecks — закупочная цена из МС (объект buyPrice, Value в копейках)
-// в *int64; nil-объект → nil (МС не отдала цену). Округление как в контракте.
-func buyPriceKopecks(p *client.MSBuyPrice) *int64 {
-	if p == nil {
-		return nil
-	}
-	v := int64(math.Round(p.Value))
-
-	return &v
-}
-
-// salePriceKopecks — цена продажи: ПЕРВЫЙ элемент salePrices (в учётке тип
-// цены ровно один — «Цена продажи»). Пустой/отсутствующий массив → nil.
-func salePriceKopecks(prices []client.MSSalePrice) *int64 {
-	if len(prices) == 0 {
-		return nil
-	}
-	v := int64(math.Round(prices[0].Value))
-
-	return &v
 }
 
 // resolveVat — НДС из полей МС в нашу метку (-1 = «без НДС», nil = не отдана):

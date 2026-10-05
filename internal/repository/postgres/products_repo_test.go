@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -209,6 +210,73 @@ func TestUpdateProductPriceSQL(t *testing.T) {
 	} {
 		if !strings.Contains(updateProductPriceSQL, frag) {
 			t.Errorf("updateProductPriceSQL: нет фрагмента %q", frag)
+		}
+	}
+}
+
+// declaredColumns вытаскивает колонки из CREATE TABLE <table> (...) в .sql-файле
+// пакета: имя → тип (верхний регистр). Схема — источник правды, поэтому SQL-код
+// в Go сверяем именно с ней: Postgres на VM нет, и опечатка/переименование
+// колонки всплыли бы только на препроде. Общий для products и курсора цен.
+func declaredColumns(t *testing.T, file, table string) map[string]string {
+	t.Helper()
+
+	sql := readSQLFile(t, file)
+	marker := "CREATE TABLE " + table
+	start := strings.Index(sql, marker)
+	if start < 0 {
+		t.Fatalf("%s: нет %q", file, marker)
+	}
+	body := sql[start:]
+	// Конец тела — закрывающая скобка на СВОЕЙ строке («\n);»), а не первое
+	// «);» вообще: в комментариях к колонкам встречается «);» (напр.
+	// «(productFolder.name); NULL»), и наивный срез обрезал бы схему раньше.
+	if end := strings.Index(body, "\n);"); end >= 0 {
+		body = body[:end]
+	}
+
+	colRe := regexp.MustCompile(`(?m)^\s*([a-z_][a-z0-9_]*)\s+([A-Z][A-Z0-9]*)`)
+	cols := map[string]string{}
+	for _, m := range colRe.FindAllStringSubmatch(body, -1) {
+		cols[m[1]] = m[2]
+	}
+	if len(cols) == 0 {
+		t.Fatalf("%s: не разобрана ни одна колонка таблицы %s", file, table)
+	}
+
+	return cols
+}
+
+// TestProductColumnsMatchSchema — список колонок SELECT (productColumns) и
+// ценовые колонки синка обязаны существовать в products_schema.sql. Иначе
+// запрос валится только на живой БД, а тесты молчат.
+func TestProductColumnsMatchSchema(t *testing.T) {
+	cols := declaredColumns(t, "products_schema.sql", "products")
+
+	for _, col := range strings.Split(productColumns, ",") {
+		col = strings.TrimSpace(col)
+		if col == "" {
+			continue
+		}
+		if _, ok := cols[col]; !ok {
+			t.Errorf("productColumns называет колонку %q, которой нет в products_schema.sql", col)
+		}
+	}
+
+	// Типы цен: копейки — BIGINT (domain int64), НДС — SMALLINT (int16).
+	// Несовпадение молча разъехалось бы с доменной моделью.
+	for col, want := range map[string]string{
+		"buy_price":     "BIGINT",
+		"sale_price":    "BIGINT",
+		"effective_vat": "SMALLINT",
+	} {
+		got, ok := cols[col]
+		if !ok {
+			t.Errorf("в products_schema.sql нет колонки %q", col)
+			continue
+		}
+		if got != want {
+			t.Errorf("%s = %q, want %q", col, got, want)
 		}
 	}
 }
