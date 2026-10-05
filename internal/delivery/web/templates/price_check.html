@@ -32,6 +32,7 @@
     <table id="pc-table">
         <thead>
             <tr>
+                <th class="col-toggle"></th>
                 <th>Товар</th>
                 <th>Текущая наценка</th>
                 <th>Входящий НДС, %</th>
@@ -42,23 +43,26 @@
             {{$prev := ""}}
             {{range $p := .Rows}}
             {{if ne $p.GroupName $prev}}
-            <tr class="group-row">
-                <td colspan="4">{{if $p.GroupName}}{{$p.GroupName}}{{else}}Без группы{{end}}</td>
+            <tr class="group-row" data-group="{{$p.GroupName}}" data-collapsed="1">
+                <td class="col-toggle" data-role="group-toggle" title="Развернуть группу">+</td>
+                <td colspan="4" data-role="group-toggle">{{if $p.GroupName}}{{$p.GroupName}}{{else}}Без группы{{end}}</td>
             </tr>
             {{$prev = $p.GroupName}}
             {{end}}
-            <tr class="pc-row" data-pid="{{$p.ProductID}}">
+            <tr class="pc-row group-hidden" data-pid="{{$p.ProductID}}" data-group="{{$p.GroupName}}">
+                <td class="col-toggle"></td>
                 <td>{{$p.Name}}{{if $p.InternalCode}} <span class="muted small">{{$p.InternalCode}}</span>{{end}}</td>
                 <td class="js-markup">{{if $p.Missing}}<span class="hint">не хватает: {{$p.Missing}}</span>{{else}}{{$p.Markup}} %{{end}}</td>
                 <td><input class="pc-input js-vat" type="number" min="0" max="100" step="1" value="{{$p.VatIn}}" title="Enter — сохранить в каталог"></td>
                 <td><button type="button" class="btn-secondary small js-sbox-toggle">Рассчитать наценку</button></td>
             </tr>
-            <tr class="pc-sbox-row hidden" data-pid="{{$p.ProductID}}">
+            <tr class="pc-sbox-row hidden group-hidden" data-pid="{{$p.ProductID}}" data-group="{{$p.GroupName}}">
+                <td class="col-toggle"></td>
                 <td colspan="4">
                     <div class="days">
-                        <label class="hint">Цена продажи, ₽ <input class="pc-input js-sbox" data-field="sale" type="number" min="0" step="0.01" value="{{$p.SBox.Sale}}"></label>
+                        <label class="hint">Цена продажи, ₽ <input class="pc-input pc-input--price js-sbox" data-field="sale" type="number" min="0" step="0.01" value="{{$p.SBox.Sale}}"></label>
                         <label class="hint">Наш НДС, % <input class="pc-input js-sbox" data-field="vatout" type="number" min="0" max="100" step="1" value="{{$p.SBox.VatOut}}"></label>
-                        <label class="hint">Закупочная, ₽ <input class="pc-input js-sbox" data-field="buy" type="number" min="0" step="0.01" value="{{$p.SBox.Buy}}"></label>
+                        <label class="hint">Закупочная, ₽ <input class="pc-input pc-input--price js-sbox" data-field="buy" type="number" min="0" step="0.01" value="{{$p.SBox.Buy}}"></label>
                         <label class="hint">Входящий НДС, % <input class="pc-input js-sbox" data-field="vatin" type="number" min="0" max="100" step="1" value="{{$p.SBox.VatIn}}"></label>
                     </div>
                     <div class="hint">Наценка: <span class="js-sbox-markup">{{if $p.SBoxMissing}}не хватает: {{$p.SBoxMissing}}{{else}}{{$p.SBoxMarkup}} %{{end}}</span> — значения песочницы каталог не меняют</div>
@@ -203,9 +207,56 @@
                 }
             }, false);
 
+            // setClass — включить/выключить один класс, не трогая остальные.
+            function setClass(el, name, on) {
+                if (on) {
+                    if (!hasClass(el, name)) { el.className = el.className + ' ' + name; }
+                } else if (hasClass(el, name)) {
+                    el.className = (' ' + el.className + ' ').replace(' ' + name + ' ', ' ').replace(/^\s+|\s+$/g, '');
+                }
+            }
+            // --- группы (как в «Сроках») ---
+            // При загрузке группы свёрнуты, «+» в первой колонке разворачивает всю
+            // группу. Состояние живёт на строке-заголовке (data-collapsed), строки
+            // отрисованы сервером и не перерисовываются — в «Сроках» tbody
+            // собирается из данных заново, поэтому там состояние в JS-объекте.
+            // Прячем строки классом group-hidden, а не hidden: у строки песочницы
+            // свой независимый hidden, и он не должен слетать при сворачивании.
+            function groupRows(g) {
+                var out = [];
+                var rows = TABLE.getElementsByTagName('TR');
+                for (var i = 0; i < rows.length; i++) {
+                    if (!hasClass(rows[i], 'group-row') && rows[i].getAttribute('data-group') === g) {
+                        out.push(rows[i]);
+                    }
+                }
+                return out;
+            }
+            function setGroupCollapsed(head, collapsed) {
+                var rows = groupRows(head.getAttribute('data-group'));
+                for (var i = 0; i < rows.length; i++) {
+                    setClass(rows[i], 'group-hidden', collapsed);
+                }
+                head.setAttribute('data-collapsed', collapsed ? '1' : '0');
+                var sign = head.getElementsByTagName('TD')[0];
+                if (sign) {
+                    sign.textContent = collapsed ? '+' : '-';
+                    sign.title = collapsed ? 'Развернуть группу' : 'Свернуть группу';
+                }
+            }
+            function toggleGroup(el) {
+                var head = upTo(el, 'TR');
+                if (!head || !hasClass(head, 'group-row')) { return; }
+                setGroupCollapsed(head, head.getAttribute('data-collapsed') !== '1');
+            }
             TABLE.addEventListener('click', function (ev) {
                 var e = ev || window.event;
                 var el = e.target || e.srcElement;
+                // Клик по «+»/«−» или по названию группы — свернуть/развернуть её.
+                if (el && el.getAttribute && el.getAttribute('data-role') === 'group-toggle') {
+                    toggleGroup(el);
+                    return;
+                }
                 if (!hasClass(el, 'js-sbox-toggle')) { return; }
                 var row = upTo(el, 'TR');
                 if (!row) { return; }
