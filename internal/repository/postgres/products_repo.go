@@ -426,36 +426,36 @@ const productPriceCursorSetSQL = `
 
 // GetPriceCursor — курсор обновителя цен: момент следующего инкремента,
 // МСК-дата последнего полного прохода ("" — прохода ещё не было) и признак
-// наличия строки. ok=false — строки нет вовсе (первый запуск: модуль каталога
-// делает полный проход и начинает вести курсор).
-func (pg *PGClient) GetPriceCursor(ctx context.Context) (next time.Time, lastFullScan string, ok bool, err error) {
+// наличия строки. Exists=false — строки нет вовсе (первый запуск: модуль
+// каталога делает полный проход и начинает вести курсор).
+func (pg *PGClient) GetPriceCursor(ctx context.Context) (domain.ProductPriceCursor, error) {
 	return scanPriceCursor(pg.Pool.QueryRow(ctx, productPriceCursorGetSQL))
 }
 
 // scanPriceCursor разбирает строку курсора: ErrNoRows — не ошибка, а «курсора
-// нет» (ok=false). NULL в last_full_scan_at (дата ещё не писалась) отдаётся
-// пустой строкой — сравнение «< сегодня» тогда истинно и запускает полный
-// проход. Вынесен из GetPriceCursor, чтобы ветку проверять подделкой pgx.Row
-// без БД (как прочие scan-хелперы репозитория).
-func scanPriceCursor(row pgx.Row) (time.Time, string, bool, error) {
+// нет» (Exists=false). NULL в last_full_scan_at (дата ещё не писалась) отдаётся
+// пустой строкой — сравнение с сегодняшней МСК-датой тогда не равно и запускает
+// полный проход. Вынесен из GetPriceCursor, чтобы ветку проверять подделкой
+// pgx.Row без БД (как прочие scan-хелперы репозитория).
+func scanPriceCursor(row pgx.Row) (domain.ProductPriceCursor, error) {
 	var (
 		next     time.Time
 		lastFull *time.Time
 	)
 	if err := row.Scan(&next, &lastFull); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return time.Time{}, "", false, nil
+			return domain.ProductPriceCursor{}, nil
 		}
 
-		return time.Time{}, "", false, fmt.Errorf("get product price cursor: %w", err)
+		return domain.ProductPriceCursor{}, fmt.Errorf("get product price cursor: %w", err)
 	}
 
-	lastFullScan := ""
+	cur := domain.ProductPriceCursor{Next: next, Exists: true}
 	if lastFull != nil {
-		lastFullScan = lastFull.Format(time.DateOnly)
+		cur.LastFullScan = lastFull.Format(time.DateOnly)
 	}
 
-	return next, lastFullScan, true, nil
+	return cur, nil
 }
 
 // SetPriceCursor сохраняет момент, с которого сканировать следующий инкремент

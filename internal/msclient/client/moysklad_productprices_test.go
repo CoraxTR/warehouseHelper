@@ -114,7 +114,7 @@ func TestParseMSProductPriceParentVat(t *testing.T) {
 		t.Errorf("ID = %q, want %q", got.ID, priceID1)
 	}
 	if !got.UseParentVat {
-		t.Errorf("UseParentVat = false, want true")
+		t.Error("UseParentVat = false, want true")
 	}
 	if got.EffectiveVat != nil {
 		t.Errorf("EffectiveVat = %d, want nil (при useParentVat поля НДС в ответе нет)", *got.EffectiveVat)
@@ -250,7 +250,7 @@ func TestProductPriceFrom(t *testing.T) {
 func TestFetchProductPricesByIDsEmpty(t *testing.T) {
 	requests := 0
 
-	msac, _ := newDetailTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+	msac, _ := newDetailTestClient(t, func(_ http.ResponseWriter, _ *http.Request) {
 		requests++
 	})
 

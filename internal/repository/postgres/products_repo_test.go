@@ -262,7 +262,7 @@ func declaredColumns(t *testing.T, file, table string) map[string]string {
 func TestProductColumnsMatchSchema(t *testing.T) {
 	cols := declaredColumns(t, "products_schema.sql", "products")
 
-	for _, col := range strings.Split(productColumns, ",") {
+	for col := range strings.SplitSeq(productColumns, ",") {
 		col = strings.TrimSpace(col)
 		if col == "" {
 			continue

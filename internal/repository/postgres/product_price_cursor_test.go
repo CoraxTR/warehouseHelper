@@ -9,7 +9,7 @@ import (
 )
 
 // TestScanPriceCursor — разбор строки курсора обновителя цен. Закрепляем новый
-// контракт: ok=false ТОЛЬКО на ErrNoRows («курсора ещё нет» — первый запуск, не
+// контракт: Exists=false ТОЛЬКО на ErrNoRows («курсора ещё нет» — первый запуск, не
 // ошибка), NULL в last_full_scan_at отдаётся пустой строкой (полного прохода не
 // было → сравнение «!= сегодня» истинно и запускает проход), а дата
 // форматируется DateOnly. Строгость подделки важна: NULL в string отклоняется
@@ -53,7 +53,7 @@ func TestScanPriceCursor(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotNext, gotFullScan, gotOK, err := scanPriceCursor(tt.row)
+			got, err := scanPriceCursor(tt.row)
 			if tt.wantErr {
 				if err == nil {
 					t.Fatal("scanPriceCursor: ошибки нет, а ожидалась")
@@ -63,14 +63,14 @@ func TestScanPriceCursor(t *testing.T) {
 			if err != nil {
 				t.Fatalf("scanPriceCursor: %v", err)
 			}
-			if gotOK != tt.wantOK {
-				t.Errorf("ok = %v, want %v", gotOK, tt.wantOK)
+			if got.Exists != tt.wantOK {
+				t.Errorf("Exists = %v, want %v", got.Exists, tt.wantOK)
 			}
-			if !gotNext.Equal(tt.wantNext) {
-				t.Errorf("next = %s, want %s", gotNext, tt.wantNext)
+			if !got.Next.Equal(tt.wantNext) {
+				t.Errorf("Next = %s, want %s", got.Next, tt.wantNext)
 			}
-			if gotFullScan != tt.wantFullScan {
-				t.Errorf("lastFullScan = %q, want %q", gotFullScan, tt.wantFullScan)
+			if got.LastFullScan != tt.wantFullScan {
+				t.Errorf("LastFullScan = %q, want %q", got.LastFullScan, tt.wantFullScan)
 			}
 		})
 	}

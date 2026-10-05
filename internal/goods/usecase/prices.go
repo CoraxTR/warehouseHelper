@@ -23,6 +23,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math"
 	"time"
 
 	"warehouseHelper/internal/domain"
@@ -51,10 +52,10 @@ type PricesRepository interface {
 	// UpdateProductPrices — записать цены/НДС пачкой; возвращает число
 	// обновлённых строк.
 	UpdateProductPrices(ctx context.Context, prices []domain.ProductPrice) (int, error)
-	// GetPriceCursor — момент, с которого смотреть изменения, и МСК-дата
-	// последнего полного прохода ("" — прохода ещё не было); ok=false —
-	// строки курсора нет (первый запуск).
-	GetPriceCursor(ctx context.Context) (next time.Time, lastFullScan string, ok bool, err error)
+	// GetPriceCursor — курсор обновителя цен: момент следующего инкремента и
+	// МСК-дата последнего полного прохода (Exists=false — строки курсора нет,
+	// первый запуск).
+	GetPriceCursor(ctx context.Context) (domain.ProductPriceCursor, error)
 	// SetPriceCursor — перезаписать время следующего прохода и дату полного.
 	SetPriceCursor(ctx context.Context, next time.Time, lastFullScan string) error
 }
@@ -121,12 +122,12 @@ func (p *PricesPoller) tick(ctx context.Context) error {
 	now := p.cfg.Now()
 	today := now.In(mskLoc).Format(time.DateOnly)
 
-	next, lastFullScan, ok, err := p.products.GetPriceCursor(ctx)
+	cur, err := p.products.GetPriceCursor(ctx)
 	if err != nil {
 		return fmt.Errorf("цены: чтение курсора: %w", err)
 	}
 
-	if !ok {
+	if !cur.Exists {
 		// Первого запуска нет в календаре: полный проход идёт сразу, чтобы ждать
 		// полуночи не пришлось. Курсор при падении запроса НЕ пишем: строки нет —
 		// значит следующий тик повторит проход (инкременту пока опираться не на что).
@@ -141,7 +142,7 @@ func (p *PricesPoller) tick(ctx context.Context) error {
 		return nil
 	}
 
-	if lastFullScan != today {
+	if cur.LastFullScan != today {
 		// Новый календарный день — полный проход. Сравнение строго на НЕРАВЕНСТВО
 		// (не «<»): дата в курсоре из будущего — сдвиг часов сервера или ручная
 		// правка БД — при «<» навсегда подавила бы полный проход.
@@ -155,7 +156,7 @@ func (p *PricesPoller) tick(ctx context.Context) error {
 
 		nextScan := now
 		if batchErr != nil {
-			nextScan = next
+			nextScan = cur.Next
 		}
 
 		if err := p.products.SetPriceCursor(ctx, nextScan, today); err != nil {
@@ -165,7 +166,7 @@ func (p *PricesPoller) tick(ctx context.Context) error {
 		return batchErr
 	}
 
-	return p.tickIncrement(ctx, now, next, lastFullScan)
+	return p.tickIncrement(ctx, now, cur.Next, cur.LastFullScan)
 }
 
 // tickBatch — полный проход: все id каталога пачками по BatchSize. Своего sleep
@@ -270,7 +271,7 @@ func msPriceToDomain(p client.MSProductPrice) domain.ProductPrice {
 		ID:           p.ID,
 		BuyPrice:     p.BuyPrice,
 		SalePrice:    p.SalePrice,
-		EffectiveVat: resolveVat(p.EffectiveVat, p.EffectiveVatEnabled, p.UseParentVat),
+		EffectiveVat: resolveVat(p),
 	}
 }
 
@@ -287,17 +288,27 @@ func msPricesToDomain(prices []client.MSProductPrice) []domain.ProductPrice {
 // resolveVat — НДС из полей МС в нашу метку (-1 = «без НДС», nil = не отдана):
 //   - UseParentVat или EffectiveVat == nil → nil (НДС наследуется от группы);
 //   - vatEnabled=false при effectiveVat=0 → -1 («без НДС»);
+//   - EffectiveVat вне диапазона int16 → nil (см. проверку ниже);
 //   - иначе → int16(*effectiveVat).
-func resolveVat(effectiveVat *int, enabled *bool, useParent bool) *int16 {
-	if useParent || effectiveVat == nil {
+func resolveVat(p client.MSProductPrice) *int16 {
+	if p.UseParentVat || p.EffectiveVat == nil {
 		return nil
 	}
-	if enabled != nil && !*enabled && *effectiveVat == 0 {
+	if p.EffectiveVatEnabled != nil && !*p.EffectiveVatEnabled && *p.EffectiveVat == 0 {
 		v := int16(-1)
 
 		return &v
 	}
-	v := int16(*effectiveVat)
+	// НДС МС — int в JSON, а у нас метка int16: конверсию делаем только после
+	// явной проверки диапазона (G115), иначе переполнение молча исказило бы
+	// ставку. Практически МС отдаёт 10/22, но защищаемся: вне int16 считаем,
+	// что ставка не отдана (nil), и пишем предупреждение.
+	if *p.EffectiveVat < math.MinInt16 || *p.EffectiveVat > math.MaxInt16 {
+		slog.Warn("goods: НДС МС вне диапазона int16 — считаем, что не отдана", "значение", *p.EffectiveVat)
+
+		return nil
+	}
+	v := int16(*p.EffectiveVat)
 
 	return &v
 }

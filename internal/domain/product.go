@@ -1,6 +1,9 @@
 package domain
 
-import "errors"
+import (
+	"errors"
+	"time"
+)
 
 // ErrInternalCodeTaken — внутренний код (code из МС) уже занят другим товаром.
 var ErrInternalCodeTaken = errors.New("внутренний код уже используется другим товаром")
@@ -53,4 +56,13 @@ type ProductPrice struct {
 	BuyPrice     *int64 // закупочная цена, копейки; nil — не отдана
 	SalePrice    *int64 // цена продажи, копейки; nil — не отдана
 	EffectiveVat *int16 // НДС, %; -1 — без НДС; nil — не отдана
+}
+
+// ProductPriceCursor — состояние обновителя цен: время следующего инкремента и
+// МСК-дата последнего полного прохода. Exists=false — строки курсора ещё нет
+// (первый запуск).
+type ProductPriceCursor struct {
+	Next         time.Time
+	LastFullScan string
+	Exists       bool
 }

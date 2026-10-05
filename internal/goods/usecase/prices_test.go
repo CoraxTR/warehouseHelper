@@ -84,11 +84,11 @@ func (s *stubPricesRepo) UpdateProductPrices(_ context.Context, prices []domain.
 	return len(prices), nil
 }
 
-func (s *stubPricesRepo) GetPriceCursor(_ context.Context) (time.Time, string, bool, error) {
+func (s *stubPricesRepo) GetPriceCursor(_ context.Context) (domain.ProductPriceCursor, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	return s.cursor, s.lastFullScan, s.cursorOK, s.cursorErr
+	return domain.ProductPriceCursor{Next: s.cursor, LastFullScan: s.lastFullScan, Exists: s.cursorOK}, s.cursorErr
 }
 
 func (s *stubPricesRepo) SetPriceCursor(_ context.Context, next time.Time, lastFullScan string) error {
@@ -218,6 +218,26 @@ func assertCursorWrite(t *testing.T, repo *stubPricesRepo, wantNext time.Time, w
 	}
 }
 
+// priceTickCase — один сценарий календарного тика: что в курсоре и «сейчас», что
+// должно произойти (полный проход/инкремент), сколько записей курсора и какая
+// пара (next, дата) легла в последнюю.
+type priceTickCase struct {
+	name string
+
+	cursorOK     bool
+	cursor       time.Time
+	lastFullScan string
+	now          time.Time
+	fetchErr     error
+
+	wantFull     bool      // ждём полный проход (запрос по всем id)
+	wantIncrem   bool      // ждём инкремент (запрос по окну)
+	wantWrites   int       // сколько раз записан курсор
+	wantNext     time.Time // время следующего прохода в последней записи
+	wantFullDate string    // МСК-дата полного прохода в последней записи
+	wantErr      bool
+}
+
 // TestPriceTickCalendar — календарная привязка полного прохода (МСК): решение
 // «батч или инкремент» принимает ОДИН тик по МСК-дате последнего полного
 // прохода, прочитанной из БД. Условие прохода — lastFullScan != сегодня (НЕ
@@ -238,22 +258,7 @@ func assertCursorWrite(t *testing.T, repo *stubPricesRepo, wantNext time.Time, w
 func TestPriceTickCalendar(t *testing.T) {
 	ids := []string{"p1", "p2"}
 
-	tests := []struct {
-		name string
-
-		cursorOK     bool
-		cursor       time.Time
-		lastFullScan string
-		now          time.Time
-		fetchErr     error
-
-		wantFull     bool      // ждём полный проход (запрос по всем id)
-		wantIncrem   bool      // ждём инкремент (запрос по окну)
-		wantWrites   int       // сколько раз записан курсор
-		wantNext     time.Time // время следующего прохода в последней записи
-		wantFullDate string    // МСК-дата полного прохода в последней записи
-		wantErr      bool
-	}{
+	tests := []priceTickCase{
 		{
 			name:         "нет строки курсора → полный проход и запись курсора",
 			cursorOK:     false,
@@ -357,60 +362,66 @@ func TestPriceTickCalendar(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			repo := &stubPricesRepo{
-				ids:          ids,
-				cursorOK:     tt.cursorOK,
-				cursor:       tt.cursor,
-				lastFullScan: tt.lastFullScan,
-			}
-			cl := &stubPriceClient{byIDsErr: tt.fetchErr, sinceErr: tt.fetchErr}
-			p := NewPricesPoller(PricesConfig{Now: func() time.Time { return tt.now }}, repo, cl)
+		t.Run(tt.name, func(t *testing.T) { runPriceTickCalendarCase(t, tt, ids) })
+	}
+}
 
-			err := p.tick(context.Background())
-			if tt.wantErr && err == nil {
-				t.Fatal("tick вернул nil, ожидалась ошибка")
-			}
-			if !tt.wantErr && err != nil {
-				t.Fatalf("tick: %v", err)
-			}
+// runPriceTickCalendarCase — прогон одного сценария TestPriceTickCalendar: собирает
+// заглушки по кейсу, делает тик и проверяет наблюдаемые побочные эффекты.
+func runPriceTickCalendarCase(t *testing.T, c priceTickCase, ids []string) {
+	t.Helper()
 
-			// Полный проход и инкремент различимы по тому, какой метод клиента
-			// МС реально вызван (это и есть наблюдаемый побочный эффект выбора).
-			gotFull := len(cl.chunks()) > 0
-			gotIncrem := len(cl.sinceTimes()) > 0
-			if gotFull != tt.wantFull {
-				t.Errorf("полный проход: got %v, want %v (чанков %d)", gotFull, tt.wantFull, len(cl.chunks()))
-			}
-			if gotIncrem != tt.wantIncrem {
-				t.Errorf("инкремент: got %v, want %v (запросов окна %d)", gotIncrem, tt.wantIncrem, len(cl.sinceTimes()))
-			}
+	repo := &stubPricesRepo{
+		ids:          ids,
+		cursorOK:     c.cursorOK,
+		cursor:       c.cursor,
+		lastFullScan: c.lastFullScan,
+	}
+	cl := &stubPriceClient{byIDsErr: c.fetchErr, sinceErr: c.fetchErr}
+	p := NewPricesPoller(PricesConfig{Now: func() time.Time { return c.now }}, repo, cl)
 
-			// На успешном полном проходе в МС обязан уйти весь каталог.
-			if tt.wantFull && tt.fetchErr == nil {
-				total := 0
-				for _, chunk := range cl.chunks() {
-					total += len(chunk)
-				}
-				if total != len(ids) {
-					t.Errorf("в МС ушло %d id, want %d", total, len(ids))
-				}
-			}
+	err := p.tick(context.Background())
+	if c.wantErr && err == nil {
+		t.Fatal("tick вернул nil, ожидалась ошибка")
+	}
+	if !c.wantErr && err != nil {
+		t.Fatalf("tick: %v", err)
+	}
 
-			writes := repo.writes()
-			if len(writes) != tt.wantWrites {
-				t.Fatalf("записей курсора: %d, want %d: %+v", len(writes), tt.wantWrites, writes)
-			}
-			if tt.wantWrites > 0 {
-				last := writes[len(writes)-1]
-				if !last.next.Equal(tt.wantNext) {
-					t.Errorf("next = %v, want %v", last.next, tt.wantNext)
-				}
-				if last.lastFullScan != tt.wantFullDate {
-					t.Errorf("lastFullScan = %q, want %q", last.lastFullScan, tt.wantFullDate)
-				}
-			}
-		})
+	// Полный проход и инкремент различимы по тому, какой метод клиента
+	// МС реально вызван (это и есть наблюдаемый побочный эффект выбора).
+	gotFull := len(cl.chunks()) > 0
+	gotIncrem := len(cl.sinceTimes()) > 0
+	if gotFull != c.wantFull {
+		t.Errorf("полный проход: got %v, want %v (чанков %d)", gotFull, c.wantFull, len(cl.chunks()))
+	}
+	if gotIncrem != c.wantIncrem {
+		t.Errorf("инкремент: got %v, want %v (запросов окна %d)", gotIncrem, c.wantIncrem, len(cl.sinceTimes()))
+	}
+
+	// На успешном полном проходе в МС обязан уйти весь каталог.
+	if c.wantFull && c.fetchErr == nil {
+		total := 0
+		for _, chunk := range cl.chunks() {
+			total += len(chunk)
+		}
+		if total != len(ids) {
+			t.Errorf("в МС ушло %d id, want %d", total, len(ids))
+		}
+	}
+
+	writes := repo.writes()
+	if len(writes) != c.wantWrites {
+		t.Fatalf("записей курсора: %d, want %d: %+v", len(writes), c.wantWrites, writes)
+	}
+	if c.wantWrites > 0 {
+		last := writes[len(writes)-1]
+		if !last.next.Equal(c.wantNext) {
+			t.Errorf("next = %v, want %v", last.next, c.wantNext)
+		}
+		if last.lastFullScan != c.wantFullDate {
+			t.Errorf("lastFullScan = %q, want %q", last.lastFullScan, c.wantFullDate)
+		}
 	}
 }
 
@@ -690,7 +701,7 @@ func TestPriceIncrementFetchErrorDoesNotStopPoller(t *testing.T) {
 	go func() { done <- p.Run(ctx) }()
 
 	// Дожидаемся двух тиков инкремента: поллер обязан продолжать после ошибок.
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		select {
 		case <-called:
 		case <-time.After(2 * time.Second):
@@ -739,14 +750,20 @@ func TestPriceResolveVat(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := resolveVat(tt.vat, tt.enabled, tt.useParent)
+			got := resolveVat(client.MSProductPrice{
+				EffectiveVat:        tt.vat,
+				EffectiveVatEnabled: tt.enabled,
+				UseParentVat:        tt.useParent,
+			})
 			switch {
 			case tt.want == nil && got != nil:
 				t.Fatalf("resolveVat = %d, want nil", *got)
 			case tt.want != nil && got == nil:
 				t.Fatalf("resolveVat = nil, want %d", *tt.want)
-			case tt.want != nil && *got != *tt.want:
-				t.Fatalf("resolveVat = %d, want %d", *got, *tt.want)
+			default:
+				if tt.want != nil && *got != *tt.want {
+					t.Fatalf("resolveVat = %d, want %d", *got, *tt.want)
+				}
 			}
 		})
 	}
