@@ -19,7 +19,8 @@ import (
 // именно NULL, а модель хранит пустую строку.
 //
 // Порядок значений — productColumns: цены (buy_price, sale_price, effective_vat)
-// идут после site_url; NULL в них — «МС не отдала», домен это различает (nil).
+// идут после site_url, последняя колонка — ручной vat_incoming («Проверка цен»).
+// NULL в ценах — «МС не отдала», домен это различает (nil).
 func TestScanProductNullableText(t *testing.T) {
 	tests := []struct {
 		name string
@@ -29,7 +30,7 @@ func TestScanProductNullableText(t *testing.T) {
 		{
 			name: "три TEXT-колонки NULL",
 			vals: []any{"p-1", nil, "Молоко", "шт", nil, nil, nil,
-				int16(14), int16(6), "Копейка", true, false, nil, nil, nil, nil},
+				int16(14), int16(6), "Копейка", true, false, nil, nil, nil, nil, nil},
 			want: domain.Product{
 				ID: "p-1", Name: "Молоко", UOM: "шт",
 				ShelfLife: new(int16(14)), PackSize: new(int16(6)),
@@ -39,7 +40,7 @@ func TestScanProductNullableText(t *testing.T) {
 		{
 			name: "url на сайте NULL — пустая строка",
 			vals: []any{"p-3", "00009999", "Стейк", "кг", "Мясо", "folder-9", nil,
-				nil, nil, "Копейка", false, false, nil, nil, nil, nil},
+				nil, nil, "Копейка", false, false, nil, nil, nil, nil, nil},
 			want: domain.Product{
 				ID: "p-3", InternalCode: "00009999", Name: "Стейк", UOM: "кг",
 				GroupName: "Мясо", FolderID: "folder-9", InventoryType: "Копейка",
@@ -49,7 +50,7 @@ func TestScanProductNullableText(t *testing.T) {
 			name: "значения есть — переносятся как есть",
 			vals: []any{"p-2", "00001234", "Сыр", "кг", "Молочка/Сыры", "folder-7", 0.35,
 				nil, nil, "Копейка", false, true, "https://www.steakhome.ru/catalog/element/syr/",
-				int64(12345), int64(19999), int16(22)},
+				int64(12345), int64(19999), int16(22), int16(20)},
 			want: domain.Product{
 				ID: "p-2", InternalCode: "00001234", Name: "Сыр", UOM: "кг",
 				GroupName: "Молочка/Сыры", FolderID: "folder-7",
@@ -58,6 +59,7 @@ func TestScanProductNullableText(t *testing.T) {
 				BuyPrice:     new(int64(12345)),
 				SalePrice:    new(int64(19999)),
 				EffectiveVat: new(int16(22)),
+				VATIncoming:  new(int16(20)),
 			},
 		},
 	}
@@ -82,7 +84,7 @@ func TestScanProductNullableText(t *testing.T) {
 func TestScanProductPrices(t *testing.T) {
 	base := func(buy, sale, vat any) []any {
 		return []any{"p-1", "00010001", "Товар", "шт", nil, nil, nil,
-			nil, nil, "Копейка", false, false, nil, buy, sale, vat}
+			nil, nil, "Копейка", false, false, nil, buy, sale, vat, nil}
 	}
 
 	tests := []struct {

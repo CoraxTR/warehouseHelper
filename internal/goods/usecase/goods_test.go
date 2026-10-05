@@ -380,6 +380,14 @@ type stubProductsRepo struct {
 	siteURLErr         error
 	siteURLProducts    []domain.Product
 	siteURLProductsErr error
+	// incomingVAT — записанный входящий НДС по id (SetProductIncomingVAT);
+	// sandboxes/savedSandbox — песочница цен (Load/UpsertPriceSandbox).
+	incomingVAT    map[string]*int16
+	incomingVATErr error
+	sandboxes      map[string]domain.PriceSandbox
+	sandboxErr     error
+	savedSandbox   *domain.PriceSandbox
+	sandboxSaveErr error
 }
 
 var _ ProductsRepository = (*stubProductsRepo)(nil)
@@ -392,6 +400,35 @@ func (s *stubProductsRepo) SetProductSiteURL(_ context.Context, productID, siteU
 		s.siteURLs = make(map[string]string)
 	}
 	s.siteURLs[productID] = siteURL
+	return nil
+}
+
+// SetProductIncomingVAT — запись входящего НДС (страница «Проверка цен»).
+func (s *stubProductsRepo) SetProductIncomingVAT(_ context.Context, productID string, vat *int16) error {
+	if s.incomingVATErr != nil {
+		return s.incomingVATErr
+	}
+	if s.incomingVAT == nil {
+		s.incomingVAT = make(map[string]*int16)
+	}
+	s.incomingVAT[productID] = vat
+	return nil
+}
+
+// LoadPriceSandboxes — снапшоты песочницы цен по всем товарам.
+func (s *stubProductsRepo) LoadPriceSandboxes(_ context.Context) (map[string]domain.PriceSandbox, error) {
+	if s.sandboxErr != nil {
+		return nil, s.sandboxErr
+	}
+	return s.sandboxes, nil
+}
+
+// UpsertPriceSandbox — сохранение снапшота песочницы (последний виден в savedSandbox).
+func (s *stubProductsRepo) UpsertPriceSandbox(_ context.Context, box domain.PriceSandbox) error {
+	if s.sandboxSaveErr != nil {
+		return s.sandboxSaveErr
+	}
+	s.savedSandbox = &box
 	return nil
 }
 

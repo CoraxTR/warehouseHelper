@@ -56,6 +56,14 @@ type ProductsRepository interface {
 	// SetProductSiteURL — запись адреса позиции на сайте (products.site_url):
 	// единственный писатель колонки, синки из МС её не трогают.
 	SetProductSiteURL(ctx context.Context, productID, siteURL string) error
+	// SetProductIncomingVAT — запись входящего НДС (products.vat_incoming, %):
+	// ручное поле страницы «Проверка цен», синки из МС её не трогают.
+	SetProductIncomingVAT(ctx context.Context, productID string, vat *int16) error
+	// LoadPriceSandboxes — снапшоты песочницы цен по всем товарам (ключ —
+	// product_id); отдельная таблица страницы «Проверка цен», products не трогает.
+	LoadPriceSandboxes(ctx context.Context) (map[string]domain.PriceSandbox, error)
+	// UpsertPriceSandbox — сохранить снапшот песочницы товара.
+	UpsertPriceSandbox(ctx context.Context, s domain.PriceSandbox) error
 }
 
 // ProductPageSynchronizer — контракт автосоздания страницы товара в вики

@@ -720,6 +720,10 @@ details.multi-select .ms-empty { color: #66645C; font-size: 13px; margin-top: 6p
 .av-cell.off { background: #2A2A33; }
 .av-cell.sel { outline: 2px solid #C8A65C; }
 
+/* «Проверка цен»: поле числа узкое (входящий НДС строки и поля песочницы).
+   Своего цвета правило не вводит — дневная тема двойника не требует. */
+.pc-input { width: 76px; }
+
 /* Отчёт по наличию: заливки совпадают с xlsx-выгрузкой */
 .cell-plain { background: #FFFFFF; color: #000; }
 .cell-yellow { background: #FFEB3B; color: #000; }
