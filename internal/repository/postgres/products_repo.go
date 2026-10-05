@@ -18,7 +18,7 @@ import (
 // порядок обязан совпадать с порядком Scan в scanProduct (иначе рассинхрон молчит).
 const productColumns = `id, internal_code, name, uom, group_name, folder_id, average_weight,
     shelf_life, pack_size, inventory_type, short_list, track_weekly, site_url,
-    buy_price, sale_price, effective_vat`
+    buy_price, sale_price, effective_vat, vat_incoming`
 
 // scanProduct сканирует строку в domain.Product (порядок productColumns).
 //
@@ -38,12 +38,13 @@ func scanProduct(row pgx.Row) (*domain.Product, error) {
 		internalCode, groupName, folderID, siteURL *string
 		buyPrice, salePrice                        *int64
 		effectiveVAT                               *int16
+		vatIncoming                                *int16
 	)
 	if err := row.Scan(
 		&p.ID, &internalCode, &p.Name, &p.UOM, &groupName, &folderID,
 		&p.AverageWeight, &p.ShelfLife, &p.PackSize,
 		&p.InventoryType, &p.ShortList, &p.TrackWeekly, &siteURL,
-		&buyPrice, &salePrice, &effectiveVAT,
+		&buyPrice, &salePrice, &effectiveVAT, &vatIncoming,
 	); err != nil {
 		return nil, err
 	}
@@ -54,6 +55,7 @@ func scanProduct(row pgx.Row) (*domain.Product, error) {
 	p.BuyPrice = buyPrice
 	p.SalePrice = salePrice
 	p.EffectiveVat = effectiveVAT
+	p.VATIncoming = vatIncoming
 
 	return &p, nil
 }
@@ -254,6 +256,25 @@ func (pg *PGClient) SetProductSiteURL(ctx context.Context, productID, siteURL st
     `, productID, siteURL)
 	if err != nil {
 		return fmt.Errorf("set product site url %s: %w", productID, err)
+	}
+
+	if tag.RowsAffected() == 0 {
+		return domain.ErrProductNotFound
+	}
+
+	return nil
+}
+
+// SetProductIncomingVAT записывает входящий НДС товара (products.vat_incoming, %) —
+// единственное место записи колонки: значение задаёт человек на странице
+// «Проверка цен», синки из МС и карточка позиции колонку не трогают. nil
+// означает «не задан» и пишется как NULL. Товара нет → domain.ErrProductNotFound.
+func (pg *PGClient) SetProductIncomingVAT(ctx context.Context, productID string, vat *int16) error {
+	tag, err := pg.Pool.Exec(ctx, `
+        UPDATE products SET vat_incoming = $2 WHERE id = $1
+    `, productID, vat)
+	if err != nil {
+		return fmt.Errorf("set product incoming vat %s: %w", productID, err)
 	}
 
 	if tag.RowsAffected() == 0 {

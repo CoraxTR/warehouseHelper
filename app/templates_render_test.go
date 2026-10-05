@@ -77,6 +77,27 @@ func TestTemplatesRender(t *testing.T) {
 				"Room": &room, "IsGuest": true,
 			},
 		},
+		{
+			// «Проверка цен»: строка с посчитанной наценкой и строка, где
+			// данных не хватает (пустые Markup/SBox) — шаблон обязан не упасть.
+			name: "проверка цен: наценка и неполные данные",
+			file: "price_check.html",
+			data: map[string]any{"Rows": []any{
+				map[string]any{
+					"ProductID": "p-1", "Name": "Сыр", "InternalCode": "00001234",
+					"GroupName": "Молочка/Сыры", "VatIn": "20",
+					"Markup": "53.33", "Missing": "", "SBoxMarkup": "186.67", "SBoxMissing": "",
+					"SBox": map[string]any{"Sale": "450.00", "Buy": "300.00", "VatOut": "20", "VatIn": "20"},
+				},
+				map[string]any{
+					"ProductID": "p-2", "Name": "Без данных", "InternalCode": "",
+					"GroupName": "Молочка/Сыры", "VatIn": "",
+					"Markup": "", "Missing": "цена продажи, закупочная цена, наш НДС, входящий НДС",
+					"SBoxMarkup": "", "SBoxMissing": "цена продажи, закупочная цена, наш НДС, входящий НДС",
+					"SBox": map[string]any{},
+				},
+			}},
+		},
 	}
 
 	for _, c := range cases {

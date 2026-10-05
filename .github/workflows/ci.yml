@@ -62,6 +62,7 @@ jobs:
           export PGPASSWORD=wh
           for f in \
             products_schema.sql \
+            product_price_sandbox_schema.sql \
             suppliers_schema.sql \
             refgo_orders_schema.sql \
             product_stock_schema.sql \
@@ -80,4 +81,4 @@ jobs:
             reservewatch_schema.sql; do
             psql -h localhost -U wh -d wh -v ON_ERROR_STOP=1 -f "internal/repository/postgres/$f" > /dev/null || exit 1
           done
-          echo "Схемы применены: 16/16"
+          echo "Схемы применены: 17/17"

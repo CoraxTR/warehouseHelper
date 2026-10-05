@@ -43,6 +43,9 @@ func NewRouter(h *Handler) *http.ServeMux {
 	mux.HandleFunc("POST /goods/availability/save", h.AvailabilitySave)    // сохранить доступность на даты
 	mux.HandleFunc("GET /goods/stock-report", h.StockReportPage)           // «Отчёт по наличию»
 	mux.HandleFunc("POST /goods/stock-report/export", h.StockReportExport) // выгрузка отчёта xlsx
+	mux.HandleFunc("GET /goods/price-check", h.PriceCheckPage)             // «Проверка цен»: наценка и входящий НДС
+	mux.HandleFunc("POST /goods/price-check/vat", h.PriceCheckVATSave)     // запись входящего НДС товара
+	mux.HandleFunc("POST /goods/price-check/sandbox", h.PriceCheckSandboxSave)
 	// «Возврат в продажу»: список событий (?e нет), карточка (?e=<id>),
 	// приём возврата и ручное закрытие (URL-кнопка «Расформировать» в чате склада).
 	mux.HandleFunc("GET /goods/return", h.ReturnsPage)                    // список / карточка события
