@@ -334,6 +334,158 @@ func TestRecalcAffectedPickDoesNotFillEmptyPlace(t *testing.T) {
 	}
 }
 
+// Подбор заказа, у которого ушёл избыток: СТОЯЩЕЕ значение пары остаётся на
+// месте, хотя «положенное сегодня» (ступень по сроку) уже выше него — выход по
+// владельцу значения НЕ поднимает (решение владельца 05.10.2026). Кейс с сайта
+// 05.10.2026 (понедельник): подбор мяса убрал избыток группы, значение пары
+// держал ТГ-день (20 %), а выход по владельцу записал на сайт ступень на
+// сегодня (30 %) — в чат ушло «Поднять скидку до 30 %», и сайт получил ступень
+// вторника в понедельник. Подъём — работа планового пересмотра (план 14:00 и
+// подъём 16:00 КТ-дня, утро субботы), поэтому в тесте проверяем и то, что
+// часовой пересчёт избытка значение тоже не поднимает.
+func TestRecalcAffectedPickDoesNotRaiseOwnedValue(t *testing.T) {
+	ctx := context.Background()
+	now := day(0).Add(12 * time.Hour) // понедельник, 12:00 — вне КТ-дней, день начат
+	if expiryDay(now) {
+		t.Fatalf("тест требует не-КТ день, а %s — КТ-день", now.Weekday())
+	}
+	fixture := func() *recalcHarness {
+		return newRecalcHarness(now,
+			// D = 7 → ступень на сегодня 30, D = 8 → тоже 30: обе пары ждут
+			// подъёма вторника. Стоит у них 20 % владельца «эскалация» —
+			// значение поставлено прошлым ТГ-днём.
+			lotInput("p-meat", "Мясник Праймбиф. Охл.", day(7), 4, shelfLifeInput(30),
+				plainInput(20), ownerInput(discounts.OwnerEscalation.String()),
+				telegramInput(20), telegramOwnerInput(discounts.OwnerEscalation.String())),
+			lotInput("p-meat", "Мясник Праймбиф. Охл.", day(8), 5, shelfLifeInput(30),
+				plainInput(20), ownerInput(discounts.OwnerEscalation.String()),
+				telegramInput(20), telegramOwnerInput(discounts.OwnerEscalation.String())),
+		)
+	}
+
+	// Контроль: до подбора избыток группы есть — основания для выхода нет, и
+	// значения остаются на месте.
+	hQuiet := fixture()
+	hQuiet.turnover("p-meat", 30) // 1 шт/день: накопленного остатка больше скорости
+	if err := hQuiet.uc.RecalcSurplus(ctx, now); err != nil {
+		t.Fatalf("RecalcSurplus (наполнение): %v", err)
+	}
+	if got := hQuiet.batches(); len(got) != 0 {
+		t.Fatalf("до подбора правки: %+v, want ни одной: избыток на месте", got)
+	}
+
+	// Подбор: из дальнего лота списали 4 шт — избытка группы не стало у обеих пар.
+	h := fixture()
+	h.turnover("p-meat", 30)
+	if err := h.uc.RecalcSurplus(ctx, now); err != nil {
+		t.Fatalf("RecalcSurplus (наполнение): %v", err)
+	}
+	h.tasks.texts, h.tasks.tries = nil, nil
+	h.repo.inputs[1].Qty = 1
+
+	h.uc.MarkDirty("p-meat")
+	h.uc.runSteps(ctx, affectedSchedule())
+
+	// Главное: подбора не хватило, чтобы поднять сайту скидку до ступени.
+	for _, b := range h.batches() {
+		for _, w := range b {
+			if w.General != nil && *w.General > 20 {
+				t.Errorf("подбор поднял значение пары: %+v, want не выше стоящих 20 %%", w)
+			}
+		}
+	}
+	for _, in := range h.repo.inputs {
+		if in.GeneralPlain == nil || *in.GeneralPlain != 20 {
+			t.Errorf("general пары в БД стал %v, want 20: выход по владельцу не поднимает", in.GeneralPlain)
+		}
+	}
+	if len(h.tasks.texts) != 0 {
+		t.Errorf("уведомления %q, want тишину: сайту скидку не поднимали", h.tasks.texts)
+	}
+	// Работа по паре у выхода всё же была: ТГ-колонку он чистит по-своему
+	// основанию (план ТГ-дня отработан, избытка нет) — иначе зависшая 20 %
+	// всплывёт меткой в отчёте при пустой колонке сайта (дефект 02.10.2026).
+	for _, in := range h.repo.inputs {
+		if in.TelegramPlain != nil {
+			t.Errorf("ТГ-колонка пары в БД %d, want пусто (основание ушло)", *in.TelegramPlain)
+		}
+	}
+
+	// Час спустя: полный пересчёт избытка правило не обходит.
+	before := len(h.batches())
+	if err := h.uc.RecalcSurplus(ctx, now.Add(3*time.Hour)); err != nil {
+		t.Fatalf("RecalcSurplus (следующий час): %v", err)
+	}
+	for _, b := range h.batches()[before:] {
+		for _, w := range b {
+			if w.General != nil && *w.General > 20 {
+				t.Errorf("часовой пересчёт поднял значение пары: %+v, want не выше 20 %%", w)
+			}
+		}
+	}
+}
+
+// Событие стока правит только затронутые товары: у чужой пары основание тоже
+// ушло (план добора выполнен), но её снятие — работа часового пересчёта избытка,
+// а не подбора соседа (решение владельца 05.10.2026). Кейс с сайта 05.10.2026:
+// точечный пересчёт обходил все пары сразу, и одно событие подбора могло снять
+// скидку и уведомить людей по товару, которого подбор не касался.
+func TestRecalcAffectedDoesNotTouchOtherProducts(t *testing.T) {
+	ctx := context.Background()
+	now := day(0).Add(12 * time.Hour) // понедельник, 12:00
+	h := newRecalcHarness(now,
+		// Товар события: подбор списал остаток (роста не было) — своих правок
+		// у пары нет ни до, ни после.
+		lotInput("p-picked", "Соус", day(7), 1, shelfLifeInput(30)),
+		// Чужой товар: значение 20 % держал ТГ-день, избыток ещё есть — пару
+		// отпустит выполненный план добора (план сохранил ТГ-день, события
+		// стока по этому товару не было).
+		lotInput("p-other", "Сыр", day(10), 100,
+			plainInput(20), ownerInput(discounts.OwnerEscalation.String())),
+	)
+	h.turnover("p-other", 30) // избыток есть: пару отпускает именно план
+
+	// Наполняем реестр и закрываем час: дальше проходы расписания делают только
+	// пересчёт по событиям.
+	h.uc.runSteps(ctx, affectedSchedule())
+	if got := h.batches(); len(got) != 0 {
+		t.Fatalf("проход наполнения записал: %+v, want ни одной правки", got)
+	}
+	h.tasks.texts, h.tasks.tries = nil, nil
+
+	// План добора выполнен — у чужой пары появилось что снимать.
+	h.repo.plans = map[discounts.LotKey]discounts.LotPlan{
+		{ProductID: "p-other", BestBefore: day(10)}: {Initial: 120, Plan: 10},
+	}
+
+	// Событие стока по другому товару.
+	h.uc.MarkDirty("p-picked")
+	h.uc.runSteps(ctx, affectedSchedule())
+
+	if got := h.batches(); len(got) != 0 {
+		t.Errorf("пересчёт события правил чужие товары: %+v, want ни одной правки", got)
+	}
+	if len(h.tasks.texts) != 0 {
+		t.Errorf("уведомления %q, want тишину: чужого товара событие не касается", h.tasks.texts)
+	}
+	if got := h.repo.inputs[1].GeneralPlain; got == nil || *got != 20 {
+		t.Errorf("значение чужой пары в БД %v, want 20 (его снимает часовой пересчёт)", got)
+	}
+
+	// Часовой пересчёт избытка ту же правку делает по своему расписанию.
+	if err := h.uc.RecalcSurplus(ctx, now.Add(time.Hour)); err != nil {
+		t.Fatalf("RecalcSurplus (следующий час): %v", err)
+	}
+	batches := h.batches()
+	if len(batches) != 1 || len(batches[0]) != 1 {
+		t.Fatalf("часовой пересчёт: батчи %+v, ожидалась одна правка по p-other", batches)
+	}
+	if w := batches[0][0]; w.ProductID != "p-other" || w.General == nil ||
+		*w.General != discounts.SurplusPercent() {
+		t.Errorf("правка часового пересчёта: %+v, ожидалось расчётное значение p-other", w)
+	}
+}
+
 // Ручная правка скидки на странице «Сроки» — событие БЕЗ роста: пустое место
 // соседней пары она ступенью не заполняет (вне КТ-дней ступень двигает план
 // дня, а не правка менеджера). Контроль: то же событие с ростом остатка ступень
