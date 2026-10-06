@@ -348,3 +348,57 @@ func TestPositionsFromAggregate(t *testing.T) {
 		t.Fatalf("Positions() = %+v, want %+v", got, want)
 	}
 }
+
+// TestWeightQuantity — граммы из штрих-кода переводятся в единицы учёта
+// товара (uom), а не всегда в килограммы: в системе живут шт/кг, но правило
+// должно быть верным и для г/т, иначе количество в документе МС разойдётся.
+func TestWeightQuantity(t *testing.T) {
+	tests := []struct {
+		name  string
+		uom   string
+		grams int64
+		want  float64
+	}{
+		{name: "килограммы", uom: "кг", grams: 1234, want: 1.234},
+		{name: "граммы — как есть", uom: "г", grams: 1234, want: 1234},
+		{name: "тонны", uom: "т", grams: 1500000, want: 1.5},
+		{name: "регистр и пробелы", uom: "  КГ ", grams: 500, want: 0.5},
+		{name: "штучный uom — ноль", uom: "шт", grams: 500, want: 0},
+		{name: "пустой uom — ноль", uom: "", grams: 500, want: 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := WeightQuantity(tt.uom, tt.grams); got != tt.want {
+				t.Errorf("WeightQuantity(%q, %d) = %v, want %v", tt.uom, tt.grams, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestWeightDecimals — знаков после точки в показе веса по uom.
+func TestWeightDecimals(t *testing.T) {
+	if got := WeightDecimals("г"); got != 0 {
+		t.Errorf("WeightDecimals(г) = %d, want 0", got)
+	}
+	for _, uom := range []string{"кг", "т", " КГ "} {
+		if got := WeightDecimals(uom); got != 3 {
+			t.Errorf("WeightDecimals(%q) = %d, want 3", uom, got)
+		}
+	}
+}
+
+// TestAggregateGramsUOM — весовой товар в граммах: факт в граммах, не в кг.
+func TestAggregateGramsUOM(t *testing.T) {
+	products := []Product{{ID: "p-1", InternalCode: "10210001", Name: "Специи", UOM: "г"}}
+	preview, err := Aggregate(products, []string{item("10210001", 250)})
+	if err != nil {
+		t.Fatalf("Aggregate() error = %v", err)
+	}
+	if got := preview.Lines[0].Fact; got != 250 {
+		t.Errorf("Fact = %v, want 250 (граммы в единицах товара)", got)
+	}
+	if got := preview.Lines[0].Weighted; !got {
+		t.Error("Weighted = false, want true")
+	}
+}

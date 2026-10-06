@@ -231,6 +231,8 @@
                         code: code,
                         name: item ? item.n : code,
                         weighted: item ? !!item.w : false,
+                        unit: item ? (item.u || '') : '',
+                        divisor: item ? item.d : 0,
                         amount: 0,
                         scans: 0
                     };
@@ -246,11 +248,15 @@
             return rows;
         }
 
+        // Факт показываем в единицах ТОВАРА: делитель и подпись приходят с
+        // сервера по каждой позиции группы (кг → 1000, г → 1, т → 1000000).
         function factText(row) {
-            if (row.weighted) {
-                return (row.amount / 1000).toFixed(3) + ' кг';
+            if (!row.weighted) {
+                return row.amount + (row.unit ? ' ' + row.unit : ' шт');
             }
-            return row.amount + ' шт';
+            var d = row.divisor > 0 ? row.divisor : 1000;
+            var dec = d === 1 ? 0 : 3;
+            return (row.amount / d).toFixed(dec) + ' ' + (row.unit || 'кг');
         }
 
         function updateButtons() {

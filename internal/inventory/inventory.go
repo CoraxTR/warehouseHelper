@@ -68,6 +68,33 @@ func Weighted(uom string) bool {
 	}
 }
 
+// WeightQuantity переводит граммы из штрих-кода в единицы учёта весового
+// товара: килограммы — /1000, граммы — как есть, тонны — /1 000 000. Для
+// невесового uom возвращает 0 (вызывающий код обязан сперва спросить Weighted):
+// единица количества в документе МС — единица товара, а не всегда килограммы.
+func WeightQuantity(uom string, grams int64) float64 {
+	switch strings.ToLower(strings.TrimSpace(uom)) {
+	case "кг":
+		return float64(grams) / 1000
+	case "г":
+		return float64(grams)
+	case "т":
+		return float64(grams) / 1_000_000
+	default:
+		return 0
+	}
+}
+
+// WeightDecimals — знаков после точки для показа веса в единицах товара:
+// граммы — целые, килограммы и тонны — три знака (точность грамма).
+func WeightDecimals(uom string) int {
+	if strings.ToLower(strings.TrimSpace(uom)) == "г" {
+		return 0
+	}
+
+	return 3
+}
+
 // Aggregate собирает отчёт по группе: строки идут в порядке входа products,
 // сканы раскладываются по внутреннему коду товара. Весовые сканы суммируются
 // в граммах (Fact — килограммы), штучные — в штуках. Первый невалидный скан
@@ -128,8 +155,9 @@ func Aggregate(products []Product, scans []string) (Preview, error) {
 
 	for i := range preview.Lines {
 		if preview.Lines[i].Weighted {
-			// Граммы целые — деление даёт ровно три знака после точки.
-			preview.Lines[i].Fact = float64(grams[i]) / 1000
+			// Граммы целые: килограммы дают ровно три знака после точки,
+			// граммы — целое, тонны — шесть знаков.
+			preview.Lines[i].Fact = WeightQuantity(preview.Lines[i].UOM, grams[i])
 			continue
 		}
 		preview.Lines[i].Fact = qty[i]
