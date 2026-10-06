@@ -146,6 +146,30 @@ func TestBuildExpected_Filters(t *testing.T) {
 	}
 }
 
+// Частичное расформирование: строку из заказа не убрали, к возврату — снятая
+// часть резерва (Released). Урезанная весовая строка возврата не создаёт:
+// уменьшение веса второй единицы не делает — физически это тот же кусок.
+func TestBuildExpected_ReleasedPartialRemoval(t *testing.T) {
+	cands := []Candidate{
+		{ProductID: prodD, Name: "Соус", Quantity: 2, Reserve: 2, Released: 1},                 // штучная урезана 2 шт → 1 шт
+		{ProductID: prodA, Name: "Чак ролл", Quantity: 0.657, Reserve: 0.657, Released: 0.257}, // весовая урезана — не возврат
+		{ProductID: "no-code", Name: "Без кода", Quantity: 2, Reserve: 2, Released: 1},         // урезана, но без кода склада
+	}
+	products := map[string]CatalogProduct{
+		prodA:     {ProductID: prodA, InternalCode: codeA, Weighted: true},
+		prodD:     {ProductID: prodD, InternalCode: codeD, Weighted: false},
+		"no-code": {ProductID: "no-code", InternalCode: "", Weighted: false},
+	}
+
+	expected := BuildExpected(cands, products)
+	if len(expected) != 1 {
+		t.Fatalf("ожиданий = %d (%+v), want 1 (только урезанная штучная)", len(expected), expected)
+	}
+	if expected[0].ProductID != prodD || expected[0].ExpectedQty != 1 || expected[0].Weighted {
+		t.Errorf("строка 0 = %+v, want Соус 1 шт штучная", expected[0])
+	}
+}
+
 // Существующий лот: сканы одного товара с одним сроком складываются, с разными
 // сроками — разные лоты.
 func TestAggregateLots_GroupByProductAndDate(t *testing.T) {

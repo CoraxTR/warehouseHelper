@@ -158,6 +158,76 @@ func TestParseDetailRemovalAndCancelledTogether(t *testing.T) {
 	}
 }
 
+func TestParseDetailPartialRemoval(t *testing.T) {
+	// Живой аудит 06.10.2026, заказ 07231: в одном событии две УДАЛЁННЫЕ
+	// отложенные позиции и УРЕЗАННАЯ штучная — Карпаччо креветки 2 шт r=2 →
+	// 1 шт r=1 (менеджер уменьшил количество в вебе, МС сам понизил резерв).
+	// Фильтр «quantity == reserve» такое событие не видит (резерв снова
+	// сходится) — единственный источник это дифф аудита.
+	const fixture = `{"rows": [{
+		"source": "app", "eventType": "update", "entityType": "customerorder",
+		"uid": "solomyannov@steakhome", "moment": "2026-10-06 14:29:45.129",
+		"diff": {"sum": {"oldValue": 64635.03, "newValue": 56375.68}, "positions": [
+			{"oldValue": {"assortment": {"meta": {"href": "https://api.moysklad.ru/api/remap/1.2/entity/product/285f6985-ae84-11f1-0a80-16670027d938"}, "name": "Корейка ягненка Мясомелье 8 ребер, зам."}, "quantity": 0.515, "uom": "кг", "reserve": 0.515}},
+			{"oldValue": {"assortment": {"meta": {"href": "https://api.moysklad.ru/api/remap/1.2/entity/product/6025db1e-d893-11ea-0a80-09d90006c6b2"}, "name": "Соль копчёная (дойпак) SPASSKIY. 115 гр."}, "quantity": 1.0, "uom": "шт", "reserve": 1.0}},
+			{"oldValue": {"assortment": {"meta": {"href": "https://api.moysklad.ru/api/remap/1.2/entity/product/23dfc731-51c8-11f0-0a80-0d0400110454"}, "name": "Карпаччо из красной средиземноморской креветки 500г"}, "quantity": 2.0, "uom": "шт", "reserve": 2.0},
+			 "newValue": {"assortment": {"meta": {"href": "https://api.moysklad.ru/api/remap/1.2/entity/product/23dfc731-51c8-11f0-0a80-0d0400110454"}, "name": "Карпаччо из красной средиземноморской креветки 500г"}, "quantity": 1.0, "uom": "шт", "reserve": 1.0}}
+		]},
+		"name": "07231",
+		"entity": {"meta": {"href": "https://api.moysklad.ru/api/remap/1.2/entity/customerorder/513c9424-c175-11f1-0a80-1f230013d26b"}}
+	}]}`
+
+	out := parseDetail(rowsFixture(t, fixture), cancelledStateID)
+	if out.cancelled {
+		t.Error("cancelled = true, want false")
+	}
+	if len(out.removals) != 3 {
+		t.Fatalf("len(removals) = %d, want 3 (2 удаления + урезание): %+v", len(out.removals), out.removals)
+	}
+
+	// Полное удаление: к возврату вся отложенная строка, Released пуст.
+	if got := out.removals[0]; got.Quantity != 0.515 || got.Reserve != 0.515 || got.Released != 0 {
+		t.Errorf("удаление = %+v, want 0.515/0.515 и Released 0", got)
+	}
+
+	// Урезание: Released — снятая часть резерва (1 шт), Quantity/Reserve —
+	// снимок строки ДО уменьшения.
+	r := out.removals[2]
+	if r.ProductID != "23dfc731-51c8-11f0-0a80-0d0400110454" {
+		t.Errorf("ProductID = %s, want uuid товара из meta.href", r.ProductID)
+	}
+	if r.Released != 1 {
+		t.Errorf("Released = %v, want 1 (резерв 2 → 1)", r.Released)
+	}
+	if r.Quantity != 2 || r.Reserve != 2 {
+		t.Errorf("Quantity/Reserve = %v/%v, want снимок до уменьшения 2/2", r.Quantity, r.Reserve)
+	}
+	if r.Uom != "шт" {
+		t.Errorf("Uom = %q, want шт", r.Uom)
+	}
+}
+
+func TestParseDetailPartialRemovalNotOurs(t *testing.T) {
+	// Не частичное расформирование: рост количества, замена товара в строке и
+	// уменьшение без снятия резерва (строка не была отложена) — в возврат не идут.
+	const fixture = `{"rows": [{
+		"diff": {"positions": [
+			{"oldValue": {"assortment": {"meta": {"href": "https://api.moysklad.ru/api/remap/1.2/entity/product/p-1"}}, "quantity": 1.0, "reserve": 1.0, "uom": "шт"},
+			 "newValue": {"assortment": {"meta": {"href": "https://api.moysklad.ru/api/remap/1.2/entity/product/p-1"}}, "quantity": 2.0, "reserve": 1.0, "uom": "шт"}},
+			{"oldValue": {"assortment": {"meta": {"href": "https://api.moysklad.ru/api/remap/1.2/entity/product/p-1"}}, "quantity": 1.0, "reserve": 1.0, "uom": "шт"},
+			 "newValue": {"assortment": {"meta": {"href": "https://api.moysklad.ru/api/remap/1.2/entity/product/p-2"}}, "quantity": 1.0, "reserve": 1.0, "uom": "шт"}},
+			{"oldValue": {"assortment": {"meta": {"href": "https://api.moysklad.ru/api/remap/1.2/entity/product/p-3"}}, "quantity": 2.0, "reserve": 0.0, "uom": "шт"},
+			 "newValue": {"assortment": {"meta": {"href": "https://api.moysklad.ru/api/remap/1.2/entity/product/p-3"}}, "quantity": 1.0, "reserve": 0.0, "uom": "шт"}}
+		]}
+	}]}`
+
+	out := parseDetail(rowsFixture(t, fixture), cancelledStateID)
+	if len(out.removals) != 0 {
+		t.Errorf("len(removals) = %d, want 0: рост/замена товара/без резерва — не расформирование (%+v)",
+			len(out.removals), out.removals)
+	}
+}
+
 func TestLastPathSegment(t *testing.T) {
 	cases := map[string]string{
 		"https://api.moysklad.ru/api/remap/1.2/entity/product/a02a9121-7ef5-11e5-7a40-e897001b4cc6":                       "a02a9121-7ef5-11e5-7a40-e897001b4cc6",

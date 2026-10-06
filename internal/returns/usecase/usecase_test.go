@@ -279,6 +279,24 @@ func jsonNumber(v float64) string {
 	return string(b)
 }
 
+// partialDiffJSON — diff частичного расформирования (живой аудит 06.10.2026,
+// заказ 07231): удаление отложенной весовой строки + урезание штучной 2 шт →
+// 1 шт, резерв МС понизил сам (2 → 1).
+func partialDiffJSON() string {
+	return `{"positions":[` +
+		`{"oldValue":{"assortment":{"meta":{"href":"…/product/` + prodA + `"},"name":"Чак ролл"},"quantity":0.657,"reserve":0.657,"uom":"кг"}},` +
+		`{"oldValue":{"assortment":{"meta":{"href":"…/product/` + prodD + `"},"name":"Соус"},"quantity":2,"reserve":2,"uom":"шт"},` +
+		`"newValue":{"assortment":{"meta":{"href":"…/product/` + prodD + `"},"name":"Соус"},"quantity":1,"reserve":1,"uom":"шт"}}]}`
+}
+
+// weightedPartialDiffJSON — урезание ВЕСОВОЙ отложенной строки (0.657 → 0.4 кг,
+// резерв 0.657 → 0.4): возврата не создаёт — физически это тот же кусок.
+func weightedPartialDiffJSON() string {
+	return `{"positions":[` +
+		`{"oldValue":{"assortment":{"meta":{"href":"…/product/` + prodA + `"},"name":"Чак ролл"},"quantity":0.657,"reserve":0.657,"uom":"кг"},` +
+		`"newValue":{"assortment":{"meta":{"href":"…/product/` + prodA + `"},"name":"Чак ролл"},"quantity":0.4,"reserve":0.4,"uom":"кг"}}]}`
+}
+
 // testEnv — окружение юнит-теста: usecase + стабы (один результат вместо
 // четырёх — revive function-result-limit).
 type testEnv struct {
@@ -352,6 +370,46 @@ func TestBuildExpected_KeepsLinePerPosition(t *testing.T) {
 	}
 	if expected[0].Idx != 0 || expected[1].Idx != 1 {
 		t.Errorf("Idx = %d/%d, want 0/1 (порядок отчёта)", expected[0].Idx, expected[1].Idx)
+	}
+}
+
+// Частичное расформирование (живой аудит 06.10.2026, заказ 07231): урезанная
+// штучная строка идёт в возврат на снятую часть резерва — фильтр «quantity ==
+// reserve» её не видит, МС понизил резерв вслед за количеством (2 → 1).
+func TestBuildExpected_PartialRemovalCountsReleasedPart(t *testing.T) {
+	repo := newStubRepo()
+	env := newTestEnv(repo)
+	uc, audit := env.uc, env.audit
+
+	audit.details[auditID] = []client.AuditEventRow{detailRow(partialDiffJSON(), "07231")}
+	ev := &returns.ReturnEvent{ID: auditID, Kind: returns.KindRemoved, OrderID: orderID, OrderName: "07231"}
+
+	expected, err := uc.buildExpected(context.Background(), ev)
+	if err != nil {
+		t.Fatalf("buildExpected: %v", err)
+	}
+	if len(expected) != 2 {
+		t.Fatalf("ожиданий = %d (%+v), want 2 (удаление + урезание)", len(expected), expected)
+	}
+	if expected[0].ProductID != prodA || expected[0].ExpectedQty != 657 {
+		t.Errorf("строка 0 = %+v, want Чак ролл 657 г (удаление целиком)", expected[0])
+	}
+	if expected[1].ProductID != prodD || expected[1].ExpectedQty != 1 || expected[1].Weighted {
+		t.Errorf("строка 1 = %+v, want Соус 1 шт (снятая часть резерва)", expected[1])
+	}
+}
+
+// Урезание весовой строки ожиданий не создаёт: возвращать нечего.
+func TestBuildExpected_WeightedPartialRemovalNothingToReturn(t *testing.T) {
+	repo := newStubRepo()
+	env := newTestEnv(repo)
+	uc, audit := env.uc, env.audit
+
+	audit.details[auditID] = []client.AuditEventRow{detailRow(weightedPartialDiffJSON(), "07231")}
+	ev := &returns.ReturnEvent{ID: auditID, Kind: returns.KindRemoved, OrderID: orderID, OrderName: "07231"}
+
+	if _, err := uc.buildExpected(context.Background(), ev); !errors.Is(err, returns.ErrNothingToReturn) {
+		t.Fatalf("err = %v, want ErrNothingToReturn", err)
 	}
 }
 
