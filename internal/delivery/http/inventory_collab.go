@@ -43,8 +43,8 @@ func (h *Handler) openInventoryRoom(r *http.Request, w http.ResponseWriter, inve
 // (перезапуск приложения/purge) или она отменена: хост проводит по своим сканам,
 // отказывать оператору из-за этого нельзя. Строки возвращаются в исходном виде —
 // вынимает из них штрих-коды iucase.MergeGuestScans.
-func (h *Handler) claimGuestInventoryScans(sessionID, inventoryType string) ([]json.RawMessage, bool, error) {
-	rows, err := h.collabUC.Claim(sessionID, inventoryType)
+func (h *Handler) claimGuestInventoryScans(sessionID, inventoryType string) (rows []json.RawMessage, taken bool, err error) {
+	rows, err = h.collabUC.Claim(sessionID, inventoryType)
 
 	switch {
 	case errors.Is(err, collab.ErrNotFound), errors.Is(err, collab.ErrClosed):
