@@ -6,6 +6,7 @@ package usecase
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 
@@ -103,6 +104,42 @@ func (uc *UseCase) Conduct(
 // предупреждает оператора и не даёт создать документ).
 func (uc *UseCase) StoreConfigured() bool {
 	return uc.ms.InventoryStoreConfigured()
+}
+
+// guestScan — строка гостя совместной инвентаризации: несёт штрих-код и номер
+// для курсора. Гости шлют объекты вида {"raw":"<штрихкод>","seq":N}; домен
+// инвентаризации не меняется — тот же скан, что и у хоста.
+type guestScan struct {
+	Raw string `json:"raw"`
+}
+
+// MergeGuestScans вынимает штрих-коды из строк гостей и доклеивает их к сканам
+// хоста: получается ОДИН набор, который уходит в Conduct одним вызовом (документ
+// в МС создаёт только хозяин). Порядок — свои, затем гостевые (в порядке
+// отправки чанков). Строку без raw пропускаем (гость прислал пустышку), а
+// невалидный JSON — ошибка: непонятную строку не угадываем.
+//
+// Вынесено в сценарий, а не в слой доставки: склейку и единственный вызов
+// Conduct проверяем юнит-тестом (в package internal/delivery/http тесты писать
+// нельзя — шаблоны парсятся в init по относительным путям).
+func MergeGuestScans(own []string, guests []json.RawMessage) ([]string, error) {
+	out := make([]string, 0, len(own)+len(guests))
+	out = append(out, own...)
+
+	for _, raw := range guests {
+		var g guestScan
+		if err := json.Unmarshal(raw, &g); err != nil {
+			return nil, err
+		}
+
+		if strings.TrimSpace(g.Raw) == "" {
+			continue
+		}
+
+		out = append(out, g.Raw)
+	}
+
+	return out, nil
 }
 
 // msPositions переводит строки документа домена (inventory.Position) в позиции
