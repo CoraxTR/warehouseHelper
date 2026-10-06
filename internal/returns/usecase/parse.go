@@ -66,6 +66,9 @@ func parseDetail(rows []client.AuditEventRow, cancelledStateID string) parseOutc
 				if r, ok := partialRemoval(*pos.OldValue, *pos.NewValue); ok {
 					out.removals = append(out.removals, r)
 				}
+
+			default:
+				// Добавление строки (только newValue) — не наше событие.
 			}
 		}
 	}
