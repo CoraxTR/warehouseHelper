@@ -967,9 +967,12 @@ func manualTelegramInput(v int16) func(*discounts.Input) {
 
 // Дефект 02.10.2026: скидка, поставленная ТГ-днём (план 14:00 и подъём 16:00),
 // снимается, когда основание ушло — избытка нет или выполнен план продаж
-// добора. Значение сайта падает до расчётного, ТГ-колонка пустеет: иначе
-// зависшая 20 % живёт на паре навсегда и всплывает в отчёте меткой (ТГ) при
-// пустой колонке сайта. Раньше снятие работало только на ровно 10 %.
+// добора. Снятие — ЦЕЛИКОМ, без подстановки расчётного значения (решение
+// владельца 06.10.2026: обещание рассылки не заменяем меньшей ступенью, иначе
+// на паре появляется «Понизить скидку до 10 %», которое менеджеры исполняют).
+// ТГ-колонка пустеет: иначе зависшая 20 % живёт на паре навсегда и всплывает в
+// отчёте меткой (ТГ) при пустой колонке сайта. Раньше снятие работало только на
+// ровно 10 %.
 func TestRecalcSurplusClearsEscalationWhenPlanDone(t *testing.T) {
 	h := newRecalcHarness(recalcNow(1),
 		lotInput("p1", "Мясник Праймбиф", day(10), 100,
@@ -989,12 +992,12 @@ func TestRecalcSurplusClearsEscalationWhenPlanDone(t *testing.T) {
 		t.Fatalf("батчи правок: %+v", batches)
 	}
 	w := batches[0][0]
-	if w.General == nil || *w.General != discounts.SurplusPercent() {
-		t.Errorf("general правки %v, want %d (расчётное значение пары)",
-			w.General, discounts.SurplusPercent())
+	if w.General != nil {
+		t.Errorf("general правки %v, want NULL (значение ТГ-дня снимается целиком, не понижается)", w.General)
 	}
-	if w.GeneralOwner != discounts.OwnerSurplus.String() {
-		t.Errorf("владелец general %q, want %q", w.GeneralOwner, discounts.OwnerSurplus.String())
+	if w.GeneralOwner != discounts.OwnerNone.String() {
+		t.Errorf("владелец general %q, want %q (владельца нет — значение снято)",
+			w.GeneralOwner, discounts.OwnerNone.String())
 	}
 	if w.Telegram != nil {
 		t.Errorf("ТГ-колонка правки %v, want NULL (обещание рассылки кончилось)", w.Telegram)
