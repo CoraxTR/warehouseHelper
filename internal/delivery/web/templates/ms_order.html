@@ -119,7 +119,7 @@ html.day .mark--done { color: #1A7F37; }
             </tr>
             {{if .GroupLast}}
             <tr class="group-total" data-group="{{.Group}}">
-                <td colspan="7">итого: {{.GroupQtyText}}<span class="group-weight"></span></td>
+                <td colspan="7">итого: {{.GroupQtyText}}<span class="group-weight"></span><span class="group-sum"></span></td>
             </tr>
             {{end}}
             {{end}}
@@ -304,14 +304,6 @@ html.day .mark--done { color: #1A7F37; }
                 return num(kg) + ' кг';
             }
 
-            function fmtQtyText(n, weighted) {
-                if (weighted) {
-                    var s = n.toFixed(3).replace(/0+$/, '').replace(/\.$/, '');
-                    return num(s) + ' кг';
-                }
-                return String(Math.round(n)) + ' шт';
-            }
-
             // ---- Справочный вес (только отсканированное, в браузере) ----
             // Не отсканировано — в вес не входит. Весовая строка — Σ весов
             // сканов, штучная — число сканов × средний вес товара. Это
@@ -331,19 +323,79 @@ html.day .mark--done { color: #1A7F37; }
                 return fmtKgText(Math.round(kg * 1000));
             }
 
+            // ---- Факт по сканам: колонки «Кол-во (вес)» и «Сумма» ----
+            // Колонка количества показывает набранное/плановое («0/2», «1/2»,
+            // «2/2»; весовые — «0,4/0,5 кг»), сумма — стоимость набранного.
+            // Не отсканировано — ноль в числителе; план в знаменателе не
+            // меняется. Строки без кода склада сканами не управляются — их
+            // ячейки оставляем серверными.
+            function rowFactKg(r) {
+                var g = 0;
+                for (var i = 0; i < r.records.length; i++) { g += r.records[i].w; }
+                return g / 1000;
+            }
+
+            // Набрано единиц: сканы + резерв МС (добор). У переподбора резерв
+            // прежний и в набранное не входит — считаем только новые сканы
+            // (как в rowPickedText).
+            function rowFactPieces(r) {
+                return r.records.length + (r.repickTarget === undefined ? r.reserve : 0);
+            }
+
+            function rowFactQty(r) {
+                return r.weighted ? rowFactKg(r) : rowFactPieces(r);
+            }
+
+            // План строки: у переподбора штучной — цель сканов, иначе qty из МС.
+            function rowPlanQty(r) {
+                if (!r.weighted && r.repickTarget !== undefined) { return r.repickTarget; }
+                return r.qty;
+            }
+
+            // Число с обрезкой хвостовых нулей и запятой (как fmtKgText без «кг»).
+            function fmtQtyShort(n) {
+                var s = Number(n).toFixed(3).replace(/0+$/, '').replace(/\.$/, '');
+                return num(s === '' ? '0' : s);
+            }
+
+            function factQtyText(r) {
+                if (r.weighted) {
+                    return fmtQtyShort(rowFactKg(r)) + '/' + fmtQtyShort(r.qty) + ' кг';
+                }
+                return String(Math.round(rowFactPieces(r))) + '/' + String(Math.round(rowPlanQty(r)));
+            }
+
+            // Сумма набранного в копейках (округление как серверный moneyInt).
+            function rowFactSum(r) {
+                return Math.floor(r.price * rowFactQty(r) + 0.5);
+            }
+
+            function updateRowFacts(r) {
+                if (!r.hascode) { return; }
+                var qCell = r.tr.querySelector('.cell-qty');
+                if (qCell) { qCell.textContent = factQtyText(r); }
+                var sCell = r.tr.querySelector('.cell-sum');
+                if (sCell) { sCell.textContent = fmtMoneyText(rowFactSum(r)); }
+            }
+
+            // Пересчёт веса заказа, веса и суммы групп и фактовых ячеек строк —
+            // всё только по отсканированному. Смёрженные строки пропускаем: их
+            // сканы перенесены в первую строку группы (иначе вес и сумма
+            // группы удвоятся).
             function recalcWeights() {
                 var total = 0;
                 var byGroup = {};
+                var byGroupSum = {};
                 for (var i = 0; i < rows.length; i++) {
                     var r = rows[i];
-                    // Смёрженные строки не считаем: их сканы перенесены в первую
-                    // строку группы (иначе вес группы удвоится).
                     if (r.merged) { continue; }
                     var kg = rowScanKg(r);
                     total += kg;
+                    updateRowFacts(r);
                     if (r.group !== 0) {
                         var g = String(r.group);
                         byGroup[g] = (byGroup[g] || 0) + kg;
+                        byGroupSum[g] = (byGroupSum[g] || 0) + rowFactSum(r);
                     }
                 }
 
@@ -352,10 +404,17 @@ html.day .mark--done { color: #1A7F37; }
 
                 var groupRows = document.querySelectorAll('tr.group-total');
                 for (var j = 0; j < groupRows.length; j++) {
+                    var key = String(groupRows[j].getAttribute('data-group'));
                     var span = groupRows[j].querySelector('.group-weight');
-                    if (!span) { continue; }
-                    var gw = byGroup[String(groupRows[j].getAttribute('data-group'))] || 0;
-                    span.textContent = gw > 0 ? ' · вес группы: ' + fmtWeightKg(gw) : '';
+                    if (span) {
+                        var gw = byGroup[key] || 0;
+                        span.textContent = gw > 0 ? ' · вес группы: ' + fmtWeightKg(gw) : '';
+                    }
+                    var sumSpan = groupRows[j].querySelector('.group-sum');
+                    if (sumSpan) {
+                        var gs = byGroupSum[key] || 0;
+                        sumSpan.textContent = gs > 0 ? ' · сумма группы: ' + fmtMoneyText(gs) : '';
+                    }
                 }
             }
 
@@ -689,18 +748,9 @@ html.day .mark--done { color: #1A7F37; }
                 first.qty = totalQty;
                 first.reserve = totalReserve;
 
-                // Сканы группы переехали в первую строку — вес пересчитываем.
+                // Сканы группы переехали в первую строку — вес, кол-во и сумму
+                // строки/группы пересчитываем (первая строка теперь несёт Σ).
                 recalcWeights();
-
-                var qtyCell = first.tr.querySelector('.cell-qty');
-                if (qtyCell) { qtyCell.textContent = fmtQtyText(totalQty, first.weighted); }
-
-                // Сумма смёрженной строки = цена × Σ qty (округление как у
-                // серверного moneyInt: int64(x+0.5)).
-                var sumCell = first.tr.querySelector('.cell-sum');
-                if (sumCell) {
-                    sumCell.textContent = fmtMoneyText(Math.floor(first.price * totalQty + 0.5));
-                }
 
                 // Подытог группы больше не нужен — смёрженная строка несёт Σ сама.
                 var groupTotals = document.querySelectorAll('tr.group-total');
