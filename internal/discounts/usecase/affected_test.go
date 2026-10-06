@@ -481,9 +481,9 @@ func TestRecalcAffectedDoesNotTouchOtherProducts(t *testing.T) {
 	if len(batches) != 1 || len(batches[0]) != 1 {
 		t.Fatalf("часовой пересчёт: батчи %+v, ожидалась одна правка по p-other", batches)
 	}
-	if w := batches[0][0]; w.ProductID != "p-other" || w.General == nil ||
-		*w.General != discounts.SurplusPercent() {
-		t.Errorf("правка часового пересчёта: %+v, ожидалось расчётное значение p-other", w)
+	if w := batches[0][0]; w.ProductID != "p-other" || w.General != nil ||
+		w.GeneralOwner != discounts.OwnerNone.String() {
+		t.Errorf("правка часового пересчёта: %+v, ожидалось снятие значения p-other целиком", w)
 	}
 }
 

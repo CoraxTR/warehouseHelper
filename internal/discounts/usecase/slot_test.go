@@ -687,6 +687,61 @@ func TestRunStepsDigestAfterRecalc(t *testing.T) {
 	}
 }
 
+// Пара БЕЗ плана продаж (сроковая, добор без избытка): подъём переставляет её
+// ступень по сроку — владелец general «ступень по сроку», не «эскалация».
+// Иначе значение гаснет первым же часовым пересчётом (escalationOver для пары
+// без избытка = true) и в чат склада уходит «Понизить скидку до 10 %» — прод
+// 06.10.2026, Монреальская смесь специй: 20 % добором в рассылку, 10 % через час.
+func TestRunRaiseMarksStepForLotWithoutPlan(t *testing.T) {
+	h := newSlotHarness(recalcNow(1),
+		lotInput("p1", "Монреальская смесь специй. 60 гр.", day(9), 8,
+			shelfLifeInput(26), telegramInput(slotMainPercent)),
+	)
+	h.repo.plan = []discounts.SlotItem{h.planItem("p1", day(9), discounts.ReasonExpiry)}
+
+	if err := h.uc.RunRaise(context.Background(), h.now); err != nil {
+		t.Fatalf("подъём general: %v", err)
+	}
+
+	writes := h.writesOf(t)
+	if len(writes) != 1 {
+		t.Fatalf("правки подъёма: %+v", writes)
+	}
+	w := writes[0]
+	if w.General == nil || *w.General != slotMainPercent {
+		t.Errorf("general правки %v, want %d", w.General, slotMainPercent)
+	}
+	if w.GeneralOwner != discounts.OwnerExpiry.String() {
+		t.Errorf("владелец general %q, want %q: ступень переставлена, а не «эскалация» ТГ-дня",
+			w.GeneralOwner, discounts.OwnerExpiry.String())
+	}
+}
+
+// Пара ДОБОРА ИЗ ИЗБЫТКА (есть план продаж) остаётся «эскалацией»: по этому
+// владельцу работает снятие, когда план продаж выполнен (решение владельца
+// 06.10.2026 — продажа избытка снимает такую скидку из general).
+func TestRunRaiseKeepsEscalationForLotWithPlan(t *testing.T) {
+	h := newSlotHarness(recalcNow(1),
+		lotInput("p1", "Сыр", day(11), 100, telegramInput(slotMainPercent)),
+	)
+	h.repo.plan = []discounts.SlotItem{
+		h.surplusPlanItem("p1", day(11), slotMainPercent, 100, 51),
+	}
+
+	if err := h.uc.RunRaise(context.Background(), h.now); err != nil {
+		t.Fatalf("подъём general: %v", err)
+	}
+
+	writes := h.writesOf(t)
+	if len(writes) != 1 {
+		t.Fatalf("правки подъёма: %+v", writes)
+	}
+	if w := writes[0]; w.GeneralOwner != discounts.OwnerEscalation.String() {
+		t.Errorf("владелец general %q, want %q: добор из избытка ведёт план продаж",
+			w.GeneralOwner, discounts.OwnerEscalation.String())
+	}
+}
+
 // Подъём 16:00: по позициям ОТПРАВЛЕННОГО плана general поднимается до скидки
 // плана; значения ТГ-колонки и метки источника уезжают как есть.
 func TestRunRaiseUpgradesGeneralFromPlan(t *testing.T) {
