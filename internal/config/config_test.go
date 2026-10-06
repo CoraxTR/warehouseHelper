@@ -337,3 +337,37 @@ func TestFirstUsableIPv4(t *testing.T) {
 		})
 	}
 }
+
+// Склад для складских документов (MSAPI_STORE_ID) — необязательный ref:
+// значение читается как есть (кавычки из .env срезаются), пусто — пусто.
+// Остальные refs обязательные (loadMSRefs завершает процесс) — в тесте
+// подставлены заглушки, проверяется только склад.
+func TestLoadMSRefsStoreID(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  string
+	}{
+		{name: "id задан", value: "store-uuid", want: "store-uuid"},
+		{name: "значение в кавычках", value: `"store-uuid"`, want: "store-uuid"},
+		{name: "пусто — фича деградирует", value: "", want: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("MSAPI_READYSTATE_ID", "ready")
+			t.Setenv("MSAPI_SHIPEDSTATE_ID", "shipped")
+			t.Setenv("MSAPI_SELLTYPEOTHER_ID", "sell-other")
+			t.Setenv("MSAPI_SELLTYPEOTHER_TYPE", "sell-type")
+			t.Setenv("MSAPI_ORG_ID", "org")
+			t.Setenv("MSAPI_REFGOCOURIER_ID", "courier")
+			t.Setenv("MSAPI_PRINTTEMPLATE_ID", "template")
+			t.Setenv("MSAPI_STORE_ID", tt.value)
+
+			refs := loadMSRefs()
+			if refs.StoreID != tt.want {
+				t.Errorf("StoreID = %q, want %q", refs.StoreID, tt.want)
+			}
+		})
+	}
+}
