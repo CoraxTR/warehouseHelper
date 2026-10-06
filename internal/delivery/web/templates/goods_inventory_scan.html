@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Инвентаризация: сканирование</title>
+    <link rel="stylesheet" href="/static/raven-guard.css">
+    <script src="/static/theme.js"></script>
+</head>
+
+<body>
+
+    <header class="brandbar">
+        <a class="brandbar__brand" href="/"><svg class="brandbar__emblem" viewBox="0 0 64 64" aria-hidden="true"><circle class="em__shade" cx="35" cy="25" r="14"/><polygon class="em__shade" points="6,26 30,17 28,27"/><polygon class="em__shade" points="13,35 28,27 26,36"/><circle class="em__eye" cx="34" cy="23" r="3.6"/><circle class="em__glint" cx="33" cy="22" r="1.1"/></svg><span class="brandbar__name">ВОРОН&nbsp;&middot;&nbsp;СКЛАД</span></a>
+        <div class="brandbar__right">
+            <span class="brandbar__motto">Приёмка или смерть</span>
+            <span class="themeswitch" id="theme-switch">
+                <span class="themeswitch__label" id="theme-label"><span class="themeswitch__label-night">Нормальная тема</span><span class="themeswitch__label-day">Любитель щурится</span></span>
+                <button class="themeswitch__track" id="theme-toggle" type="button"
+                 role="switch" aria-checked="false" aria-label="Тема оформления"
+                 title="Переключить на «Любитель щурится»">
+                    <span class="themeswitch__knob"></span>
+                </button>
+            </span>
+        </div>
+    </header>
+    {{template "nav"}}
+
+    <div class="topbar">
+        <a class="btn btn-cancel cancel" href="/goods/inventory">← Инвентаризация</a>
+        <h1>Инвентаризация: {{.Type}}</h1>
+    </div>
+
+    {{if .Error}}
+    <div class="error-banner">{{.Error}}</div>
+    {{end}}
+
+    {{if not .StoreReady}}
+    <div class="banner err">Склад МойСклад не настроен (MSAPI_STORE_ID): документ создать не получится. Сканирование и предпросмотр работают — провести документ не выйдет, обратитесь к администратору.</div>
+    {{end}}
+
+    <div id="inv-data" data-group="{{.GroupJSON}}" data-type="{{.Type}}" data-lengths="{{.Lengths}}"></div>
+
+    <div id="scan-block" class="scan-block">
+        <div class="constraint hint">Сканируйте внутренние штрих-коды позиций этого вида (куски и коробки). Количество собирается из сканов: весовой товар — суммой веса (кг), штучный — числом единиц (шт). Повторный скан учитывается. Непросканированные позиции попадут в документ нулями — их можно проверить в предпросмотре перед проведением.</div>
+        <input id="scan-input" type="text" autocomplete="off" placeholder="Отсканируйте штрих-код…">
+        <div id="scan-error" class="error" style="display:none;"></div>
+        <div id="ok-banner" class="banner ok" style="display:none;"></div>
+        <div id="scan-list"></div>
+        <div class="save-row">
+            <button id="preview-btn" class="btn btn-save" type="button" disabled>Провести инвентаризацию</button>
+            <button id="clear-btn" class="btn btn-cancel" type="button">Очистить</button>
+        </div>
+        <div id="counter" class="counter"></div>
+    </div>
+
+    <div id="preview" class="scan-block hidden">
+        <div class="constraint hint">Предпросмотр документа: все позиции вида, включая непросканированные (нули). Ничего в МойСклад ещё не записано. Сканы сохранены — можно вернуться, досканировать и открыть предпросмотр снова.</div>
+        <div id="preview-summary" class="muted small"></div>
+        <div id="preview-rows"></div>
+        <div class="save-row">
+            <button id="conduct-btn" class="btn btn-save" type="button">Создать документ в МС</button>
+            <button id="back-btn" class="btn btn-cancel" type="button">← Вернуться к сканированию</button>
+        </div>
+    </div>
+
+    <script>
+        // Страница инвентаризации вида: сканы внутренних штрих-кодов собираются
+        // в количество по позициям, предпросмотр подтверждает и создаёт документ
+        // в МС. Только ES5 (старые браузеры склада). Локальная проверка дублирует
+        // серверную (авторитетную): состав группы, количества и деньги — сервер.
+        var INV = { scans: [], codes: {}, name: '', lengths: [], busy: false };
+
+        function el(id) {
+            return document.getElementById(id);
+        }
+
+        function esc(s) {
+            return String(s === null || s === undefined ? '' : s)
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        }
+
+        function showError(msg) {
+            var e = el('scan-error');
+            e.innerHTML = msg;
+            e.style.display = 'block';
+        }
+
+        function hideError() {
+            var e = el('scan-error');
+            if (e) {
+                e.style.display = 'none';
+            }
+        }
+
+        function showOk(msg) {
+            var b = el('ok-banner');
+            if (!b) {
+                return;
+            }
+            b.innerHTML = msg;
+            b.style.display = 'block';
+            clearTimeout(INV.okTimer);
+            INV.okTimer = setTimeout(function () { b.style.display = 'none'; }, 8000);
+        }
+
+        // Громкий бип (Web Audio); нет звука — сообщение об ошибке всё равно видно.
+        var beepCtx = null;
+        function beep() {
+            try {
+                var AC = window.AudioContext || window.webkitAudioContext;
+                if (!AC) {
+                    return;
+                }
+                if (!beepCtx) {
+                    beepCtx = new AC();
+                }
+                var osc = beepCtx.createOscillator();
+                var gain = beepCtx.createGain();
+                osc.connect(gain);
+                gain.connect(beepCtx.destination);
+                osc.frequency.value = 880;
+                gain.gain.value = 0.5;
+                osc.start(0);
+                setTimeout(function () { osc.stop(0); }, 180);
+            } catch (e) { /* тишина */ }
+        }
+
+        // Данные страницы: группа (code → имя/весовой), вид, длины, склад МС.
+        function readData() {
+            var d = el('inv-data');
+            if (!d) {
+                return;
+            }
+            INV.name = d.getAttribute('data-type') || '';
+
+            var group = [];
+            try {
+                group = JSON.parse(d.getAttribute('data-group') || '[]');
+            } catch (e) {
+                group = [];
+            }
+            if (!group || !group.length) {
+                group = [];
+            }
+            INV.codes = {};
+            for (var i = 0; i < group.length; i++) {
+                if (group[i] && group[i].c) {
+                    INV.codes[group[i].c] = group[i];
+                }
+            }
+
+            INV.lengths = [];
+            var parts = (d.getAttribute('data-lengths') || '').split(',');
+            for (var j = 0; j < parts.length; j++) {
+                var n = parseInt(parts[j], 10);
+                if (n > 0) {
+                    INV.lengths.push(n);
+                }
+            }
+        }
+
+        function lengthOk(len) {
+            for (var i = 0; i < INV.lengths.length; i++) {
+                if (INV.lengths[i] === len) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // Локальная проверка скана. null — принят, иначе текст отказа.
+        function checkScan(raw) {
+            if (!lengthOk(raw.length)) {
+                return 'Не наш штрих-код';
+            }
+            if (!INV.codes[raw.substr(0, 8)]) {
+                return 'Позиция не из вида «' + INV.name + '»';
+            }
+            return null;
+        }
+
+        // Вклад одного скана: весовой — граммы, штучный — единицы. Формат полей —
+        // инвариант internal/innercode (29 — кусок, 33 — коробка).
+        function scanAmount(raw) {
+            var item = INV.codes[raw.substr(0, 8)];
+            var weighted = item ? !!item.w : false;
+            if (raw.length === 33) {
+                if (weighted) {
+                    return parseInt(raw.substr(8, 6), 10) || 0;
+                }
+                return parseInt(raw.substr(14, 3), 10) || 0;
+            }
+            if (weighted) {
+                return parseInt(raw.substr(8, 5), 10) || 0;
+            }
+            return 1;
+        }
+
+        // Агрегация сканов по позициям (порядок первого появления).
+        function aggregate() {
+            var byCode = {}, order = [], i;
+            for (i = 0; i < INV.scans.length; i++) {
+                var raw = INV.scans[i];
+                var code = raw.substr(0, 8);
+                var item = INV.codes[code];
+                if (!byCode[code]) {
+                    byCode[code] = {
+                        code: code,
+                        name: item ? item.n : code,
+                        weighted: item ? !!item.w : false,
+                        amount: 0,
+                        scans: 0
+                    };
+                    order.push(code);
+                }
+                byCode[code].amount += scanAmount(raw);
+                byCode[code].scans += 1;
+            }
+            var rows = [];
+            for (i = 0; i < order.length; i++) {
+                rows.push(byCode[order[i]]);
+            }
+            return rows;
+        }
+
+        function factText(row) {
+            if (row.weighted) {
+                return (row.amount / 1000).toFixed(3) + ' кг';
+            }
+            return row.amount + ' шт';
+        }
+
+        function updateButtons() {
+            var p = el('preview-btn');
+            if (p) {
+                p.disabled = INV.busy || INV.scans.length === 0;
+            }
+            var c = el('conduct-btn');
+            if (c) {
+                c.disabled = INV.busy;
+            }
+        }
+
+        function renderAll() {
+            var rows = aggregate();
+            var html = '';
+            for (var i = 0; i < rows.length; i++) {
+                html += '<div class="scan-row"><span class="code">' + esc(rows[i].code) + '</span> '
+                    + esc(rows[i].name) + ' — <b>' + esc(factText(rows[i])) + '</b> · сканов ' + rows[i].scans
+                    + '<button type="button" class="rm" data-code="' + esc(rows[i].code) + '">✕</button></div>';
+            }
+            el('scan-list').innerHTML = html;
+
+            var c = el('counter');
+            if (c) {
+                c.innerHTML = INV.scans.length === 0 ? ''
+                    : 'сканов ' + INV.scans.length + ' · позиций ' + rows.length;
+            }
+            updateButtons();
+        }
+
+        function removeLastScan(code) {
+            for (var i = INV.scans.length - 1; i >= 0; i--) {
+                if (INV.scans[i].substr(0, 8) === code) {
+                    INV.scans.splice(i, 1);
+                    break;
+                }
+            }
+            renderAll();
+        }
+
+        function submitScan() {
+            var input = el('scan-input');
+            var raw = input.value.replace(/^\s+|\s+$/g, '');
+            if (raw === '') {
+                return;
+            }
+            var err = checkScan(raw);
+            if (err) {
+                beep();
+                showError(err);
+                input.value = '';
+                input.focus();
+                return;
+            }
+            hideError();
+            INV.scans.push(raw);
+            input.value = '';
+            input.focus();
+            renderAll();
+        }
+
+        function clearAll() {
+            if (INV.busy) {
+                return;
+            }
+            INV.scans = [];
+            hideError();
+            renderAll();
+            el('scan-input').focus();
+        }
+
+        function xhrPost(url, body, onDone) {
+            var xhr = new XMLHttpRequest();
+            xhr.open('POST', url, true);
+            xhr.setRequestHeader('Content-Type', 'application/json');
+            xhr.onreadystatechange = function () {
+                if (xhr.readyState !== 4) {
+                    return;
+                }
+                var data = null;
+                try {
+                    data = JSON.parse(xhr.responseText);
+                } catch (e) {
+                    data = null;
+                }
+                onDone(xhr.status, data);
+            };
+            xhr.send(JSON.stringify(body));
+        }
+
+        function requestPreview() {
+            if (INV.busy || INV.scans.length === 0) {
+                return;
+            }
+            INV.busy = true;
+            updateButtons();
+            xhrPost('/goods/inventory/preview', { type: INV.name, scans: INV.scans }, function (status, data) {
+                INV.busy = false;
+                updateButtons();
+                if (status !== 200 || !data || !data.ok) {
+                    beep();
+                    showError((data && data.error) ? esc(data.error) : 'Не удалось собрать предпросмотр (HTTP ' + status + ')');
+                    return;
+                }
+                renderPreview(data);
+            });
+        }
+
+        function renderPreview(data) {
+            var html = '';
+            for (var i = 0; i < data.rows.length; i++) {
+                var r = data.rows[i];
+                html += '<div class="scan-row"><span class="code">' + esc(r.code) + '</span> '
+                    + esc(r.name) + ' — <b>' + esc(r.qty) + '</b> · ' + esc(r.price) + ' · сканов ' + r.scans
+                    + (r.zero ? ' · <span class="muted">не сканировано</span>' : '') + '</div>';
+            }
+            el('preview-rows').innerHTML = html;
+            el('preview-summary').innerHTML = 'Позиций всего: ' + data.total
+                + ' · просканировано: ' + data.scanned + ' · сканов: ' + data.scans;
+            hideError();
+            el('scan-block').className = 'scan-block hidden';
+            el('preview').className = 'scan-block';
+        }
+
+        // Возврат к сканированию: сканы СОХРАНЯЮТСЯ — можно досканировать и
+        // открыть предпросмотр снова.
+        function backToScan() {
+            el('preview').className = 'scan-block hidden';
+            el('scan-block').className = 'scan-block';
+            el('scan-input').focus();
+        }
+
+        function conduct() {
+            if (INV.busy || INV.scans.length === 0) {
+                return;
+            }
+            INV.busy = true;
+            updateButtons();
+            xhrPost('/goods/inventory/conduct', { type: INV.name, scans: INV.scans }, function (status, data) {
+                INV.busy = false;
+                updateButtons();
+                if (status !== 200 || !data || !data.ok) {
+                    beep();
+                    showError((data && data.error) ? esc(data.error) : 'Не удалось создать документ (HTTP ' + status + ')');
+                    return;
+                }
+                INV.scans = [];
+                el('preview').className = 'scan-block hidden';
+                el('scan-block').className = 'scan-block';
+                renderAll();
+                showOk('Создан документ «' + esc(data.name) + '»'
+                    + (data.url ? ' — <a href="' + esc(data.url) + '" target="_blank">открыть в МойСклад</a>' : '')
+                    + '. Сканы очищены — можно начать новое сканирование.');
+                el('scan-input').focus();
+            });
+        }
+
+        function init() {
+            readData();
+            var input = el('scan-input');
+            if (input) {
+                input.addEventListener('keydown', function (ev) {
+                    if (ev.keyCode === 13) {
+                        ev.preventDefault();
+                        submitScan();
+                    }
+                });
+                input.focus();
+            }
+            var list = el('scan-list');
+            if (list) {
+                list.addEventListener('click', function (ev) {
+                    var t = ev.target || ev.srcElement;
+                    while (t && t !== list) {
+                        if (t.getAttribute && t.getAttribute('data-code') !== null) {
+                            removeLastScan(t.getAttribute('data-code'));
+                            return;
+                        }
+                        t = t.parentNode;
+                    }
+                });
+            }
+            var preview = el('preview-btn');
+            if (preview) {
+                preview.addEventListener('click', requestPreview);
+            }
+            var clear = el('clear-btn');
+            if (clear) {
+                clear.addEventListener('click', clearAll);
+            }
+            var conductBtn = el('conduct-btn');
+            if (conductBtn) {
+                conductBtn.addEventListener('click', conduct);
+            }
+            var back = el('back-btn');
+            if (back) {
+                back.addEventListener('click', backToScan);
+            }
+            renderAll();
+        }
+
+        init();
+    </script>
+
+</body>
+
+</html>

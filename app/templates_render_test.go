@@ -98,6 +98,39 @@ func TestTemplatesRender(t *testing.T) {
 				},
 			}},
 		},
+		{
+			// «Инвентаризация»: выбор вида — список видов и пустой список.
+			name: "инвентаризация: виды инвентаризации",
+			file: "goods_inventory.html",
+			data: map[string]any{
+				"Error": "", "Types": []string{"Заморозка", "Сопутка"}, "StoreReady": true,
+			},
+		},
+		{
+			name: "инвентаризация: нет видов, склад не настроен",
+			file: "goods_inventory.html",
+			data: map[string]any{
+				"Error": "", "Types": []string{}, "StoreReady": false,
+			},
+		},
+		{
+			// «Инвентаризация»: сканирование вида — группа для клиента.
+			name: "инвентаризация: сканирование вида",
+			file: "goods_inventory_scan.html",
+			data: map[string]any{
+				"Type": "Заморозка", "GroupJSON": `[{"c":"00001234","n":"Стейк","w":1}]`,
+				"Lengths": "29,33", "StoreReady": true, "Error": "",
+			},
+		},
+		{
+			// Пустые строки — страховка от nil-полей: шаблон обязан не упасть.
+			name: "инвентаризация: сканирование, пустые данные",
+			file: "goods_inventory_scan.html",
+			data: map[string]any{
+				"Type": "", "GroupJSON": "", "Lengths": "",
+				"StoreReady": false, "Error": "",
+			},
+		},
 	}
 
 	for _, c := range cases {
