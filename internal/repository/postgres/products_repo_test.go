@@ -191,6 +191,36 @@ func TestProductIDsSQL(t *testing.T) {
 	}
 }
 
+// TestListInventoryTypesSQL — виды инвентаризации для страницы: только непустые,
+// по алфавиту (DISTINCT снимает дубли товаров одного вида).
+func TestListInventoryTypesSQL(t *testing.T) {
+	for _, frag := range []string{
+		"SELECT DISTINCT inventory_type",
+		"WHERE inventory_type <> ''",
+		"ORDER BY inventory_type",
+	} {
+		if !strings.Contains(listInventoryTypesSQL, frag) {
+			t.Errorf("listInventoryTypesSQL: нет фрагмента %q", frag)
+		}
+	}
+}
+
+// TestLoadProductsByInventoryTypeSQL — товары одного вида: колонки каталога
+// подставляются общим списком, фильтр параметризован, товары без кода склада
+// (NULL/пусто) идут в конец — сканировать их нельзя, но в документе они есть.
+func TestLoadProductsByInventoryTypeSQL(t *testing.T) {
+	for _, frag := range []string{
+		productColumns,
+		"WHERE inventory_type = $1",
+		"ORDER BY",
+		"internal_code IS NULL",
+	} {
+		if !strings.Contains(loadProductsByInventoryTypeSQL, frag) {
+			t.Errorf("loadProductsByInventoryTypeSQL: нет фрагмента %q", frag)
+		}
+	}
+}
+
 // TestUpdateProductPricesEmptyInput — пустой вход не должен трогать БД: у
 // PGClient без пула (nil-Pool) обращение упало бы паникой, а метод обязан
 // вернуть (0, nil) до него.

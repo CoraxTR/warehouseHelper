@@ -488,3 +488,67 @@ func (pg *PGClient) SetPriceCursor(ctx context.Context, next time.Time, lastFull
 
 	return nil
 }
+
+// listInventoryTypesSQL — непустые виды инвентаризации каталога (products.inventory_type),
+// по алфавиту: выбор на странице «Инвентаризация».
+const listInventoryTypesSQL = `
+        SELECT DISTINCT inventory_type
+        FROM products
+        WHERE inventory_type <> ''
+        ORDER BY inventory_type`
+
+// loadProductsByInventoryTypeSQL — товары одного вида инвентаризации. Порядок —
+// код склада, затем название; товары без кода (NULL/пусто) идут в конец: в документе
+// они всё равно есть (нулевым количеством), но сканировать их нельзя.
+const loadProductsByInventoryTypeSQL = `
+        SELECT ` + productColumns + `
+        FROM products
+        WHERE inventory_type = $1
+        ORDER BY (internal_code IS NULL OR internal_code = ''), internal_code, name`
+
+// ListInventoryTypes — уникальные непустые виды инвентаризации каталога.
+func (pg *PGClient) ListInventoryTypes(ctx context.Context) ([]string, error) {
+	rows, err := pg.Pool.Query(ctx, listInventoryTypesSQL)
+	if err != nil {
+		return nil, fmt.Errorf("list inventory types: %w", err)
+	}
+	defer rows.Close()
+
+	types := make([]string, 0)
+	for rows.Next() {
+		var inventoryType string
+		if err := rows.Scan(&inventoryType); err != nil {
+			return nil, fmt.Errorf("list inventory types: %w", err)
+		}
+		types = append(types, inventoryType)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list inventory types: %w", err)
+	}
+
+	return types, nil
+}
+
+// LoadProductsByInventoryType — товары указанного вида инвентаризации
+// (страница инвентаризации: состав группы и строки документа).
+func (pg *PGClient) LoadProductsByInventoryType(ctx context.Context, inventoryType string) ([]domain.Product, error) {
+	rows, err := pg.Pool.Query(ctx, loadProductsByInventoryTypeSQL, inventoryType)
+	if err != nil {
+		return nil, fmt.Errorf("load products by inventory type %q: %w", inventoryType, err)
+	}
+	defer rows.Close()
+
+	products := make([]domain.Product, 0)
+	for rows.Next() {
+		p, err := scanProduct(rows)
+		if err != nil {
+			return nil, fmt.Errorf("load products by inventory type %q: %w", inventoryType, err)
+		}
+		products = append(products, *p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("load products by inventory type %q: %w", inventoryType, err)
+	}
+
+	return products, nil
+}
