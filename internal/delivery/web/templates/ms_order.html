@@ -124,7 +124,7 @@ html.day .mark--done { color: #1A7F37; }
             {{end}}
             {{end}}
             <tr class="order-total">
-                <td colspan="7">Общий вес заказа: <span id="total-weight">{{.Order.TotalWeightText}}</span> · Общая сумма: {{.Order.TotalSumText}}{{if gt .Order.WeightMissingPositions 0}} · без {{.Order.WeightMissingPositions}} поз. — нет среднего веса{{end}}</td>
+                <td colspan="7">Общий вес заказа: <span id="total-weight">{{.Order.TotalWeightText}}</span> · Общая сумма: <span id="total-sum">{{.Order.TotalSumText}}</span>{{if gt .Order.WeightMissingPositions 0}} · без {{.Order.WeightMissingPositions}} поз. — нет среднего веса{{end}}</td>
             </tr>
         </tbody>
     </table>
@@ -378,12 +378,13 @@ html.day .mark--done { color: #1A7F37; }
                 if (sCell) { sCell.textContent = fmtMoneyText(rowFactSum(r)); }
             }
 
-            // Пересчёт веса заказа, веса и суммы групп и фактовых ячеек строк —
-            // всё только по отсканированному. Смёрженные строки пропускаем: их
-            // сканы перенесены в первую строку группы (иначе вес и сумма
-            // группы удвоятся).
+            // Пересчёт веса заказа, веса и суммы групп, фактовых ячеек строк и
+            // итоговой суммы заказа — всё только по отсканированному. Смёрженные
+            // строки пропускаем: их сканы перенесены в первую строку группы
+            // (иначе вес и сумма группы удвоятся).
             function recalcWeights() {
                 var total = 0;
+                var totalSum = 0;
                 var byGroup = {};
                 var byGroupSum = {};
                 for (var i = 0; i < rows.length; i++) {
@@ -391,6 +392,7 @@ html.day .mark--done { color: #1A7F37; }
                     if (r.merged) { continue; }
                     var kg = rowScanKg(r);
                     total += kg;
+                    totalSum += rowFactSum(r);
                     updateRowFacts(r);
                     if (r.group !== 0) {
                         var g = String(r.group);
@@ -401,6 +403,11 @@ html.day .mark--done { color: #1A7F37; }
 
                 var totalEl = document.getElementById('total-weight');
                 if (totalEl) { totalEl.textContent = fmtWeightKg(total); }
+
+                // Общая сумма — тоже по набранному (симметрично весу): строки без
+                // кода склада сканами не подбираются и дают ноль.
+                var totalSumEl = document.getElementById('total-sum');
+                if (totalSumEl) { totalSumEl.textContent = fmtMoneyText(totalSum); }
 
                 var groupRows = document.querySelectorAll('tr.group-total');
                 for (var j = 0; j < groupRows.length; j++) {
