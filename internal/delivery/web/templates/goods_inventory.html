@@ -3,12 +3,13 @@
 
 <head>
     <meta charset="UTF-8">
-    <title>Продукция</title>
+    <title>Инвентаризация</title>
     <link rel="stylesheet" href="/static/raven-guard.css">
     <script src="/static/theme.js"></script>
 </head>
 
 <body>
+
     <header class="brandbar">
         <a class="brandbar__brand" href="/"><svg class="brandbar__emblem" viewBox="0 0 64 64" aria-hidden="true"><circle class="em__shade" cx="35" cy="25" r="14"/><polygon class="em__shade" points="6,26 30,17 28,27"/><polygon class="em__shade" points="13,35 28,27 26,36"/><circle class="em__eye" cx="34" cy="23" r="3.6"/><circle class="em__glint" cx="33" cy="22" r="1.1"/></svg><span class="brandbar__name">ВОРОН&nbsp;&middot;&nbsp;СКЛАД</span></a>
         <div class="brandbar__right">
@@ -24,35 +25,33 @@
         </div>
     </header>
     {{template "nav"}}
-    <h1>Продукция</h1>
-    <p><a href="/ms">← Назад в МойСклад</a></p>
+
+    <div class="topbar">
+        <a class="btn btn-cancel cancel" href="/goods">← Продукция</a>
+        <h1>Инвентаризация</h1>
+    </div>
 
     {{if .Error}}
     <div class="error-banner">{{.Error}}</div>
     {{end}}
 
-    <div class="actions">
-        <form method="post" action="/goods/search" class="search-row">
-            <input type="text" name="q" value="{{.Query}}" placeholder="Код или название товара" autofocus>
-            <button type="submit">Поиск</button>
-        </form>
-        <a href="/goods/tree"><button class="add-btn">Добавление</button></a>
-        <a href="/goods/availability"><button class="add-btn">Доступность товаров</button></a>
-        <a href="/goods/stock-report"><button class="add-btn">Отчёт по наличию</button></a>
-        <a href="/goods/return"><button class="add-btn">Возврат в продажу</button></a>
-        <a href="/goods/withdraw"><button class="add-btn">Вывод из продажи</button></a>
-        <a href="/goods/box"><button class="add-btn">Создать коробку</button></a>
-        <a href="/goods/inventory"><button class="add-btn">Инвентаризация</button></a>
-    </div>
+    {{if not .StoreReady}}
+    <div class="banner err">Склад МойСклад не настроен (MSAPI_STORE_ID): документ инвентаризации создать не получится. Сканирование и предпросмотр работают, но провести документ не выйдет — обратитесь к администратору.</div>
+    {{end}}
 
-    {{if .Matches}}
-    <div class="matches">
-        <h2>Найдено: {{len .Matches}}</h2>
-        {{range .Matches}}
-        <a href="/goods/edit?id={{.ID}}"><span class="code">{{.InternalCode}}</span>{{.Name}}</a>
+    <div class="scan-block">
+        <div class="constraint hint">Вид инвентаризации — это группа товаров каталога (products.inventory_type). Выберите вид: на следующей странице сканируйте штрих-коды позиций; количество соберётся из сканов, а непросканированные позиции уйдут в документ нулями.</div>
+        {{if .Types}}
+        <div class="actions">
+            {{range .Types}}
+            <a href="/goods/inventory/scan?type={{urlquery .}}"><button class="add-btn">{{.}}</button></a>
+            {{end}}
+        </div>
+        {{else}}
+        <div class="banner">В каталоге нет видов инвентаризации — заполните поле «Вид инвентаризации» у товаров.</div>
         {{end}}
     </div>
-    {{end}}
+
 </body>
 
 </html>

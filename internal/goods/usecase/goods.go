@@ -18,6 +18,7 @@ import (
 	"warehouseHelper/internal/averagesales"
 	"warehouseHelper/internal/daystate"
 	"warehouseHelper/internal/domain"
+	"warehouseHelper/internal/inventory"
 	"warehouseHelper/internal/metrics"
 	"warehouseHelper/internal/msclient/client"
 	"warehouseHelper/internal/sitecheck"
@@ -64,6 +65,10 @@ type ProductsRepository interface {
 	LoadPriceSandboxes(ctx context.Context) (map[string]domain.PriceSandbox, error)
 	// UpsertPriceSandbox — сохранить снапшот песочницы товара.
 	UpsertPriceSandbox(ctx context.Context, s domain.PriceSandbox) error
+	// ListInventoryTypes — виды инвентаризации каталога (страница «Инвентаризация»).
+	ListInventoryTypes(ctx context.Context) ([]string, error)
+	// LoadProductsByInventoryType — товары одного вида инвентаризации.
+	LoadProductsByInventoryType(ctx context.Context, inventoryType string) ([]domain.Product, error)
 }
 
 // ProductPageSynchronizer — контракт автосоздания страницы товара в вики
@@ -823,4 +828,42 @@ func attrFloat(attrs map[string]client.MSAttribute, name string) (float64, error
 		}
 	}
 	return 0, fmt.Errorf("атрибут %q — не число", name)
+}
+
+// InventoryTypes — виды инвентаризации каталога для выбора на странице.
+func (uc *GoodsUseCase) InventoryTypes(ctx context.Context) ([]string, error) {
+	done := metrics.Track(trackPkg, "InventoryTypes")
+	defer done()
+
+	types, err := uc.repo.ListInventoryTypes(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("виды инвентаризации: %w", err)
+	}
+
+	return types, nil
+}
+
+// InventoryProducts — проекция позиций вида инвентаризации для модуля инвентаризации:
+// id, код склада, название, единица измерения и закупочная цена (nil — не задана).
+func (uc *GoodsUseCase) InventoryProducts(ctx context.Context, inventoryType string) ([]inventory.Product, error) {
+	done := metrics.Track(trackPkg, "InventoryProducts")
+	defer done()
+
+	products, err := uc.repo.LoadProductsByInventoryType(ctx, inventoryType)
+	if err != nil {
+		return nil, fmt.Errorf("товары вида инвентаризации %q: %w", inventoryType, err)
+	}
+
+	out := make([]inventory.Product, 0, len(products))
+	for _, p := range products {
+		out = append(out, inventory.Product{
+			ID:           p.ID,
+			InternalCode: p.InternalCode,
+			Name:         p.Name,
+			UOM:          p.UOM,
+			BuyPriceKop:  p.BuyPrice,
+		})
+	}
+
+	return out, nil
 }

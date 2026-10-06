@@ -55,13 +55,17 @@ func NewRouter(h *Handler) *http.ServeMux {
 	mux.HandleFunc("POST /goods/return/manual/save", h.ReturnsManualSave) // ручной возврат: принять сканы
 	// «Вывод из продажи»: зеркало ручного возврата — сканы кусков снимают их
 	// со сроков (остатков), документ МС не создаётся.
-	mux.HandleFunc("GET /goods/withdraw", h.GoodsWithdrawPage)       // вывод из продажи: страница
-	mux.HandleFunc("POST /goods/withdraw/save", h.GoodsWithdrawSave) // вывод из продажи: списать сканы
-	mux.HandleFunc("GET /goods/box", h.GoodsBoxPage)                 // «Создать коробку»: страница сканирования кусков
-	mux.HandleFunc("POST /goods/box/save", h.GoodsBoxSave)           // «Создать коробку»: наклейка коробки (xlsx)
-	mux.HandleFunc("/qrcodes", h.QRPage)                             // GET — модуль «Честный знак»
-	mux.HandleFunc("/qrcodes/add", h.QRAdd)                          // GET — форма, POST — сохранение фото
-	mux.HandleFunc("/qrcodes/list", h.QRList)                        // GET — таблица заказов с фото
+	mux.HandleFunc("GET /goods/withdraw", h.GoodsWithdrawPage)               // вывод из продажи: страница
+	mux.HandleFunc("POST /goods/withdraw/save", h.GoodsWithdrawSave)         // вывод из продажи: списать сканы
+	mux.HandleFunc("GET /goods/box", h.GoodsBoxPage)                         // «Создать коробку»: страница сканирования кусков
+	mux.HandleFunc("POST /goods/box/save", h.GoodsBoxSave)                   // «Создать коробку»: наклейка коробки (xlsx)
+	mux.HandleFunc("GET /goods/inventory", h.GoodsInventoryPage)             // выбор вида инвентаризации
+	mux.HandleFunc("GET /goods/inventory/scan", h.GoodsInventoryScanPage)    // сканирование позиций вида
+	mux.HandleFunc("POST /goods/inventory/preview", h.GoodsInventoryPreview) // предпросмотр документа (JSON)
+	mux.HandleFunc("POST /goods/inventory/conduct", h.GoodsInventoryConduct) // создать документ в МС (JSON)
+	mux.HandleFunc("/qrcodes", h.QRPage)                                     // GET — модуль «Честный знак»
+	mux.HandleFunc("/qrcodes/add", h.QRAdd)                                  // GET — форма, POST — сохранение фото
+	mux.HandleFunc("/qrcodes/list", h.QRList)                                // GET — таблица заказов с фото
 	mux.Handle("/qrcodes/photos/", http.StripPrefix("/qrcodes/photos/", qrPhotosHandler(h.qrUC.PhotosDir())))
 
 	// Модуль «МойСклад»: хаб и справочник поставщиков.

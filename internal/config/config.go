@@ -661,6 +661,11 @@ type MSRefs struct {
 	OrgID               string
 	RefGoCourierID      string
 	PrinttemplateID     string
+	// StoreID — склад МС для складских документов (инвентаризация): href
+	// собирается как store/{id}. Необязательный: пусто — фича говорит «склад
+	// не настроен», старт приложения не падает (прод .env правит владелец
+	// руками), как у WeightPickedStateID.
+	StoreID string
 }
 
 func loadMSRefs() *MSRefs {
@@ -704,6 +709,10 @@ func loadMSRefs() *MSRefs {
 	// (подбор не ставит статус), а не роняет старт, как обязательные refs.
 	weightPickedStateID := strings.Trim(os.Getenv("MSAPI_WEIGHT_PICKED_STATE_ID"), `"`)
 
+	// Склад МС (инвентаризация) — тоже необязательный по той же причине:
+	// пусто → документ не создаём, страница говорит «склад не настроен».
+	storeID := strings.Trim(os.Getenv("MSAPI_STORE_ID"), `"`)
+
 	return &MSRefs{
 		ReadystateID:        readystateID,
 		ShipedstateID:       shipedstateID,
@@ -713,6 +722,7 @@ func loadMSRefs() *MSRefs {
 		OrgID:               orgID,
 		RefGoCourierID:      refGoCourierID,
 		PrinttemplateID:     printtemplateID,
+		StoreID:             storeID,
 	}
 }
 

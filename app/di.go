@@ -16,6 +16,7 @@ import (
 	"warehouseHelper/internal/discounts"
 	ducase "warehouseHelper/internal/discounts/usecase"
 	gucase "warehouseHelper/internal/goods/usecase"
+	iucase "warehouseHelper/internal/inventory/usecase"
 	"warehouseHelper/internal/msclient/client"
 	orderscache "warehouseHelper/internal/msclient/ordercache"
 	"warehouseHelper/internal/msclient/pdfpreloader"
@@ -92,6 +93,7 @@ type DIContainer struct {
 	receivingUC     *rucase.ReceivingUseCase
 	avgWeightUC     *aucase.UseCase
 	collabUC        *ccase.UseCase
+	inventoryUC     *iucase.UseCase
 
 	// Хэндлеры
 	mux      *http.ServeMux
@@ -652,6 +654,18 @@ func (d *DIContainer) ReturnsUC() *retucase.UseCase {
 	return d.returnsUC
 }
 
+// InventoryUC — сценарий инвентаризации: виды инвентаризации каталога и
+// создание документа в МС. GoodsUC реализует iucase.Catalog (методы модуля
+// «Продукция»), MSClient — iucase.MSClient (создание документа и признак
+// настроенного склада).
+func (d *DIContainer) InventoryUC() *iucase.UseCase {
+	if d.inventoryUC == nil {
+		d.inventoryUC = iucase.New(d.GoodsUC(), d.MSClient())
+	}
+
+	return d.inventoryUC
+}
+
 // ReserveWatchUC — «Контроль резервов заказов»: раз в минуту лист заказов
 // в рабочих статусах с плановой отгрузкой в окне, сверка резерва позиций
 // с quantity, уведомления в чат склада с кнопкой «Подобрать». PGClient
@@ -699,7 +713,7 @@ func (d *DIContainer) SiteCheckUC() *scucase.UseCase {
 
 func (d *DIContainer) Handler() *myhttp.Handler {
 	if d.handlers == nil {
-		d.handlers = myhttp.NewHandler(d.SyncUC(), d.OrdersUC(), d.ExcelExportUC(), d.PdfExportUC(), d.BarcodeExportUC(), d.RefGoCheckAgainstUC(), d.WikiUC(), d.GoodsUC(), d.DayStateUC(), d.QRUC(), d.SuppliersUC(), d.StockUC(), d.StockHub(), d.ReceiveBarcodes(), d.ReceivingUC(), d.ComplaintsUC(), d.TasksUC(), d.MSOrdersUC(), d.MSFormsUC(), d.ReturnsUC(), d.CollabUC(), d.DiscountsUC(), d.Config().DiscountWindowCap, d.Config().DiscountTelegramCap)
+		d.handlers = myhttp.NewHandler(d.SyncUC(), d.OrdersUC(), d.ExcelExportUC(), d.PdfExportUC(), d.BarcodeExportUC(), d.RefGoCheckAgainstUC(), d.WikiUC(), d.GoodsUC(), d.DayStateUC(), d.QRUC(), d.SuppliersUC(), d.StockUC(), d.StockHub(), d.ReceiveBarcodes(), d.ReceivingUC(), d.ComplaintsUC(), d.TasksUC(), d.MSOrdersUC(), d.MSFormsUC(), d.ReturnsUC(), d.CollabUC(), d.InventoryUC(), d.DiscountsUC(), d.Config().DiscountWindowCap, d.Config().DiscountTelegramCap)
 	}
 
 	return d.handlers

@@ -1,0 +1,390 @@
+package usecase
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"reflect"
+	"testing"
+
+	"warehouseHelper/internal/inventory"
+	"warehouseHelper/internal/msclient/client"
+)
+
+// Внутренние коды и даты для сборки валидных сканов (формат как в
+// internal/inventory/inventory_test.go: код(8) + вес(5) + даты(8+8) = 29 цифр).
+const (
+	invWeightCode = "00210003" // весовой товар
+	invPieceCode  = "11210004" // штучный товар
+	invProdDate   = "29082026"
+	invExpDate    = "29092026"
+)
+
+// invItem собирает внутренний штрих-код куска.
+func invItem(code string, weightG int) string {
+	return fmt.Sprintf("%s%05d%s%s", code, weightG, invProdDate, invExpDate)
+}
+
+// Позиции каталога для тестов.
+var (
+	invWeightProduct = inventory.Product{
+		ID:           "prod-weight",
+		InternalCode: invWeightCode,
+		Name:         "Говядина охл",
+		UOM:          "кг",
+		BuyPriceKop:  new(int64(150000)),
+	}
+	invPieceProduct = inventory.Product{
+		ID:           "prod-piece",
+		InternalCode: invPieceCode,
+		Name:         "Соус",
+		UOM:          "шт",
+		BuyPriceKop:  new(int64(50000)),
+	}
+	invNoCodeProduct = inventory.Product{
+		ID:   "prod-nocode",
+		Name: "Товар без кода",
+		UOM:  "шт",
+	}
+)
+
+// fakeInvCatalog — фейк каталога (модуль «Продукция»).
+type fakeInvCatalog struct {
+	types       []string
+	typesErr    error
+	products    []inventory.Product
+	productsErr error
+	askedType   string
+}
+
+func (f *fakeInvCatalog) InventoryTypes(context.Context) ([]string, error) {
+	return f.types, f.typesErr
+}
+
+func (f *fakeInvCatalog) InventoryProducts(_ context.Context, inventoryType string) ([]inventory.Product, error) {
+	f.askedType = inventoryType
+	return f.products, f.productsErr
+}
+
+// fakeInvMS — фейк клиента МойСклад.
+type fakeInvMS struct {
+	positions       []client.MSInventoryPosition
+	doc             client.MSInventoryDocument
+	err             error
+	storeConfigured bool
+	calls           int
+}
+
+func (f *fakeInvMS) CreateInventory(
+	_ context.Context,
+	positions []client.MSInventoryPosition,
+) (client.MSInventoryDocument, error) {
+	f.calls++
+	f.positions = positions
+	return f.doc, f.err
+}
+
+func (f *fakeInvMS) InventoryStoreConfigured() bool {
+	return f.storeConfigured
+}
+
+// 1. Types делегирует каталогу; ошибка каталога пробрасывается.
+func TestTypes(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("список каталога", func(t *testing.T) {
+		cat := &fakeInvCatalog{types: []string{"охл/Вагю", "заморозка"}}
+		uc := New(cat, &fakeInvMS{})
+
+		got, err := uc.Types(ctx)
+		if err != nil {
+			t.Fatalf("Types() error = %v, want nil", err)
+		}
+		if want := []string{"охл/Вагю", "заморозка"}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("Types() = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("ошибка каталога пробрасывается", func(t *testing.T) {
+		wantErr := errors.New("каталог недоступен")
+		uc := New(&fakeInvCatalog{typesErr: wantErr}, &fakeInvMS{})
+
+		if _, err := uc.Types(ctx); !errors.Is(err, wantErr) {
+			t.Fatalf("Types() error = %v, want errors.Is %v", err, wantErr)
+		}
+	})
+}
+
+// 2. Пустой/пробельный вид: ErrNoType и никаких обращений к каталогу.
+func TestNoType(t *testing.T) {
+	ctx := context.Background()
+	views := []struct {
+		name string
+		view string
+	}{
+		{name: "пустой вид", view: ""},
+		{name: "пробельный вид", view: "   "},
+	}
+
+	for _, tt := range views {
+		t.Run(tt.name, func(t *testing.T) {
+			cat := &fakeInvCatalog{products: []inventory.Product{invWeightProduct}}
+			ms := &fakeInvMS{}
+			uc := New(cat, ms)
+
+			if _, err := uc.Group(ctx, tt.view); !errors.Is(err, ErrNoType) {
+				t.Errorf("Group() error = %v, want ErrNoType", err)
+			}
+			if _, err := uc.Preview(ctx, tt.view, []string{invItem(invWeightCode, 250)}); !errors.Is(err, ErrNoType) {
+				t.Errorf("Preview() error = %v, want ErrNoType", err)
+			}
+			if _, err := uc.Conduct(ctx, tt.view, []string{invItem(invWeightCode, 250)}); !errors.Is(err, ErrNoType) {
+				t.Errorf("Conduct() error = %v, want ErrNoType", err)
+			}
+
+			if cat.askedType != "" {
+				t.Errorf("каталог дёрнули при пустом виде: askedType = %q", cat.askedType)
+			}
+			if ms.calls != 0 {
+				t.Errorf("клиент МС дёрнули при пустом виде: calls = %d", ms.calls)
+			}
+		})
+	}
+}
+
+// 3. Preview: все позиции группы, факт по сканам, цены перенесены.
+func TestPreview(t *testing.T) {
+	ctx := context.Background()
+
+	tests := []struct {
+		name      string
+		view      string
+		products  []inventory.Product
+		scans     []string
+		want      inventory.Preview
+		wantAsked string
+	}{
+		{
+			name:     "весовой с кодом и штучный без кода: один валидный скан",
+			view:     "охл/Вагю",
+			products: []inventory.Product{invWeightProduct, invNoCodeProduct},
+			scans:    []string{invItem(invWeightCode, 250)},
+			want: inventory.Preview{
+				Lines: []inventory.Line{
+					{
+						ProductID:    "prod-weight",
+						InternalCode: invWeightCode,
+						Name:         "Говядина охл",
+						UOM:          "кг",
+						Weighted:     true,
+						Fact:         0.25,
+						Scans:        1,
+						PriceKop:     150000,
+						Scanable:     true,
+					},
+					{
+						ProductID: "prod-nocode",
+						Name:      "Товар без кода",
+						UOM:       "шт",
+						Scanable:  false,
+					},
+				},
+				Total: 2, Scanned: 1, Scans: 1,
+			},
+			wantAsked: "охл/Вагю",
+		},
+		{
+			name:     "вид с пробелами обрезается перед каталогом",
+			view:     "  заморозка  ",
+			products: []inventory.Product{invWeightProduct},
+			scans:    nil,
+			want: inventory.Preview{
+				Lines: []inventory.Line{{
+					ProductID:    "prod-weight",
+					InternalCode: invWeightCode,
+					Name:         "Говядина охл",
+					UOM:          "кг",
+					Weighted:     true,
+					PriceKop:     150000,
+					Scanable:     true,
+				}},
+				Total: 1, Scanned: 0, Scans: 0,
+			},
+			wantAsked: "заморозка",
+		},
+		{
+			name:     "штучный скан даёт штуки",
+			view:     "сопутка",
+			products: []inventory.Product{invPieceProduct},
+			scans:    []string{invItem(invPieceCode, 100), invItem(invPieceCode, 200)},
+			want: inventory.Preview{
+				Lines: []inventory.Line{{
+					ProductID:    "prod-piece",
+					InternalCode: invPieceCode,
+					Name:         "Соус",
+					UOM:          "шт",
+					Fact:         2,
+					Scans:        2,
+					PriceKop:     50000,
+					Scanable:     true,
+				}},
+				Total: 1, Scanned: 1, Scans: 2,
+			},
+			wantAsked: "сопутка",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cat := &fakeInvCatalog{products: tt.products}
+			uc := New(cat, &fakeInvMS{})
+
+			got, err := uc.Preview(ctx, tt.view, tt.scans)
+			if err != nil {
+				t.Fatalf("Preview() error = %v, want nil", err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("Preview() = %+v, want %+v", got, tt.want)
+			}
+			if cat.askedType != tt.wantAsked {
+				t.Fatalf("каталог спросили про %q, want %q", cat.askedType, tt.wantAsked)
+			}
+		})
+	}
+}
+
+// 4. Preview: скан чужого кода — ошибка агрегации наружу как есть.
+func TestPreviewForeignCode(t *testing.T) {
+	cat := &fakeInvCatalog{products: []inventory.Product{invWeightProduct}}
+	uc := New(cat, &fakeInvMS{})
+
+	_, err := uc.Preview(context.Background(), "охл", []string{invItem("21210005", 300)})
+	if !errors.Is(err, inventory.ErrScanNotInGroup) {
+		t.Fatalf("Preview() error = %v, want errors.Is %v", err, inventory.ErrScanNotInGroup)
+	}
+}
+
+// 4б. Preview: невалидный скан — тоже как есть.
+func TestPreviewInvalidScan(t *testing.T) {
+	cat := &fakeInvCatalog{products: []inventory.Product{invWeightProduct}}
+	uc := New(cat, &fakeInvMS{})
+
+	_, err := uc.Preview(context.Background(), "охл", []string{"1234567890"})
+	if !errors.Is(err, inventory.ErrScanInvalid) {
+		t.Fatalf("Preview() error = %v, want errors.Is %v", err, inventory.ErrScanInvalid)
+	}
+}
+
+// 4в. Preview: ошибка каталога пробрасывается, агрегации не происходит.
+func TestPreviewCatalogError(t *testing.T) {
+	wantErr := errors.New("каталог упал")
+	cat := &fakeInvCatalog{productsErr: wantErr}
+	uc := New(cat, &fakeInvMS{})
+
+	if _, err := uc.Preview(context.Background(), "охл", nil); !errors.Is(err, wantErr) {
+		t.Fatalf("Preview() error = %v, want errors.Is %v", err, wantErr)
+	}
+}
+
+// 5. Conduct: позиции уходят в клиент в порядке строк отчёта, включая
+// непросканированную с нулями; возвращается документ клиента.
+func TestConduct(t *testing.T) {
+	doc := client.MSInventoryDocument{
+		ID:   "doc-1",
+		Name: "Инвентаризация № 1",
+		URL:  "https://api.moysklad.ru/entity/inventory/doc-1",
+	}
+	cat := &fakeInvCatalog{products: []inventory.Product{invWeightProduct, invNoCodeProduct}}
+	ms := &fakeInvMS{doc: doc}
+	uc := New(cat, ms)
+
+	got, err := uc.Conduct(context.Background(), "охл", []string{invItem(invWeightCode, 250)})
+	if err != nil {
+		t.Fatalf("Conduct() error = %v, want nil", err)
+	}
+	if !reflect.DeepEqual(got, doc) {
+		t.Fatalf("Conduct() doc = %+v, want %+v", got, doc)
+	}
+	if ms.calls != 1 {
+		t.Fatalf("CreateInventory вызван %d раз, want 1", ms.calls)
+	}
+	want := []client.MSInventoryPosition{
+		{AssortmentID: "prod-weight", Quantity: 0.25, PriceKop: 150000},
+		{AssortmentID: "prod-nocode", Quantity: 0, PriceKop: 0},
+	}
+	if !reflect.DeepEqual(ms.positions, want) {
+		t.Fatalf("позиции в клиент = %+v, want %+v", ms.positions, want)
+	}
+}
+
+// 6. Conduct при пустой группе — ErrEmptyGroup, в клиент МС не ходим.
+func TestConductEmptyGroup(t *testing.T) {
+	cat := &fakeInvCatalog{products: nil}
+	ms := &fakeInvMS{}
+	uc := New(cat, ms)
+
+	got, err := uc.Conduct(context.Background(), "сопутка", nil)
+	if !errors.Is(err, ErrEmptyGroup) {
+		t.Fatalf("Conduct() error = %v, want ErrEmptyGroup", err)
+	}
+	if got != (client.MSInventoryDocument{}) {
+		t.Fatalf("Conduct() doc = %+v, want пустой", got)
+	}
+	if ms.calls != 0 {
+		t.Fatalf("CreateInventory вызван %d раз при пустой группе, want 0", ms.calls)
+	}
+}
+
+// 7. Conduct при ошибке клиента — ошибка наружу, документ пустой.
+func TestConductClientError(t *testing.T) {
+	wantErr := errors.New("МС 500")
+	cat := &fakeInvCatalog{products: []inventory.Product{invWeightProduct}}
+	ms := &fakeInvMS{err: wantErr}
+	uc := New(cat, ms)
+
+	got, err := uc.Conduct(context.Background(), "охл", []string{invItem(invWeightCode, 250)})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Conduct() error = %v, want errors.Is %v", err, wantErr)
+	}
+	if got != (client.MSInventoryDocument{}) {
+		t.Fatalf("Conduct() doc = %+v, want пустой", got)
+	}
+	if ms.calls != 1 {
+		t.Fatalf("CreateInventory вызван %d раз, want 1", ms.calls)
+	}
+}
+
+// 7б. Conduct при ошибке агрегации — ошибка как есть, в клиент не ходим.
+func TestConductAggregateError(t *testing.T) {
+	cat := &fakeInvCatalog{products: []inventory.Product{invWeightProduct}}
+	ms := &fakeInvMS{}
+	uc := New(cat, ms)
+
+	_, err := uc.Conduct(context.Background(), "охл", []string{invItem("21210005", 300)})
+	if !errors.Is(err, inventory.ErrScanNotInGroup) {
+		t.Fatalf("Conduct() error = %v, want errors.Is %v", err, inventory.ErrScanNotInGroup)
+	}
+	if ms.calls != 0 {
+		t.Fatalf("CreateInventory вызван %d раз при ошибке агрегации, want 0", ms.calls)
+	}
+}
+
+// 8. StoreConfigured — значение из клиента МС.
+func TestStoreConfigured(t *testing.T) {
+	tests := []struct {
+		name string
+		flag bool
+	}{
+		{name: "склад задан", flag: true},
+		{name: "склад пуст", flag: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			uc := New(&fakeInvCatalog{}, &fakeInvMS{storeConfigured: tt.flag})
+			if got := uc.StoreConfigured(); got != tt.flag {
+				t.Fatalf("StoreConfigured() = %v, want %v", got, tt.flag)
+			}
+		})
+	}
+}

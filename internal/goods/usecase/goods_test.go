@@ -388,6 +388,13 @@ type stubProductsRepo struct {
 	sandboxErr     error
 	savedSandbox   *domain.PriceSandbox
 	sandboxSaveErr error
+	// invTypes/invProducts — выборки страницы «Инвентаризация»; invTypeQueried —
+	// какой вид инвентаризации спросили (проверка, что выбор дошёл до хранилища).
+	invTypes       []string
+	invTypesErr    error
+	invProducts    []domain.Product
+	invProductsErr error
+	invTypeQueried string
 }
 
 var _ ProductsRepository = (*stubProductsRepo)(nil)
@@ -484,6 +491,21 @@ func (s *stubProductsRepo) UpdateProductAverageWeight(_ context.Context, _ strin
 	}
 	s.updateAvg = append(s.updateAvg, avgKg)
 	return nil
+}
+
+func (s *stubProductsRepo) ListInventoryTypes(_ context.Context) ([]string, error) {
+	if s.invTypesErr != nil {
+		return nil, s.invTypesErr
+	}
+	return s.invTypes, nil
+}
+
+func (s *stubProductsRepo) LoadProductsByInventoryType(_ context.Context, inventoryType string) ([]domain.Product, error) {
+	s.invTypeQueried = inventoryType
+	if s.invProductsErr != nil {
+		return nil, s.invProductsErr
+	}
+	return s.invProducts, nil
 }
 
 func TestUpdateAverageWeight(t *testing.T) {
@@ -1010,5 +1032,84 @@ func TestExportProducts_WikiErrorIsReportedNotFatal(t *testing.T) {
 	}
 	if len(errs) != 1 || !strings.Contains(errs[0].Err, "страницу вики") {
 		t.Fatalf("ожидалась ошибка вики в отчёте, получено: %v", errs)
+	}
+}
+
+// TestInventoryProducts — проекция позиций вида инвентаризации: поля переносятся
+// как есть, цена — указателем (nil у штучного без цены, nil НЕ разыменовывается),
+// порядок позиций — как отдал репозиторий.
+func TestInventoryProducts(t *testing.T) {
+	repo := &stubProductsRepo{invProducts: []domain.Product{
+		{
+			ID:           "p-вес",
+			InternalCode: "00010001",
+			Name:         "Говядина охл.",
+			UOM:          "кг",
+			BuyPrice:     new(int64(123456)),
+		},
+		{
+			ID:           "p-шт",
+			InternalCode: "00010002",
+			Name:         "Пакет",
+			UOM:          "шт",
+			BuyPrice:     nil,
+		},
+	}}
+	uc := NewGoodsUseCase(nil, nil, repo, nil)
+
+	got, err := uc.InventoryProducts(context.Background(), "Копейка")
+	if err != nil {
+		t.Fatalf("InventoryProducts: %v", err)
+	}
+	if repo.invTypeQueried != "Копейка" {
+		t.Fatalf("в хранилище спросили вид %q, ожидался %q", repo.invTypeQueried, "Копейка")
+	}
+	if len(got) != 2 {
+		t.Fatalf("позиций %d, ожидалось 2: %+v", len(got), got)
+	}
+
+	weighted := got[0]
+	if weighted.ID != "p-вес" || weighted.InternalCode != "00010001" ||
+		weighted.Name != "Говядина охл." || weighted.UOM != "кг" {
+		t.Errorf("весовая позиция искажена: %+v", weighted)
+	}
+	if weighted.BuyPriceKop == nil || *weighted.BuyPriceKop != 123456 {
+		t.Errorf("цена весовой позиции = %v, ожидалось 123456", weighted.BuyPriceKop)
+	}
+
+	piece := got[1]
+	if piece.ID != "p-шт" || piece.UOM != "шт" {
+		t.Errorf("штучная позиция искажена: %+v", piece)
+	}
+	if piece.BuyPriceKop != nil {
+		t.Errorf("цена штучной позиции = %v, ожидался nil (не задана)", *piece.BuyPriceKop)
+	}
+}
+
+// TestInventoryProducts_EmptyType — пустой вид инвентаризации передаётся в
+// хранилище как есть (пустой результат без ошибки), юзкейс его не отсекает.
+func TestInventoryProducts_EmptyType(t *testing.T) {
+	repo := &stubProductsRepo{}
+	uc := NewGoodsUseCase(nil, nil, repo, nil)
+
+	got, err := uc.InventoryProducts(context.Background(), "")
+	if err != nil {
+		t.Fatalf("InventoryProducts(\"\"): %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("ожидался пустой срез, получено: %+v", got)
+	}
+	if repo.invTypeQueried != "" {
+		t.Fatalf("вид не дошёл до хранилища как пустой: %q", repo.invTypeQueried)
+	}
+}
+
+// TestInventoryTypes_Error — ошибка хранилища возвращается как есть (в обёртке).
+func TestInventoryTypes_Error(t *testing.T) {
+	repo := &stubProductsRepo{invTypesErr: errors.New("сбой БД")}
+	uc := NewGoodsUseCase(nil, nil, repo, nil)
+
+	if _, err := uc.InventoryTypes(context.Background()); !errors.Is(err, repo.invTypesErr) {
+		t.Fatalf("ошибка хранилища должна пробрасываться: %v", err)
 	}
 }
