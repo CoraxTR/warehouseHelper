@@ -235,8 +235,8 @@ func invGroupJSON(products []inventory.Product) string {
 			C: p.InternalCode,
 			N: p.Name,
 			W: w,
-			U: invUnitLabel(p.UOM, w == 1),
-			D: invWeightDivisor(p.UOM, w == 1),
+			U: invUnitLabel(p.UOM),
+			D: invWeightDivisor(p.UOM),
 		})
 	}
 
@@ -299,45 +299,42 @@ func invPreviewBody(p inventory.Preview) invPreviewResponse {
 	}
 }
 
-// invQtyText — факт просканированной строки строкой: весовой — кг с тремя
-// знаками, штучный — целое. Непросканированные строки в предпросмотре
-// показываются отдельным текстом («0» + пометка), сюда не попадают.
+// invQtyText — факт просканированной строки строкой: весовой — в единицах
+// товара (кг/г/т) с точностью грамма, штучный — целое. Непросканированные
+// строки в предпросмотре показываются отдельным текстом («0»), сюда не попадают.
 func invQtyText(line inventory.Line) string {
 	if !line.Weighted {
-		return strconv.FormatFloat(line.Fact, 'f', 0, 64) + " " + invUnitLabel(line.UOM, false)
+		return strconv.FormatFloat(line.Fact, 'f', 0, 64) + " " + invUnitLabel(line.UOM)
 	}
 
 	decimals := inventory.WeightDecimals(line.UOM)
 
-	return strconv.FormatFloat(line.Fact, 'f', decimals, 64) + " " + invUnitLabel(line.UOM, true)
+	return strconv.FormatFloat(line.Fact, 'f', decimals, 64) + " " + invUnitLabel(line.UOM)
 }
 
-// invUnitLabel — подпись единицы в предпросмотре: uom товара как есть, а при
-// пустой/непонятной единице — «кг» у весового и «шт» у штучного.
-func invUnitLabel(uom string, weighted bool) string {
+// invUnitLabel — подпись единицы в предпросмотре: uom товара как есть; пустая
+// единица — штучный товар без единицы в МС (весовой её всегда имеет: кг/г/т).
+func invUnitLabel(uom string) string {
 	if u := strings.TrimSpace(uom); u != "" {
 		return u
-	}
-	if weighted {
-		return "кг"
 	}
 
 	return "шт"
 }
 
-// invWeightDivisor — делитель граммов для клиента: во что превращаются граммы
-// штрих-кода в единицах товара (кг → 1000, г → 1, т → 1 000 000, штучный → 1).
-func invWeightDivisor(uom string, weighted bool) float64 {
-	if !weighted {
-		return 1
-	}
+// invWeightDivisor — во что граммы штрих-кода превращаются в единицах учёта
+// товара: кг → 1000, г → 1, т → 1 000 000; 0 — товар не весовой (вес из
+// штрих-кода не значит ничего, факт считается штуками).
+func invWeightDivisor(uom string) float64 {
 	switch strings.ToLower(strings.TrimSpace(uom)) {
+	case "кг":
+		return 1000
 	case "г":
 		return 1
 	case "т":
 		return 1000000
 	default:
-		return 1000
+		return 0
 	}
 }
 
