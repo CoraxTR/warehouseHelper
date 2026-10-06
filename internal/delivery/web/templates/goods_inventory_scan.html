@@ -827,6 +827,10 @@
                 return;
             }
             if (!INV.scans.length) { return; }
+            // seq — номер строки в общем потоке комнаты, считаем от последнего
+            // отправленного (roomLastSeq). Каждая отправка уходит со своим
+            // chunk_id, а сервер отбрасывает повтор того же чанка (chunk_id +
+            // сумма), поэтому повтор после обрыва связи дублей не создаёт.
             var scans = [], i;
             for (i = 0; i < INV.scans.length; i++) {
                 scans.push({ raw: INV.scans[i], seq: roomLastSeq + i + 1 });

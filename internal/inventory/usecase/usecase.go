@@ -111,6 +111,10 @@ func (uc *UseCase) StoreConfigured() bool {
 // инвентаризации не меняется — тот же скан, что и у хоста.
 type guestScan struct {
 	Raw string `json:"raw"`
+	// ManualProductID — товар, выбранный гостем вручную (скан без штрих-кода).
+	// Общая валидация комнаты такую строку пропускает, а провести по ней
+	// инвентаризацию нельзя: сообщаем ошибкой, а не теряем строку молча.
+	ManualProductID string `json:"manual_product_id"`
 }
 
 // MergeGuestScans вынимает штрих-коды из строк гостей и доклеивает их к сканам
@@ -132,11 +136,18 @@ func MergeGuestScans(own []string, guests []json.RawMessage) ([]string, error) {
 			return nil, err
 		}
 
-		if strings.TrimSpace(g.Raw) == "" {
+		raw := strings.TrimSpace(g.Raw)
+		if raw == "" {
+			// Пустышку пропускаем молча, а вот строку с товаром по internal id —
+			// нет: провести её нельзя, и молчание потеряло бы позицию гостя.
+			if strings.TrimSpace(g.ManualProductID) != "" {
+				return nil, errors.New("inventory: строка гостя без штрих-кода (товар выбран вручную)")
+			}
+
 			continue
 		}
 
-		out = append(out, g.Raw)
+		out = append(out, raw)
 	}
 
 	return out, nil

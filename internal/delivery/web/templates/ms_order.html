@@ -358,10 +358,30 @@ html.day .mark--done { color: #1A7F37; }
                 return num(s === '' ? '0' : s);
             }
 
+            // Подпись числа кусков для цели переподбора («1 кусок», «2 куска»).
+            function piecesText(n) {
+                var tail = n % 100;
+                if (tail >= 11 && tail <= 14) { return n + ' кусков'; }
+
+                var last = n % 10;
+                if (last === 1) { return n + ' кусок'; }
+                if (last >= 2 && last <= 4) { return n + ' куска'; }
+
+                return n + ' кусков';
+            }
+
             function factQtyText(r) {
                 if (r.weighted) {
-                    return fmtQtyShort(rowFactKg(r)) + '/' + fmtQtyShort(r.qty) + ' кг';
+                    // Переподбор весовой строки меняет весь кусок: план — цель
+                    // скана (как в подписи «набрано … из 1 куска»), а не вес
+                    // строки из МС.
+                    if (r.repickTarget !== undefined) {
+                        return fmtQtyShort(rowFactQty(r)) + ' кг / ' + piecesText(r.repickTarget);
+                    }
+
+                    return fmtQtyShort(rowFactQty(r)) + '/' + fmtQtyShort(r.qty) + ' кг';
                 }
+
                 return String(Math.round(rowFactPieces(r))) + '/' + String(Math.round(rowPlanQty(r)));
             }
 

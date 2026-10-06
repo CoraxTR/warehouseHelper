@@ -199,13 +199,16 @@ func (h *Handler) GoodsInventoryScanPage(w http.ResponseWriter, r *http.Request)
 	// сразу. Своя — по ключу хозяина в cookie (F5 продолжает её же); нет ключа —
 	// заводим новую, даже когда у вида висит чужая комната: её убьёт TTL, тупика
 	// «инвентаризацию не начать» быть не должно.
-	room, err := h.openInventoryRoom(r, w, inventoryType)
+	room, created, err := h.openInventoryRoom(r, w, inventoryType)
 	if err != nil {
 		slog.Error(fmt.Sprintf("inventory: открыть комнату: %v", err))
 		data.Error = "не удалось открыть совместную инвентаризацию: " + err.Error()
 	} else {
 		data.Room = &room
-		data.IsGuest = false
+		// Хозяин — машина, открывшая комнату (её ключ в cookie). Вторая машина на
+		// тот же вид получит ту же комнату без ключа и сразу становится гостем:
+		// иначе её панель хоста упиралась бы в 403 на проведении.
+		data.IsGuest = !created && !roomHost(r, room)
 		data.Others = h.otherRooms(collab.KindInventory, inventoryType, room.ID)
 	}
 
@@ -283,9 +286,19 @@ func (h *Handler) GoodsInventoryConduct(w http.ResponseWriter, r *http.Request) 
 	if sessionID != "" {
 		// Провести может только машина, начавшая инвентаризацию: у гостя в
 		// cookie ключа хозяина нет, и он получит отказ (страница гостя кнопку
-		// проведения и не показывает).
-		room, err := h.collabUC.State(sessionID)
-		if err == nil && !roomHost(r, room) {
+		// проведения и не показывает). Комнаты на сервере может уже не быть
+		// (рестарт приложения, TTL, «Отменить») — роль и тогда доказывает
+		// cookie-ключ: без этой проверки гость со своим session_id создал бы
+		// документ по неполным сканам. Ключ живёт 12 ч против TTL комнаты 6 ч,
+		// поэтому «хозяин проводит после сноса комнаты» не ломается.
+		room, stateErr := h.collabUC.State(sessionID)
+
+		host := stateErr == nil && roomHost(r, room)
+		if stateErr != nil {
+			host = hasRoomHostCookie(r, sessionID)
+		}
+
+		if !host {
 			invWriteJSON(w, http.StatusForbidden, invErrorResponse{
 				Error: "провести инвентаризацию может только машина, начавшая её",
 			})

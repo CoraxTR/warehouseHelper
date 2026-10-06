@@ -19,22 +19,38 @@ import (
 
 // openInventoryRoom выдаёт машине комнату инвентаризации вида inventoryType:
 // есть ключ живой комнаты этого вида — отдаём её же (F5 не заводит вторую), нет
-// — заводим новую и выдаём ключ хозяина. Имя комнаты — сам вид инвентаризации.
-func (h *Handler) openInventoryRoom(r *http.Request, w http.ResponseWriter, inventoryType string) (collab.Session, error) {
+// — заводим новую и выдаём ключ хозяина. Второе значение — «комнату открыла эта
+// машина»: по нему страница решает, кто здесь хозяин (см. GoodsInventoryScanPage).
+// Имя комнаты — сам вид инвентаризации.
+func (h *Handler) openInventoryRoom(r *http.Request, w http.ResponseWriter, inventoryType string) (collab.Session, bool, error) {
 	if room, ok := hostRoom(r, h.collabUC, collab.KindInventory, inventoryType); ok {
-		return room, nil
+		return room, false, nil
 	}
 
 	room, created, err := h.collabUC.Open(collab.KindInventory, inventoryType, inventoryType)
 	if err != nil {
-		return collab.Session{}, err
+		return collab.Session{}, false, err
 	}
 
 	if created {
 		setRoomHostCookie(w, room)
 	}
 
-	return room, nil
+	return room, created, nil
+}
+
+// hasRoomHostCookie — у машины есть cookie-ключ хозяина комнаты sessionID. Нужен,
+// когда комнаты на сервере уже нет (рестарт, TTL, «Отменить»): ключ живёт дольше
+// комнаты и отличает машину, начавшую инвентаризацию, от гостя, у которого в
+// session_id та же комната, но ключа нет.
+func hasRoomHostCookie(r *http.Request, sessionID string) bool {
+	for _, c := range r.Cookies() {
+		if c.Value != "" && collab.RoomIDFromHostCookie(c.Name) == sessionID {
+			return true
+		}
+	}
+
+	return false
 }
 
 // claimGuestInventoryScans забирает строки гостей на проведение инвентаризации:

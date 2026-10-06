@@ -443,6 +443,17 @@ func TestMergeGuestScans(t *testing.T) {
 			t.Fatalf("MergeGuestScans() = %v, want %v", got, want)
 		}
 	})
+
+	t.Run("товар по internal id вместо штрих-кода — ошибка, а не тихая потеря", func(t *testing.T) {
+		// Такую строку общая валидация комнаты пропускает (manual_product_id
+		// непустой), но провести по ней инвентаризацию нельзя: строка гостя
+		// должна дать отказ, а не исчезнуть из документа молча.
+		guests := []json.RawMessage{json.RawMessage(`{"manual_product_id":"prod-piece","seq":5}`)}
+
+		if got, err := MergeGuestScans(own, guests); err == nil {
+			t.Fatalf("MergeGuestScans() = %v, want ошибку про строку без штрих-кода", got)
+		}
+	})
 }
 
 // 8. StoreConfigured — значение из клиента МС.
