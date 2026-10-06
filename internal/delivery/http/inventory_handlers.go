@@ -1,6 +1,7 @@
 package http
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"warehouseHelper/internal/collab"
 	"warehouseHelper/internal/innercode"
 	"warehouseHelper/internal/inventory"
 	iucase "warehouseHelper/internal/inventory/usecase"
@@ -36,6 +38,11 @@ type goodsInventoryData struct {
 	Error      string
 	Types      []string
 	StoreReady bool
+
+	// Open — идущие совместные инвентаризации: их видно списком, из него же
+	// подключаются гости (кодов подключения нет — как у приёмки, решение
+	// владельца 06.10.2026).
+	Open []collab.Session
 }
 
 // goodsInventoryScanData — данные страницы сканирования: вид, группа для клиента
@@ -46,6 +53,16 @@ type goodsInventoryScanData struct {
 	Lengths    string
 	StoreReady bool
 	Error      string
+
+	// Room — комната страницы: инвентаризация всегда идёт в комнате, поэтому nil
+	// только при ошибке открытия. IsGuest — эта машина не хозяин: сканы уходят
+	// хосту, документ в МС создаёт хозяин.
+	Room    *collab.Session
+	IsGuest bool
+
+	// Others — живые инвентаризации того же вида на других машинах: подсказка
+	// хозяину, иначе один вид проведут дважды, каждый в свой документ.
+	Others []collab.Session
 }
 
 // invGroupItem — позиция группы для клиента: код склада, имя, весовой ли товар,
@@ -61,8 +78,9 @@ type invGroupItem struct {
 
 // invPreviewRequest — вход предпросмотра и проведения (одинаковый).
 type invPreviewRequest struct {
-	Type  string   `json:"type"`
-	Scans []string `json:"scans"`
+	Type      string   `json:"type"`
+	Scans     []string `json:"scans"`
+	SessionID string   `json:"session_id"`
 }
 
 // invPreviewRow — строка предпросмотра: только строки, никаких сырых float и
@@ -104,32 +122,102 @@ type invErrorResponse struct {
 // GoodsInventoryPage — GET /goods/inventory: выбор вида инвентаризации.
 // Ошибка чтения видов — в Error шаблона, страница остаётся живой (не 500).
 func (h *Handler) GoodsInventoryPage(w http.ResponseWriter, r *http.Request) {
-	data := goodsInventoryData{StoreReady: h.inventoryUC.StoreConfigured()}
+	h.renderInventoryPicker(w, h.inventoryPickerData(r.Context(), ""))
+}
 
-	types, err := h.inventoryUC.Types(r.Context())
+// inventoryPickerData собирает данные страницы выбора вида: виды инвентаризации
+// и идущие совместные инвентаризации (список, из которого подключаются гости).
+// Ошибка чтения видов — в Error шаблона, страница остаётся живой (не 500).
+func (h *Handler) inventoryPickerData(ctx context.Context, errMsg string) goodsInventoryData {
+	data := goodsInventoryData{
+		StoreReady: h.inventoryUC.StoreConfigured(),
+		Error:      errMsg,
+		Open:       h.collabUC.List(collab.KindInventory),
+	}
+
+	types, err := h.inventoryUC.Types(ctx)
 	if err != nil {
 		slog.Error(fmt.Sprintf("inventory types: %v", err))
-		data.Error = "не удалось прочитать виды инвентаризации: " + err.Error()
+
+		if data.Error == "" {
+			data.Error = "не удалось прочитать виды инвентаризации: " + err.Error()
+		}
 	} else {
 		data.Types = types
 	}
 
+	return data
+}
+
+// renderInventoryPicker отдаёт страницу выбора вида; ошибка исполнения уже не
+// чинится (часть тела могла уйти) — только в лог.
+func (h *Handler) renderInventoryPicker(w http.ResponseWriter, data goodsInventoryData) {
 	if err := inventoryTypesTmpl.Execute(w, data); err != nil {
 		slog.Error(fmt.Sprintf("inventory types template: %v", err))
 	}
 }
 
-// GoodsInventoryScanPage — GET /goods/inventory/scan?type=…: сканирование
-// позиций выбранного вида. Пустой вид — редирект на выбор вида; ошибка чтения
-// группы — Error в шаблоне (страница живёт, сканы всё равно отбиваются сервером).
+// GoodsInventoryScanPage — GET /goods/inventory/scan?type=…[&c=…]: сканирование
+// позиций выбранного вида. `?type=` — страница хозяина: комната заводится всегда
+// при отрисовке (как у приёмки). `?c=<комната>` — страница гостя: вид берётся из
+// комнаты, а не из query. Пустой вид — редирект на выбор вида; закрытая/чужая
+// комната гостя — понятный текст и список идущих (не 500); ошибка чтения группы —
+// Error в шаблоне (сканы всё равно отбиваются сервером).
 func (h *Handler) GoodsInventoryScanPage(w http.ResponseWriter, r *http.Request) {
-	inventoryType := strings.TrimSpace(r.URL.Query().Get("type"))
+	query := r.URL.Query()
+	inventoryType := strings.TrimSpace(query.Get("type"))
+	roomID := strings.TrimSpace(query.Get("c"))
+
+	// Страница гостя: комната пришла ссылкой из списка идущих инвентаризаций.
+	if roomID != "" {
+		room, err := h.collabUC.State(roomID)
+		if err != nil || room.Closed() || room.Kind != collab.KindInventory {
+			h.renderInventoryPicker(w, h.inventoryPickerData(r.Context(),
+				"совместная инвентаризация уже проведена или закрыта — выберите вид заново"))
+
+			return
+		}
+
+		data := h.inventoryScanData(r, room.Ref)
+		data.Room = &room
+		data.IsGuest = !roomHost(r, room)
+
+		h.renderInventoryScan(w, data)
+
+		return
+	}
+
 	if inventoryType == "" {
 		http.Redirect(w, r, "/goods/inventory", http.StatusFound)
 
 		return
 	}
 
+	data := h.inventoryScanData(r, inventoryType)
+
+	// Комната заводится прямо при отрисовке: гости видят инвентаризацию в списке
+	// сразу. Своя — по ключу хозяина в cookie (F5 продолжает её же); нет ключа —
+	// заводим новую, даже когда у вида висит чужая комната: её убьёт TTL, тупика
+	// «инвентаризацию не начать» быть не должно.
+	room, created, err := h.openInventoryRoom(r, w, inventoryType)
+	if err != nil {
+		slog.Error(fmt.Sprintf("inventory: открыть комнату: %v", err))
+		data.Error = "не удалось открыть совместную инвентаризацию: " + err.Error()
+	} else {
+		data.Room = &room
+		// Хозяин — машина, открывшая комнату (её ключ в cookie). Вторая машина на
+		// тот же вид получит ту же комнату без ключа и сразу становится гостем:
+		// иначе её панель хоста упиралась бы в 403 на проведении.
+		data.IsGuest = !created && !roomHost(r, room)
+		data.Others = h.otherRooms(collab.KindInventory, inventoryType, room.ID)
+	}
+
+	h.renderInventoryScan(w, data)
+}
+
+// inventoryScanData — общая часть страницы сканирования: вид, группа для
+// клиента, допустимые длины кодов и состояние склада МС.
+func (h *Handler) inventoryScanData(r *http.Request, inventoryType string) goodsInventoryScanData {
 	data := goodsInventoryScanData{
 		Type:       inventoryType,
 		GroupJSON:  "[]",
@@ -145,6 +233,11 @@ func (h *Handler) GoodsInventoryScanPage(w http.ResponseWriter, r *http.Request)
 		data.GroupJSON = invGroupJSON(products)
 	}
 
+	return data
+}
+
+// renderInventoryScan отдаёт страницу сканирования.
+func (h *Handler) renderInventoryScan(w http.ResponseWriter, data goodsInventoryScanData) {
 	if err := inventoryScanTmpl.Execute(w, data); err != nil {
 		slog.Error(fmt.Sprintf("inventory scan template: %v", err))
 	}
@@ -170,15 +263,75 @@ func (h *Handler) GoodsInventoryPreview(w http.ResponseWriter, r *http.Request) 
 }
 
 // GoodsInventoryConduct — POST /goods/inventory/conduct: создать документ
-// инвентаризации в МС. body: {"type":"…","scans":["…"]}. 200 — документ;
-// 400 — вид/сканы (пусто, не из группы, пустая группа); прочее (в т.ч. склад МС
-// не настроен и ошибки МС) — 500 с текстом в error и записью в лог.
+// инвентаризации в МС. body: {"type":"…","scans":["…"],"session_id":"…"}.
+// 200 — документ; 400 — вид/сканы (пусто, не из группы, пустая группа);
+// 403 — проведение запросила не машина-хозяин; 409 — комната занята/не готова;
+// прочее (в т.ч. склад МС не настроен и ошибки МС) — 500 с текстом в error.
+//
+// Совместная инвентаризация: session_id непустой — строки подключённых гостей
+// доклеиваются к строкам хоста, и весь вид уходит в ОДИН вызов Conduct (документ
+// в МС создаёт только хозяин). Пока не все гости прислали сканы, проведение
+// отвергается (409): кнопка на странице хоста заблокирована, но устаревшая
+// страница не должна провести без чужих строк.
 func (h *Handler) GoodsInventoryConduct(w http.ResponseWriter, r *http.Request) {
 	req, ok := invDecodeRequest(w, r)
 	if !ok {
 		return
 	}
-	if len(req.Scans) == 0 {
+
+	sessionID := strings.TrimSpace(req.SessionID)
+	scans := req.Scans
+	claimed := false
+
+	if sessionID != "" {
+		// Провести может только машина, начавшая инвентаризацию: у гостя в
+		// cookie ключа хозяина нет, и он получит отказ (страница гостя кнопку
+		// проведения и не показывает). Комнаты на сервере может уже не быть
+		// (рестарт приложения, TTL, «Отменить») — роль и тогда доказывает
+		// cookie-ключ: без этой проверки гость со своим session_id создал бы
+		// документ по неполным сканам. Ключ живёт 12 ч против TTL комнаты 6 ч,
+		// поэтому «хозяин проводит после сноса комнаты» не ломается.
+		room, stateErr := h.collabUC.State(sessionID)
+
+		host := stateErr == nil && roomHost(r, room)
+		if stateErr != nil {
+			host = hasHostCookie(r, sessionID)
+		}
+
+		if !host {
+			invWriteJSON(w, http.StatusForbidden, invErrorResponse{
+				Error: "провести инвентаризацию может только машина, начавшая её",
+			})
+
+			return
+		}
+
+		guestRows, taken, claimErr := h.claimGuestInventoryScans(sessionID, req.Type)
+		if claimErr != nil {
+			invCollabError(w, claimErr)
+
+			return
+		}
+
+		claimed = taken
+
+		merged, mergeErr := iucase.MergeGuestScans(scans, guestRows)
+		if mergeErr != nil {
+			if claimed {
+				h.releaseRoom(sessionID)
+			}
+
+			invWriteJSON(w, http.StatusBadRequest, invErrorResponse{
+				Error: "строка гостя не разобрана: " + mergeErr.Error(),
+			})
+
+			return
+		}
+
+		scans = merged
+	}
+
+	if len(scans) == 0 {
 		invWriteJSON(w, http.StatusBadRequest, invErrorResponse{
 			Error: "нет сканов — создавать документ не из чего",
 		})
@@ -186,11 +339,25 @@ func (h *Handler) GoodsInventoryConduct(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	doc, err := h.inventoryUC.Conduct(r.Context(), req.Type, req.Scans)
+	doc, err := h.inventoryUC.Conduct(r.Context(), req.Type, scans)
 	if err != nil {
+		// Инвентаризация не прошла — комнату освобождаем: строки гостей на месте,
+		// хост может повторить (в том числе провести без гостей).
+		if claimed {
+			h.releaseRoom(sessionID)
+		}
+
 		invWriteJSONError(w, err)
 
 		return
+	}
+
+	// Документ создан — комнату закрываем: гости увидят это опросом и получат
+	// «инвентаризация проведена». Отказ закрытия работу не отменяет.
+	if sessionID != "" {
+		if _, err := h.collabUC.Close(sessionID); err != nil {
+			slog.Info("inventory: закрыть совместную инвентаризацию", "session", sessionID, "err", err)
+		}
 	}
 
 	invWriteJSON(w, http.StatusOK, invConductResponse{

@@ -30,8 +30,12 @@ func raw(v string) json.RawMessage {
 func TestOpenValidates(t *testing.T) {
 	uc, _ := newUC(t)
 
-	if _, _, err := uc.Open(collab.Kind("inventory"), "doc-1", "Инвентаризация"); !errors.Is(err, collab.ErrKind) {
+	if _, _, err := uc.Open(collab.Kind("bogus"), "doc-1", "Что-то"); !errors.Is(err, collab.ErrKind) {
 		t.Errorf("неизвестный вид: %v, ожидалась ErrKind", err)
+	}
+
+	if _, _, err := uc.Open(collab.KindInventory, "Заморозка", "Заморозка"); err != nil {
+		t.Errorf("инвентаризация — известный вид: %v", err)
 	}
 
 	if _, _, err := uc.Open(collab.KindReceive, "   ", "Поставщик"); !errors.Is(err, ErrNeedRef) {

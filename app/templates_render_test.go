@@ -31,6 +31,7 @@ func TestTemplatesRender(t *testing.T) {
 
 	supplier := map[string]any{"ID": "1", "Name": "ООО Тест"}
 	room := collabRoom()
+	invRoom := invCollabRoom()
 
 	cases := []struct {
 		name string
@@ -131,6 +132,39 @@ func TestTemplatesRender(t *testing.T) {
 				"StoreReady": false, "Error": "",
 			},
 		},
+		{
+			// «Инвентаризация»: выбор вида — список идущих совместных
+			// инвентаризаций, из него подключаются гости.
+			name: "инвентаризация: идущие совместные инвентаризации",
+			file: "goods_inventory.html",
+			data: map[string]any{
+				"Error": "", "Types": []string{"Заморозка"}, "StoreReady": true,
+				"Open": []collab.Session{invCollabRoom()},
+			},
+		},
+		{
+			// «Инвентаризация»: страница хоста — комната и чужая инвентаризация
+			// того же вида (подсказка, иначе вид проведут дважды).
+			name: "инвентаризация: хост совместной инвентаризации",
+			file: "goods_inventory_scan.html",
+			data: map[string]any{
+				"Type": "Заморозка", "GroupJSON": `[{"c":"00001234","n":"Стейк","w":1}]`,
+				"Lengths": "29,33", "StoreReady": true, "Error": "",
+				"Room": &invRoom, "IsGuest": false,
+				"Others": []collab.Session{invCollabRoom()},
+			},
+		},
+		{
+			// «Инвентаризация»: страница гостя — своя кнопка «Отправить сканы»
+			// вместо проведения, предпросмотра нет.
+			name: "инвентаризация: гость совместной инвентаризации",
+			file: "goods_inventory_scan.html",
+			data: map[string]any{
+				"Type": "Заморозка", "GroupJSON": `[{"c":"00001234","n":"Стейк","w":1}]`,
+				"Lengths": "29,33", "StoreReady": true, "Error": "",
+				"Room": &invRoom, "IsGuest": true,
+			},
+		},
 	}
 
 	for _, c := range cases {
@@ -162,6 +196,24 @@ func collabRoom() collab.Session {
 		GuestSeq:  2,
 		Guests: []collab.Guest{
 			{ID: "g1", Name: "Гость 1", Status: collab.GuestReady, Chunks: 1, Rows: 12},
+			{ID: "g2", Name: "Гость 2", Status: collab.GuestScanning},
+		},
+	}
+}
+
+// invCollabRoom — комната совместной инвентаризации для проверки страницы вида:
+// Ref — вид инвентаризации (не поставщик), два гостя: первый отправил, второй
+// ещё сканирует.
+func invCollabRoom() collab.Session {
+	return collab.Session{
+		ID:        "inv1",
+		Kind:      collab.KindInventory,
+		Ref:       "Заморозка",
+		Title:     "Заморозка",
+		CreatedAt: time.Date(2026, time.October, 6, 11, 5, 0, 0, time.UTC),
+		GuestSeq:  2,
+		Guests: []collab.Guest{
+			{ID: "g1", Name: "Гость 1", Status: collab.GuestReady, Chunks: 1, Rows: 7},
 			{ID: "g2", Name: "Гость 2", Status: collab.GuestScanning},
 		},
 	}

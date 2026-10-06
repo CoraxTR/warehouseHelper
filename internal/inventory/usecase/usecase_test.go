@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -367,6 +368,92 @@ func TestConductAggregateError(t *testing.T) {
 	if ms.calls != 0 {
 		t.Fatalf("CreateInventory вызван %d раз при ошибке агрегации, want 0", ms.calls)
 	}
+}
+
+// 9. MergeGuestScans — склейка набора хоста со строками гостей совместной
+// инвентаризации: строки гостей идут ПОСЛЕ своих и уходят в один Conduct
+// (документ в МС создаёт только хозяин). Гость шлёт объекты {"raw":…,"seq":…};
+// из строки берётся raw, остальное (курсор) склейке не нужно.
+func TestMergeGuestScans(t *testing.T) {
+	own := []string{invItem(invWeightCode, 250), invItem(invPieceCode, 100)}
+
+	t.Run("строки гостей доклеиваются к своим", func(t *testing.T) {
+		guests := []json.RawMessage{
+			json.RawMessage(`{"raw":"` + invItem(invWeightCode, 300) + `","seq":1}`),
+			json.RawMessage(`{"raw":"` + invItem(invPieceCode, 100) + `","seq":2}`),
+		}
+		want := []string{own[0], own[1], invItem(invWeightCode, 300), invItem(invPieceCode, 100)}
+
+		got, err := MergeGuestScans(own, guests)
+		if err != nil {
+			t.Fatalf("MergeGuestScans() error = %v, want nil", err)
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("MergeGuestScans() = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("пустой список гостей — свои без изменений", func(t *testing.T) {
+		got, err := MergeGuestScans(own, nil)
+		if err != nil {
+			t.Fatalf("MergeGuestScans() error = %v, want nil", err)
+		}
+		if !reflect.DeepEqual(got, own) {
+			t.Fatalf("MergeGuestScans() = %v, want свои %v", got, own)
+		}
+	})
+
+	t.Run("чужие коды не трогаем — склейка только вынимает raw", func(t *testing.T) {
+		// Вид и валидность кода проверяет Conduct (Aggregate): склейка лишь
+		// переносит строку, чтобы отказ был один и с понятным текстом.
+		guests := []json.RawMessage{json.RawMessage(`{"raw":"1234567890","seq":1}`)}
+
+		got, err := MergeGuestScans(own, guests)
+		if err != nil {
+			t.Fatalf("MergeGuestScans() error = %v, want nil", err)
+		}
+		if want := []string{own[0], own[1], "1234567890"}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("MergeGuestScans() = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("мусорная строка (не JSON) — ошибка, строки не угадываем", func(t *testing.T) {
+		guests := []json.RawMessage{json.RawMessage(`{"raw":"` + invItem(invWeightCode, 300) + `"}`), json.RawMessage(`не json`)}
+		if got, err := MergeGuestScans(own, guests); err == nil {
+			t.Fatalf("MergeGuestScans() = %v, want ошибку разбора", got)
+		}
+	})
+
+	t.Run("строка без raw пропускается, а не ломает склейку", func(t *testing.T) {
+		// validCollabScans не пропускает строку без raw ещё на входе, но склейка
+		// защищена сама: пустышка не должна ронять проведение всего документа.
+		guests := []json.RawMessage{
+			json.RawMessage(`{}`),
+			json.RawMessage(`{"raw":"   "}`),
+			json.RawMessage(`{"seq":3}`),
+			json.RawMessage(`{"raw":"` + invItem(invPieceCode, 200) + `","seq":4}`),
+		}
+		want := []string{own[0], own[1], invItem(invPieceCode, 200)}
+
+		got, err := MergeGuestScans(own, guests)
+		if err != nil {
+			t.Fatalf("MergeGuestScans() error = %v, want nil", err)
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("MergeGuestScans() = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("товар по internal id вместо штрих-кода — ошибка, а не тихая потеря", func(t *testing.T) {
+		// Такую строку общая валидация комнаты пропускает (manual_product_id
+		// непустой), но провести по ней инвентаризацию нельзя: строка гостя
+		// должна дать отказ, а не исчезнуть из документа молча.
+		guests := []json.RawMessage{json.RawMessage(`{"manual_product_id":"prod-piece","seq":5}`)}
+
+		if got, err := MergeGuestScans(own, guests); err == nil {
+			t.Fatalf("MergeGuestScans() = %v, want ошибку про строку без штрих-кода", got)
+		}
+	})
 }
 
 // 8. StoreConfigured — значение из клиента МС.
