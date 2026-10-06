@@ -135,7 +135,7 @@ func (h *Handler) GoodsInventoryScanPage(w http.ResponseWriter, r *http.Request)
 
 	products, err := h.inventoryUC.Group(r.Context(), inventoryType)
 	if err != nil {
-		slog.Error(fmt.Sprintf("inventory group %q: %v", inventoryType, err))
+		slog.Error(fmt.Sprintf("inventory group: %v", err))
 		data.Error = "не удалось прочитать позиции вида: " + err.Error()
 	} else {
 		data.GroupJSON = invGroupJSON(products)
@@ -262,10 +262,16 @@ func invPreviewBody(p inventory.Preview) invPreviewResponse {
 		if !zero {
 			allZero = false
 		}
+		qty := "0"
+		if !zero {
+			// Факт строки показываем только у просканированных позиций: у
+			// непросканированных он ноль, а «0 кг / 0 шт» читается как ошибка.
+			qty = invQtyText(line)
+		}
 		rows = append(rows, invPreviewRow{
 			Code:     line.InternalCode,
 			Name:     line.Name,
-			Qty:      invQtyText(line, zero),
+			Qty:      qty,
 			Price:    invRublesText(line.PriceKop),
 			Scans:    line.Scans,
 			Scanable: line.Scanable,
@@ -283,12 +289,10 @@ func invPreviewBody(p inventory.Preview) invPreviewResponse {
 	}
 }
 
-// invQtyText — факт строки строкой: весовой — кг с тремя знаками, штучный —
-// целое; ноль — «0» без единицы (непросканированная позиция).
-func invQtyText(line inventory.Line, zero bool) string {
-	if zero {
-		return "0"
-	}
+// invQtyText — факт просканированной строки строкой: весовой — кг с тремя
+// знаками, штучный — целое. Непросканированные строки в предпросмотре
+// показываются отдельным текстом («0» + пометка), сюда не попадают.
+func invQtyText(line inventory.Line) string {
 	if line.Weighted {
 		return strconv.FormatFloat(line.Fact, 'f', 3, 64) + " кг"
 	}

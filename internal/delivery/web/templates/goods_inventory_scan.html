@@ -39,7 +39,7 @@
     <div class="banner err">Склад МойСклад не настроен (MSAPI_STORE_ID): документ создать не получится. Сканирование и предпросмотр работают — провести документ не выйдет, обратитесь к администратору.</div>
     {{end}}
 
-    <div id="inv-data" data-group="{{.GroupJSON}}" data-type="{{.Type}}" data-lengths="{{.Lengths}}"></div>
+    <div id="inv-data" data-group="{{.GroupJSON}}" data-type="{{.Type}}" data-lengths="{{.Lengths}}" data-store-ready="{{.StoreReady}}"></div>
 
     <div id="scan-block" class="scan-block">
         <div class="constraint hint">Сканируйте внутренние штрих-коды позиций этого вида (куски и коробки). Количество собирается из сканов: весовой товар — суммой веса (кг), штучный — числом единиц (шт). Повторный скан учитывается. Непросканированные позиции попадут в документ нулями — их можно проверить в предпросмотре перед проведением.</div>
@@ -70,7 +70,7 @@
         // в количество по позициям, предпросмотр подтверждает и создаёт документ
         // в МС. Только ES5 (старые браузеры склада). Локальная проверка дублирует
         // серверную (авторитетную): состав группы, количества и деньги — сервер.
-        var INV = { scans: [], codes: {}, name: '', lengths: [], busy: false };
+        var INV = { scans: [], codes: {}, name: '', lengths: [], busy: false, storeReady: true };
 
         function el(id) {
             return document.getElementById(id);
@@ -95,8 +95,9 @@
             }
         }
 
-        // Ошибка предпросмотра/проведения — СВОЁ место: блок сканирования в этот
-        // момент скрыт, и ошибка в нём была бы не видна (только бип).
+        // Ошибка ПРОВЕДЕНИЯ показывается здесь: блок сканирования в этот момент
+        // скрыт, и ошибка в нём была бы не видна (оператор услышал бы только бип).
+        // Ошибка предпросмотра идёт в блок сканирования (он тогда видим).
         function showPreviewError(msg) {
             var e = el('preview-error');
             if (!e) {
@@ -153,6 +154,7 @@
                 return;
             }
             INV.name = d.getAttribute('data-type') || '';
+            INV.storeReady = d.getAttribute('data-store-ready') === 'true';
 
             var group = [];
             try {
@@ -195,7 +197,7 @@
                 return 'Не наш штрих-код';
             }
             if (!INV.codes[raw.substr(0, 8)]) {
-                return 'Позиция не из вида «' + INV.name + '»';
+                return 'Позиция не из вида «' + esc(INV.name) + '»';
             }
             return null;
         }
@@ -258,7 +260,10 @@
             }
             var c = el('conduct-btn');
             if (c) {
-                c.disabled = INV.busy;
+                c.disabled = INV.busy || !INV.storeReady;
+                c.title = INV.storeReady
+                    ? ''
+                    : 'Склад МойСклад не настроен (MSAPI_STORE_ID) — документ создать нельзя';
             }
         }
 
@@ -373,6 +378,7 @@
             hidePreviewError();
             el('scan-block').className = 'scan-block hidden';
             el('preview').className = 'scan-block';
+            updateButtons();
         }
 
         // Возврат к сканированию: сканы СОХРАНЯЮТСЯ — можно досканировать и
@@ -384,6 +390,11 @@
         }
 
         function conduct() {
+            if (!INV.storeReady) {
+                beep();
+                showPreviewError('Склад МойСклад не настроен (MSAPI_STORE_ID): документ создать нельзя.');
+                return;
+            }
             if (INV.busy || INV.scans.length === 0) {
                 return;
             }

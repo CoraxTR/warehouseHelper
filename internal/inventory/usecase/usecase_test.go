@@ -25,8 +25,6 @@ func invItem(code string, weightG int) string {
 	return fmt.Sprintf("%s%05d%s%s", code, weightG, invProdDate, invExpDate)
 }
 
-func invPtr(v int64) *int64 { return &v }
-
 // Позиции каталога для тестов.
 var (
 	invWeightProduct = inventory.Product{
@@ -34,14 +32,14 @@ var (
 		InternalCode: invWeightCode,
 		Name:         "Говядина охл",
 		UOM:          "кг",
-		BuyPriceKop:  invPtr(150000),
+		BuyPriceKop:  new(int64(150000)),
 	}
 	invPieceProduct = inventory.Product{
 		ID:           "prod-piece",
 		InternalCode: invPieceCode,
 		Name:         "Соус",
 		UOM:          "шт",
-		BuyPriceKop:  invPtr(50000),
+		BuyPriceKop:  new(int64(50000)),
 	}
 	invNoCodeProduct = inventory.Product{
 		ID:   "prod-nocode",

@@ -167,7 +167,7 @@ func TestCreateInventory(t *testing.T) {
 
 // TestCreateInventoryAPIError — не-2xx от МС: ошибка несёт текст errors[].
 func TestCreateInventoryAPIError(t *testing.T) {
-	msac, _ := newInventoryTestClient(t, "store-test", func(w http.ResponseWriter, r *http.Request) {
+	msac, _ := newInventoryTestClient(t, "store-test", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusPreconditionFailed)
 		_, _ = w.Write([]byte(`{"errors":[{"error":"Недостаточно прав для создания инвентаризации"}]}`))
@@ -193,11 +193,11 @@ func TestCreateInventoryAPIError(t *testing.T) {
 // TestCreateInventoryStoreNotConfigured — пустой Refs.StoreID: ошибка до
 // запроса, в МС НИЧЕГО не уходит (счётчик обращений к /entity/inventory = 0).
 func TestCreateInventoryStoreNotConfigured(t *testing.T) {
-	var inventoryRequests int32
+	var inventoryRequests atomic.Int32
 
 	msac, _ := newInventoryTestClient(t, "", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/entity/inventory" {
-			atomic.AddInt32(&inventoryRequests, 1)
+			inventoryRequests.Add(1)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{}`))
@@ -212,7 +212,7 @@ func TestCreateInventoryStoreNotConfigured(t *testing.T) {
 	if !strings.Contains(err.Error(), "MSAPI_STORE_ID") {
 		t.Errorf("ошибка не упоминает MSAPI_STORE_ID: %v", err)
 	}
-	if n := atomic.LoadInt32(&inventoryRequests); n != 0 {
+	if n := inventoryRequests.Load(); n != 0 {
 		t.Errorf("обращений к /entity/inventory = %d, want 0 (запрос не должен уходить)", n)
 	}
 }

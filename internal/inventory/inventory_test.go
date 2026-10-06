@@ -25,8 +25,6 @@ func box(code string, weightG, qty int) string {
 	return fmt.Sprintf("%s%06d%03d%s%s", code, weightG, qty, prodDate, expDate)
 }
 
-func ptr(v int64) *int64 { return &v }
-
 func TestWeighted(t *testing.T) {
 	tests := []struct {
 		name string
@@ -58,14 +56,14 @@ var (
 		InternalCode: weightCode,
 		Name:         "Говядина охл",
 		UOM:          "кг",
-		BuyPriceKop:  ptr(150000),
+		BuyPriceKop:  new(int64(150000)),
 	}
 	pieceProduct = Product{
 		ID:           "prod-piece",
 		InternalCode: pieceCode,
 		Name:         "Соус",
 		UOM:          "шт",
-		BuyPriceKop:  ptr(50000),
+		BuyPriceKop:  new(int64(50000)),
 	}
 	noCodeProduct = Product{
 		ID:   "prod-nocode",
