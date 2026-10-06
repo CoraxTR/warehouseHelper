@@ -44,7 +44,7 @@
         {{if .Types}}
         <div class="actions">
             {{range .Types}}
-            <a href="/goods/inventory/scan?type={{.}}"><button class="add-btn">{{.}}</button></a>
+            <a href="/goods/inventory/scan?type={{urlquery .}}"><button class="add-btn">{{.}}</button></a>
             {{end}}
         </div>
         {{else}}
