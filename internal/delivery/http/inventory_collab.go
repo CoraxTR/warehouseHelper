@@ -39,20 +39,6 @@ func (h *Handler) openInventoryRoom(r *http.Request, w http.ResponseWriter, inve
 	return room, created, nil
 }
 
-// hasRoomHostCookie — у машины есть cookie-ключ хозяина комнаты sessionID. Нужен,
-// когда комнаты на сервере уже нет (рестарт, TTL, «Отменить»): ключ живёт дольше
-// комнаты и отличает машину, начавшую инвентаризацию, от гостя, у которого в
-// session_id та же комната, но ключа нет.
-func hasRoomHostCookie(r *http.Request, sessionID string) bool {
-	for _, c := range r.Cookies() {
-		if c.Value != "" && collab.RoomIDFromHostCookie(c.Name) == sessionID {
-			return true
-		}
-	}
-
-	return false
-}
-
 // claimGuestInventoryScans забирает строки гостей на проведение инвентаризации:
 // одним вызовом проверяет, что комната — этот же вид, не занята и все гости
 // готовы, и отдаёт снимок строк (как есть, объектами). taken=false — комнаты нет

@@ -117,14 +117,17 @@ func (h *Handler) ReceivePage(w http.ResponseWriter, r *http.Request) {
 	// продолжает её же); если ключа нет, заводим новую, даже когда у поставщика
 	// висит чужая комната: её убьёт TTL, тупика «приёмку не начать» быть не должно.
 	if data.Room == nil {
-		room, _, err := h.openReceiveRoom(r, w, supplier.ID, supplier.Name)
+		room, created, err := h.openReceiveRoom(r, w, supplier.ID, supplier.Name)
 		if err != nil {
 			slog.Info("receive: открыть приёмку", "supplier_id", supplier.ID, "err", err)
 
 			data.Error = "не удалось открыть приёмку: " + err.Error()
 		} else {
 			data.Room = &room
-			data.IsGuest = false
+			// Хозяин — машина, открывшая приёмку (её ключ в cookie). Вторая машина
+			// на того же поставщика получает ту же комнату без ключа и сразу
+			// становится гостем: иначе её панель хоста могла бы сохранить приёмку.
+			data.IsGuest = !created && !roomHost(r, room)
 			data.Others = h.otherRooms(collab.KindReceive, supplier.ID, room.ID)
 		}
 	}
@@ -196,6 +199,20 @@ func roomHost(r *http.Request, room collab.Session) bool {
 	}
 
 	return room.HostTokenMatches(cookie.Value)
+}
+
+// hasHostCookie — у машины есть cookie-ключ хозяина комнаты sessionID. Нужен,
+// когда комнаты на сервере уже нет (рестарт приложения, TTL, «Отменить»): ключ
+// живёт дольше комнаты и отличает машину, начавшую работу, от гостя, у которого
+// в session_id та же комната, но ключа нет.
+func hasHostCookie(r *http.Request, sessionID string) bool {
+	for _, c := range r.Cookies() {
+		if collab.HostKeyLooksLike(c.Name, c.Value, sessionID) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // setRoomHostCookie отдаёт ключ хозяина машине, открывшей приёмку. Ключ живёт в
@@ -295,6 +312,24 @@ func (h *Handler) ReceiveSave(w http.ResponseWriter, r *http.Request) {
 	claimed := false
 
 	if sessionID != "" {
+		// Сохранить приёмку может только машина, начавшая её: у гостя ключа
+		// хозяина нет (его кнопка и не активна). Комната могла уже исчезнуть
+		// (рестарт приложения, TTL, «Отменить») — тогда роль доказывает
+		// cookie-ключ: без этой проверки вторая машина с тем же session_id
+		// сохранила бы приёмку за хозяина.
+		room, stateErr := h.collabUC.State(sessionID)
+
+		host := stateErr == nil && roomHost(r, room)
+		if stateErr != nil {
+			host = hasHostCookie(r, sessionID)
+		}
+
+		if !host {
+			http.Error(w, "сохранить приёмку может только машина, начавшая её", http.StatusForbidden)
+
+			return
+		}
+
 		guestScans, taken, err := h.claimGuestScans(sessionID, supplierID)
 		if err != nil {
 			collabError(w, err)

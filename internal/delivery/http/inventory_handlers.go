@@ -295,7 +295,7 @@ func (h *Handler) GoodsInventoryConduct(w http.ResponseWriter, r *http.Request) 
 
 		host := stateErr == nil && roomHost(r, room)
 		if stateErr != nil {
-			host = hasRoomHostCookie(r, sessionID)
+			host = hasHostCookie(r, sessionID)
 		}
 
 		if !host {

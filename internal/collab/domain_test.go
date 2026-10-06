@@ -23,3 +23,31 @@ func TestKindValid(t *testing.T) {
 		}
 	}
 }
+
+// TestHostKeyLooksLike — роль хозяина по cookie, когда комнаты на сервере уже
+// нет (рестарт/TTL/«Отменить»): ключ хозяина живёт дольше комнаты и обязан
+// отличать её машину от гостя и от чужого/пустого cookie.
+func TestHostKeyLooksLike(t *testing.T) {
+	const roomID = "room-1"
+
+	cases := []struct {
+		name        string
+		cookieName  string
+		cookieValue string
+		room        string
+		want        bool
+	}{
+		{"ключ этой комнаты", HostCookieName(roomID), "secret", roomID, true},
+		{"пустое значение — не ключ", HostCookieName(roomID), "", roomID, false},
+		{"ключ чужой комнаты", HostCookieName("room-2"), "secret", roomID, false},
+		{"не наш cookie", "wh_collab_guest_" + roomID, "secret", roomID, false},
+	}
+
+	for _, c := range cases {
+		got := HostKeyLooksLike(c.cookieName, c.cookieValue, c.room)
+		if got != c.want {
+			t.Errorf("%s: HostKeyLooksLike(%q, %q, %q) = %v, ожидалось %v",
+				c.name, c.cookieName, c.cookieValue, c.room, got, c.want)
+		}
+	}
+}

@@ -313,3 +313,11 @@ func RoomIDFromHostCookie(name string) string {
 
 	return strings.TrimPrefix(name, hostCookiePrefix)
 }
+
+// HostKeyLooksLike — имя cookie принадлежит комнате roomID и значение непустое.
+// Нужно, когда комнаты на сервере уже нет (рестарт приложения, TTL, «Отменить»):
+// сам ключ хозяина живёт дольше комнаты (12 ч против 6 ч) и отличает машину,
+// начавшую работу, от гостя — у гостя в session_id та же комната, но ключа нет.
+func HostKeyLooksLike(cookieName, cookieValue, roomID string) bool {
+	return cookieValue != "" && RoomIDFromHostCookie(cookieName) == roomID
+}
