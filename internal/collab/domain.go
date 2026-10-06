@@ -27,13 +27,18 @@ import (
 // Kind — вид работы, результат которой собирает комната.
 type Kind string
 
-// KindReceive — совместная приёмка. Единственный вид, который умеет открывать
-// клиент; Kind.Valid — точка расширения для инвентаризации.
+// KindReceive — совместная приёмка.
 const KindReceive Kind = "receive"
+
+// KindInventory — совместная инвентаризация. Комната заводится на ВИД
+// инвентаризации (products.inventory_type): документа МойСклад на момент
+// открытия комнаты ещё нет, а вид — это и есть работа (решение владельца
+// 06.10.2026: отдельного «совместного» режима не плодим — комната всегда).
+const KindInventory Kind = "inventory"
 
 // Valid сообщает, умеет ли система открывать комнаты этого вида.
 func (k Kind) Valid() bool {
-	return k == KindReceive
+	return k == KindReceive || k == KindInventory
 }
 
 // GuestStatus — состояние участника-гостя.

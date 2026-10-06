@@ -70,7 +70,7 @@ func (h *Handler) ReceivePage(w http.ResponseWriter, r *http.Request) {
 	// Страница гостя: комната пришла ссылкой из списка открытых приёмок.
 	if roomID != "" {
 		room, err := h.collabUC.State(roomID)
-		if err != nil || room.Closed() {
+		if err != nil || room.Closed() || room.Kind != collab.KindReceive {
 			data.Error = "совместная приёмка уже сохранена или закрыта"
 			data.Open = h.collabUC.List(collab.KindReceive)
 
@@ -125,7 +125,7 @@ func (h *Handler) ReceivePage(w http.ResponseWriter, r *http.Request) {
 		} else {
 			data.Room = &room
 			data.IsGuest = false
-			data.Others = h.otherRooms(supplier.ID, room.ID)
+			data.Others = h.otherRooms(collab.KindReceive, supplier.ID, room.ID)
 		}
 	}
 
@@ -136,7 +136,7 @@ func (h *Handler) ReceivePage(w http.ResponseWriter, r *http.Request) {
 // поставщика — отдаём её же (перезагрузка страницы не заводит вторую), нет —
 // заводим новую и выдаём ключ хозяина.
 func (h *Handler) openReceiveRoom(r *http.Request, w http.ResponseWriter, supplierID, title string) (collab.Session, bool, error) {
-	if room, ok := hostRoom(r, h.collabUC, supplierID); ok {
+	if room, ok := hostRoom(r, h.collabUC, collab.KindReceive, supplierID); ok {
 		return room, false, nil
 	}
 
@@ -152,9 +152,10 @@ func (h *Handler) openReceiveRoom(r *http.Request, w http.ResponseWriter, suppli
 	return room, created, nil
 }
 
-// hostRoom ищет живую приёмку этого поставщика, ключ которой есть у машины: ключ
-// лежит в cookie комнаты (HostCookieName).
-func hostRoom(r *http.Request, uc *ccase.UseCase, supplierID string) (collab.Session, bool) {
+// hostRoom ищет живую работу вида kind по ref, ключ которой есть у машины: ключ
+// лежит в cookie комнаты (HostCookieName). Вид задаёт вызывающий — функция общая
+// для приёмки и инвентаризации, чтобы cookie одной работы не выдавала роль в другой.
+func hostRoom(r *http.Request, uc *ccase.UseCase, kind collab.Kind, ref string) (collab.Session, bool) {
 	for _, cookie := range r.Cookies() {
 		roomID := collab.RoomIDFromHostCookie(cookie.Name)
 		if roomID == "" {
@@ -162,7 +163,7 @@ func hostRoom(r *http.Request, uc *ccase.UseCase, supplierID string) (collab.Ses
 		}
 
 		room, err := uc.State(roomID)
-		if err != nil || room.Kind != collab.KindReceive || room.Ref != supplierID {
+		if err != nil || room.Kind != kind || room.Ref != ref {
 			continue
 		}
 
@@ -174,12 +175,12 @@ func hostRoom(r *http.Request, uc *ccase.UseCase, supplierID string) (collab.Ses
 	return collab.Session{}, false
 }
 
-// otherRooms — живые приёмки того же поставщика с других машин.
-func (h *Handler) otherRooms(supplierID, ownRoomID string) []collab.Session {
+// otherRooms — живые работы вида kind с тем же ref, но с других машин.
+func (h *Handler) otherRooms(kind collab.Kind, ref, ownRoomID string) []collab.Session {
 	var out []collab.Session
 
-	for _, room := range h.collabUC.List(collab.KindReceive) {
-		if room.ID != ownRoomID && room.Ref == supplierID {
+	for _, room := range h.collabUC.List(kind) {
+		if room.ID != ownRoomID && room.Ref == ref {
 			out = append(out, room)
 		}
 	}

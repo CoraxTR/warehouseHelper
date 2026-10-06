@@ -39,6 +39,31 @@
     <div class="banner err">Склад МойСклад не настроен (MSAPI_STORE_ID): документ создать не получится. Сканирование и предпросмотр работают — провести документ не выйдет, обратитесь к администратору.</div>
     {{end}}
 
+    {{if .Room}}
+    <div class="collab-panel">
+        {{if .IsGuest}}
+        <div class="collab-line">Совместная инвентаризация: вы — <b id="collab-name">гость</b>. Сканы уходят на
+            машину-хост, документ в МойСклад создаёт она. После «Отправить сканы» отправленные строки менять
+            нельзя — чтобы добрать, отсканируйте новый заход и отправьте ещё раз.</div>
+        <div class="collab-line collab-far" id="collab-state">Подключаюсь к инвентаризации…</div>
+        {{else}}
+        <div class="collab-line">Совместная инвентаризация: <b>вы хост</b> — сканы собираются и документ в МойСклад
+            создаётся здесь. Гости подключаются к этому виду на странице «Инвентаризация».</div>
+        {{if .Others}}
+        <div class="collab-line collab-wait">У этого вида уже идёт инвентаризация на другой машине:
+            {{range .Others}}<a href="/goods/inventory/scan?type={{urlquery .Ref}}&amp;c={{.ID}}">подключиться гостем к ней</a> {{end}}
+            — иначе выйдут два документа по одному виду.</div>
+        {{end}}
+        <div id="collab-guests"></div>
+        <div class="collab-line" id="collab-wait"></div>
+        <div class="collab-line">
+            <button type="button" class="small" onclick="collabConductWithoutGuests()">Провести без гостей</button>
+            <button type="button" class="small btn-remove" onclick="collabCancel()">Отменить инвентаризацию</button>
+        </div>
+        {{end}}
+    </div>
+    {{end}}
+
     <div id="inv-data" data-group="{{.GroupJSON}}" data-type="{{.Type}}" data-lengths="{{.Lengths}}" data-store-ready="{{.StoreReady}}"></div>
 
     <div id="scan-block" class="scan-block">
@@ -48,7 +73,11 @@
         <div id="ok-banner" class="banner ok" style="display:none;"></div>
         <div id="scan-list"></div>
         <div class="save-row">
+            {{if .IsGuest}}
+            <button id="send-btn" class="btn btn-save" type="button" disabled>Отправить сканы</button>
+            {{else}}
             <button id="preview-btn" class="btn btn-save" type="button" disabled>Провести инвентаризацию</button>
+            {{end}}
             <button id="clear-btn" class="btn btn-cancel" type="button">Очистить</button>
         </div>
         <div id="counter" class="counter"></div>
@@ -71,6 +100,24 @@
         // в МС. Только ES5 (старые браузеры склада). Локальная проверка дублирует
         // серверную (авторитетную): состав группы, количества и деньги — сервер.
         var INV = { scans: [], codes: {}, name: '', lengths: [], busy: false, storeReady: true };
+
+        // Совместная инвентаризация (комната на сервере): хост открыл вид — комната
+        // заведена, гости подключились к ней из списка идущих инвентаризаций и шлют
+        // свои сканы. Состояние читаем коротким опросом раз в 2,5 с, а не
+        // вебсокетом: Wi-Fi на складе рвётся, опрос сам заживает. GUEST_ID — карточка
+        // машины-гостя в комнате, живёт в localStorage, поэтому F5 её не теряет.
+        var ROOM_ID = {{if .Room}}'{{.Room.ID}}'{{else}}''{{end}};
+        var ROOM_GUEST = {{if .IsGuest}}true{{else}}false{{end}};
+        var GUEST_ID = '';        // id нашей карточки гостя в комнате
+        var GUEST_READY = false;  // последний чанк отправлен, новых строк нет
+        var ROOM_CLOSED = false;  // инвентаризация проведена — сканировать больше нечего
+        var sentRows = 0;         // сколько строк всего ушло хосту
+        var collabTimer = null;   // опрос состояния комнаты
+        var collabLastRoom = null; // последнее состояние комнаты (для «Провести без гостей»)
+        var collabWaiting = false; // хост ждёт неготовых гостей — кнопка проведения закрыта
+        var SENDING = false;      // запрос отправки уже в пути — кнопка закрыта
+        var CHUNK_ID = '';        // номер текущего захода гостя (узнавание повтора на сервере)
+        var roomLastSeq = 0;      // до какого номера строки хозяин уже принял (из состояния комнаты)
 
         function el(id) {
             return document.getElementById(id);
@@ -262,7 +309,15 @@
         function updateButtons() {
             var p = el('preview-btn');
             if (p) {
-                p.disabled = INV.busy || INV.scans.length === 0;
+                // У хоста ворота — неготовые гости: пока они сканируют, документ
+                // проводить нельзя (обойти — «Провести без гостей»).
+                p.disabled = INV.busy || INV.scans.length === 0 ||
+                    (ROOM_ID !== '' && !ROOM_GUEST && collabWaiting);
+            }
+            var s = el('send-btn');
+            if (s) {
+                s.disabled = INV.busy || ROOM_CLOSED || SENDING || !GUEST_ID || INV.scans.length === 0;
+                s.textContent = SENDING ? 'Отправляю…' : 'Отправить сканы';
             }
             var c = el('conduct-btn');
             if (c) {
@@ -316,6 +371,9 @@
                 return;
             }
             hideError();
+            // Гость после отправки захода начинает новый: хост снова его ждёт
+            // (иначе кнопка проведения на хосте осталась бы открытой).
+            if (ROOM_GUEST && GUEST_READY) { collabScanning(); }
             INV.scans.push(raw);
             input.value = '';
             input.focus();
@@ -352,6 +410,10 @@
         }
 
         function requestPreview() {
+            if (ROOM_GUEST) {
+                // Гостю предпросмотр недоступен: документ собирает хост.
+                return;
+            }
             if (INV.busy || INV.scans.length === 0) {
                 return;
             }
@@ -396,6 +458,10 @@
         }
 
         function conduct() {
+            if (ROOM_GUEST) {
+                // Гость документ не создаёт: его сканы уходят хосту.
+                return;
+            }
             if (!INV.storeReady) {
                 beep();
                 showPreviewError('Склад МойСклад не настроен (MSAPI_STORE_ID): документ создать нельзя.');
@@ -406,7 +472,9 @@
             }
             INV.busy = true;
             updateButtons();
-            xhrPost('/goods/inventory/conduct', { type: INV.name, scans: INV.scans }, function (status, data) {
+            // session_id — комната: сервер сам доклеит строки гостей к нашим.
+            // Пусто (комнаты нет после перезапуска) — проводим по своим сканам.
+            xhrPost('/goods/inventory/conduct', { type: INV.name, scans: INV.scans, session_id: ROOM_ID }, function (status, data) {
                 INV.busy = false;
                 updateButtons();
                 if (status !== 200 || !data || !data.ok) {
@@ -418,11 +486,410 @@
                 el('preview').className = 'scan-block hidden';
                 el('scan-block').className = 'scan-block';
                 renderAll();
+                // Комната закрыта сервером после успеха: опрос прекращаем, гости
+                // отключены. Сканер не гасим — можно начать новое сканирование.
+                if (ROOM_ID !== '') { collabDone(); }
                 showOk('Создан документ «' + esc(data.name) + '»'
                     + (data.url ? ' — <a href="' + esc(data.url) + '" target="_blank">открыть в МойСклад</a>' : '')
                     + '. Сканы очищены — можно начать новое сканирование.');
                 el('scan-input').focus();
             });
+        }
+
+        // ===== Совместная инвентаризация =====
+        // Комната живёт на сервере: хост открыл вид, гости подключились к ней и
+        // шлют свои чанки штрих-кодов. Документ проводит только хост — сервер сам
+        // доклеивает строки гостей по session_id.
+
+        function collabKey() { return 'wh_collab_guest_' + ROOM_ID; }
+
+        // collabStoredGuest — наша карточка гостя из прошлого захода: по ней F5 не
+        // создаёт в комнате нового гостя. localStorage может быть запрещён — тогда
+        // работаем как в первом заходе.
+        function collabStoredGuest() {
+            try { return window.localStorage.getItem(collabKey()) || ''; } catch (e) { return ''; }
+        }
+
+        function collabRememberGuest(gid) {
+            try { window.localStorage.setItem(collabKey(), gid); } catch (e) {}
+        }
+
+        // collabForgetGuest — забыть карточку гостя: хост отключил машину, старая
+        // карточка в комнате мертва.
+        function collabForgetGuest() {
+            try { window.localStorage.removeItem(collabKey()); } catch (e) {}
+        }
+
+        function collabPost(url, body, onOk, onFail) {
+            var xhr = new XMLHttpRequest();
+            xhr.open('POST', url, true);
+            xhr.setRequestHeader('Content-Type', 'application/json');
+            // Сеть на складе рвётся: без срока ожидания кнопка осталась бы
+            // «Отправляю…» навсегда. По таймауту считаем, что не доехало, и
+            // разрешаем повторить; повтор захода сервер узнаёт по chunk_id.
+            xhr.timeout = 15000;
+            xhr.ontimeout = function () {
+                if (onFail) { onFail(0, 'сервер не ответил за 15 секунд'); }
+            };
+            xhr.onreadystatechange = function () {
+                if (xhr.readyState !== 4) { return; }
+                if (xhr.status === 200) {
+                    var resp = null;
+                    try { resp = JSON.parse(xhr.responseText); } catch (e) { resp = null; }
+                    if (onOk) { onOk(resp); }
+                    return;
+                }
+                if (onFail) { onFail(xhr.status, xhr.responseText); }
+            };
+            xhr.send(JSON.stringify(body));
+        }
+
+        // collabNewChunkID — номер захода: одинаковый у повторов одного и того же
+        // захода, новый после успешной отправки.
+        function collabNewChunkID() {
+            return 'c' + (new Date().getTime()) + '-' + Math.floor(Math.random() * 1000000);
+        }
+
+        // collabSending закрывает кнопку «Отправить сканы» на время запроса: второй
+        // клик не уйдёт, пока не пришёл ответ.
+        function collabSending(on) {
+            SENDING = on;
+            updateButtons();
+        }
+
+        // collabJoin — подключение к комнате: знакомый id гостя сохраняет
+        // отправленное, новый — заводит карточку «Гость N».
+        function collabJoin() {
+            collabPost('/ms/collab/join', {id: ROOM_ID, guest_id: collabStoredGuest()}, function (resp) {
+                if (!resp || !resp.guest_id) {
+                    collabGuestState('Не удалось подключиться к инвентаризации', false);
+                    return;
+                }
+                GUEST_ID = resp.guest_id;
+                collabRememberGuest(GUEST_ID);
+                collabRender(resp.session);
+            }, function (status, text) {
+                collabGuestState(status === 404
+                    ? 'Инвентаризация уже проведена или закрыта'
+                    : 'Ошибка подключения: ' + text, false);
+            });
+        }
+
+        // collabPoll — опрос состояния комнаты (обе роли). Запрос гостя для сервера
+        // ещё и отклик: по нему хост видит, у кого оборвалась связь.
+        function collabPoll() {
+            if (ROOM_CLOSED) { return; }
+            if (ROOM_GUEST && !GUEST_ID) { return; }
+            var url = '/ms/collab/state?id=' + encodeURIComponent(ROOM_ID);
+            if (ROOM_GUEST) { url += '&guest_id=' + encodeURIComponent(GUEST_ID); }
+            var xhr = new XMLHttpRequest();
+            xhr.open('GET', url, true);
+            xhr.onreadystatechange = function () {
+                if (xhr.readyState !== 4) { return; }
+                if (xhr.status === 404) {
+                    // Комнаты нет: у гостя это отключение хостом, у хоста —
+                    // отменённая или снесённая перезапуском инвентаризация.
+                    if (ROOM_GUEST) { collabKicked('Хост отключил вашу машину от инвентаризации'); }
+                    else { collabClosed('Совместная инвентаризация закрыта'); }
+                    return;
+                }
+                if (xhr.status !== 200) { return; }
+                var resp;
+                try { resp = JSON.parse(xhr.responseText); } catch (e) { return; }
+                collabRender(resp.session);
+            };
+            xhr.send();
+        }
+
+        // collabRender показывает состояние комнаты: хосту — участники и готовность
+        // (по ней заблокирована кнопка проведения), гостю — своя карточка и сколько
+        // строк уже ушло.
+        function collabRender(room) {
+            if (!room) { return; }
+            if (room.closed) {
+                collabClosed(ROOM_GUEST ? 'Инвентаризация проведена хостом' : 'Совместная инвентаризация закрыта');
+                return;
+            }
+
+            collabLastRoom = room;
+
+            if (ROOM_GUEST) {
+                var mine = collabFind(room, GUEST_ID);
+                if (!mine) {
+                    // Хост отключил нашу машину: сами не возвращаемся — иначе
+                    // отключение снималось бы следующим же опросом.
+                    collabKicked('Хост отключил вашу машину от инвентаризации');
+                    return;
+                }
+                GUEST_READY = !!mine.ready;
+                // Что хозяин уже принял от нас: по этому номеру решаем, что
+                // отправлять после обрыва (номер переживает перезагрузку страницы).
+                roomLastSeq = Math.max(roomLastSeq, mine.last_seq || 0);
+                var nameEl = document.getElementById('collab-name');
+                if (nameEl) { nameEl.textContent = mine.name; }
+                collabGuestState(collabGuestText(mine), true);
+                updateButtons();
+                return;
+            }
+
+            collabGuests(room);
+            collabWait(room);
+        }
+
+        function collabFind(room, gid) {
+            var list = room.guests || [], i;
+            for (i = 0; i < list.length; i++) {
+                if (list[i].id === gid) { return list[i]; }
+            }
+            return null;
+        }
+
+        function collabGuestText(g) {
+            var text = g.ready ? 'Отправлено хосту' : 'Сканы ещё не отправлены';
+            text += ', строк: ' + g.rows;
+            if (g.chunks > 1) { text += ' (' + g.chunks + ' захода)'; }
+            text += '. Кнопка «Отправить сканы» отправляет новый заход.';
+            return text;
+        }
+
+        // collabLine собирает строку панели: текст только через textContent,
+        // имена участников в разметку не подставляем.
+        function collabLine(text, cls) {
+            var el = document.createElement('div');
+            el.className = cls ? 'collab-line ' + cls : 'collab-line';
+            el.textContent = text;
+            return el;
+        }
+
+        function collabGuests(room) {
+            var box = document.getElementById('collab-guests');
+            if (!box) { return; }
+            while (box.firstChild) { box.removeChild(box.firstChild); }
+            var list = room.guests || [], i;
+            if (!list.length) {
+                box.appendChild(collabLine('Гостей нет — инвентаризацию можно проводить одному.', 'collab-far'));
+                return;
+            }
+            box.appendChild(collabLine('Подключены:'));
+            for (i = 0; i < list.length; i++) {
+                box.appendChild(collabGuestRow(list[i]));
+            }
+        }
+
+        function collabGuestRow(g) {
+            var row = document.createElement('div');
+            row.className = 'collab-line collab-guest';
+            var span = document.createElement('span');
+            span.className = g.ready ? 'collab-ok' : 'collab-wait';
+            span.textContent = g.name + ' — ' + (g.ready ? 'готов' : 'сканирует') +
+                (g.rows ? ', строк: ' + g.rows : '') +
+                (g.idle_sec > 0 ? ', молчит ' + g.idle_sec + ' с' : '');
+            row.appendChild(span);
+            var btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'small btn-remove';
+            btn.textContent = 'Отключить';
+            btn.onclick = function () { collabDrop(g.id); };
+            row.appendChild(btn);
+            return row;
+        }
+
+        // collabWait — гейт кнопки проведения на хосте: ждём всех подключённых
+        // гостей. Отключённый гость (обрыв) из ожидания выпадает — за это отвечает
+        // кнопка «Отключить».
+        function collabWait(room) {
+            var wait = room.waiting || [];
+            collabWaiting = wait.length > 0;
+            var hint = document.getElementById('collab-wait');
+            if (hint) {
+                if (wait.length) {
+                    hint.className = 'collab-line collab-wait';
+                    hint.textContent = 'Ждём: ' + wait.join(', ') +
+                        ' — кнопка проведения откроется, когда все пришлют сканы.';
+                } else {
+                    hint.className = 'collab-line collab-ok';
+                    hint.textContent = 'Гости готовы — можно проводить.';
+                }
+            }
+            updateButtons();
+        }
+
+        function collabGuestState(text, ok) {
+            var e = document.getElementById('collab-state');
+            if (e) {
+                e.className = ok ? 'collab-line collab-ok' : 'collab-line collab-wait';
+                e.textContent = text;
+            }
+        }
+
+        // collabClosed — инвентаризация проведена хостом (или комната закрыта):
+        // сканировать и отправлять больше нечего, опрос прекращаем.
+        function collabClosed(text) {
+            ROOM_CLOSED = true;
+            collabWaiting = false;
+            if (collabTimer) { window.clearInterval(collabTimer); collabTimer = null; }
+            collabGuestState(text, true);
+            var s = el('send-btn');
+            if (s) { s.disabled = true; }
+            var p = el('preview-btn');
+            if (p) { p.disabled = true; }
+            var input = el('scan-input');
+            if (input) { input.disabled = true; }
+        }
+
+        // collabKicked — машина отключена хостом (или комнаты уже нет): опрос
+        // останавливаем, кнопку и сканер гасим. Возврат — только вручную (F5), и
+        // это будет новый гость: иначе отключение снималось бы само.
+        function collabKicked(text) {
+            ROOM_CLOSED = true;
+            collabWaiting = false;
+            if (collabTimer) { window.clearInterval(collabTimer); collabTimer = null; }
+            collabForgetGuest();
+            GUEST_ID = '';
+            var e = document.getElementById('collab-state');
+            if (e) { e.className = 'collab-line collab-wait'; e.textContent = text; }
+            var input = el('scan-input');
+            if (input) { input.disabled = true; }
+            updateButtons();
+        }
+
+        // collabDone — хост провёл инвентаризацию: комната закрыта сервером, опрос
+        // прекращаем. Сканер не гасим — можно начать новый заход.
+        function collabDone() {
+            ROOM_CLOSED = true;
+            collabWaiting = false;
+            if (collabTimer) { window.clearInterval(collabTimer); collabTimer = null; }
+            var hint = document.getElementById('collab-wait');
+            if (hint) {
+                hint.className = 'collab-line collab-ok';
+                hint.textContent = 'Инвентаризация проведена — гости отключены.';
+            }
+            var box = document.getElementById('collab-guests');
+            if (box) { while (box.firstChild) { box.removeChild(box.firstChild); } }
+        }
+
+        // collabDrop — хост отключает гостя с оборвавшейся связью: его сканы в
+        // документ не пойдут, из ожидания он выпадает.
+        function collabDrop(gid) {
+            if (!window.confirm('Отключить гостя от инвентаризации? Его присланные сканы НЕ попадут в документ.')) { return; }
+            collabPost('/ms/collab/drop', {id: ROOM_ID, guest_id: gid}, function (resp) {
+                collabRender(resp.session);
+            }, function (status, text) {
+                alert('Не удалось отключить: ' + text);
+            });
+        }
+
+        // collabSubmit — гость отправляет заход хосту. Отправленное замирает:
+        // список сканов очищаем и начинаем новый заход.
+        function collabSubmit(scans) {
+            if (SENDING) { return; }   // второй клик, пока запрос в пути, не отправляем
+            if (!CHUNK_ID) { CHUNK_ID = collabNewChunkID(); }
+            collabSending(true);
+            collabGuestState('Отправляю сканы хосту…', false);
+            collabPost('/ms/collab/submit', {id: ROOM_ID, guest_id: GUEST_ID, chunk_id: CHUNK_ID, scans: scans}, function (resp) {
+                collabSending(false);
+                // Заход ушёл — следующий получит новый номер (повтор стал бы
+                // неотличим от уже принятого).
+                CHUNK_ID = '';
+                var mine = (resp && resp.session) ? collabFind(resp.session, GUEST_ID) : null;
+                GUEST_READY = true;
+                sentRows = mine ? mine.rows : sentRows + scans.length;
+                if (mine) { roomLastSeq = Math.max(roomLastSeq, mine.last_seq || 0); }
+                INV.scans = [];
+                renderAll();
+                collabGuestState('Отправлено хосту, всего строк: ' + sentRows +
+                    '. Можно сканировать следующий заход.', true);
+                showOk('Сканы отправлены хосту — всего строк: ' + sentRows +
+                    '. Список очищен, сканируйте следующий заход.');
+            }, function (status, text) {
+                // Не доехало: сканы на странице остаются, кнопка снова доступна —
+                // повтор уйдёт с тем же номером захода, и сервер его не задвоит.
+                collabSending(false);
+                GUEST_READY = false;
+                // 404 — хост отключил машину: сканы не уходят и обратно мы не
+                // заходим (отключение должно держаться), они остаются на странице.
+                if (status === 404) {
+                    collabKicked('Хост отключил вашу машину от инвентаризации — сканы не отправлены');
+                    return;
+                }
+                alert('Не удалось отправить сканы хосту:\n' + text);
+                collabGuestState('Сканы не отправлены — нажмите «Отправить сканы» ещё раз', false);
+            });
+        }
+
+        // sendScans — гость отправляет набранные сканы хосту одним чанком: строки
+        // уходят объектами {raw, seq}, как требует серверная проверка
+        // validCollabScans; seq — метка «уже у хозяина» для повтора после обрыва.
+        function sendScans() {
+            if (ROOM_CLOSED || SENDING) { return; }
+            if (!GUEST_ID) {
+                collabGuestState('Подключение к инвентаризации ещё не завершено — подождите секунду и повторите', false);
+                return;
+            }
+            if (!INV.scans.length) { return; }
+            var scans = [], i;
+            for (i = 0; i < INV.scans.length; i++) {
+                scans.push({ raw: INV.scans[i], seq: roomLastSeq + i + 1 });
+            }
+            collabSubmit(scans);
+        }
+
+        // collabConductWithoutGuests — «Провести без гостей»: хост отключает всех
+        // подключённых и проводит только по своим сканам. Выход для случая, когда
+        // сканы гостя не сходятся и документ иначе не собрать.
+        function collabConductWithoutGuests() {
+            if (ROOM_GUEST || ROOM_CLOSED) { return; }
+            var list = (collabLastRoom && collabLastRoom.guests) ? collabLastRoom.guests.slice() : [];
+            var start = function () { collabWaiting = false; updateButtons(); requestPreview(); };
+            if (!list.length) { start(); return; }
+            if (!window.confirm('Отключить всех гостей (' + list.length + ') и провести инвентаризацию только по вашим сканам?')) { return; }
+            collabDropAll(list, 0, start);
+        }
+
+        // collabDropAll отключает гостей по одному: роут отключает одну машину.
+        function collabDropAll(list, i, done) {
+            if (i >= list.length) { done(); return; }
+            collabPost('/ms/collab/drop', {id: ROOM_ID, guest_id: list[i].id}, function () {
+                collabDropAll(list, i + 1, done);
+            }, function (status, text) {
+                alert('Не удалось отключить гостя: ' + text);
+            });
+        }
+
+        // collabCancel — хост отменяет совместную инвентаризацию: комната
+        // закрывается без документа, сканы гостей пропадают. Свои сканы хост
+        // провести может.
+        function collabCancel() {
+            if (!window.confirm('Отменить совместную инвентаризацию? Сканы гостей в документ не попадут, комната закроется.')) { return; }
+            collabPost('/ms/collab/close', {id: ROOM_ID}, function () {
+                ROOM_CLOSED = true;
+                collabWaiting = false;
+                if (collabTimer) { window.clearInterval(collabTimer); collabTimer = null; }
+                var hint = document.getElementById('collab-wait');
+                if (hint) {
+                    hint.className = 'collab-line collab-wait';
+                    hint.textContent = 'Совместная инвентаризация отменена — сканы гостей не сохранены.';
+                }
+                var box = document.getElementById('collab-guests');
+                if (box) { while (box.firstChild) { box.removeChild(box.firstChild); } }
+                updateButtons();
+            }, function (status, text) {
+                alert('Не удалось отменить инвентаризацию: ' + text);
+            });
+        }
+
+        // collabScanning — гость начал новый заход: хост снова его ждёт (иначе
+        // кнопка проведения на хосте осталась бы открытой).
+        function collabScanning() {
+            GUEST_READY = false;
+            collabPost('/ms/collab/scanning', {id: ROOM_ID, guest_id: GUEST_ID}, null, null);
+        }
+
+        // collabStart — подключение страницы к комнате при загрузке.
+        function collabStart() {
+            if (!ROOM_ID) { return; }
+            if (ROOM_GUEST) { collabJoin(); } else { collabPoll(); }
+            collabTimer = window.setInterval(collabPoll, 2500);
         }
 
         function init() {
@@ -454,6 +921,10 @@
             if (preview) {
                 preview.addEventListener('click', requestPreview);
             }
+            var send = el('send-btn');
+            if (send) {
+                send.addEventListener('click', sendScans);
+            }
             var clear = el('clear-btn');
             if (clear) {
                 clear.addEventListener('click', clearAll);
@@ -467,6 +938,7 @@
                 back.addEventListener('click', backToScan);
             }
             renderAll();
+            collabStart();
         }
 
         init();
