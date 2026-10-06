@@ -13,7 +13,8 @@ import (
 // единицы сверки) живут в общем ядре internal/scanmatch.
 
 // candidates — строки-кандидаты по виду события. Источник правды —
-// живой МС (снимков в БД нет): для удаления — раскрытие audit/<id>/events,
+// живой МС (снимков в БД нет): для ушедших позиций (удаление строки целиком
+// или урезание количества) — раскрытие audit/<id>/events,
 // для отмены — позиции заказа в текущем состоянии (МС reserve при отмене
 // НЕ сбрасывает — проверено пользователем 08.09.2026).
 func (uc *UseCase) candidates(ctx context.Context, ev *returns.ReturnEvent) ([]scanmatch.Candidate, error) {
@@ -32,6 +33,7 @@ func (uc *UseCase) candidates(ctx context.Context, ev *returns.ReturnEvent) ([]s
 				Name:      r.Name,
 				Quantity:  r.Quantity,
 				Reserve:   r.Reserve,
+				Released:  r.Released,
 			})
 		}
 		return cands, nil

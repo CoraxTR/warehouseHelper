@@ -119,6 +119,57 @@ func TestTick_RemovedReservedSendsNotification(t *testing.T) {
 	}
 }
 
+// Частичное расформирование (живой аудит 06.10.2026, заказ 07231) — тот же вид
+// события и тот же текст, что удаление: ОДНО сообщение на событие, в нём и
+// удалённая позиция, и снятая часть урезанной.
+func TestTick_PartialRemovalSendsOneNotification(t *testing.T) {
+	repo := newStubRepo()
+	repo.cursor = &[]time.Time{time.Now().Add(-time.Hour).UTC()}[0]
+	env := newTestEnv(repo)
+	uc, audit, notify := env.uc, env.audit, env.notify
+
+	audit.rows = []client.AuditRow{auditRow("app")}
+	audit.details[auditID] = []client.AuditEventRow{detailRow(partialDiffJSON(), "07231")}
+
+	if err := uc.tick(context.Background()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+
+	ev := repo.events[auditID]
+	if ev == nil || ev.Kind != returns.KindRemoved {
+		t.Fatalf("event = %+v, want positions_removed", ev)
+	}
+	if len(notify.sends) != 1 {
+		t.Fatalf("want одно сообщение на событие, got %d", len(notify.sends))
+	}
+	text := notify.sends[0]
+	for _, want := range []string{"Из заказа 07231 удалили:", "Чак ролл 0.657 кг", "Соус 1 шт"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("текст = %q, want вхождение %q", text, want)
+		}
+	}
+}
+
+// Урезание весовой строки событием не является: возвращать нечего — уведомление
+// не уходит, строка в return_events не появляется.
+func TestTick_WeightedPartialRemovalCreatesNothing(t *testing.T) {
+	repo := newStubRepo()
+	repo.cursor = &[]time.Time{time.Now().Add(-time.Hour).UTC()}[0]
+	env := newTestEnv(repo)
+	uc, audit, notify := env.uc, env.audit, env.notify
+
+	audit.rows = []client.AuditRow{auditRow("app")}
+	audit.details[auditID] = []client.AuditEventRow{detailRow(weightedPartialDiffJSON(), "07231")}
+
+	if err := uc.tick(context.Background()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if len(repo.events) != 0 || len(notify.sends) != 0 {
+		t.Fatalf("урезание весовой строки не должно создавать событие: events=%d sends=%d",
+			len(repo.events), len(notify.sends))
+	}
+}
+
 func TestTick_CancelledWithoutReserveCreatesNothing(t *testing.T) {
 	repo := newStubRepo()
 	repo.cursor = &[]time.Time{time.Now().Add(-time.Hour).UTC()}[0]
