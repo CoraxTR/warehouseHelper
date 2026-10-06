@@ -57,6 +57,7 @@
     <div id="preview" class="scan-block hidden">
         <div class="constraint hint">Предпросмотр документа: все позиции вида, включая непросканированные (нули). Ничего в МойСклад ещё не записано. Сканы сохранены — можно вернуться, досканировать и открыть предпросмотр снова.</div>
         <div id="preview-summary" class="muted small"></div>
+        <div id="preview-error" class="error" style="display:none;"></div>
         <div id="preview-rows"></div>
         <div class="save-row">
             <button id="conduct-btn" class="btn btn-save" type="button">Создать документ в МС</button>
@@ -89,6 +90,24 @@
 
         function hideError() {
             var e = el('scan-error');
+            if (e) {
+                e.style.display = 'none';
+            }
+        }
+
+        // Ошибка предпросмотра/проведения — СВОЁ место: блок сканирования в этот
+        // момент скрыт, и ошибка в нём была бы не видна (только бип).
+        function showPreviewError(msg) {
+            var e = el('preview-error');
+            if (!e) {
+                return;
+            }
+            e.innerHTML = msg;
+            e.style.display = 'block';
+        }
+
+        function hidePreviewError() {
+            var e = el('preview-error');
             if (e) {
                 e.style.display = 'none';
             }
@@ -351,6 +370,7 @@
             el('preview-summary').innerHTML = 'Позиций всего: ' + data.total
                 + ' · просканировано: ' + data.scanned + ' · сканов: ' + data.scans;
             hideError();
+            hidePreviewError();
             el('scan-block').className = 'scan-block hidden';
             el('preview').className = 'scan-block';
         }
@@ -374,7 +394,7 @@
                 updateButtons();
                 if (status !== 200 || !data || !data.ok) {
                     beep();
-                    showError((data && data.error) ? esc(data.error) : 'Не удалось создать документ (HTTP ' + status + ')');
+                    showPreviewError((data && data.error) ? esc(data.error) : 'Не удалось создать документ (HTTP ' + status + ')');
                     return;
                 }
                 INV.scans = [];
