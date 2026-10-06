@@ -20,6 +20,7 @@ import (
 	discucase "warehouseHelper/internal/discounts/usecase"
 	"warehouseHelper/internal/domain"
 	gucase "warehouseHelper/internal/goods/usecase"
+	iucase "warehouseHelper/internal/inventory/usecase"
 	msucase "warehouseHelper/internal/msclient/usecase"
 	msordersuc "warehouseHelper/internal/msorders/usecase"
 	msu "warehouseHelper/internal/mssuppliers/usecase"
@@ -60,6 +61,10 @@ type Handler struct {
 	// собирают с нескольких машин (хост + гости).
 	collabUC *ccase.UseCase
 
+	// Модуль инвентаризации: выбор вида (products.inventory_type), страница
+	// сканирования внутренних кодов группы и создание документа в МС.
+	inventoryUC *iucase.UseCase
+
 	// Модуль расчёта скидок: страница «Скидки» (окно и очередь реестра) и
 	// предпросмотр плана 14:00. Ёмкости приходят из конфига
 	// (APP_DISCOUNT_WINDOW_CAP — окно сайта, APP_DISCOUNT_TELEGRAM_CAP — слот ТГ).
@@ -68,7 +73,7 @@ type Handler struct {
 	discountTelegramCap int
 }
 
-func NewHandler(syncUC *msucase.SyncUseCase, ordersUC *msucase.OrdersUseCase, exportUC *rgucase.ExportToExcelUseCase, pdfUC *rgucase.ExportOrderPDFUseCase, barcodeUC *rgucase.ExportBarcodesToExcelUseCase, refGoUC *rgucase.RefGoCheckAgainstUseCase, wikiUC *wucase.WikiUseCase, goodsUC *gucase.GoodsUseCase, dayStateUC *ducecase.UseCase, qrUC *qucase.QRUseCase, msUC *msu.MSSuppliersUseCase, stockUC *sucase.StockUseCase, stockHub *stockws.Hub, receiveUC *rucase.BarcodeEditor, receivingUC *rucase.ReceivingUseCase, complaintsUC *cucase.UseCase, tasksUC *tusecase.UseCase, msOrdersUC *msordersuc.UseCase, msFormsUC *msordersuc.FormsUseCase, returnsUC *retucase.UseCase, collabUC *ccase.UseCase, discountsUC *discucase.UseCase, discountWindowCap, discountTelegramCap int) *Handler {
+func NewHandler(syncUC *msucase.SyncUseCase, ordersUC *msucase.OrdersUseCase, exportUC *rgucase.ExportToExcelUseCase, pdfUC *rgucase.ExportOrderPDFUseCase, barcodeUC *rgucase.ExportBarcodesToExcelUseCase, refGoUC *rgucase.RefGoCheckAgainstUseCase, wikiUC *wucase.WikiUseCase, goodsUC *gucase.GoodsUseCase, dayStateUC *ducecase.UseCase, qrUC *qucase.QRUseCase, msUC *msu.MSSuppliersUseCase, stockUC *sucase.StockUseCase, stockHub *stockws.Hub, receiveUC *rucase.BarcodeEditor, receivingUC *rucase.ReceivingUseCase, complaintsUC *cucase.UseCase, tasksUC *tusecase.UseCase, msOrdersUC *msordersuc.UseCase, msFormsUC *msordersuc.FormsUseCase, returnsUC *retucase.UseCase, collabUC *ccase.UseCase, inventoryUC *iucase.UseCase, discountsUC *discucase.UseCase, discountWindowCap, discountTelegramCap int) *Handler {
 	return &Handler{
 		syncUC:       syncUC,
 		ordersUC:     ordersUC,
@@ -91,6 +96,7 @@ func NewHandler(syncUC *msucase.SyncUseCase, ordersUC *msucase.OrdersUseCase, ex
 		msFormsUC:    msFormsUC,
 		returnsUC:    returnsUC,
 		collabUC:     collabUC,
+		inventoryUC:  inventoryUC,
 
 		discountsUC:         discountsUC,
 		discountWindowCap:   discountWindowCap,
