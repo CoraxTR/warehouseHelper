@@ -29,6 +29,9 @@ type mockRepo struct {
 	discounts      []stock.DiscountWrite // записанные «просто»-скидки (SetDiscounts)
 	discountErr    error                 // ошибка SetDiscounts
 	onSetDiscounts func()                // хук теста: проверка порядка «БД → кэш → событие»
+
+	replaceCalls     int // число вызовов ReplaceStockLots (+1 на вызов, даже если writes пуст)
+	loadByCodesCalls int // число вызовов LoadProductsByCodes
 }
 
 type updateCall struct {
@@ -54,6 +57,7 @@ func (m *mockRepo) SetManualDiscount(_ context.Context, productID string, bestBe
 }
 
 func (m *mockRepo) LoadProductsByCodes(_ context.Context, codes []string) (map[string]stock.Product, error) {
+	m.loadByCodesCalls++
 	out := make(map[string]stock.Product, len(codes))
 	for _, c := range codes {
 		if p, ok := m.catalog[c]; ok {
@@ -76,6 +80,7 @@ func (m *mockRepo) LoadGroupNameByCode(_ context.Context, groupCode string) (str
 }
 
 func (m *mockRepo) ReplaceStockLots(_ context.Context, writes []stock.ProductWrite) error {
+	m.replaceCalls++
 	if m.writeErr != nil {
 		return m.writeErr
 	}
@@ -809,6 +814,285 @@ func TestReplaceStockRepoError(t *testing.T) {
 	if len(pub.events) != 0 {
 		t.Errorf("события при ошибке репо: %+v", pub.events)
 	}
+}
+
+// --- вид инвентаризации: замена по сканам + обнуление неотсканированных ---
+
+// inventoryRepo — стенд «вида инвентаризации»: два товара с лотами в кэше
+// (p1, p2) и один товар каталога без лотов (p3). catalog — карта по кодам вида,
+// её отдаёт LoadProductsByCodes (грузит ТОЛЬКО запрошенные коды, поэтому код
+// вне вида в неё не попадает).
+func inventoryRepo() *mockRepo {
+	prod := day(-9)
+	return &mockRepo{
+		products: []stock.Product{
+			{
+				ID: "p1", InternalCode: "10100001", Name: "Хлеб", GroupName: "Хлебобулочные",
+				Lots: []stock.Lot{
+					{BestBefore: day(1), Qty: 2, GeneralManual: new(int16(3))},
+					{BestBefore: day(5), Qty: 5},
+				},
+			},
+			{
+				ID: "p2", InternalCode: "20100002", Name: "Молоко", GroupName: "Молочные",
+				Lots: []stock.Lot{
+					{BestBefore: day(3), Qty: 7, ProducedOn: &prod},
+					{BestBefore: day(9), Qty: 4},
+				},
+			},
+			// В кэше каталога, но без лотов: страница показывает весь ассортимент.
+			{ID: "p3", InternalCode: "30100003", Name: "Сыр", GroupName: "Молочные"},
+		},
+		catalog: map[string]stock.Product{
+			"10100001": {ID: "p1", InternalCode: "10100001", Name: "Хлеб", GroupName: "Хлебобулочные"},
+			"20100002": {ID: "p2", InternalCode: "20100002", Name: "Молоко", GroupName: "Молочные"},
+			"30100003": {ID: "p3", InternalCode: "30100003", Name: "Сыр", GroupName: "Молочные"},
+		},
+	}
+}
+
+// TestReplaceInventoryLots — замена остатков «вида инвентаризации»: коды вида со
+// сканами получают лоты ровно по сканам, коды без сканов обнуляются, остальные
+// товары не трогаются. Каждый кейс — на свежем прогретом стенде.
+func TestReplaceInventoryLots(t *testing.T) {
+	// 1. Сканы заменяют лоты просканированного товара: qty = сумма сканов по
+	// сроку, неотсканированный срок удаляется, ручная скидка неистёкшего лота
+	// сохраняется.
+	t.Run("сканы заменяют лоты просканированного товара", func(t *testing.T) {
+		repo := inventoryRepo()
+		pub := &mockPub{}
+		uc := newDiscountsUC(t, repo, pub)
+
+		// Кусок (qty 1) + коробка (qty 10) на срок day(1): итог 11.
+		if err := uc.ReplaceInventoryLots(context.Background(),
+			[]string{"10100001"},
+			[]string{
+				codeItem("10100001", 250, day(-10), day(1)),
+				codeBox("10100001", 2500, 10, day(-10), day(1)),
+			},
+		); err != nil {
+			t.Fatalf("ReplaceInventoryLots: %v", err)
+		}
+
+		if repo.replaceCalls != 1 {
+			t.Fatalf("ReplaceStockLots вызван %d раз, want 1", repo.replaceCalls)
+		}
+		if len(repo.writes) != 1 || repo.writes[0].ProductID != "p1" {
+			t.Fatalf("writes = %+v, want одну запись p1", repo.writes)
+		}
+		w := repo.writes[0]
+		if len(w.Upserts) != 1 {
+			t.Fatalf("upserts = %+v, want один лот day(1)", w.Upserts)
+		}
+		if !w.Upserts[0].BestBefore.Equal(day(1)) || w.Upserts[0].Qty != 11 {
+			t.Errorf("upsert = (%s qty %d), want (day(1), 11)",
+				w.Upserts[0].BestBefore.Format(time.DateOnly), w.Upserts[0].Qty)
+		}
+		if w.Upserts[0].GeneralManual == nil || *w.Upserts[0].GeneralManual != 3 {
+			t.Errorf("ручная скидка неистёкшего лота = %v, want 3", w.Upserts[0].GeneralManual)
+		}
+		if len(w.Deletes) != 1 || !w.Deletes[0].Equal(day(5)) {
+			t.Errorf("deletes = %v, want [day(5)]", w.Deletes)
+		}
+
+		// Кэш p1: остался ровно один лот с суммой сканов.
+		snap := findTestProduct(uc.Snapshot(), "p1")
+		if len(snap.Lots) != 1 || !snap.Lots[0].BestBefore.Equal(day(1)) || snap.Lots[0].Qty != 11 {
+			t.Errorf("кэш p1 = %+v, want [day(1) qty 11]", snap.Lots)
+		}
+	})
+
+	// 2. Код вида без сканов обнуляется: все его лоты удаляются, в БД уходят
+	// Deletes по всем срокам, upsert'ов нет, события — только lot_delete.
+	t.Run("код без сканов обнуляется", func(t *testing.T) {
+		repo := inventoryRepo()
+		pub := &mockPub{}
+		uc := newDiscountsUC(t, repo, pub)
+
+		if err := uc.ReplaceInventoryLots(context.Background(),
+			[]string{"20100002"}, nil,
+		); err != nil {
+			t.Fatalf("ReplaceInventoryLots: %v", err)
+		}
+
+		if len(repo.writes) != 1 {
+			t.Fatalf("writes = %+v, want одну запись p2", repo.writes)
+		}
+		w := repo.writes[0]
+		if w.ProductID != "p2" {
+			t.Errorf("productID = %q, want p2", w.ProductID)
+		}
+		if len(w.Upserts) != 0 {
+			t.Errorf("upserts = %+v, want пусто (обнуление)", w.Upserts)
+		}
+		if len(w.Deletes) != 2 || !w.Deletes[0].Equal(day(3)) || !w.Deletes[1].Equal(day(9)) {
+			t.Errorf("deletes = %v, want [day(3) day(9)]", w.Deletes)
+		}
+
+		// Кэш p2: лотов не осталось. mergeLots кладёт пустой МАССИВ, а не nil
+		// («lots в JSON обязан быть []»), поэтому проверяем сам кэш: Snapshot
+		// копирует срез через append([]stock.Lot(nil), ...) и схлопывает
+		// пустой непустой-по-адресу срез в nil (см. отчёт: p2.Lots в снапшоте
+		// выходит nil). Здесь важно, что лотов нет.
+		uc.mu.RLock()
+		cached := uc.cache["p2"].Lots
+		uc.mu.RUnlock()
+		if cached == nil || len(cached) != 0 {
+			t.Errorf("кэш p2.Lots = %#v (nil=%v), want []stock.Lot{} (не nil)", cached, cached == nil)
+		}
+		if snap := findTestProduct(uc.Snapshot(), "p2"); len(snap.Lots) != 0 {
+			t.Errorf("снапшот p2.Lots = %+v, want пусто", snap.Lots)
+		}
+
+		// События: по удалению на каждый срок, и только они.
+		if len(pub.events) != 2 {
+			t.Fatalf("событий %d, want 2", len(pub.events))
+		}
+		for _, e := range pub.events {
+			if e.Kind != stock.EventLotDelete || e.ProductID != "p2" {
+				t.Errorf("событие = %+v, want lot_delete p2", e)
+			}
+		}
+	})
+
+	// 3. Товар без лотов в кэше и без сканов не дёргает репозиторий/наблюдателей:
+	// пустой план (ни upsert'ов, ни удалений) отфильтрован — если в виде только
+	// такие товары, ReplaceStockLots не вызывается вообще.
+	t.Run("товар без лотов и без сканов ничего не трогает", func(t *testing.T) {
+		repo := inventoryRepo()
+		pub := &mockPub{}
+		uc := newDiscountsUC(t, repo, pub)
+		ds := &mockDayState{}
+		uc.dayState = ds
+
+		if err := uc.ReplaceInventoryLots(context.Background(),
+			[]string{"30100003"}, nil,
+		); err != nil {
+			t.Fatalf("ReplaceInventoryLots: %v", err)
+		}
+
+		if repo.replaceCalls != 0 {
+			t.Errorf("ReplaceStockLots вызван %d раз, want 0 (пустой план отфильтрован)", repo.replaceCalls)
+		}
+		if len(repo.writes) != 0 {
+			t.Errorf("writes = %+v, want пусто", repo.writes)
+		}
+		if len(pub.events) != 0 {
+			t.Errorf("события = %+v, want пусто", pub.events)
+		}
+		if len(ds.calls) != 0 {
+			t.Errorf("daystate = %v, want пусто", ds.calls)
+		}
+	})
+
+	// 4. Пустой список кодов (в т.ч. пробельные) → nil и ни одного обращения к
+	// репозиторию: ранний выход до LoadProductsByCodes, сканы не разбираются.
+	t.Run("пустой список кодов — no-op", func(t *testing.T) {
+		repo := inventoryRepo()
+		pub := &mockPub{}
+		uc := newDiscountsUC(t, repo, pub)
+
+		if err := uc.ReplaceInventoryLots(context.Background(),
+			[]string{"", "   "},
+			[]string{codeItem("10100001", 250, day(-10), day(1))},
+		); err != nil {
+			t.Fatalf("ReplaceInventoryLots: %v, want nil", err)
+		}
+
+		if repo.loadByCodesCalls != 0 || repo.replaceCalls != 0 {
+			t.Errorf("обращения к репозиторию: byCodes=%d replace=%d, want 0/0",
+				repo.loadByCodesCalls, repo.replaceCalls)
+		}
+		if len(pub.events) != 0 {
+			t.Errorf("события = %+v, want пусто", pub.events)
+		}
+	})
+
+	// 5. Скан с кодом ВНЕ списка кодов вида → ошибка: карта грузится только по
+	// кодам вида, поэтому чужой код в группировке не находится. Запись атомарна —
+	// репозиторий не получает ни одной правки.
+	t.Run("скан вне вида — ошибка и ничего не записано", func(t *testing.T) {
+		repo := inventoryRepo()
+		pub := &mockPub{}
+		uc := newDiscountsUC(t, repo, pub)
+
+		err := uc.ReplaceInventoryLots(context.Background(),
+			[]string{"10100001"}, // в виде только хлеб
+			[]string{codeItem("20100002", 250, day(-10), day(1))}, // отсканировано молоко
+		)
+		if !errors.Is(err, stock.ErrProductNotFound) {
+			t.Fatalf("err = %v, want stock.ErrProductNotFound", err)
+		}
+		if repo.replaceCalls != 0 || len(repo.writes) != 0 {
+			t.Errorf("запись при ошибке: replace=%d writes=%+v, want 0/пусто", repo.replaceCalls, repo.writes)
+		}
+		if len(pub.events) != 0 {
+			t.Errorf("события при ошибке = %+v, want пусто", pub.events)
+		}
+		// Кэш не тронут.
+		if got := lotQty(t, uc, "p1", day(5)); got != 5 {
+			t.Errorf("кэш p1 day(5) qty = %d, want 5 (не изменён)", got)
+		}
+	})
+
+	// 6. Дубли и пробельные коды в codes сворачиваются: на товар — один план,
+	// одна запись ProductWrite (иначе дубликат дал бы два плана и двойную запись).
+	t.Run("дубли и пробельные коды — один план на товар", func(t *testing.T) {
+		repo := inventoryRepo()
+		pub := &mockPub{}
+		uc := newDiscountsUC(t, repo, pub)
+
+		if err := uc.ReplaceInventoryLots(context.Background(),
+			[]string{"10100001", " 10100001 ", "10100001"},
+			[]string{codeItem("10100001", 250, day(-10), day(1))},
+		); err != nil {
+			t.Fatalf("ReplaceInventoryLots: %v", err)
+		}
+
+		if repo.replaceCalls != 1 {
+			t.Errorf("ReplaceStockLots вызван %d раз, want 1", repo.replaceCalls)
+		}
+		if len(repo.writes) != 1 || repo.writes[0].ProductID != "p1" {
+			t.Errorf("writes = %+v, want ровно одну запись p1", repo.writes)
+		}
+	})
+
+	// 7. Общий случай вида: часть товаров со сканами, часть — без. Все правки
+	// уходят ОДНИМ вызовом ReplaceStockLots (одна транзакция на весь вид).
+	t.Run("смешанный вид — одна транзакция на все товары", func(t *testing.T) {
+		repo := inventoryRepo()
+		pub := &mockPub{}
+		uc := newDiscountsUC(t, repo, pub)
+
+		if err := uc.ReplaceInventoryLots(context.Background(),
+			[]string{"10100001", "20100002"}, // p1 сканирован, p2 — нет
+			[]string{codeItem("10100001", 250, day(-10), day(1))},
+		); err != nil {
+			t.Fatalf("ReplaceInventoryLots: %v", err)
+		}
+
+		if repo.replaceCalls != 1 {
+			t.Fatalf("ReplaceStockLots вызван %d раз, want 1 (одна транзакция на вид)", repo.replaceCalls)
+		}
+		if len(repo.writes) != 2 {
+			t.Fatalf("writes = %+v, want две записи (p1, p2)", repo.writes)
+		}
+		writesByProduct := map[string]stock.ProductWrite{}
+		for _, w := range repo.writes {
+			writesByProduct[w.ProductID] = w
+		}
+		p1, ok1 := writesByProduct["p1"]
+		p2, ok2 := writesByProduct["p2"]
+		if !ok1 || !ok2 {
+			t.Fatalf("writes = %+v, want p1 и p2", repo.writes)
+		}
+		if len(p1.Upserts) != 1 || p1.Upserts[0].Qty != 1 || len(p1.Deletes) != 1 {
+			t.Errorf("p1: %+v, want 1 upsert qty 1 + 1 delete", p1)
+		}
+		if len(p2.Upserts) != 0 || len(p2.Deletes) != 2 {
+			t.Errorf("p2: %+v, want 0 upsert + 2 delete (обнуление)", p2)
+		}
+	})
 }
 
 // --- контекст страницы «Обновить сроки» ---

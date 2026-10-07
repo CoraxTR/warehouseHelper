@@ -538,6 +538,85 @@ func (uc *StockUseCase) ReplaceStock(ctx context.Context, req ReplaceRequest) er
 	return uc.applyReplacePlans(ctx, order, plans, byID)
 }
 
+// ReplaceInventoryLots — замена остатков товаров вида инвентаризации: каждый код
+// вида получает лоты ровно по сканам, а код вида без сканов обнуляется (все лоты
+// удаляются) — чего на складе не нашли, того нет. Отложка сюда не приходит: её
+// единицы уже списаны подбором (решение владельца), и «Обновить сроки»
+// (ReplaceStock) их тоже не трогает: отложка — предмет подбора.
+//
+// Коды — коды склада позиций вида в порядке группы (страница собирает их из
+// InventoryProducts, только непустые). Скан с кодом вне вида: код отсутствует в
+// карте товаров → groupScans вернёт stock.ErrProductNotFound (страница такой скан
+// не пропускает, но домен всё равно проверяет). Валидация и запись атомарны: любая
+// ошибка → ничего не меняется. Пустой список кодов → nil (нечего делать).
+func (uc *StockUseCase) ReplaceInventoryLots(ctx context.Context, codes []string, scans []string) error {
+	done := metrics.Track(trackPkg, "ReplaceInventoryLots")
+	defer done()
+
+	uniqCodes := uniqueTrimmedCodes(codes)
+	if len(uniqCodes) == 0 {
+		return nil
+	}
+
+	var parsed []parsedScan
+	if len(scans) > 0 {
+		var err error
+		parsed, err = parseScans(scans, "")
+		if err != nil {
+			return err
+		}
+	}
+
+	// Карта по кодам ВИДА: она же — проверка «скан из вида» в groupScans.
+	byCode, err := uc.repo.LoadProductsByCodes(ctx, uniqCodes)
+	if err != nil {
+		return fmt.Errorf("load products by codes: %w", err)
+	}
+	byID := make(map[string]stock.Product, len(byCode))
+	for _, p := range byCode {
+		byID[p.ID] = p
+	}
+
+	batches, order, err := groupScans(parsed, byCode, "")
+	if err != nil {
+		return err
+	}
+	// Коды вида без сканов — обнуление: пустой батч удалит все существующие лоты
+	// товара в deletedLots. Коды вне вида в byCode отсутствуют — им батч не нужен.
+	for _, code := range uniqCodes {
+		p, ok := byCode[code]
+		if !ok {
+			continue
+		}
+		if _, has := batches[p.ID]; has {
+			continue
+		}
+		batches[p.ID] = map[time.Time]*agg{}
+		order = append(order, p.ID)
+	}
+
+	plans, err := uc.buildReplacePlans(batches, order)
+	if err != nil {
+		return err
+	}
+	// Пустой план (ни upsert'ов, ни удалений) — товар не трогаем: без фильтра
+	// репозиторий и события (daystate/скидки) дёргались бы по всему виду впустую.
+	keptOrder := make([]string, 0, len(order))
+	keptPlans := make([]replacePlan, 0, len(plans))
+	for i := range plans {
+		if len(plans[i].upserts) == 0 && len(plans[i].deletes) == 0 {
+			continue
+		}
+		keptOrder = append(keptOrder, order[i])
+		keptPlans = append(keptPlans, plans[i])
+	}
+	if len(keptPlans) == 0 {
+		return nil
+	}
+
+	return uc.applyReplacePlans(ctx, keptOrder, keptPlans, byID)
+}
+
 // parsedScan — разобранный штрих-код одного скана.
 type parsedScan struct {
 	code       string
@@ -586,6 +665,25 @@ func uniqueCodes(parsed []parsedScan) []string {
 		}
 	}
 	return codes
+}
+
+// uniqueTrimmedCodes собирает непустые коды в порядке появления без дублей:
+// пробельные коды вида отбрасываются, дубликат не должен дать два плана.
+func uniqueTrimmedCodes(codes []string) []string {
+	seen := make(map[string]struct{}, len(codes))
+	out := make([]string, 0, len(codes))
+	for _, code := range codes {
+		code = strings.TrimSpace(code)
+		if code == "" {
+			continue
+		}
+		if _, ok := seen[code]; ok {
+			continue
+		}
+		seen[code] = struct{}{}
+		out = append(out, code)
+	}
+	return out
 }
 
 // agg — сумма сканов одного лота (товар, срок).

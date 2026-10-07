@@ -527,7 +527,7 @@ td.col-name:focus { box-shadow: inset 0 0 0 2px #E0C47E; }
 
 /* ---------------- Сканер (stock_update) ---------------- */
 .scan-block { max-width: 660px; margin: 0 auto; }
-#scan-input { width: 100%; box-sizing: border-box; font-size: 17px; padding: 10px 12px; font-family: Consolas, "Courier New", monospace; letter-spacing: 0.05em; }
+#scan-input, #hold-input { width: 100%; box-sizing: border-box; font-size: 17px; padding: 10px 12px; font-family: Consolas, "Courier New", monospace; letter-spacing: 0.05em; }
 #scan-list { margin: 12px 0; }
 .scan-row {
     display: flex;
@@ -545,6 +545,26 @@ td.col-name:focus { box-shadow: inset 0 0 0 2px #E0C47E; }
 .save-row { text-align: center; margin-top: 16px; }
 .constraint { font-size: 14px; color: #A7A49A; margin-bottom: 4px; }
 .counter { font-size: 12px; color: #66645C; margin-top: 8px; text-align: center; }
+
+/* «Отложка» — вторая строка сканирования (07.10.2026). Товар, отложенный под
+   заказы: он физически на складе, пока не уехал, поэтому его количество
+   складывается с общей строкой в количество позиции документа МС, но в сроки
+   годности не идёт (эти единицы уже списаны подбором). Надпись крупная —
+   оператор должен видеть с монитора склада, в какую строку он сканирует.
+   Дневную пару генерирует gen_day_theme.py. */
+.hold-title {
+    font-size: 22px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.16em;
+    color: #F4F1E9;
+    text-align: center;
+    margin: 24px 0 10px;
+    padding-top: 16px;
+    border-top: 1px solid #26262E;
+}
+.hold-add { color: #93A7BC; }
+.sroki-zero { color: #E0877E; }
 
 /* ---------------- Дерево (goods_tree) ---------------- */
 #folder-tree { list-style: none; padding-left: 0; }
@@ -990,6 +1010,41 @@ html.day .themeswitch__knob { left: 22px; background: #FFFFFF; }
    выглядеть заблокированной, а не «нажми меня». */
 button[disabled] { opacity: .45; cursor: default; }
 
+/* ---------------- Тост (всплывающее сообщение сверху) ----------------
+   После проведения инвентаризации сверху вниз всплывает надпись о судьбе
+   сроков годности: «Сроки обновлены» (успех) или «Сроки не обновлялись»
+   (в общей строке не было сканов, вид не трогали). Показ запускает класс
+   .toast--show (CSS-переход transform), автоскрытие — таймером в шаблоне.
+   Дневную пару генерирует gen_day_theme.py. */
+.toast {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    max-width: 620px;
+    margin: 0 auto;
+    padding: 14px 18px;
+    background: #101014;
+    color: #E9E6DD;
+    border: 1px solid #26262E;
+    border-top: 0;
+    border-radius: 0 0 2px 2px;
+    text-align: center;
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    box-shadow: 0 6px 18px rgba(0,0,0,0.55);
+    transform: translateY(-120%);
+    transition: transform 0.28s ease;
+    z-index: 2000;
+    /* Клики тост не перехватывает: 4 секунды он лежит поперёк верха страницы,
+       а под ним брендбар и переключатель темы (склад работает с монитора). */
+    pointer-events: none;
+}
+.toast.toast--show { transform: translateY(0); }
+.toast--ok { background: #161E15; border-color: #2E4029; color: #A3B894; }
+.toast--warn { background: #241F12; border-color: #6B5A30; color: #C8A65C; }
+
 /* ===== DAY-THEME-START ===== */
 /* ДНЕВНАЯ ТЕМА «Любитель щурится» — офисная, чёрный шрифт
 
@@ -1104,6 +1159,9 @@ html.day .scan-row { background: #FFFFFF; border: 1px solid #D0D7DE; }
 html.day .scan-row .code { color: #000000; }
 html.day .constraint { color: #57606A; }
 html.day .counter { color: #6E7781; }
+html.day .hold-title { color: #000000; border-top: 1px solid #D0D7DE; }
+html.day .hold-add { color: #0969DA; }
+html.day .sroki-zero { color: #B42318; }
 html.day .folder-toggle { color: #57606A; }
 html.day .entry { border-bottom: 1px solid #E4E9EE; }
 html.day .entry-title { color: #000000; }
@@ -1186,4 +1244,7 @@ html.day .collab-panel .collab-line b { color: #000000; }
 html.day .collab-panel .collab-far { color: #6E7781; }
 html.day .collab-panel .collab-ok { color: #1A7F37; }
 html.day .collab-panel .collab-wait { color: #9A6700; }
+html.day .toast { background: #FFFFFF; color: #000000; border: 1px solid #D0D7DE; box-shadow: 0 6px 18px rgba(27, 31, 36, 0.35); }
+html.day .toast--ok { background: #E7F6EC; border-color: #A8D5B5; color: #1A7F37; }
+html.day .toast--warn { background: #FFF6D8; border-color: #BF9E5A; color: #9A6700; }
 /* ===== DAY-THEME-END ===== */
