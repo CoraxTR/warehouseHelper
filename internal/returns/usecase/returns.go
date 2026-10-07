@@ -221,6 +221,50 @@ func (uc *UseCase) tick(ctx context.Context) error {
 	return uc.retryNew(ctx)
 }
 
+// eventKind — вид события для записи и уведомления; ok=false — сообщать нечего.
+// Отмена — свой вид (вес к ней отношения не имеет), дифф: возврат в продажу
+// приоритетнее веса, чистое уменьшение веса — manual_weight_down.
+func eventKind(kind returns.EventKind, expected, drops int) (returns.EventKind, bool) {
+	switch {
+	case kind == returns.KindCancelled:
+		return returns.KindCancelled, expected > 0
+	case expected > 0:
+		return returns.KindRemoved, true
+	case drops > 0:
+		return returns.KindManualWeightDown, true
+	default:
+		return "", false
+	}
+}
+
+// eventPlan — состав события: ожидания возврата, строки ручного уменьшения веса и
+// вид для записи (Notify=false — сообщать нечего).
+type eventPlan struct {
+	Kind     returns.EventKind
+	Expected []returns.Expected
+	Drops    []returns.ManualWeightDrop
+	Notify   bool
+}
+
+// resolveEvent — состав события: ожидания возврата, строки ручного уменьшения
+// веса и вид для записи; Notify=false — сообщать нечего.
+func (uc *UseCase) resolveEvent(ctx context.Context, ev *returns.ReturnEvent,
+	kind returns.EventKind) (eventPlan, error) {
+	expected, err := uc.buildExpected(ctx, ev)
+	if err != nil && !errors.Is(err, returns.ErrNothingToReturn) {
+		return eventPlan{}, err
+	}
+
+	drops, err := uc.manualWeightDrops(ctx, ev)
+	if err != nil {
+		return eventPlan{}, err
+	}
+
+	k, ok := eventKind(kind, len(expected), len(drops))
+
+	return eventPlan{Kind: k, Expected: expected, Drops: drops, Notify: ok}, nil
+}
+
 // processRow — одна строка листа аудита: отбор customerorder, пропуск наших
 // API-источников, раскрытие events, определение вида события, отправка
 // уведомления. Уже обработанные id (дедуп) пропускаются.
@@ -280,17 +324,26 @@ func (uc *UseCase) processRow(ctx context.Context, row client.AuditRow) error {
 	}
 
 	// Отложенные позиции с internal_code есть? (пустая отмена / удаление без
-	// резерва — уведомлять нечего). Одно раскрытие МС на событие: expected
-	// уходят в sendEventMessage (текст сообщения строится из них).
-	expected, err := uc.buildExpected(ctx, ev)
+	// резерва — уведомлять нечего). Ядро сверки даёт ожидания возврата в
+	// продажу, а ручное уменьшение веса отложенной весовой строки ожиданий не
+	// создаёт (scanmatch: физически тот же кусок) — его собираем отдельно, своим
+	// решением. Сообщение на событие ОДНО: expected и drops уходят вместе.
+	plan, err := uc.resolveEvent(ctx, ev, kind)
 	if err != nil {
-		if errors.Is(err, returns.ErrNothingToReturn) {
-			slog.Info("returns: событие без отложенных позиций — пропущено",
-				"event", row.ID, "order", orderName, "kind", kind)
-			return nil
-		}
 		return err
 	}
+
+	// Вид события. Отмена — свой вид (состав возврата — позиции заказа), как
+	// раньше, вес к ней отношения не имеет. Для события диффа: возврат в продажу
+	// приоритетнее веса (штучное расформирование + урезанный вес в одном событии
+	// — это KindRemoved, кнопка на страницу возврата); чистое уменьшение веса —
+	// свой вид; нечего сообщать — пропускаем.
+	if !plan.Notify {
+		slog.Info("returns: событие без отложенных позиций — пропущено",
+			"event", row.ID, "order", orderName, "kind", kind)
+		return nil
+	}
+	ev.Kind = plan.Kind
 
 	inserted, err := uc.repo.InsertEvent(ctx, ev)
 	if err != nil {
@@ -299,20 +352,28 @@ func (uc *UseCase) processRow(ctx context.Context, row client.AuditRow) error {
 	if !inserted {
 		return nil // дубль на границе окна — другой тик уже обработал
 	}
-	slog.Info("returns: событие аудита принято", "event", row.ID, "order", orderName, "kind", kind)
+	slog.Info("returns: событие аудита принято", "event", row.ID, "order", orderName, "kind", ev.Kind)
 
-	if err := uc.sendEventMessage(ctx, ev, expected); err != nil {
+	if err := uc.sendEventMessage(ctx, ev, plan.Expected, plan.Drops); err != nil {
 		// Событие остаётся в статусе new — retryNew дослает в следующих тиках.
 		slog.Error("returns send notification failed", "event", row.ID, "err", err)
 	}
 	return nil
 }
 
-// sendEventMessage — текст уведомления (по ожиданиям события) и отправка
-// в чат склада с URL-кнопкой «Расформировать».
-func (uc *UseCase) sendEventMessage(ctx context.Context, ev *returns.ReturnEvent, expected []returns.Expected) error {
-	chatID, messageID, err := uc.notify.SendWarehouseReturn(ctx,
-		uc.messageText(ev, expected), uc.returnURL(ev.ID))
+// sendEventMessage — текст уведомления (ожидания возврата + строки ручного
+// уменьшения веса) и отправка в чат склада с URL-кнопкой. Кнопка ведёт на
+// страницу возврата, если есть ожидания; при одном весе — на страницу заказа
+// (склад перевешивает/переподбирает там). Событие только с весом на странице
+// возврата делать нечего — после успешной отправки сразу закрываем его вручную
+// (строка остаётся отметкой дедупа: ListActive отдаёт лишь new/sent).
+func (uc *UseCase) sendEventMessage(ctx context.Context, ev *returns.ReturnEvent, expected []returns.Expected, drops []returns.ManualWeightDrop) error {
+	button := uc.returnURL(ev.ID)
+	if len(expected) == 0 {
+		button = uc.orderURL(ev.OrderID)
+	}
+
+	chatID, messageID, err := uc.notify.SendWarehouseReturn(ctx, uc.messageText(ev, expected, drops), button)
 	if err != nil {
 		return err
 	}
@@ -325,6 +386,18 @@ func (uc *UseCase) sendEventMessage(ctx context.Context, ev *returns.ReturnEvent
 	}
 	slog.Info("returns: уведомление отправлено в чат склада",
 		"event", ev.ID, "order", ev.OrderName, "chat", chatID, "message", messageID)
+
+	if len(expected) == 0 {
+		// Уведомление «вес уменьшен вручную»: расформировывать на странице
+		// возврата нечего (там только штучный возврат) — событие закрываем
+		// сразу, чтобы оно не висело в активных. Повторный тик дубль не шлёт:
+		// processRow пропускает уже отслеживаемое событие, retryNew — не new.
+		if err := uc.repo.MarkDone(ctx, ev.ID, true); err != nil {
+			return fmt.Errorf("returns mark done %s: %w", ev.ID, err)
+		}
+		ev.Status = returns.StatusDone
+		ev.Manual = true
+	}
 	return nil
 }
 
@@ -344,38 +417,63 @@ func (uc *UseCase) retryNew(ctx context.Context) error {
 		}
 
 		expected, err := uc.buildExpected(ctx, &ev)
-		if err != nil {
-			if errors.Is(err, returns.ErrNothingToReturn) {
-				// Событие «опустело» (заказ изменился после создания) — закрываем.
-				if doneErr := uc.repo.MarkDone(ctx, ev.ID, false); doneErr != nil {
-					slog.Error("returns close emptied event", "event", ev.ID, "err", doneErr)
-				}
-				continue
-			}
+		if err != nil && !errors.Is(err, returns.ErrNothingToReturn) {
 			slog.Error("returns retry build expected", "event", ev.ID, "err", err)
 			continue
 		}
+		// Событие могло остаться new и как «вес уменьшен вручную» (TG был
+		// недоступен при первой отправке): у него нет expected, но есть drops —
+		// пересобираем их тем же путём, что processRow.
+		drops, err := uc.manualWeightDrops(ctx, &ev)
+		if err != nil {
+			slog.Error("returns retry build manual weight drops", "event", ev.ID, "err", err)
+			continue
+		}
 
-		if err := uc.sendEventMessage(ctx, &ev, expected); err != nil {
+		if len(expected) == 0 && len(drops) == 0 {
+			// Событие «опустело» (заказ изменился после создания) — закрываем.
+			if doneErr := uc.repo.MarkDone(ctx, ev.ID, false); doneErr != nil {
+				slog.Error("returns close emptied event", "event", ev.ID, "err", doneErr)
+			}
+			continue
+		}
+
+		if err := uc.sendEventMessage(ctx, &ev, expected, drops); err != nil {
 			slog.Error("returns retry notification", "event", ev.ID, "err", err)
 		}
 	}
 	return nil
 }
 
-// messageText — текст уведомления в чат склада.
-func (uc *UseCase) messageText(ev *returns.ReturnEvent, expected []returns.Expected) string {
+// messageText — текст уведомления в чат склада: отмена — фразой о статусе;
+// иначе строки ушедших позиций возврата («удалили») и уменьшенного вручную
+// веса — в одном сообщении на событие.
+func (uc *UseCase) messageText(ev *returns.ReturnEvent, expected []returns.Expected, drops []returns.ManualWeightDrop) string {
 	if ev.Kind == returns.KindCancelled {
 		return fmt.Sprintf("Заказ %s был переведён в статус «Отменён»", ev.OrderName)
 	}
 
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "Из заказа %s удалили:", ev.OrderName)
-	for _, e := range expected {
-		sb.WriteString("\n— ")
-		sb.WriteString(e.Name)
-		sb.WriteByte(' ')
-		sb.WriteString(formatQty(e))
+	if len(expected) > 0 {
+		fmt.Fprintf(&sb, "Из заказа %s удалили:", ev.OrderName)
+		for _, e := range expected {
+			sb.WriteString("\n— ")
+			sb.WriteString(e.Name)
+			sb.WriteByte(' ')
+			sb.WriteString(formatQty(e))
+		}
+	}
+	if len(drops) > 0 {
+		if sb.Len() > 0 {
+			sb.WriteByte('\n')
+		}
+		fmt.Fprintf(&sb, "В заказе %s вручную уменьшили вес:", ev.OrderName)
+		for _, d := range drops {
+			sb.WriteString("\n— ")
+			sb.WriteString(d.Name)
+			// Формат кг — 3 знака, как в formatQty: «2.482 кг → 1.962 кг».
+			fmt.Fprintf(&sb, " %.3f кг → %.3f кг", d.BeforeKg, d.AfterKg)
+		}
 	}
 	return sb.String()
 }
@@ -396,6 +494,18 @@ func (uc *UseCase) returnURL(eventID string) string {
 		base = base[:len(base)-1]
 	}
 	return base + "/goods/return?e=" + eventID
+}
+
+// orderURL — адрес страницы заказа МС для URL-кнопки уведомления о ручном
+// уменьшении веса: склад перевешивает/переподбирает отложенную позицию там
+// (страница возврата обслуживает только штучный возврат). Срез хвостовых «/» —
+// как в returnURL (PublicURL может кончаться слэшем).
+func (uc *UseCase) orderURL(orderID string) string {
+	base := uc.cfg.PublicURL
+	for base != "" && base[len(base)-1] == '/' {
+		base = base[:len(base)-1]
+	}
+	return base + "/ms/orders/" + orderID
 }
 
 // skippedSource — событие от нашего API (source из списка пропуска)?
