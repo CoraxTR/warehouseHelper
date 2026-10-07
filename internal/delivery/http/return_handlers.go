@@ -75,6 +75,8 @@ func returnKindText(k returns.EventKind) string {
 		return "Заказ отменён"
 	case returns.KindRemoved:
 		return "Из заказа удалены позиции"
+	case returns.KindManualWeightDown:
+		return "Вес уменьшен вручную"
 	default:
 		return string(k)
 	}
