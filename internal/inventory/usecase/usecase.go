@@ -44,7 +44,7 @@ type MSClient interface {
 type Sroki interface {
 	// ReplaceInventoryLots — каждый код вида получает лоты ровно по сканам,
 	// код без сканов обнуляется. Валидация и запись атомарны.
-	ReplaceInventoryLots(ctx context.Context, codes []string, scans []string) error
+	ReplaceInventoryLots(ctx context.Context, codes, scans []string) error
 }
 
 // UseCase — сценарий инвентаризации.

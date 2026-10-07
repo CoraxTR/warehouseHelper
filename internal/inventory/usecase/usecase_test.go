@@ -103,7 +103,7 @@ type fakeInvSroki struct {
 	trace *[]string // общая лента порядка вызовов: сюда пишется "sroki"
 }
 
-func (f *fakeInvSroki) ReplaceInventoryLots(_ context.Context, codes []string, scans []string) error {
+func (f *fakeInvSroki) ReplaceInventoryLots(_ context.Context, codes, scans []string) error {
 	f.calls++
 	if f.trace != nil {
 		*f.trace = append(*f.trace, "sroki")
@@ -500,9 +500,9 @@ func TestStoreConfigured(t *testing.T) {
 	}
 }
 
-// 10. Conduct со швом «Сроки»: порядок шагов сроки→документ, отложка в шов не
-// уходит, страховка от обнуления вида (пустая общая строка) и поведение при
-// ошибках шва/МС.
+// 10. Conduct со швом «Сроки»: порядок шагов сроки→документ и страховка от
+// обнуления вида (пустая общая строка). Состав аргументов шва и поведение при
+// сбоях шва/МС — в TestConductSrokiCalls.
 func TestConductSroki(t *testing.T) {
 	ctx := context.Background()
 	doc := client.MSInventoryDocument{
@@ -560,6 +560,19 @@ func TestConductSroki(t *testing.T) {
 			t.Fatalf("позиции = %+v, want %+v (отложка входит в количество документа)", ms.positions, want)
 		}
 	})
+
+}
+
+// TestConductSrokiCalls — состав аргументов шва и поведение при сбоях: ошибка шва
+// не пускает создание документа (сканы снаружи живы), ошибка МС на шаге документа —
+// сроки уже заменены (outcome SrokiUpdated).
+func TestConductSrokiCalls(t *testing.T) {
+	ctx := context.Background()
+	doc := client.MSInventoryDocument{
+		ID:   "doc-1",
+		Name: "Инвентаризация № 1",
+		URL:  "https://api.moysklad.ru/entity/inventory/doc-1",
+	}
 
 	t.Run("ошибка шва: документ не создаём, сканы снаружи живы", func(t *testing.T) {
 		wantErr := errors.New("сток упал")

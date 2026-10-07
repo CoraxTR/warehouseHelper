@@ -549,7 +549,7 @@ func (uc *StockUseCase) ReplaceStock(ctx context.Context, req ReplaceRequest) er
 // карте товаров → groupScans вернёт stock.ErrProductNotFound (страница такой скан
 // не пропускает, но домен всё равно проверяет). Валидация и запись атомарны: любая
 // ошибка → ничего не меняется. Пустой список кодов → nil (нечего делать).
-func (uc *StockUseCase) ReplaceInventoryLots(ctx context.Context, codes []string, scans []string) error {
+func (uc *StockUseCase) ReplaceInventoryLots(ctx context.Context, codes, scans []string) error {
 	done := metrics.Track(trackPkg, "ReplaceInventoryLots")
 	defer done()
 
