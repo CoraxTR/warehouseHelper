@@ -560,7 +560,6 @@ func TestConductSroki(t *testing.T) {
 			t.Fatalf("позиции = %+v, want %+v (отложка входит в количество документа)", ms.positions, want)
 		}
 	})
-
 }
 
 // TestConductSrokiCalls — состав аргументов шва и поведение при сбоях: ошибка шва

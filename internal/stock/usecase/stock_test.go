@@ -852,9 +852,9 @@ func inventoryRepo() *mockRepo {
 }
 
 // TestReplaceInventoryLots — замена остатков «вида инвентаризации»: код вида со
-// сканами получает лоты ровно по сканам, код вида без сканов обнуляется (все его
-// лоты удаляются). Кейсы «писать нечего» и ошибок — в TestReplaceInventoryLotsSkipped,
-// смешанный вид — в TestReplaceInventoryLotsMixed. Каждый кейс — на свежем стенде.
+// сканами получает лоты ровно по сканам. Обнуление кода без сканов — в
+// TestReplaceInventoryLotsZeroesUnscanned, кейсы «писать нечего» — в
+// TestReplaceInventoryLotsSkipped, смешанный вид — в TestReplaceInventoryLotsMixed.
 func TestReplaceInventoryLots(t *testing.T) {
 	// 1. Сканы заменяют лоты просканированного товара: qty = сумма сканов по
 	// сроку, неотсканированный срок удаляется, ручная скидка неистёкшего лота
@@ -902,7 +902,12 @@ func TestReplaceInventoryLots(t *testing.T) {
 			t.Errorf("кэш p1 = %+v, want [day(1) qty 11]", snap.Lots)
 		}
 	})
+}
 
+// TestReplaceInventoryLotsZeroesUnscanned — код вида без сканов обнуляется: все его
+// лоты удаляются, в БД уходят Deletes по всем срокам, upsert'ов нет, события —
+// только lot_delete.
+func TestReplaceInventoryLotsZeroesUnscanned(t *testing.T) {
 	// 2. Код вида без сканов обнуляется: все его лоты удаляются, в БД уходят
 	// Deletes по всем срокам, upsert'ов нет, события — только lot_delete.
 	t.Run("код без сканов обнуляется", func(t *testing.T) {
@@ -959,7 +964,6 @@ func TestReplaceInventoryLots(t *testing.T) {
 			t.Errorf("лот p2 day(3) = %d, want лота нет (обнулён)", got)
 		}
 	})
-
 }
 
 // TestReplaceInventoryLotsSkipped — кейсы «писать нечего»: пустой план товара
@@ -1067,7 +1071,6 @@ func TestReplaceInventoryLotsSkipped(t *testing.T) {
 			t.Errorf("writes = %+v, want ровно одну запись p1", repo.writes)
 		}
 	})
-
 }
 
 // TestReplaceInventoryLotsMixed — общий случай вида: часть товаров со сканами,
