@@ -293,10 +293,6 @@ func (uc *UseCase) pickedGrams(ctx context.Context, orderID string, positions []
 
 		return map[string]int64{}
 	}
-	if picked == nil {
-		return map[string]int64{}
-	}
-
 	return picked
 }
 

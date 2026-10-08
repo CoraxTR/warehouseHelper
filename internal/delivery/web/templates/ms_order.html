@@ -113,6 +113,8 @@ html.day .mark--done { color: #1A7F37; }
                     <div class="picked"></div>
                     {{else if .CanRepick}}
                     <button type="button" class="btn-secondary repick-btn">Переподобрать</button>
+                    {{/* Подсказка — только в ветке переподбора: пометка возврата осмысленна там, где строка
+                         переподбирается (весовая = CanRepick при reserve > 0); у активной строки возврат не предлагается. */}}
                     {{if .ReturnWeightText}}<div class="muted">вес уменьшили вручную — в «Сроки» вернётся кусок {{.ReturnWeightText}}</div>{{end}}
                     {{else}}
                     <span class="muted">—</span>
