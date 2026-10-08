@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -297,6 +298,50 @@ func weightedPartialDiffJSON() string {
 		`"newValue":{"assortment":{"meta":{"href":"…/product/` + prodA + `"},"name":"Чак ролл"},"quantity":0.4,"reserve":0.4,"uom":"кг"}}]}`
 }
 
+// manualWeightDiffJSON — ручное уменьшение веса отложенной весовой позиции
+// (живой случай 07.10.2026, заказ 07246: Стриплойн 2.482 кг → 1.962 кг, МС
+// опустил резерв вслед за количеством). Источник уведомления «вес уменьшен
+// вручную» — ожиданий возврата не создаёт, но склад обязан перевесить кусок.
+func manualWeightDiffJSON() string {
+	return `{"positions":[` +
+		`{"oldValue":{"assortment":{"meta":{"href":"…/product/` + prodA + `"},"name":"Чак ролл"},"quantity":2.482,"reserve":2.482,"uom":"кг"},` +
+		`"newValue":{"assortment":{"meta":{"href":"…/product/` + prodA + `"},"name":"Чак ролл"},"quantity":1.962,"reserve":1.962,"uom":"кг"}}]}`
+}
+
+// mixedWeightRemovalDiffJSON — в одном событии и ручное уменьшение веса
+// весовой строки (2.482 → 1.962), и удаление отложенной ШТУЧНОЙ позиции
+// (Соус, quantity == reserve): ОДНО сообщение, вид — возврат в продажу.
+func mixedWeightRemovalDiffJSON() string {
+	return `{"positions":[` +
+		`{"oldValue":{"assortment":{"meta":{"href":"…/product/` + prodA + `"},"name":"Чак ролл"},"quantity":2.482,"reserve":2.482,"uom":"кг"},` +
+		`"newValue":{"assortment":{"meta":{"href":"…/product/` + prodA + `"},"name":"Чак ролл"},"quantity":1.962,"reserve":1.962,"uom":"кг"}},` +
+		`{"oldValue":{"assortment":{"meta":{"href":"…/product/` + prodD + `"},"name":"Соус"},"quantity":2,"reserve":2,"uom":"шт"}}]}`
+}
+
+// stockPartialDiffJSON — урезание ШТУЧНОЙ отложенной строки (2 шт → 1 шт,
+// резерв 2 → 1): снятая часть уходит в возврат в продажу (не в «вес вручную»).
+func stockPartialDiffJSON() string {
+	return `{"positions":[` +
+		`{"oldValue":{"assortment":{"meta":{"href":"…/product/` + prodD + `"},"name":"Соус"},"quantity":2,"reserve":2,"uom":"шт"},` +
+		`"newValue":{"assortment":{"meta":{"href":"…/product/` + prodD + `"},"name":"Соус"},"quantity":1,"reserve":1,"uom":"шт"}}]}`
+}
+
+// weightedNoReserveDecreaseDiffJSON — вес уменьшили, но резерва НЕ было
+// (reserve 0 → 0): снимать нечего — событием не является.
+func weightedNoReserveDecreaseDiffJSON() string {
+	return `{"positions":[` +
+		`{"oldValue":{"assortment":{"meta":{"href":"…/product/` + prodA + `"},"name":"Чак ролл"},"quantity":0.657,"reserve":0,"uom":"кг"},` +
+		`"newValue":{"assortment":{"meta":{"href":"…/product/` + prodA + `"},"name":"Чак ролл"},"quantity":0.4,"reserve":0,"uom":"кг"}}]}`
+}
+
+// weightedGrowthDiffJSON — весовой РОСТ количества (0.657 → 1.0, резерв вырос
+// вместе с ним): не наше событие (весовой перевес ловит подбор).
+func weightedGrowthDiffJSON() string {
+	return `{"positions":[` +
+		`{"oldValue":{"assortment":{"meta":{"href":"…/product/` + prodA + `"},"name":"Чак ролл"},"quantity":0.657,"reserve":0.657,"uom":"кг"},` +
+		`"newValue":{"assortment":{"meta":{"href":"…/product/` + prodA + `"},"name":"Чак ролл"},"quantity":1.0,"reserve":1.0,"uom":"кг"}}]}`
+}
+
 // testEnv — окружение юнит-теста: usecase + стабы (один результат вместо
 // четырёх — revive function-result-limit).
 type testEnv struct {
@@ -410,6 +455,68 @@ func TestBuildExpected_WeightedPartialRemovalNothingToReturn(t *testing.T) {
 
 	if _, err := uc.buildExpected(context.Background(), ev); !errors.Is(err, returns.ErrNothingToReturn) {
 		t.Fatalf("err = %v, want ErrNothingToReturn", err)
+	}
+}
+
+// ── manualWeightDrops ───────────────────────────────────────────────────────
+
+// Ручное уменьшение веса отложенной весовой строки: BeforeKg/AfterKg — вес до
+// и после правки (Quantity и Quantity-Released), строка одна.
+func TestManualWeightDrops_WeightedPartial(t *testing.T) {
+	repo := newStubRepo()
+	env := newTestEnv(repo)
+	uc, audit := env.uc, env.audit
+
+	audit.details[auditID] = []client.AuditEventRow{detailRow(manualWeightDiffJSON(), "07246")}
+	ev := &returns.ReturnEvent{ID: auditID, Kind: returns.KindRemoved, OrderID: orderID, OrderName: "07246"}
+
+	drops, err := uc.manualWeightDrops(context.Background(), ev)
+	if err != nil {
+		t.Fatalf("manualWeightDrops: %v", err)
+	}
+	if len(drops) != 1 {
+		t.Fatalf("drops = %+v, want 1 строку", drops)
+	}
+	d := drops[0]
+	if d.ProductID != prodA || d.Name != "Чак ролл" {
+		t.Errorf("drops[0] = %+v, want Чак ролл", d)
+	}
+	// Веса сравниваем в граммах: 2.482 и 1.962 в double — хвосты округления.
+	if math.Round(d.BeforeKg*1000) != 2482 || math.Round(d.AfterKg*1000) != 1962 {
+		t.Errorf("BeforeKg/AfterKg = %v/%v, want 2.482/1.962", d.BeforeKg, d.AfterKg)
+	}
+}
+
+// Что строками веса НЕ является: штучное урезание (его ловит scanmatch),
+// уменьшение без резерва, весовой рост; для отмены источника нет вовсе
+// (позиции заказа, Released не бывает).
+func TestManualWeightDrops_SkipsNotOurCases(t *testing.T) {
+	tests := []struct {
+		name string
+		kind returns.EventKind
+		diff string
+	}{
+		{name: "штучное урезание", kind: returns.KindRemoved, diff: stockPartialDiffJSON()},
+		{name: "уменьшение без резерва", kind: returns.KindRemoved, diff: weightedNoReserveDecreaseDiffJSON()},
+		{name: "весовой рост", kind: returns.KindRemoved, diff: weightedGrowthDiffJSON()},
+		{name: "отмена — источник другой", kind: returns.KindCancelled, diff: cancelledDiffJSON()},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := newStubRepo()
+			env := newTestEnv(repo)
+			uc, audit := env.uc, env.audit
+			audit.details[auditID] = []client.AuditEventRow{detailRow(tt.diff, "07246")}
+
+			ev := &returns.ReturnEvent{ID: auditID, Kind: tt.kind, OrderID: orderID, OrderName: "07246"}
+			drops, err := uc.manualWeightDrops(context.Background(), ev)
+			if err != nil {
+				t.Fatalf("manualWeightDrops: %v", err)
+			}
+			if len(drops) != 0 {
+				t.Errorf("drops = %+v, want пусто", drops)
+			}
+		})
 	}
 }
 

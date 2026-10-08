@@ -228,6 +228,37 @@ func TestParseDetailPartialRemovalNotOurs(t *testing.T) {
 	}
 }
 
+func TestParseDetailWeightedPartialRemoval(t *testing.T) {
+	// Урезание ВЕСОВОЙ строки (2.482 → 1.962 кг, резерв 2.482 → 1.962): тоже
+	// removal с Released > 0 (снятая часть резерва). В возврат в продажу
+	// scanmatch такую строку не пустит, но модуль «вес уменьшен вручную» читает
+	// тот же дифф — парсер обязан её отдать.
+	const fixture = `{"rows": [{
+		"source": "app", "eventType": "update", "entityType": "customerorder",
+		"moment": "2026-10-07 10:00:00.000",
+		"diff": {"positions": [
+			{"oldValue": {"assortment": {"meta": {"href": "https://api.moysklad.ru/api/remap/1.2/entity/product/a02a9121-7ef5-11e5-7a40-e897001b4cc6"}, "name": "Стриплойн 1\\2 Праймбиф"}, "quantity": 2.482, "reserve": 2.482, "uom": "кг"},
+			 "newValue": {"assortment": {"meta": {"href": "https://api.moysklad.ru/api/remap/1.2/entity/product/a02a9121-7ef5-11e5-7a40-e897001b4cc6"}, "name": "Стриплойн 1\\2 Праймбиф"}, "quantity": 1.962, "reserve": 1.962, "uom": "кг"}}
+		]},
+		"name": "07246"
+	}]}`
+
+	out := parseDetail(rowsFixture(t, fixture), cancelledStateID)
+	if len(out.removals) != 1 {
+		t.Fatalf("len(removals) = %d, want 1 (урезание весовой строки)", len(out.removals))
+	}
+	r := out.removals[0]
+	if r.Quantity != 2.482 || r.Reserve != 2.482 {
+		t.Errorf("Quantity/Reserve = %v/%v, want снимок до уменьшения 2.482/2.482", r.Quantity, r.Reserve)
+	}
+	if r.Released < 0.519 || r.Released > 0.521 {
+		t.Errorf("Released = %v, want ≈0.52 (резерв 2.482 → 1.962)", r.Released)
+	}
+	if r.Uom != "кг" {
+		t.Errorf("Uom = %q, want кг", r.Uom)
+	}
+}
+
 func TestLastPathSegment(t *testing.T) {
 	cases := map[string]string{
 		"https://api.moysklad.ru/api/remap/1.2/entity/product/a02a9121-7ef5-11e5-7a40-e897001b4cc6":                       "a02a9121-7ef5-11e5-7a40-e897001b4cc6",

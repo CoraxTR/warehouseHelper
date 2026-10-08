@@ -25,6 +25,12 @@ const (
 	// KindRemoved — из заказа удалены отложенные позиции (quantity == reserved);
 	// состав возврата — удалённые позиции из diff события.
 	KindRemoved EventKind = "positions_removed"
+	// KindManualWeightDown — менеджер вручную уменьшил вес отложенной весовой
+	// позиции в МС. Физически это та же единица меньшего веса, склад обязан
+	// перевесить/переподобрать её (возврата в продажу событие НЕ создаёт —
+	// возврат про штучные единицы, см. scanmatch.BuildExpected). Состав — из
+	// того же diff аудита, что у KindRemoved.
+	KindManualWeightDown EventKind = "manual_weight_down"
 )
 
 // EventStatus — жизненный цикл события в модуле.
@@ -78,6 +84,17 @@ type RemainingPosition struct {
 	Name         string  // название товара
 	Quantity     float64 // количество строки: кг для весовых, штуки для штучных
 	Weighted     bool    // тип учёта из каталога склада
+}
+
+// ManualWeightDrop — отложенная весовая позиция, вес которой менеджер уменьшил
+// вручную в МС: склад обязан перевесить кусок (переподбор), а не вернуть его в
+// продажу. BeforeKg/AfterKg — вес строки до и после правки (кг); событие лишь
+// уведомляет, снимков в БД не хранит.
+type ManualWeightDrop struct {
+	ProductID string  // uuid товара в МС
+	Name      string  // название товара
+	BeforeKg  float64 // вес строки до уменьшения
+	AfterKg   float64 // вес строки после уменьшения
 }
 
 // Ошибки страницы возврата.

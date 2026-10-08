@@ -10,7 +10,7 @@ DROP TABLE IF EXISTS return_cursor;
 
 CREATE TABLE return_events (
     id           TEXT PRIMARY KEY,       -- uuid события аудита МС (audit/<id>); дедуп-ключ поллера
-    kind         TEXT NOT NULL CHECK (kind IN ('order_cancelled', 'positions_removed')),
+    kind         TEXT NOT NULL CHECK (kind IN ('order_cancelled', 'positions_removed', 'manual_weight_down')),
     order_id     TEXT NOT NULL,          -- uuid заказа МС (id, не href)
     order_name   TEXT NOT NULL,          -- номер заказа (name из events-раскрытия) — для текста сообщения
     moment       TIMESTAMPTZ NOT NULL,   -- момент события (UTC; из audit moment в TZ учётки = МСК)

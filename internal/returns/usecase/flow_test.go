@@ -150,23 +150,159 @@ func TestTick_PartialRemovalSendsOneNotification(t *testing.T) {
 	}
 }
 
-// Урезание весовой строки событием не является: возвращать нечего — уведомление
-// не уходит, строка в return_events не появляется.
-func TestTick_WeightedPartialRemovalCreatesNothing(t *testing.T) {
+// Ручное уменьшение веса отложенной весовой строки (живой случай 07.10.2026,
+// заказ 07246: Стриплойн 2.482 → 1.962 кг): возврата в продажу не создаёт, но
+// уходит отдельным уведомлением «вес уменьшен вручную», кнопка ведёт на
+// страницу заказа, событие сразу закрывается (на странице возврата делать
+// нечего). Повторный тик дубль не шлёт.
+func TestTick_ManualWeightDownSendsNotification(t *testing.T) {
 	repo := newStubRepo()
 	repo.cursor = &[]time.Time{time.Now().Add(-time.Hour).UTC()}[0]
 	env := newTestEnv(repo)
 	uc, audit, notify := env.uc, env.audit, env.notify
 
 	audit.rows = []client.AuditRow{auditRow("app")}
-	audit.details[auditID] = []client.AuditEventRow{detailRow(weightedPartialDiffJSON(), "07231")}
+	audit.details[auditID] = []client.AuditEventRow{detailRow(manualWeightDiffJSON(), "07246")}
+
+	if err := uc.tick(context.Background()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+
+	ev := repo.events[auditID]
+	if ev == nil || ev.Kind != returns.KindManualWeightDown {
+		t.Fatalf("event = %+v, want manual_weight_down", ev)
+	}
+	if ev.Status != returns.StatusDone || !ev.Manual {
+		t.Errorf("status/manual = %s/%v, want done/true (событию-весу на странице возврата делать нечего)", ev.Status, ev.Manual)
+	}
+	if len(notify.sends) != 1 {
+		t.Fatalf("want одно сообщение на событие, got %d", len(notify.sends))
+	}
+	text := notify.sends[0]
+	for _, want := range []string{"В заказе 07246 вручную уменьшили вес:", "Чак ролл 2.482 кг → 1.962 кг"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("текст = %q, want вхождение %q", text, want)
+		}
+	}
+	if !strings.HasSuffix(notify.urls[0], "/ms/orders/"+orderID) {
+		t.Errorf("url кнопки = %q, want страница заказа /ms/orders/", notify.urls[0])
+	}
+
+	// Повторный тик: событие уже отслеживается (done) — дубля нет.
+	if err := uc.tick(context.Background()); err != nil {
+		t.Fatalf("повторный tick: %v", err)
+	}
+	if len(notify.sends) != 1 {
+		t.Errorf("повторный тик отправил дубль: sends=%d", len(notify.sends))
+	}
+}
+
+// Урезание ШТУЧНОЙ строки — по-прежнему возврат в продажу (регресс): вид,
+// текст и кнопка страницы возврата не изменились.
+func TestTick_StockPartialRemovalSendsReturn(t *testing.T) {
+	repo := newStubRepo()
+	repo.cursor = &[]time.Time{time.Now().Add(-time.Hour).UTC()}[0]
+	env := newTestEnv(repo)
+	uc, audit, notify := env.uc, env.audit, env.notify
+
+	audit.rows = []client.AuditRow{auditRow("app")}
+	audit.details[auditID] = []client.AuditEventRow{detailRow(stockPartialDiffJSON(), "07231")}
+
+	if err := uc.tick(context.Background()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+
+	ev := repo.events[auditID]
+	if ev == nil || ev.Kind != returns.KindRemoved {
+		t.Fatalf("event = %+v, want positions_removed", ev)
+	}
+	if len(notify.sends) != 1 || !strings.Contains(notify.sends[0], "Соус 1 шт") {
+		t.Fatalf("текст = %q, want «Соус 1 шт»", notify.sends)
+	}
+	if strings.Contains(notify.sends[0], "вручную уменьшили вес") {
+		t.Errorf("штучное урезание не должно давать строку веса: %q", notify.sends[0])
+	}
+	if !strings.HasSuffix(notify.urls[0], "/goods/return?e="+auditID) {
+		t.Errorf("url кнопки = %q", notify.urls[0])
+	}
+	if ev.Status != returns.StatusSent {
+		t.Errorf("status = %s, want sent (событие ждёт расформирования)", ev.Status)
+	}
+}
+
+// Смешанное событие (ручное уменьшение веса + удаление штучной позиции) — ОДНО
+// сообщение, вид возврата в продажу: строки возврата и строка веса вместе,
+// кнопка — страница возврата.
+func TestTick_MixedWeightAndRemovalSendsOneNotification(t *testing.T) {
+	repo := newStubRepo()
+	repo.cursor = &[]time.Time{time.Now().Add(-time.Hour).UTC()}[0]
+	env := newTestEnv(repo)
+	uc, audit, notify := env.uc, env.audit, env.notify
+
+	audit.rows = []client.AuditRow{auditRow("app")}
+	audit.details[auditID] = []client.AuditEventRow{detailRow(mixedWeightRemovalDiffJSON(), "07246")}
+
+	if err := uc.tick(context.Background()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+
+	ev := repo.events[auditID]
+	if ev == nil || ev.Kind != returns.KindRemoved {
+		t.Fatalf("event = %+v, want positions_removed (возврат приоритетнее веса)", ev)
+	}
+	if ev.Status != returns.StatusSent {
+		t.Errorf("status = %s, want sent", ev.Status)
+	}
+	if len(notify.sends) != 1 {
+		t.Fatalf("want одно сообщение на событие, got %d", len(notify.sends))
+	}
+	text := notify.sends[0]
+	for _, want := range []string{
+		"Из заказа 07246 удалили:", "Соус 2 шт",
+		"В заказе 07246 вручную уменьшили вес:", "Чак ролл 2.482 кг → 1.962 кг",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("текст = %q, want вхождение %q", text, want)
+		}
+	}
+	if !strings.HasSuffix(notify.urls[0], "/goods/return?e="+auditID) {
+		t.Errorf("url кнопки = %q, want страница возврата", notify.urls[0])
+	}
+}
+
+// Вес уменьшили, но резерва НЕ было (Released <= 0) — тишина.
+func TestTick_WeightedDecreaseWithoutReserveCreatesNothing(t *testing.T) {
+	repo := newStubRepo()
+	repo.cursor = &[]time.Time{time.Now().Add(-time.Hour).UTC()}[0]
+	env := newTestEnv(repo)
+	uc, audit, notify := env.uc, env.audit, env.notify
+
+	audit.rows = []client.AuditRow{auditRow("app")}
+	audit.details[auditID] = []client.AuditEventRow{detailRow(weightedNoReserveDecreaseDiffJSON(), "07246")}
 
 	if err := uc.tick(context.Background()); err != nil {
 		t.Fatalf("tick: %v", err)
 	}
 	if len(repo.events) != 0 || len(notify.sends) != 0 {
-		t.Fatalf("урезание весовой строки не должно создавать событие: events=%d sends=%d",
-			len(repo.events), len(notify.sends))
+		t.Fatalf("уменьшение без резерва не событие: events=%d sends=%d", len(repo.events), len(notify.sends))
+	}
+}
+
+// Весовой РОСТ количества — тишина (не наше: перевес ловит подбор).
+func TestTick_WeightedGrowthCreatesNothing(t *testing.T) {
+	repo := newStubRepo()
+	repo.cursor = &[]time.Time{time.Now().Add(-time.Hour).UTC()}[0]
+	env := newTestEnv(repo)
+	uc, audit, notify := env.uc, env.audit, env.notify
+
+	audit.rows = []client.AuditRow{auditRow("app")}
+	audit.details[auditID] = []client.AuditEventRow{detailRow(weightedGrowthDiffJSON(), "07246")}
+
+	if err := uc.tick(context.Background()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if len(repo.events) != 0 || len(notify.sends) != 0 {
+		t.Fatalf("весовой рост не событие: events=%d sends=%d", len(repo.events), len(notify.sends))
 	}
 }
 
@@ -252,6 +388,63 @@ func TestRetryNew_ResendsAfterFailedSend(t *testing.T) {
 	}
 	if repo.events[auditID].Status != returns.StatusSent {
 		t.Errorf("status = %s, want sent после повторной отправки", repo.events[auditID].Status)
+	}
+}
+
+// Событие «вес уменьшен вручную» зависло в new (TG был недоступен): retryNew
+// пересобирает drops, отправляет и сразу закрывает (страница возврата ему не
+// нужна).
+func TestRetryNew_ManualWeightDownSendsAndCloses(t *testing.T) {
+	repo := newStubRepo()
+	env := newTestEnv(repo)
+	uc, audit, notify := env.uc, env.audit, env.notify
+
+	repo.events[auditID] = &returns.ReturnEvent{
+		ID: auditID, Kind: returns.KindManualWeightDown, OrderID: orderID, OrderName: "07246", Status: returns.StatusNew,
+	}
+	audit.details[auditID] = []client.AuditEventRow{detailRow(manualWeightDiffJSON(), "07246")}
+
+	if err := uc.retryNew(context.Background()); err != nil {
+		t.Fatalf("retryNew: %v", err)
+	}
+	if len(notify.sends) != 1 {
+		t.Fatalf("want 1 повторную отправку, got %d", len(notify.sends))
+	}
+	if !strings.Contains(notify.sends[0], "вручную уменьшили вес") ||
+		!strings.Contains(notify.sends[0], "2.482 кг → 1.962 кг") {
+		t.Errorf("текст = %q", notify.sends[0])
+	}
+	if !strings.HasSuffix(notify.urls[0], "/ms/orders/"+orderID) {
+		t.Errorf("url кнопки = %q, want страница заказа", notify.urls[0])
+	}
+	ev := repo.events[auditID]
+	if ev.Status != returns.StatusDone || !ev.Manual {
+		t.Errorf("event = %+v, want done+manual", ev)
+	}
+}
+
+// «Опустевшее» событие «вес уменьшен вручную» (строки в диффе больше нет) —
+// закрывается без отправки, как и раньше: пусты И expected, И drops.
+func TestRetryNew_EmptiedManualWeightDownCloses(t *testing.T) {
+	repo := newStubRepo()
+	env := newTestEnv(repo)
+	uc, audit, notify := env.uc, env.audit, env.notify
+
+	repo.events[auditID] = &returns.ReturnEvent{
+		ID: auditID, Kind: returns.KindManualWeightDown, OrderID: orderID, OrderName: "07246", Status: returns.StatusNew,
+	}
+	// Удаление неотложенной весовой строки (reserve 0) — ни expected, ни drops.
+	audit.details[auditID] = []client.AuditEventRow{detailRow(removedDiffJSON(0), "07246")}
+
+	if err := uc.retryNew(context.Background()); err != nil {
+		t.Fatalf("retryNew: %v", err)
+	}
+	if len(notify.sends) != 0 {
+		t.Fatalf("опустевшее событие не должно отправляться: %q", notify.sends)
+	}
+	ev := repo.events[auditID]
+	if ev.Status != returns.StatusDone || ev.Manual {
+		t.Errorf("event = %+v, want done без manual (закрыто как опустевшее)", ev)
 	}
 }
 

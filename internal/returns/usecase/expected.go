@@ -19,7 +19,10 @@ import (
 // НЕ сбрасывает — проверено пользователем 08.09.2026).
 func (uc *UseCase) candidates(ctx context.Context, ev *returns.ReturnEvent) ([]scanmatch.Candidate, error) {
 	switch ev.Kind {
-	case returns.KindRemoved:
+	// KindManualWeightDown — подмножество KindRemoved (урезание весовой строки):
+	// источник тот же дифф аудита, поэтому идёт этой же веткой (нужно retryNew,
+	// где вид уже сохранён в БД).
+	case returns.KindRemoved, returns.KindManualWeightDown:
 		rows, err := uc.audit.FetchAuditDetail(ctx, ev.ID)
 		if err != nil {
 			return nil, err
@@ -73,6 +76,22 @@ func (uc *UseCase) buildExpected(ctx context.Context, ev *returns.ReturnEvent) (
 		return nil, returns.ErrNothingToReturn
 	}
 
+	products, err := uc.catalog.ProductsByMSIDs(ctx, candidateProductIDs(cands))
+	if err != nil {
+		return nil, err
+	}
+
+	expected := scanmatch.BuildExpected(cands, scanmatchProducts(products))
+	if len(expected) == 0 {
+		return nil, returns.ErrNothingToReturn
+	}
+	return expected, nil
+}
+
+// candidateProductIDs — uuid товаров-кандидатов без повторов, в порядке
+// кандидатов: вход шва каталога (ProductsByMSIDs дедуп не делает, а один товар
+// в событии может встречаться несколькими строками).
+func candidateProductIDs(cands []scanmatch.Candidate) []string {
 	ids := make([]string, 0, len(cands))
 	seen := make(map[string]struct{}, len(cands))
 	for _, c := range cands {
@@ -85,17 +104,48 @@ func (uc *UseCase) buildExpected(ctx context.Context, ev *returns.ReturnEvent) (
 		seen[c.ProductID] = struct{}{}
 		ids = append(ids, c.ProductID)
 	}
+	return ids
+}
 
-	products, err := uc.catalog.ProductsByMSIDs(ctx, ids)
+// manualWeightDrops — отложенные весовые строки события, вес которых менеджер
+// уменьшил вручную (дифф аудита: количество уменьшилось, резерв МС понизил
+// вслед за ним, Released > 0). Кандидаты берём тем же путём, что buildExpected
+// (события из диффа аудита), но фильтруем по каталогу сами: ядро scanmatch не
+// зовём — оно обслуживает ещё и «возврат в сроки при переподборе», его правила
+// не трогаем. К событию отмены отношения не имеет (у позиций заказа Released
+// не бывает — источник другой), поэтому сразу пусто.
+func (uc *UseCase) manualWeightDrops(ctx context.Context, ev *returns.ReturnEvent) ([]returns.ManualWeightDrop, error) {
+	if ev.Kind != returns.KindRemoved && ev.Kind != returns.KindManualWeightDown {
+		return nil, nil
+	}
+
+	cands, err := uc.candidates(ctx, ev)
 	if err != nil {
 		return nil, err
 	}
 
-	expected := scanmatch.BuildExpected(cands, scanmatchProducts(products))
-	if len(expected) == 0 {
-		return nil, returns.ErrNothingToReturn
+	products, err := uc.catalog.ProductsByMSIDs(ctx, candidateProductIDs(cands))
+	if err != nil {
+		return nil, err
 	}
-	return expected, nil
+
+	out := make([]returns.ManualWeightDrop, 0, len(cands))
+	for _, c := range cands {
+		p, ok := products[c.ProductID]
+		// Только весовая строка складского товара: штучную урезку ловит
+		// возврат в продажу (scanmatch), рост веса и товары без кода склада —
+		// не наше событие.
+		if !ok || !p.Weighted || p.InternalCode == "" || c.Released <= 0 {
+			continue
+		}
+		out = append(out, returns.ManualWeightDrop{
+			ProductID: c.ProductID,
+			Name:      c.Name,
+			BeforeKg:  c.Quantity,
+			AfterKg:   c.Quantity - c.Released,
+		})
+	}
+	return out, nil
 }
 
 // scanmatchProducts — каталог возвратов в форме ядра сверки: BuildExpected
