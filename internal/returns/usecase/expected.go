@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 
+	"warehouseHelper/internal/msclient/client"
 	"warehouseHelper/internal/returns"
 	"warehouseHelper/internal/scanmatch"
 )
@@ -16,7 +17,8 @@ import (
 // живой МС (снимков в БД нет): для ушедших позиций (удаление строки целиком
 // или урезание количества) — раскрытие audit/<id>/events,
 // для отмены — позиции заказа в текущем состоянии (МС reserve при отмене
-// НЕ сбрасывает — проверено пользователем 08.09.2026).
+// НЕ сбрасывает — проверено пользователем 08.09.2026) ПЛЮС ушедшие строки того
+// же события из диффа (объединение составов, решение владельца 08.10.2026).
 func (uc *UseCase) candidates(ctx context.Context, ev *returns.ReturnEvent) ([]scanmatch.Candidate, error) {
 	switch ev.Kind {
 	// KindManualWeightDown — подмножество KindRemoved (урезание весовой строки):
@@ -28,18 +30,7 @@ func (uc *UseCase) candidates(ctx context.Context, ev *returns.ReturnEvent) ([]s
 			return nil, err
 		}
 
-		out := parseDetail(rows, uc.cfg.CancelledStateID)
-		cands := make([]scanmatch.Candidate, 0, len(out.removals))
-		for _, r := range out.removals {
-			cands = append(cands, scanmatch.Candidate{
-				ProductID: r.ProductID,
-				Name:      r.Name,
-				Quantity:  r.Quantity,
-				Reserve:   r.Reserve,
-				Released:  r.Released,
-			})
-		}
-		return cands, nil
+		return diffCandidates(rows, uc.cfg.CancelledStateID), nil
 
 	case returns.KindCancelled:
 		positions, err := uc.audit.FetchOrderPositions(ctx, ev.OrderID)
@@ -56,11 +47,39 @@ func (uc *UseCase) candidates(ctx context.Context, ev *returns.ReturnEvent) ([]s
 				Reserve:   p.Reserve,
 			})
 		}
-		return cands, nil
+		// В том же событии могли удалить или урезать строки: в живом заказе их
+		// уже нет, поэтому добираем их из диффа — иначе отложенная единица не
+		// вернётся (решение владельца 08.10.2026). Цена — второй GET раскрытия
+		// на событие отмены.
+		rows, err := uc.audit.FetchAuditDetail(ctx, ev.ID)
+		if err != nil {
+			return nil, err
+		}
+
+		return append(cands, diffCandidates(rows, uc.cfg.CancelledStateID)...), nil
 
 	default:
 		return nil, returns.ErrEventNotFound
 	}
+}
+
+// diffCandidates — кандидаты из раскрытия события: позиции, ушедшие из заказа
+// (строка удалена целиком или урезана — см. parseDetail).
+func diffCandidates(rows []client.AuditEventRow, cancelledStateID string) []scanmatch.Candidate {
+	out := parseDetail(rows, cancelledStateID)
+
+	cands := make([]scanmatch.Candidate, 0, len(out.removals))
+	for _, r := range out.removals {
+		cands = append(cands, scanmatch.Candidate{
+			ProductID: r.ProductID,
+			Name:      r.Name,
+			Quantity:  r.Quantity,
+			Reserve:   r.Reserve,
+			Released:  r.Released,
+		})
+	}
+
+	return cands
 }
 
 // buildExpected — ожидания возврата: состав строк собирает scanmatch по

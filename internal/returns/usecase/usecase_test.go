@@ -234,8 +234,11 @@ const (
 	prodA      = "a02a9121-7ef5-11e5-7a40-e897001b4cc6"
 	prodD      = "d00d9121-7ef5-11e5-7a40-e897001b4cc6"
 	prodNoCode = "n0c09121-7ef5-11e5-7a40-e897001b4cc6"
-	orderID    = "211a86f4-b955-11f0-0a80-182e0028d0b8"
-	auditID    = "884ff854-abc1-11f1-0a80-106a00019ed6"
+	// prodDeliv — служебная строка «Доставка» из живого события: товара нет в
+	// каталоге склада, поэтому фильтр «internal_code задан» её отсеивает.
+	prodDeliv = "de110000-7ef5-11e5-7a40-e897001b4cc6"
+	orderID   = "211a86f4-b955-11f0-0a80-182e0028d0b8"
+	auditID   = "884ff854-abc1-11f1-0a80-106a00019ed6"
 )
 
 func testCatalog() stubCatalog {
@@ -353,15 +356,21 @@ type testEnv struct {
 }
 
 func newTestEnv(repo Repo) *testEnv {
+	return newTestEnvCfg(repo, Config{
+		CancelledStateID: testCancelledID,
+		SkipSources:      []string{"remap-1.2"},
+		PublicURL:        "http://warehouse.local:8080",
+	})
+}
+
+// newTestEnvCfg — окружение с произвольным Config: нужно для проверки
+// выключенной настройки (пустой MSAPI_CANCELLED_STATE_ID — отмена не детектится).
+func newTestEnvCfg(repo Repo, cfg Config) *testEnv {
 	audit := &stubAudit{details: map[string][]client.AuditEventRow{}, positions: map[string][]client.MSPosition{}}
 	stockS := &stubStock{}
 	notify := &stubNotifier{chatID: -100999, messageID: 42}
 	orders := &stubOrders{stateID: testCancelledID}
-	uc := NewUseCase(Config{
-		CancelledStateID: testCancelledID,
-		SkipSources:      []string{"remap-1.2"},
-		PublicURL:        "http://warehouse.local:8080",
-	}, audit, repo, testCatalog(), stockS, notify, orders)
+	uc := NewUseCase(cfg, audit, repo, testCatalog(), stockS, notify, orders)
 	return &testEnv{uc: uc, audit: audit, stock: stockS, notify: notify, orders: orders}
 }
 
