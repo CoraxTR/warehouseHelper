@@ -5,7 +5,6 @@ import (
 	"errors"
 	"strings"
 	"testing"
-	"time"
 
 	"warehouseHelper/internal/msclient/client"
 	"warehouseHelper/internal/msorders"
@@ -330,6 +329,13 @@ func TestSavePickReturnEmptyRows(t *testing.T) {
 // reducedWeightOrder — заказ с вручную урезанной весовой строкой: резерв
 // 1.962 кг (менеджер уменьшил вес), но с «Сроков» снят прежний кусок 2.482 кг
 // (лежит в журнале подбора).
+// Фикстура «урезанная строка»: менеджер уменьшил вес весовой строки reducedPosition
+// вручную (2.482 → 1.962 кг, живой случай 07246) — журнал помнит прежний кусок.
+const (
+	reducedPosition = "pos-2"
+	reducedPickedKg = 2.482
+)
+
 func reducedWeightOrder() (order *fakeOrderDetail, orderID string) {
 	fake, o := submitOrder()
 	fake.positions = []client.MSPosition{
@@ -340,11 +346,12 @@ func reducedWeightOrder() (order *fakeOrderDetail, orderID string) {
 	return fake, o.ID
 }
 
-// pickedJournal — фейк журнала с одним весовым куском по позиции (прежний
-// подбор: кусок тяжелее текущего резерва строки).
-func pickedJournal(orderID, positionID string, weightKg float64) *fakeJournal {
+// pickedJournal — фейк журнала для урезанной строки: прежний подбор = один
+// весовой кусок позиции reducedPosition с весом, который сейчас тяжелее резерва
+// строки (2.482 против 1.962 кг, живой случай 07246).
+func pickedJournal(orderID string) *fakeJournal {
 	return &fakeJournal{units: []msorders.PickingUnit{
-		{OrderID: orderID, PositionID: positionID, InternalCode: "00220002", Weighted: true, WeightKg: weightKg},
+		{OrderID: orderID, PositionID: reducedPosition, InternalCode: "00220002", Weighted: true, WeightKg: reducedPickedKg},
 	}}
 }
 
@@ -379,7 +386,7 @@ func TestReturnWeightG(t *testing.T) {
 func TestSavePickReturnReducedWeightedReturnsOldPiece(t *testing.T) {
 	fake, id := reducedWeightOrder()
 	acceptor := &fakeAcceptor{}
-	j := pickedJournal(id, "pos-2", 2.482)
+	j := pickedJournal(id)
 	uc := returnUC(fake, acceptor, &fakeNotifier{})
 	uc.SetPickingJournal(j)
 
@@ -401,7 +408,7 @@ func TestSavePickReturnReducedWeightedReturnsOldPiece(t *testing.T) {
 	}
 
 	checkRemovals(t, j.removals, []msorders.PickingReturn{
-		{OrderID: id, InternalCode: "00220002", BestBefore: jDay(time.October, 10), WeightKg: 2.482, Count: 1},
+		{OrderID: id, InternalCode: "00220002", BestBefore: oktDate(10), WeightKg: 2.482, Count: 1},
 	})
 }
 
@@ -412,7 +419,7 @@ func TestSavePickReturnReducedWeightedReserveScanRejected(t *testing.T) {
 	fake, id := reducedWeightOrder()
 	acceptor := &fakeAcceptor{}
 	uc := returnUC(fake, acceptor, &fakeNotifier{})
-	uc.SetPickingJournal(pickedJournal(id, "pos-2", 2.482))
+	uc.SetPickingJournal(pickedJournal(id))
 
 	_, err := uc.SavePickReturn(context.Background(), id, PickReturnRequest{Rows: []PickReturnRow{
 		{IDs: []string{"pos-2"}, Code: "00220002", Weighted: true, Scans: []ScanRecord{{WeightG: 1962, BB: "10102026"}}},
@@ -473,7 +480,7 @@ func TestSavePickReturnJournalReadError(t *testing.T) {
 func TestClosePickReturnReducedWeightedStaysInNotice(t *testing.T) {
 	fake, id := reducedWeightOrder()
 	notifier := &fakeNotifier{}
-	j := pickedJournal(id, "pos-2", 2.482)
+	j := pickedJournal(id)
 	uc := returnUC(fake, &fakeAcceptor{}, notifier)
 	uc.SetPickingJournal(j)
 

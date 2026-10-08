@@ -93,12 +93,6 @@ func (f *fakeJournal) OrderPickingByOrder(context.Context, string) ([]msorders.P
 	return f.units, f.unitsErr
 }
 
-// jDay — UTC-полночь дня 2026 года: ожидания дат журнала (bb — срок годности,
-// pd — выработка); год фиксирован, как в oktDate.
-func jDay(month time.Month, day int) time.Time {
-	return time.Date(2026, month, day, 0, 0, 0, 0, time.UTC)
-}
-
 // jUnit — плоское ожидание строки журнала: даты сравниваются строкой дня,
 // чтобы не возиться с *time.Time (пустая выработка — ProducedOn == nil).
 type jUnit struct {
@@ -382,7 +376,7 @@ func TestSavePickReturnJournalRemovesWeightedUnit(t *testing.T) {
 	}
 
 	checkRemovals(t, j.removals, []msorders.PickingReturn{
-		{OrderID: id, InternalCode: "00220002", BestBefore: jDay(time.October, 10), WeightKg: 0.657, Count: 1},
+		{OrderID: id, InternalCode: "00220002", BestBefore: oktDate(10), WeightKg: 0.657, Count: 1},
 	})
 }
 
@@ -409,8 +403,8 @@ func TestSavePickReturnJournalRemovesPieceUnits(t *testing.T) {
 	}
 
 	checkRemovals(t, j.removals, []msorders.PickingReturn{
-		{OrderID: id, InternalCode: "21110001", BestBefore: jDay(time.October, 10), WeightKg: 1, Count: 2},
-		{OrderID: id, InternalCode: "21110001", BestBefore: jDay(time.October, 11), WeightKg: 1, Count: 1},
+		{OrderID: id, InternalCode: "21110001", BestBefore: oktDate(10), WeightKg: 1, Count: 2},
+		{OrderID: id, InternalCode: "21110001", BestBefore: oktDate(11), WeightKg: 1, Count: 1},
 	})
 }
 
