@@ -654,13 +654,14 @@ func (d *DIContainer) ReturnsUC() *retucase.UseCase {
 	return d.returnsUC
 }
 
-// InventoryUC — сценарий инвентаризации: виды инвентаризации каталога и
-// создание документа в МС. GoodsUC реализует iucase.Catalog (методы модуля
-// «Продукция»), MSClient — iucase.MSClient (создание документа и признак
-// настроенного склада).
+// InventoryUC — сценарий инвентаризации: виды инвентаризации каталога,
+// создание документа в МС и замена остатков «Сроков» по сканам. GoodsUC
+// реализует iucase.Catalog (методы модуля «Продукция»), MSClient —
+// iucase.MSClient (создание документа и признак настроенного склада), StockUC —
+// iucase.Sroki (ReplaceInventoryLots модуля «Сроки»).
 func (d *DIContainer) InventoryUC() *iucase.UseCase {
 	if d.inventoryUC == nil {
-		d.inventoryUC = iucase.New(d.GoodsUC(), d.MSClient())
+		d.inventoryUC = iucase.New(d.GoodsUC(), d.MSClient(), d.StockUC())
 	}
 
 	return d.inventoryUC

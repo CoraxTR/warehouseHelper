@@ -10,6 +10,8 @@
 
 <body>
 
+    <div id="toast" class="toast" aria-live="polite"></div>
+
     <header class="brandbar">
         <a class="brandbar__brand" href="/"><svg class="brandbar__emblem" viewBox="0 0 64 64" aria-hidden="true"><circle class="em__shade" cx="35" cy="25" r="14"/><polygon class="em__shade" points="6,26 30,17 28,27"/><polygon class="em__shade" points="13,35 28,27 26,36"/><circle class="em__eye" cx="34" cy="23" r="3.6"/><circle class="em__glint" cx="33" cy="22" r="1.1"/></svg><span class="brandbar__name">ВОРОН&nbsp;&middot;&nbsp;СКЛАД</span></a>
         <div class="brandbar__right">
@@ -72,6 +74,10 @@
         <div id="scan-error" class="error" style="display:none;"></div>
         <div id="ok-banner" class="banner ok" style="display:none;"></div>
         <div id="scan-list"></div>
+        <div class="hold-title">Отложка</div>
+        <input id="hold-input" type="text" autocomplete="off" placeholder="Отсканируйте штрих-код отложки…">
+        <div id="hold-list"></div>
+        <div id="hold-counter" class="counter"></div>
         <div class="save-row">
             {{if .IsGuest}}
             <button id="send-btn" class="btn btn-save" type="button" disabled>Отправить сканы</button>
@@ -99,7 +105,7 @@
         // в количество по позициям, предпросмотр подтверждает и создаёт документ
         // в МС. Только ES5 (старые браузеры склада). Локальная проверка дублирует
         // серверную (авторитетную): состав группы, количества и деньги — сервер.
-        var INV = { scans: [], codes: {}, name: '', lengths: [], busy: false, storeReady: true };
+        var INV = { scans: [], hold: [], codes: {}, name: '', lengths: [], busy: false, storeReady: true };
 
         // Совместная инвентаризация (комната на сервере): хост открыл вид — комната
         // заведена, гости подключились к ней из списка идущих инвентаризаций и шлют
@@ -170,6 +176,25 @@
             b.style.display = 'block';
             clearTimeout(INV.okTimer);
             INV.okTimer = setTimeout(function () { b.style.display = 'none'; }, 8000);
+        }
+
+        // Тост — всплывающая сверху вниз надпись (после проведения: судьба сроков
+        // годности). Класс .toast--show запускает CSS-переход transform,
+        // автоскрытие — таймером ES5 (setTimeout), как у ok-баннера.
+        function showToast(msg, kind) {
+            var t = el('toast');
+            if (!t) {
+                return;
+            }
+            var cls = 'toast' + (kind ? ' toast--' + kind : '');
+            t.innerHTML = msg;
+            t.className = cls;
+            void t.offsetWidth;   // сброс перехода: следующая строка снова «всплывает»
+            t.className = cls + ' toast--show';
+            clearTimeout(INV.toastTimer);
+            INV.toastTimer = setTimeout(function () {
+                t.className = cls;
+            }, 4000);
         }
 
         // Громкий бип (Web Audio); нет звука — сообщение об ошибке всё равно видно.
@@ -266,11 +291,13 @@
             return 1;
         }
 
-        // Агрегация сканов по позициям (порядок первого появления).
-        function aggregate() {
+        // Агрегация сканов ОДНОГО списка по позициям (порядок первого появления).
+        // Общая строка и «Отложка» — один код, но РАЗНЫЕ массивы: вызывающий
+        // передаёт список (INV.scans или INV.hold).
+        function aggregate(list) {
             var byCode = {}, order = [], i;
-            for (i = 0; i < INV.scans.length; i++) {
-                var raw = INV.scans[i];
+            for (i = 0; i < list.length; i++) {
+                var raw = list[i];
                 var code = raw.substr(0, 8);
                 var item = INV.codes[code];
                 if (!byCode[code]) {
@@ -307,16 +334,19 @@
         }
 
         function updateButtons() {
+            // Сканы обеих строк (общая + отложка) — и предпросмотр, и отправка
+            // доступны, если набрана хоть одна строка.
+            var total = INV.scans.length + INV.hold.length;
             var p = el('preview-btn');
             if (p) {
                 // У хоста ворота — неготовые гости: пока они сканируют, документ
                 // проводить нельзя (обойти — «Провести без гостей»).
-                p.disabled = INV.busy || INV.scans.length === 0 ||
+                p.disabled = INV.busy || total === 0 ||
                     (ROOM_ID !== '' && !ROOM_GUEST && collabWaiting);
             }
             var s = el('send-btn');
             if (s) {
-                s.disabled = INV.busy || ROOM_CLOSED || SENDING || !GUEST_ID || INV.scans.length === 0;
+                s.disabled = INV.busy || ROOM_CLOSED || SENDING || !GUEST_ID || total === 0;
                 s.textContent = SENDING ? 'Отправляю…' : 'Отправить сканы';
             }
             var c = el('conduct-btn');
@@ -328,36 +358,60 @@
             }
         }
 
-        function renderAll() {
-            var rows = aggregate();
+        // Разметка одного списка сканов: имя, факт, число сканов, ✕ (убрать
+        // последний скан этой позиции из ПЕРЕДАННОГО списка).
+        function rowsHtml(rows) {
             var html = '';
             for (var i = 0; i < rows.length; i++) {
                 html += '<div class="scan-row"><span class="code">' + esc(rows[i].code) + '</span> '
                     + esc(rows[i].name) + ' — <b>' + esc(factText(rows[i])) + '</b> · сканов ' + rows[i].scans
                     + '<button type="button" class="rm" data-code="' + esc(rows[i].code) + '">✕</button></div>';
             }
-            el('scan-list').innerHTML = html;
+            return html;
+        }
+
+        function renderAll() {
+            var rows = aggregate(INV.scans);
+            el('scan-list').innerHTML = rowsHtml(rows);
+
+            var holdRows = aggregate(INV.hold);
+            var holdList = el('hold-list');
+            if (holdList) {
+                holdList.innerHTML = rowsHtml(holdRows);
+            }
 
             var c = el('counter');
             if (c) {
                 c.innerHTML = INV.scans.length === 0 ? ''
                     : 'сканов ' + INV.scans.length + ' · позиций ' + rows.length;
             }
+            var hc = el('hold-counter');
+            if (hc) {
+                hc.innerHTML = INV.hold.length === 0 ? ''
+                    : 'сканов отложки ' + INV.hold.length + ' · позиций ' + holdRows.length;
+            }
             updateButtons();
         }
 
-        function removeLastScan(code) {
-            for (var i = INV.scans.length - 1; i >= 0; i--) {
-                if (INV.scans[i].substr(0, 8) === code) {
-                    INV.scans.splice(i, 1);
+        // removeLast убирает ПОСЛЕДНИЙ скан позиции code из переданного списка
+        // (общая строка и отложка чистятся независимо).
+        function removeLast(list, code) {
+            for (var i = list.length - 1; i >= 0; i--) {
+                if (list[i].substr(0, 8) === code) {
+                    list.splice(i, 1);
                     break;
                 }
             }
             renderAll();
         }
 
-        function submitScan() {
-            var input = el('scan-input');
+        // Обработчик строки сканирования: общая строка и «Отложка» валидируются
+        // ОДИНАКОВО, но пишут в РАЗНЫЕ массивы (list). Ошибка показывается в
+        // видимом блоке #scan-error + бип — как и раньше.
+        function submitScan(input, list) {
+            if (!input) {
+                return;
+            }
             var raw = input.value.replace(/^\s+|\s+$/g, '');
             if (raw === '') {
                 return;
@@ -374,7 +428,7 @@
             // Гость после отправки захода начинает новый: хост снова его ждёт
             // (иначе кнопка проведения на хосте осталась бы открытой).
             if (ROOM_GUEST && GUEST_READY) { collabScanning(); }
-            INV.scans.push(raw);
+            list.push(raw);
             input.value = '';
             input.focus();
             renderAll();
@@ -385,6 +439,7 @@
                 return;
             }
             INV.scans = [];
+            INV.hold = [];
             hideError();
             renderAll();
             el('scan-input').focus();
@@ -414,12 +469,12 @@
                 // Гостю предпросмотр недоступен: документ собирает хост.
                 return;
             }
-            if (INV.busy || INV.scans.length === 0) {
+            if (INV.busy || (INV.scans.length === 0 && INV.hold.length === 0)) {
                 return;
             }
             INV.busy = true;
             updateButtons();
-            xhrPost('/goods/inventory/preview', { type: INV.name, scans: INV.scans }, function (status, data) {
+            xhrPost('/goods/inventory/preview', { type: INV.name, scans: INV.scans, hold: INV.hold }, function (status, data) {
                 INV.busy = false;
                 updateButtons();
                 if (status !== 200 || !data || !data.ok) {
@@ -433,15 +488,28 @@
 
         function renderPreview(data) {
             var html = '';
+            // Метки обнуления рисуем только там, где они не врут: шаг сроков точно
+            // побежит (в общей строке есть сканы) и мы видим ВСЕ строки. В комнате
+            // предпросмотр хоста идёт без строк гостей — позицию мог отсканировать
+            // гость, и метка «сроки обнулятся» была бы неправдой.
+            var showSroki = ROOM_ID === '' && !data.srokiSkip;
             for (var i = 0; i < data.rows.length; i++) {
                 var r = data.rows[i];
+                // qty — ИТОГ (общая строка + отложка); holdQty показываем добавкой,
+                // srokiZero — метка «товар с кодом склада без общих сканов».
                 html += '<div class="scan-row"><span class="code">' + esc(r.code) + '</span> '
-                    + esc(r.name) + ' — <b>' + esc(r.qty) + '</b> · ' + esc(r.price) + ' · сканов ' + r.scans
+                    + esc(r.name) + ' — <b>' + esc(r.qty) + '</b>'
+                    + (r.holdQty ? ' · <span class="hold-add">отложка ' + esc(r.holdQty) + '</span>' : '')
+                    + ' · ' + esc(r.price) + ' · сканов ' + r.scans
+                    + (showSroki && r.srokiZero ? ' · <span class="sroki-zero">сроки обнулятся</span>' : '')
                     + (r.zero ? ' · <span class="muted">не сканировано</span>' : '') + '</div>';
             }
             el('preview-rows').innerHTML = html;
             el('preview-summary').innerHTML = 'Позиций всего: ' + data.total
-                + ' · просканировано: ' + data.scanned + ' · сканов: ' + data.scans;
+                + ' · просканировано: ' + data.scanned + ' · сканов: ' + data.scans
+                + (data.holdScans > 0 ? ' · сканов отложки: ' + data.holdScans : '')
+                + (data.srokiSkip ? ' · <b>сроки обновляться не будут: в общей строке нет ни одного скана</b>' : '')
+                + (ROOM_ID !== '' ? ' · строки гостей в предпросмотр не входят: сроки обновятся по общим сканам всех машин' : '');
             hideError();
             hidePreviewError();
             el('scan-block').className = 'scan-block hidden';
@@ -467,14 +535,16 @@
                 showPreviewError('Склад МойСклад не настроен (MSAPI_STORE_ID): документ создать нельзя.');
                 return;
             }
-            if (INV.busy || INV.scans.length === 0) {
+            if (INV.busy || (INV.scans.length === 0 && INV.hold.length === 0)) {
                 return;
             }
             INV.busy = true;
             updateButtons();
             // session_id — комната: сервер сам доклеит строки гостей к нашим.
             // Пусто (комнаты нет после перезапуска) — проводим по своим сканам.
-            xhrPost('/goods/inventory/conduct', { type: INV.name, scans: INV.scans, session_id: ROOM_ID }, function (status, data) {
+            // hold — отложка: сервер сложит её с общей строкой в документ, но в
+            // сроки годности отложка не идёт.
+            xhrPost('/goods/inventory/conduct', { type: INV.name, scans: INV.scans, hold: INV.hold, session_id: ROOM_ID }, function (status, data) {
                 INV.busy = false;
                 updateButtons();
                 if (status !== 200 || !data || !data.ok) {
@@ -483,12 +553,21 @@
                     return;
                 }
                 INV.scans = [];
+                INV.hold = [];
                 el('preview').className = 'scan-block hidden';
                 el('scan-block').className = 'scan-block';
                 renderAll();
                 // Комната закрыта сервером после успеха: опрос прекращаем, гости
                 // отключены. Сканер не гасим — можно начать новое сканирование.
                 if (ROOM_ID !== '') { collabDone(); }
+                // Судьба сроков годности — тостом сверху: «обновлены» (сервер
+                // заменил лоты по общим сканам) или «не обновлялись» (в общей
+                // строке не было сканов, вид не трогали).
+                if (data.sroki === 'skipped') {
+                    showToast('Сроки не обновлялись: в общей строке нет ни одного скана', 'warn');
+                } else {
+                    showToast('Сроки обновлены', 'ok');
+                }
                 showOk('Создан документ «' + esc(data.name) + '»'
                     + (data.url ? ' — <a href="' + esc(data.url) + '" target="_blank">открыть в МойСклад</a>' : '')
                     + '. Сканы очищены — можно начать новое сканирование.');
@@ -735,6 +814,8 @@
             if (p) { p.disabled = true; }
             var input = el('scan-input');
             if (input) { input.disabled = true; }
+            var hinput = el('hold-input');
+            if (hinput) { hinput.disabled = true; }
         }
 
         // collabKicked — машина отключена хостом (или комнаты уже нет): опрос
@@ -750,6 +831,8 @@
             if (e) { e.className = 'collab-line collab-wait'; e.textContent = text; }
             var input = el('scan-input');
             if (input) { input.disabled = true; }
+            var hinput = el('hold-input');
+            if (hinput) { hinput.disabled = true; }
             updateButtons();
         }
 
@@ -796,6 +879,7 @@
                 sentRows = mine ? mine.rows : sentRows + scans.length;
                 if (mine) { roomLastSeq = Math.max(roomLastSeq, mine.last_seq || 0); }
                 INV.scans = [];
+                INV.hold = [];
                 renderAll();
                 collabGuestState('Отправлено хосту, всего строк: ' + sentRows +
                     '. Можно сканировать следующий заход.', true);
@@ -826,14 +910,21 @@
                 collabGuestState('Подключение к инвентаризации ещё не завершено — подождите секунду и повторите', false);
                 return;
             }
-            if (!INV.scans.length) { return; }
+            if (!INV.scans.length && !INV.hold.length) { return; }
             // seq — номер строки в общем потоке комнаты, считаем от последнего
             // отправленного (roomLastSeq). Каждая отправка уходит со своим
             // chunk_id, а сервер отбрасывает повтор того же чанка (chunk_id +
             // сумма), поэтому повтор после обрыва связи дублей не создаёт.
-            var scans = [], i;
+            // Строки «Отложки» уходят с флагом hold:true — хост не путает их с
+            // общей строкой (в сроки годности отложка не идёт).
+            var scans = [], i, seq = roomLastSeq;
             for (i = 0; i < INV.scans.length; i++) {
-                scans.push({ raw: INV.scans[i], seq: roomLastSeq + i + 1 });
+                seq += 1;
+                scans.push({ raw: INV.scans[i], seq: seq });
+            }
+            for (i = 0; i < INV.hold.length; i++) {
+                seq += 1;
+                scans.push({ raw: INV.hold[i], seq: seq, hold: true });
             }
             collabSubmit(scans);
         }
@@ -896,30 +987,42 @@
             collabTimer = window.setInterval(collabPoll, 2500);
         }
 
-        function init() {
-            readData();
-            var input = el('scan-input');
+        // bindScanRow вешает Enter-обработчик строки сканирования и удаление
+        // последнего скана позиции (✕) на её список. Общая строка и «Отложка» —
+        // один и тот же код с разными массивами. Массив берём по КЛЮЧУ (INV[key])
+        // в момент события, а не ссылку при навешивании: проведение и отправка
+        // делают INV.scans = [], и захваченная ссылка осталась бы на «мёртвый»
+        // массив (скан ушёл бы в никуда).
+        function bindScanRow(input, listEl, key) {
             if (input) {
                 input.addEventListener('keydown', function (ev) {
                     if (ev.keyCode === 13) {
                         ev.preventDefault();
-                        submitScan();
+                        submitScan(input, INV[key]);
                     }
                 });
-                input.focus();
             }
-            var list = el('scan-list');
-            if (list) {
-                list.addEventListener('click', function (ev) {
+            if (listEl) {
+                listEl.addEventListener('click', function (ev) {
                     var t = ev.target || ev.srcElement;
-                    while (t && t !== list) {
+                    while (t && t !== listEl) {
                         if (t.getAttribute && t.getAttribute('data-code') !== null) {
-                            removeLastScan(t.getAttribute('data-code'));
+                            removeLast(INV[key], t.getAttribute('data-code'));
                             return;
                         }
                         t = t.parentNode;
                     }
                 });
+            }
+        }
+
+        function init() {
+            readData();
+            bindScanRow(el('scan-input'), el('scan-list'), 'scans');
+            bindScanRow(el('hold-input'), el('hold-list'), 'hold');
+            var input = el('scan-input');
+            if (input) {
+                input.focus();
             }
             var preview = el('preview-btn');
             if (preview) {

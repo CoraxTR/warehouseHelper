@@ -76,41 +76,62 @@ type invGroupItem struct {
 	D float64 `json:"d"`
 }
 
+// invMaxBody — потолок тела запросов инвентаризации: тело несёт два массива
+// штрих-кодов (общая строка и «Отложка») на заход; 2 МБ хватает с запасом, а
+// мусор в память не пролезет (как collabMaxBody у комнаты).
+const invMaxBody = 2 << 20
+
 // invPreviewRequest — вход предпросмотра и проведения (одинаковый).
 type invPreviewRequest struct {
-	Type      string   `json:"type"`
-	Scans     []string `json:"scans"`
+	Type  string   `json:"type"`
+	Scans []string `json:"scans"`
+	// Hold — сканы строки «Отложка»: товар под заказами, физически лежащий на
+	// складе. Его количество складывается с общей строкой в позицию документа
+	// МС, но в сроки годности отложка не идёт вообще (единицы уже списаны
+	// подбором). Поле необязательное: нет — nil.
+	Hold      []string `json:"hold"`
 	SessionID string   `json:"session_id"`
 }
 
 // invPreviewRow — строка предпросмотра: только строки, никаких сырых float и
 // указателей (форматирование — на сервере).
 type invPreviewRow struct {
-	Code     string `json:"code"`
-	Name     string `json:"name"`
-	Qty      string `json:"qty"`
-	Price    string `json:"price"`
-	Scans    int    `json:"scans"`
-	Scanable bool   `json:"scanable"`
-	Zero     bool   `json:"zero"`
+	Code      string `json:"code"`
+	Name      string `json:"name"`
+	Qty       string `json:"qty"`
+	HoldQty   string `json:"holdQty"`
+	Price     string `json:"price"`
+	Scans     int    `json:"scans"`
+	HoldScans int    `json:"holdScans"`
+	Scanable  bool   `json:"scanable"`
+	Zero      bool   `json:"zero"`
+	SrokiZero bool   `json:"srokiZero"`
 }
 
 // invPreviewResponse — ответ предпросмотра (rows — все позиции группы).
 type invPreviewResponse struct {
-	OK      bool            `json:"ok"`
-	Total   int             `json:"total"`
-	Scanned int             `json:"scanned"`
-	Scans   int             `json:"scans"`
-	AllZero bool            `json:"allZero"`
-	Rows    []invPreviewRow `json:"rows"`
+	OK        bool `json:"ok"`
+	Total     int  `json:"total"`
+	Scanned   int  `json:"scanned"`
+	Scans     int  `json:"scans"`
+	HoldScans int  `json:"holdScans"`
+	AllZero   bool `json:"allZero"`
+	// SrokiSkip — шаг сроков не побежит: в общей строке нет ни одного скана
+	// (страховка не обнуляет вид). Страница вместо построчных меток обнуления
+	// пишет оператору, что сроки не будут меняться.
+	SrokiSkip bool            `json:"srokiSkip"`
+	Rows      []invPreviewRow `json:"rows"`
 }
 
-// invConductResponse — ответ проведения: созданный документ МС.
+// invConductResponse — ответ проведения: созданный документ МС и итог шага
+// сроков годности (updated — сроки заменены, skipped — общих сканов нет,
+// сроки не трогали).
 type invConductResponse struct {
-	OK   bool   `json:"ok"`
-	Name string `json:"name"`
-	URL  string `json:"url"`
-	ID   string `json:"id"`
+	OK    bool   `json:"ok"`
+	Name  string `json:"name"`
+	URL   string `json:"url"`
+	ID    string `json:"id"`
+	Sroki string `json:"sroki"`
 }
 
 // invErrorResponse — ошибка JSON-эндпоинта.
@@ -244,15 +265,16 @@ func (h *Handler) renderInventoryScan(w http.ResponseWriter, data goodsInventory
 }
 
 // GoodsInventoryPreview — POST /goods/inventory/preview: предпросмотр документа
-// по сканам. body: {"type":"…","scans":["…"]}. 200 — все позиции группы со
-// фактическим количеством; 400 — вид не задан / скан невалиден / не из группы.
+// по сканам. body: {"type":"…","scans":["…"],"hold":["…"]}. 200 — все позиции
+// группы с фактическим количеством (итог = общая строка + отложка); 400 — вид не
+// задан / скан невалиден / не из группы.
 func (h *Handler) GoodsInventoryPreview(w http.ResponseWriter, r *http.Request) {
 	req, ok := invDecodeRequest(w, r)
 	if !ok {
 		return
 	}
 
-	preview, err := h.inventoryUC.Preview(r.Context(), req.Type, req.Scans)
+	preview, err := h.inventoryUC.Preview(r.Context(), req.Type, req.Scans, req.Hold)
 	if err != nil {
 		invWriteJSONError(w, err)
 
@@ -263,16 +285,19 @@ func (h *Handler) GoodsInventoryPreview(w http.ResponseWriter, r *http.Request) 
 }
 
 // GoodsInventoryConduct — POST /goods/inventory/conduct: создать документ
-// инвентаризации в МС. body: {"type":"…","scans":["…"],"session_id":"…"}.
-// 200 — документ; 400 — вид/сканы (пусто, не из группы, пустая группа);
-// 403 — проведение запросила не машина-хозяин; 409 — комната занята/не готова;
-// прочее (в т.ч. склад МС не настроен и ошибки МС) — 500 с текстом в error.
+// инвентаризации в МС. body: {"type":"…","scans":["…"],"hold":["…"],"session_id":"…"}.
+// Порядок шагов сервера: СНАЧАЛА сроки годности, ПОТОМ документ МС. Сбой сроков —
+// документ не создаётся, оператор видит ошибку.
+// 200 — документ и итог сроков (sroki: updated|skipped); 400 — вид/сканы (пусто,
+// не из группы, пустая группа); 403 — проведение запросила не машина-хозяин;
+// 409 — комната занята/не готова; прочее (в т.ч. склад МС не настроен и ошибки
+// МС/сроков) — 500 с текстом в error.
 //
 // Совместная инвентаризация: session_id непустой — строки подключённых гостей
-// доклеиваются к строкам хоста, и весь вид уходит в ОДИН вызов Conduct (документ
-// в МС создаёт только хозяин). Пока не все гости прислали сканы, проведение
-// отвергается (409): кнопка на странице хоста заблокирована, но устаревшая
-// страница не должна провести без чужих строк.
+// доклеиваются к строкам хоста (общая строка и отложка отдельно), и весь вид
+// уходит в ОДИН вызов Conduct (документ в МС создаёт только хозяин). Пока не все
+// гости прислали сканы, проведение отвергается (409): кнопка на странице хоста
+// заблокирована, но устаревшая страница не должна провести без чужих строк.
 func (h *Handler) GoodsInventoryConduct(w http.ResponseWriter, r *http.Request) {
 	req, ok := invDecodeRequest(w, r)
 	if !ok {
@@ -281,6 +306,7 @@ func (h *Handler) GoodsInventoryConduct(w http.ResponseWriter, r *http.Request) 
 
 	sessionID := strings.TrimSpace(req.SessionID)
 	scans := req.Scans
+	hold := req.Hold
 	claimed := false
 
 	if sessionID != "" {
@@ -315,7 +341,7 @@ func (h *Handler) GoodsInventoryConduct(w http.ResponseWriter, r *http.Request) 
 
 		claimed = taken
 
-		merged, mergeErr := iucase.MergeGuestScans(scans, guestRows)
+		merged, mergeErr := iucase.MergeGuestScans(scans, hold, guestRows)
 		if mergeErr != nil {
 			if claimed {
 				h.releaseRoom(sessionID)
@@ -328,10 +354,12 @@ func (h *Handler) GoodsInventoryConduct(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 
-		scans = merged
+		scans = merged.Scans
+		hold = merged.Hold
 	}
 
-	if len(scans) == 0 {
+	// Общая строка и отложка вместе пусты — создавать документ не из чего.
+	if len(scans)+len(hold) == 0 {
 		invWriteJSON(w, http.StatusBadRequest, invErrorResponse{
 			Error: "нет сканов — создавать документ не из чего",
 		})
@@ -339,12 +367,23 @@ func (h *Handler) GoodsInventoryConduct(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	doc, err := h.inventoryUC.Conduct(r.Context(), req.Type, scans)
+	doc, outcome, err := h.inventoryUC.Conduct(r.Context(), req.Type, scans, hold)
 	if err != nil {
 		// Инвентаризация не прошла — комнату освобождаем: строки гостей на месте,
 		// хост может повторить (в том числе провести без гостей).
 		if claimed {
 			h.releaseRoom(sessionID)
+		}
+
+		// Сроки уже заменены, а документ не создался: об этом оператор обязан
+		// узнать — обнуление необратимо, а повторное проведение по тем же сканам
+		// его не изменит (шаг идемпотентен). Ошибку оборачиваем, сохраняя цепочку
+		// (код ответа считает invErrorStatus по исходной ошибке).
+		if outcome == iucase.SrokiUpdated {
+			invWriteJSONError(w, fmt.Errorf(
+				"%w · сроки годности уже обновлены по сканам общей строки, повторное проведение их не изменит", err))
+
+			return
 		}
 
 		invWriteJSONError(w, err)
@@ -361,10 +400,11 @@ func (h *Handler) GoodsInventoryConduct(w http.ResponseWriter, r *http.Request) 
 	}
 
 	invWriteJSON(w, http.StatusOK, invConductResponse{
-		OK:   true,
-		Name: doc.Name,
-		URL:  doc.URL,
-		ID:   doc.ID,
+		OK:    true,
+		Name:  doc.Name,
+		URL:   doc.URL,
+		ID:    doc.ID,
+		Sroki: string(outcome),
 	})
 }
 
@@ -372,6 +412,9 @@ func (h *Handler) GoodsInventoryConduct(w http.ResponseWriter, r *http.Request) 
 // вид без смысла (страница обязана была его подставить) — 400.
 func invDecodeRequest(w http.ResponseWriter, r *http.Request) (invPreviewRequest, bool) {
 	var req invPreviewRequest
+
+	r.Body = http.MaxBytesReader(w, r.Body, invMaxBody)
+
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		invWriteJSON(w, http.StatusBadRequest, invErrorResponse{Error: "не удалось прочитать запрос"})
 
@@ -430,53 +473,74 @@ func invLengthsText() string {
 }
 
 // invPreviewBody — отчёт для клиента: все строки группы, отформатированные деньги
-// и количества. allZero — ни одной ненулевой строки (нечего проводить).
+// и количества. Qty — ИТОГ строки (общая + отложка) в единицах товара; holdQty —
+// текст добавки отложки, только когда отложка есть (иначе пусто). allZero — ни
+// одной ненулевой строки (нечего проводить). srokiZero — товар с кодом склада без
+// общих сканов: при проведении все его сроки годности обнулятся. srokiSkip — шаг
+// сроков не побежит вообще (в общей строке нет ни одного скана), и тогда метки
+// обнуления не рисуются: они врали бы оператору с точностью до наоборот.
 func invPreviewBody(p inventory.Preview) invPreviewResponse {
 	rows := make([]invPreviewRow, 0, len(p.Lines))
 	allZero := true
+	// srokiRun — побежит ли шаг сроков: без единого скана общей строки он
+	// пропускается (страховка Conduct), значит построчные метки обнуления
+	// показывать нельзя.
+	srokiRun := p.Scans > 0
 	for _, line := range p.Lines {
-		zero := line.Fact == 0
+		zero := line.Total() == 0
 		if !zero {
 			allZero = false
 		}
 		qty := "0"
 		if !zero {
-			// Факт строки показываем только у просканированных позиций: у
+			// Итог строки показываем только у просканированных позиций: у
 			// непросканированных он ноль, а «0 кг / 0 шт» читается как ошибка.
-			qty = invQtyText(line)
+			qty = invQtyText(line.Total(), line)
+		}
+		holdQty := ""
+		if line.HoldScans > 0 {
+			holdQty = invQtyText(line.HoldFact, line)
 		}
 		rows = append(rows, invPreviewRow{
-			Code:     line.InternalCode,
-			Name:     line.Name,
-			Qty:      qty,
-			Price:    invRublesText(line.PriceKop),
-			Scans:    line.Scans,
-			Scanable: line.Scanable,
-			Zero:     zero,
+			Code:      line.InternalCode,
+			Name:      line.Name,
+			Qty:       qty,
+			HoldQty:   holdQty,
+			Price:     invRublesText(line.PriceKop),
+			Scans:     line.Scans,
+			HoldScans: line.HoldScans,
+			Scanable:  line.Scanable,
+			Zero:      zero,
+			// Товар с кодом склада и без общих сканов: чего не нашли в общей
+			// строке — при проведении теряет все лоты (сроки обнулятся).
+			SrokiZero: srokiRun && line.Scanable && line.Scans == 0,
 		})
 	}
 
 	return invPreviewResponse{
-		OK:      true,
-		Total:   p.Total,
-		Scanned: p.Scanned,
-		Scans:   p.Scans,
-		AllZero: allZero,
-		Rows:    rows,
+		OK:        true,
+		Total:     p.Total,
+		Scanned:   p.Scanned,
+		Scans:     p.Scans,
+		HoldScans: p.HoldScans,
+		AllZero:   allZero,
+		SrokiSkip: !srokiRun,
+		Rows:      rows,
 	}
 }
 
-// invQtyText — факт просканированной строки строкой: весовой — в единицах
-// товара (кг/г/т) с точностью грамма, штучный — целое. Непросканированные
-// строки в предпросмотре показываются отдельным текстом («0»), сюда не попадают.
-func invQtyText(line inventory.Line) string {
+// invQtyText — количество в единицах товара строкой: весовой — с точностью
+// единицы (кг/г/т), штучный — целое. Значение — аргумент, а line — источник
+// вида товара и подписи единицы: так одним хелпером печатается и итог строки, и
+// добавка отложки; отдельного флага «весовой» нет (revive flag-parameter).
+func invQtyText(value float64, line inventory.Line) string {
 	if !line.Weighted {
-		return strconv.FormatFloat(line.Fact, 'f', 0, 64) + " " + invUnitLabel(line.UOM)
+		return strconv.FormatFloat(value, 'f', 0, 64) + " " + invUnitLabel(line.UOM)
 	}
 
 	decimals := inventory.WeightDecimals(line.UOM)
 
-	return strconv.FormatFloat(line.Fact, 'f', decimals, 64) + " " + invUnitLabel(line.UOM)
+	return strconv.FormatFloat(value, 'f', decimals, 64) + " " + invUnitLabel(line.UOM)
 }
 
 // invUnitLabel — подпись единицы в предпросмотре: uom товара как есть; пустая

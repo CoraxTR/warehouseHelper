@@ -231,7 +231,7 @@ func TestAggregate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := Aggregate(tt.products, tt.scans)
+			got, err := Aggregate(tt.products, tt.scans, nil)
 			if err != nil {
 				t.Fatalf("Aggregate() error = %v, want nil", err)
 			}
@@ -289,7 +289,7 @@ func TestAggregateErrors(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := Aggregate(tt.products, tt.scans)
+			_, err := Aggregate(tt.products, tt.scans, nil)
 			if !errors.Is(err, tt.wantErr) {
 				t.Fatalf("Aggregate() error = %v, want errors.Is %v", err, tt.wantErr)
 			}
@@ -336,7 +336,7 @@ func TestPositions(t *testing.T) {
 }
 
 func TestPositionsFromAggregate(t *testing.T) {
-	preview, err := Aggregate([]Product{weightProduct, noCodeProduct}, []string{item(weightCode, 250)})
+	preview, err := Aggregate([]Product{weightProduct, noCodeProduct}, []string{item(weightCode, 250)}, nil)
 	if err != nil {
 		t.Fatalf("Aggregate() error = %v", err)
 	}
@@ -391,7 +391,7 @@ func TestWeightDecimals(t *testing.T) {
 // TestAggregateGramsUOM — весовой товар в граммах: факт в граммах, не в кг.
 func TestAggregateGramsUOM(t *testing.T) {
 	products := []Product{{ID: "p-1", InternalCode: "10210001", Name: "Специи", UOM: "г"}}
-	preview, err := Aggregate(products, []string{item("10210001", 250)})
+	preview, err := Aggregate(products, []string{item("10210001", 250)}, nil)
 	if err != nil {
 		t.Fatalf("Aggregate() error = %v", err)
 	}
@@ -400,5 +400,218 @@ func TestAggregateGramsUOM(t *testing.T) {
 	}
 	if got := preview.Lines[0].Weighted; !got {
 		t.Error("Weighted = false, want true")
+	}
+}
+
+// TestAggregateHold — сканы «Отложки» ложатся в HoldFact/HoldScans отдельно от
+// общей строки; Total складывает обе колонки, а позиция считается
+// просканированной при скане в ЛЮБОЙ из строк (Scanned), при этом Scans и
+// HoldScans считают сканы каждой колонки раздельно.
+func TestAggregateHold(t *testing.T) {
+	tests := []struct {
+		name     string
+		products []Product
+		scans    []string
+		hold     []string
+		want     Preview
+	}{
+		{
+			name:     "весовой: общая и отложка раздельно, Total складывает",
+			products: []Product{weightProduct},
+			scans:    []string{item(weightCode, 250)},
+			hold:     []string{item(weightCode, 500)},
+			want: Preview{
+				Lines: []Line{{
+					ProductID:    "prod-weight",
+					InternalCode: weightCode,
+					Name:         "Говядина охл",
+					UOM:          "кг",
+					Weighted:     true,
+					Fact:         0.25,
+					Scans:        1,
+					HoldFact:     0.5,
+					HoldScans:    1,
+					PriceKop:     150000,
+					Scanable:     true,
+				}},
+				Total: 1, Scanned: 1, Scans: 1, HoldScans: 1,
+			},
+		},
+		{
+			name:     "штучный: сканы только в отложке — позиция просканирована, Scans 0",
+			products: []Product{pieceProduct},
+			hold:     []string{item(pieceCode, 100), item(pieceCode, 200)},
+			want: Preview{
+				Lines: []Line{{
+					ProductID:    "prod-piece",
+					InternalCode: pieceCode,
+					Name:         "Соус",
+					UOM:          "шт",
+					HoldFact:     2,
+					HoldScans:    2,
+					PriceKop:     50000,
+					Scanable:     true,
+				}},
+				Total: 1, Scanned: 1, Scans: 0, HoldScans: 2,
+			},
+		},
+		{
+			name:     "разные позиции: одна в общей, другая в отложке — Scanned обе",
+			products: []Product{weightProduct, pieceProduct},
+			scans:    []string{item(weightCode, 250)},
+			hold:     []string{item(pieceCode, 100)},
+			want: Preview{
+				Lines: []Line{
+					{
+						ProductID:    "prod-weight",
+						InternalCode: weightCode,
+						Name:         "Говядина охл",
+						UOM:          "кг",
+						Weighted:     true,
+						Fact:         0.25,
+						Scans:        1,
+						PriceKop:     150000,
+						Scanable:     true,
+					},
+					{
+						ProductID:    "prod-piece",
+						InternalCode: pieceCode,
+						Name:         "Соус",
+						UOM:          "шт",
+						HoldFact:     1,
+						HoldScans:    1,
+						PriceKop:     50000,
+						Scanable:     true,
+					},
+				},
+				Total: 2, Scanned: 2, Scans: 1, HoldScans: 1,
+			},
+		},
+		{
+			name:     "отложка пустая — поведение как раньше",
+			products: []Product{weightProduct},
+			scans:    []string{item(weightCode, 250)},
+			want: Preview{
+				Lines: []Line{{
+					ProductID:    "prod-weight",
+					InternalCode: weightCode,
+					Name:         "Говядина охл",
+					UOM:          "кг",
+					Weighted:     true,
+					Fact:         0.25,
+					Scans:        1,
+					PriceKop:     150000,
+					Scanable:     true,
+				}},
+				Total: 1, Scanned: 1, Scans: 1,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := Aggregate(tt.products, tt.scans, tt.hold)
+			if err != nil {
+				t.Fatalf("Aggregate() error = %v, want nil", err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("Aggregate() = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestAggregateHoldErrors — плохой скан «Отложки» валидируется тем же правилом,
+// что и общая строка (чужой код / битый скан). Порядок разбора детерминирован:
+// общая строка идёт первой, и её ошибка решает, даже если в отложке свой мусор —
+// разные сентинелы на входе доказывают, что сработал именно первый список.
+func TestAggregateHoldErrors(t *testing.T) {
+	foreign := item("21210005", 300) // код разобран, но товара с ним нет в группе
+
+	tests := []struct {
+		name    string
+		scans   []string
+		hold    []string
+		wantErr error
+	}{
+		{
+			name:    "чужой код в отложке",
+			scans:   []string{item(weightCode, 250)},
+			hold:    []string{foreign},
+			wantErr: ErrScanNotInGroup,
+		},
+		{
+			name:    "битый скан в отложке",
+			scans:   []string{item(weightCode, 250)},
+			hold:    []string{"junk-hold"},
+			wantErr: ErrScanInvalid,
+		},
+		{
+			name:    "пустой скан в отложке",
+			hold:    []string{""},
+			wantErr: ErrScanInvalid,
+		},
+		{
+			name:    "порядок: чужой код в общей решает над мусором в отложке",
+			scans:   []string{foreign},     // ErrScanNotInGroup
+			hold:    []string{"junk-hold"}, // ErrScanInvalid, если бы отложка шла первой
+			wantErr: ErrScanNotInGroup,
+		},
+		{
+			name:    "порядок: мусор в общей решает над чужим кодом в отложке",
+			scans:   []string{"junk-own"}, // ErrScanInvalid
+			hold:    []string{foreign},    // ErrScanNotInGroup, если бы отложка шла первой
+			wantErr: ErrScanInvalid,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Aggregate([]Product{weightProduct}, tt.scans, tt.hold)
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("Aggregate() error = %v, want errors.Is %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// TestLineTotal — итог позиции = общая строка + отложка.
+func TestLineTotal(t *testing.T) {
+	tests := []struct {
+		name string
+		line Line
+		want float64
+	}{
+		{name: "общая и отложка", line: Line{Fact: 2.75, HoldFact: 0.5}, want: 3.25},
+		{name: "только отложка", line: Line{HoldFact: 1}, want: 1},
+		{name: "пусто", line: Line{}, want: 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.line.Total(); got != tt.want {
+				t.Fatalf("Total() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestPositionsTotalWithHold — количество в документ МС = итог (общая + отложка),
+// отложка отдельной строкой не идёт.
+func TestPositionsTotalWithHold(t *testing.T) {
+	preview, err := Aggregate(
+		[]Product{weightProduct, pieceProduct},
+		[]string{item(weightCode, 250)},
+		[]string{item(weightCode, 500), item(pieceCode, 100)},
+	)
+	if err != nil {
+		t.Fatalf("Aggregate() error = %v", err)
+	}
+	want := []Position{
+		{ProductID: "prod-weight", Quantity: 0.75, PriceKop: 150000},
+		{ProductID: "prod-piece", Quantity: 1, PriceKop: 50000},
+	}
+	if got := Positions(preview); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Positions() = %+v, want %+v", got, want)
 	}
 }
