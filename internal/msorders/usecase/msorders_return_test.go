@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"warehouseHelper/internal/msclient/client"
+	"warehouseHelper/internal/msorders"
 	"warehouseHelper/internal/scanmatch"
 	"warehouseHelper/internal/stock"
 )
@@ -323,4 +324,179 @@ func TestSavePickReturnEmptyRows(t *testing.T) {
 	if _, err := uc.SavePickReturn(context.Background(), id, PickReturnRequest{}); !errors.Is(err, ErrReturnEmptyRows) {
 		t.Fatalf("ошибка = %v, want ErrReturnEmptyRows", err)
 	}
+}
+
+// reducedWeightOrder — заказ с вручную урезанной весовой строкой: резерв
+// 1.962 кг (менеджер уменьшил вес), но с «Сроков» снят прежний кусок 2.482 кг
+// (лежит в журнале подбора).
+// Фикстура «урезанная строка»: менеджер уменьшил вес весовой строки reducedPosition
+// вручную (2.482 → 1.962 кг, живой случай 07246) — журнал помнит прежний кусок.
+const (
+	reducedPosition = "pos-2"
+	reducedPickedKg = 2.482
+)
+
+func reducedWeightOrder() (order *fakeOrderDetail, orderID string) {
+	fake, o := submitOrder()
+	fake.positions = []client.MSPosition{
+		position("pos-1", "21110001", "Соус терияки", 5, 50000, 5),
+		position("pos-2", "00220002", "Стейк Нью-Йорк", 1.962, 279000, 1.962),
+	}
+
+	return fake, o.ID
+}
+
+// pickedJournal — фейк журнала для урезанной строки: прежний подбор = один
+// весовой кусок позиции reducedPosition с весом, который сейчас тяжелее резерва
+// строки (2.482 против 1.962 кг, живой случай 07246).
+func pickedJournal(orderID string) *fakeJournal {
+	return &fakeJournal{units: []msorders.PickingUnit{
+		{OrderID: orderID, PositionID: reducedPosition, InternalCode: "00220002", Weighted: true, WeightKg: reducedPickedKg},
+	}}
+}
+
+// TestReturnWeightG — ожидание возврата весовой строки: вес прежнего куска из
+// журнала, если он тяжелее грамм резерва; иначе — граммы резерва.
+func TestReturnWeightG(t *testing.T) {
+	tests := []struct {
+		name      string
+		reserveKg float64
+		pickedG   int64
+		want      int64
+	}{
+		{name: "журнал тяжелее резерва — вес прежнего куска", reserveKg: 1.962, pickedG: 2482, want: 2482},
+		{name: "журнал равен резерву — граммы резерва", reserveKg: 1.962, pickedG: 1962, want: 1962},
+		{name: "журнала нет — граммы резерва", reserveKg: 1.962, pickedG: 0, want: 1962},
+		{name: "журнал легче резерва — граммы резерва", reserveKg: 1.962, pickedG: 1000, want: 1962},
+		{name: "хвостовые граммы резерва округляются", reserveKg: 2.4824, pickedG: 0, want: 2482},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := returnWeightG(tc.reserveKg, tc.pickedG); got != tc.want {
+				t.Errorf("returnWeightG(%v, %d) = %d, want %d", tc.reserveKg, tc.pickedG, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestSavePickReturnReducedWeightedReturnsOldPiece — урезанная вручную весовая
+// строка: оператор вернул прежний кусок 2.482 кг — единица уходит в остатки по
+// сроку этикетки, а журнал чистится по весу 2.482 (не по резерву 1.962).
+func TestSavePickReturnReducedWeightedReturnsOldPiece(t *testing.T) {
+	fake, id := reducedWeightOrder()
+	acceptor := &fakeAcceptor{}
+	j := pickedJournal(id)
+	uc := returnUC(fake, acceptor, &fakeNotifier{})
+	uc.SetPickingJournal(j)
+
+	res, err := uc.SavePickReturn(context.Background(), id, PickReturnRequest{Rows: []PickReturnRow{
+		{IDs: []string{"pos-2"}, Code: "00220002", Weighted: true, Scans: []ScanRecord{{WeightG: 2482, BB: "10102026"}}},
+	}})
+	if err != nil {
+		t.Fatalf("SavePickReturn: %v", err)
+	}
+	if acceptor.calls != 1 || len(acceptor.lots) != 1 {
+		t.Fatalf("AcceptStock вызовов = %d, лотов = %d, want 1/1: %+v", acceptor.calls, len(acceptor.lots), acceptor.lots)
+	}
+	lot := acceptor.lots[0]
+	if lot.ProductID != "p2" || !lot.BestBefore.Equal(oktDate(10)) || lot.Qty != 1 {
+		t.Errorf("лот = %+v, want p2/2026-10-10/1", lot)
+	}
+	if res.Units != 1 || len(res.Rows) != 1 || res.Rows[0].Code != "00220002" {
+		t.Errorf("сводка = %+v, want 1 единица по 00220002", res)
+	}
+
+	checkRemovals(t, j.removals, []msorders.PickingReturn{
+		{OrderID: id, InternalCode: "00220002", BestBefore: oktDate(10), WeightKg: 2.482, Count: 1},
+	})
+}
+
+// TestSavePickReturnReducedWeightedReserveScanRejected — урезанная строка:
+// скана по весу резерва (1.962) недостаточно — ожидается прежний кусок 2.482,
+// отказ сверки, в остатки не пишем.
+func TestSavePickReturnReducedWeightedReserveScanRejected(t *testing.T) {
+	fake, id := reducedWeightOrder()
+	acceptor := &fakeAcceptor{}
+	uc := returnUC(fake, acceptor, &fakeNotifier{})
+	uc.SetPickingJournal(pickedJournal(id))
+
+	_, err := uc.SavePickReturn(context.Background(), id, PickReturnRequest{Rows: []PickReturnRow{
+		{IDs: []string{"pos-2"}, Code: "00220002", Weighted: true, Scans: []ScanRecord{{WeightG: 1962, BB: "10102026"}}},
+	}})
+	if err == nil {
+		t.Fatal("ожидался отказ сверки: ожидание возврата — прежний кусок 2.482")
+	}
+	if _, ok := errors.AsType[*scanmatch.ValidationError](err); !ok {
+		t.Fatalf("ошибка %v (%T), want *scanmatch.ValidationError", err, err)
+	}
+	if acceptor.calls != 0 {
+		t.Errorf("AcceptStock вызван при отказе сверки: %d", acceptor.calls)
+	}
+}
+
+// TestSavePickReturnWeightedWithoutJournalRegression — журнал пуст (pickedG
+// нет): ожидание возврата = резерв строки, скан 1.962 кг проходит — старое
+// поведение не сломано.
+func TestSavePickReturnWeightedWithoutJournalRegression(t *testing.T) {
+	fake, id := reducedWeightOrder()
+	acceptor := &fakeAcceptor{}
+	uc := returnUC(fake, acceptor, &fakeNotifier{})
+	uc.SetPickingJournal(&fakeJournal{}) // журнал подключён, но строк по заказу нет
+
+	if _, err := uc.SavePickReturn(context.Background(), id, PickReturnRequest{Rows: []PickReturnRow{
+		{IDs: []string{"pos-2"}, Code: "00220002", Weighted: true, Scans: []ScanRecord{{WeightG: 1962, BB: "10102026"}}},
+	}}); err != nil {
+		t.Fatalf("SavePickReturn: %v", err)
+	}
+	if acceptor.calls != 1 || len(acceptor.lots) != 1 || acceptor.lots[0].ProductID != "p2" {
+		t.Fatalf("AcceptStock вызовов = %d, лоты = %+v, want один лот p2", acceptor.calls, acceptor.lots)
+	}
+}
+
+// TestSavePickReturnJournalReadError — ошибка чтения журнала: 500 наружу,
+// acceptor не зовём (ожидание возврата вычислить нечем).
+func TestSavePickReturnJournalReadError(t *testing.T) {
+	fake, id := reducedWeightOrder()
+	acceptor := &fakeAcceptor{}
+	uc := returnUC(fake, acceptor, &fakeNotifier{})
+	uc.SetPickingJournal(&fakeJournal{unitsErr: errors.New("pg down")})
+
+	_, err := uc.SavePickReturn(context.Background(), id, PickReturnRequest{Rows: []PickReturnRow{
+		{IDs: []string{"pos-2"}, Code: "00220002", Weighted: true, Scans: []ScanRecord{{WeightG: 2482, BB: "10102026"}}},
+	}})
+	if err == nil || !strings.Contains(err.Error(), "read order picking") {
+		t.Fatalf("ошибка = %v, want про чтение журнала подбора", err)
+	}
+	if acceptor.calls != 0 {
+		t.Errorf("AcceptStock вызван при ошибке журнала: %d", acceptor.calls)
+	}
+}
+
+// TestClosePickReturnReducedWeightedStaysInNotice — ручное закрытие урезанной
+// весовой строки: оператор отсканировал старую этикетку (2.482), но прежний
+// кусок в «Сроки» НЕ записан (дат нет) — позиция обязана остаться в уведомлении
+// складу о пересчёте сроков. Контракт: ручное закрытие не молчит.
+func TestClosePickReturnReducedWeightedStaysInNotice(t *testing.T) {
+	fake, id := reducedWeightOrder()
+	notifier := &fakeNotifier{}
+	j := pickedJournal(id)
+	uc := returnUC(fake, &fakeAcceptor{}, notifier)
+	uc.SetPickingJournal(j)
+
+	err := uc.ClosePickReturn(context.Background(), id, PickReturnRequest{Rows: []PickReturnRow{
+		{IDs: []string{"pos-2"}, Code: "00220002", Weighted: true, Scans: []ScanRecord{{WeightG: 2482, BB: "10102026"}}},
+	}})
+	if err != nil {
+		t.Fatalf("ClosePickReturn: %v", err)
+	}
+	if len(notifier.texts) != 1 {
+		t.Fatalf("уведомлений = %d, want 1: %+v", len(notifier.texts), notifier.texts)
+	}
+	text := notifier.texts[0]
+	if !strings.Contains(text, "пересчитать сроки") || !strings.Contains(text, "00220002") {
+		t.Errorf("текст уведомления = %q, want про пересчёт сроков и код строки", text)
+	}
+	// Живая позиция строки запроса: журнал чистится (дат у ручного закрытия нет).
+	checkClear(t, j.clears, id, []string{"pos-2"})
 }

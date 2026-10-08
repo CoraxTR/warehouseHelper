@@ -212,6 +212,40 @@ func returnRowPositions(rows []PickReturnRow) []string {
 	return ids
 }
 
+// pickedWeights — вес кусков, снятых с «Сроков» по позициям заказа (журнал
+// подбора): position_id → граммы. Только весовые единицы и только позиции
+// ровно с одной единицей (одна весовая строка = один кусок); штучные и позиции
+// с несколькими единицами пропускаются. Журнал не подключён — пустая карта без
+// ошибки (деградация). Ошибка БД — наружу.
+func (uc *UseCase) pickedWeights(ctx context.Context, orderID string) (map[string]int64, error) {
+	if uc.journal == nil {
+		return map[string]int64{}, nil
+	}
+
+	units, err := uc.journal.OrderPickingByOrder(ctx, orderID)
+	if err != nil {
+		return nil, fmt.Errorf("read order picking: %w", err)
+	}
+
+	// Единиц на позицию: весовая строка = один кусок, поэтому позиция с
+	// несколькими единицами — не наш случай (переподбор/склейка), пропускаем.
+	counts := make(map[string]int, len(units))
+	for i := range units {
+		counts[units[i].PositionID]++
+	}
+
+	weights := make(map[string]int64, len(units))
+	for i := range units {
+		u := &units[i]
+		if !u.Weighted || counts[u.PositionID] != 1 {
+			continue
+		}
+		weights[u.PositionID] = scanmatch.QtyInt(u.WeightKg, scanmatch.QtyGrams)
+	}
+
+	return weights, nil
+}
+
 // ClearShelfLife — очистка журнала сроков по расформированному заказу (шов
 // модуля «Возврат в продажу»): productIDs пусто — весь заказ (заказ отменён
 // целиком); иначе — только строки позиций, которых в заказе УЖЕ НЕТ.

@@ -1,8 +1,11 @@
 // Возврат в сроки при переподборе позиций подобранного заказа: склад
 // возвращает физически отложенные куски (резерв строки) с номерами сроков,
 // пересчитанными по новым этикеткам. Сверка — по ЖИВЫМ данным заказа: заказ
-// перечитывается из МС при каждом вызове (кэша и журнала у модуля нет),
-// ожидания собираются по резерву строки, а правила сверки сканов берутся из
+// перечитывается из МС при каждом вызове (кэша у модуля нет; журнал подбора
+// читается отдельно — для строк с ручным уменьшением веса), ожидания
+// собираются по резерву строки (а для весовой строки, вес которой менеджер
+// уменьшил вручную, — по более тяжёлому прежнему куску из журнала подбора), а
+// правила сверки сканов берутся из
 // общего ядра internal/scanmatch — те же, что на странице «Возврат в продажу»
 // (строгий вес, построчное гашение, одинаковые тексты отказов оператору).
 //
@@ -120,7 +123,16 @@ func (uc *UseCase) SavePickReturn(ctx context.Context, id string, req PickReturn
 		return SavedReturn{}, err
 	}
 
-	plans, err := buildReturnPlans(req.Rows, entry)
+	// Журнал подбора — источник ожидания для весовой строки, вес которой
+	// уменьшили вручную: физически с «Сроков» снят прежний, более тяжёлый кусок
+	// (см. returnWeightG). Здесь ошибка чтения журнала — наружу (500): операция
+	// пишет в остатки, и молчаливая деградация ожидания хуже понятной ошибки.
+	pickedG, err := uc.pickedWeights(ctx, id)
+	if err != nil {
+		return SavedReturn{}, fmt.Errorf("read picking journal for order %s: %w", id, err)
+	}
+
+	plans, err := buildReturnPlans(req.Rows, entry, pickedG)
 	if err != nil {
 		return SavedReturn{}, err
 	}
@@ -204,14 +216,30 @@ func (uc *UseCase) ClosePickReturn(ctx context.Context, id string, req PickRetur
 	return nil
 }
 
+// returnWeightG — вес куска (граммы), который надо вернуть в «Сроки» по
+// весовой строке: единица журнала, если она тяжелее резерва строки (вес
+// строки уменьшили вручную — с «Сроков» снят прежний, более тяжёлый кусок),
+// иначе резерв строки. Те же правила в пометке строки страницы
+// (OrderItem.ReturnWeightG) — клиент и сервер обязаны сойтись.
+func returnWeightG(reserveKg float64, pickedG int64) int64 {
+	reserveG := scanmatch.QtyInt(reserveKg, scanmatch.QtyGrams)
+	if pickedG > reserveG {
+		return pickedG
+	}
+
+	return reserveG
+}
+
 // buildReturnPlans сверяет строки запроса с живым заказом и собирает ожидания
 // для scanmatch. ids обязаны найтись в заказе (первая позиция — живая строка,
 // остальные — смёрженные хвосты группы), код строки — резолвиться в каталоге
 // склада (иначе 400: товар без кода склада в остатки не пишется). Резерв строки
 // — сумма резервов позиций группы (как в Submit: хвосты группы несут свой
-// резерв). Весовая строка ждёт ровно один скан своего веса (вес = резерв
-// строки в граммах), штучная — N сканов (N = число сканов, 1 ≤ N ≤ резерв).
-func buildReturnPlans(rows []PickReturnRow, entry *submitEntry) ([]returnPlan, error) {
+// резерв). Весовая строка ждёт ровно один скан своего веса (вес = returnWeightG
+// резерва строки и журнала: у строки с ручным уменьшением веса это прежний,
+// более тяжёлый кусок из журнала подбора), штучная — N сканов (N = число
+// сканов, 1 ≤ N ≤ резерв).
+func buildReturnPlans(rows []PickReturnRow, entry *submitEntry, pickedG map[string]int64) ([]returnPlan, error) {
 	_, metaByID, err := orderRowMetas(entry)
 	if err != nil {
 		return nil, err
@@ -245,9 +273,10 @@ func buildReturnPlans(rows []PickReturnRow, entry *submitEntry) ([]returnPlan, e
 		}
 
 		if product.Weighted {
-			// Весовая строка: один кусок с весом, равным резерву строки
-			// (строго, без допуска) — второй скан того же веса отвергнется.
-			grams := scanmatch.QtyInt(reserve, scanmatch.QtyGrams)
+			// Весовая строка: один кусок (строго, без допуска) — второй скан
+			// отвергнется. Вес берётся из returnWeightG: у строки с ручным
+			// уменьшением веса это прежний кусок из журнала подбора.
+			grams := returnWeightG(reserve, pickedG[live.id])
 			if grams <= 0 {
 				return nil, fmt.Errorf("строка %d (%s): %w", i+1, product.InternalCode, ErrReturnNoReserve)
 			}
@@ -395,6 +424,11 @@ func returnScanLabel(expected *scanmatch.Expected, rec ScanRecord) (string, erro
 // а ошибка разбора строк заказа просто оставляет список пустым. Ожидание строки
 // — её резерв (весовой — граммы, штучный — штуки): строку гасит скан того же
 // кода (правила scanmatch).
+//
+// Разбор намеренно идёт по РЕЗЕРВУ, а не по журналу подбора: если оператор
+// закрывает строку вручную, прежний кусок в «Сроки» не записан и позиция
+// ОБЯЗАНА попасть в уведомление «пересчитать сроки» — иначе остатки разъедутся
+// молча.
 func unclosedReturnRows(rows []PickReturnRow, entry *submitEntry) []scanmatch.Expected {
 	_, metaByID, err := orderRowMetas(entry)
 	if err != nil {
