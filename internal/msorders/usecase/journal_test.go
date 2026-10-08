@@ -7,6 +7,7 @@ package usecase
 import (
 	"context"
 	"errors"
+	"maps"
 	"math"
 	"slices"
 	"testing"
@@ -733,6 +734,106 @@ func TestJournalRowPositions(t *testing.T) {
 			}
 			if got := returnRowPositions(returns); !slices.Equal(got, c.want) {
 				t.Errorf("returnRowPositions = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
+// TestPickedWeights — карта весов кусков, снятых с «Сроков», по позициям
+// (pickedWeights): только весовые единицы и только позиции ровно с одной
+// единицей; nil-журнал — пустая карта без ошибки, ошибка БД — наружу.
+func TestPickedWeights(t *testing.T) {
+	const orderID = "00023557-7e97-11e7-7a34-5acf0020c748"
+	unit := func(pos string, weighted bool, kg float64) msorders.PickingUnit {
+		return msorders.PickingUnit{OrderID: orderID, PositionID: pos, Weighted: weighted, WeightKg: kg}
+	}
+
+	tests := []struct {
+		name    string
+		nilJrnl bool
+		units   map[string][]msorders.PickingUnit
+		jErr    error
+		want    map[string]int64
+		wantErr bool
+	}{
+		{
+			name:  "одна весовая единица — граммы",
+			units: map[string][]msorders.PickingUnit{orderID: {unit("pos-1", true, 2.482)}},
+			want:  map[string]int64{"pos-1": 2482},
+		},
+		{
+			name:  "дробный вес округляется до граммов",
+			units: map[string][]msorders.PickingUnit{orderID: {unit("pos-1", true, 1.5)}},
+			want:  map[string]int64{"pos-1": 1500},
+		},
+		{
+			name: "две единицы по одной позиции — позиция пропущена",
+			units: map[string][]msorders.PickingUnit{orderID: {
+				unit("pos-1", true, 2.482),
+				unit("pos-1", true, 1.1),
+			}},
+			want: map[string]int64{},
+		},
+		{
+			name:  "штучная единица пропущена",
+			units: map[string][]msorders.PickingUnit{orderID: {unit("pos-1", false, 1)}},
+			want:  map[string]int64{},
+		},
+		{
+			name: "единицы других позиций не мешают",
+			units: map[string][]msorders.PickingUnit{orderID: {
+				unit("pos-1", true, 2.482),
+				unit("pos-2", true, 1),
+				unit("pos-2", true, 2),
+			}},
+			want: map[string]int64{"pos-1": 2482},
+		},
+		{
+			name:  "в журнале нет строк по заказу",
+			units: map[string][]msorders.PickingUnit{},
+			want:  map[string]int64{},
+		},
+		{
+			name:    "журнал не подключён — пустая карта без ошибки",
+			nilJrnl: true,
+			want:    map[string]int64{},
+		},
+		{
+			name:    "ошибка чтения журнала — наружу",
+			jErr:    errors.New("pg down"),
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			uc := NewUseCase(&fakeOrderDetail{}, &fakeCatalog{}, &fakePicker{}, nil, nil)
+
+			var jrnl *fakeShelfLifeJournal
+			if !tc.nilJrnl {
+				jrnl = &fakeShelfLifeJournal{units: tc.units, err: tc.jErr}
+				uc.SetPickingJournal(jrnl)
+			}
+
+			got, err := uc.pickedWeights(context.Background(), orderID)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("pickedWeights error = nil, want ошибку чтения журнала")
+				}
+
+				return
+			}
+			if err != nil {
+				t.Fatalf("pickedWeights: %v", err)
+			}
+			if !maps.Equal(got, tc.want) {
+				t.Errorf("pickedWeights = %v, want %v", got, tc.want)
+			}
+			if tc.nilJrnl {
+				return // журнала нет — читать нечего, вызовов быть не может
+			}
+			if len(jrnl.requested) != 1 || jrnl.requested[0] != orderID {
+				t.Errorf("журнал читали по %v, want [%s]", jrnl.requested, orderID)
 			}
 		})
 	}

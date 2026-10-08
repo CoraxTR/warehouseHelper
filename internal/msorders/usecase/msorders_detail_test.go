@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"slices"
 	"strings"
 	"testing"
 
 	"warehouseHelper/internal/msclient/client"
+	"warehouseHelper/internal/msorders"
 )
 
 // fakeOrderDetail — фейк OrderClient для Detail/Submit: заказ, позиции,
@@ -593,5 +595,165 @@ func TestDetailGroupSubtotals(t *testing.T) {
 		if row.GroupSize != w.groupSize {
 			t.Errorf("%s: GroupSize = %d, want %d", w.id, row.GroupSize, w.groupSize)
 		}
+	}
+}
+
+// rowByID — строка страницы Detail по id позиции (порядок строк зависит от
+// сортировки групп, искать по индексу нельзя).
+func rowByID(t *testing.T, rows []OrderItem, id string) OrderItem {
+	t.Helper()
+
+	for _, r := range rows {
+		if r.ID == id {
+			return r
+		}
+	}
+	t.Fatalf("строка %q не найдена в странице: %d строк", id, len(rows))
+
+	return OrderItem{}
+}
+
+// TestBuildItemsReturnWeight — чистая функция buildItems: пометка возврата
+// прежнего куска (ReturnWeightG/ReturnWeightText) ставится только весовой
+// строке и только когда журнал подбора тяжелее её резерва; иначе нули.
+func TestBuildItemsReturnWeight(t *testing.T) {
+	catalog := map[string]CatalogProduct{
+		"00220002": {ProductID: "p2", InternalCode: "00220002", Weighted: true},
+		"21110001": {ProductID: "p1", InternalCode: "21110001"},
+	}
+	// Вручную урезанная весовая строка: резерв 1.962 кг (менеджер уменьшил вес).
+	weighted := position("pos-w", "00220002", "Стейк Нью-Йорк", 1.962, 279000, 1.962)
+	piece := position("pos-p", "21110001", "Соус терияки", 5, 50000, 5)
+
+	tests := []struct {
+		name     string
+		pos      client.MSPosition
+		picked   map[string]int64
+		wantG    int64
+		wantText string
+	}{
+		{
+			name:     "прежний кусок тяжелее резерва — пометка",
+			pos:      weighted,
+			picked:   map[string]int64{"pos-w": 2482},
+			wantG:    2482,
+			wantText: "2,482 кг",
+		},
+		{
+			name:   "вес журнала равен резерву — без пометки",
+			pos:    weighted,
+			picked: map[string]int64{"pos-w": 1962},
+		},
+		{
+			name:   "журнал легче резерва (рост веса) — без пометки",
+			pos:    weighted,
+			picked: map[string]int64{"pos-w": 1000},
+		},
+		{
+			name:   "штучная строка — без пометки",
+			pos:    piece,
+			picked: map[string]int64{"pos-p": 5000},
+		},
+		{
+			name:   "nil-карта журнала — без пометки",
+			pos:    weighted,
+			picked: nil,
+		},
+		{
+			name:   "пустая карта журнала — без пометки",
+			pos:    weighted,
+			picked: map[string]int64{},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			items := buildItems([]client.MSPosition{tc.pos}, catalog, tc.picked)
+			if len(items) != 1 {
+				t.Fatalf("строк = %d, want 1", len(items))
+			}
+			got := items[0]
+			if got.ReturnWeightG != tc.wantG {
+				t.Errorf("ReturnWeightG = %d, want %d", got.ReturnWeightG, tc.wantG)
+			}
+			if got.ReturnWeightText != tc.wantText {
+				t.Errorf("ReturnWeightText = %q, want %q", got.ReturnWeightText, tc.wantText)
+			}
+		})
+	}
+}
+
+// TestDetailReturnWeightNote — сценарный: менеджер урезал вес весовой строки
+// вручную (резерв 1.962), а с «Сроков» снят прежний кусок 2.482 (журнал) — в
+// строке страницы проставляется пометка возврата.
+func TestDetailReturnWeightNote(t *testing.T) {
+	positions := []client.MSPosition{
+		position("pos-1", "21110001", "Соус терияки", 5, 50000, 5),
+		position("pos-2", "00220002", "Стейк Нью-Йорк", 1.962, 279000, 1.962),
+	}
+	order := detailOrder()
+	j := &fakeShelfLifeJournal{units: map[string][]msorders.PickingUnit{
+		order.ID: {{OrderID: order.ID, PositionID: "pos-2", InternalCode: "00220002", Weighted: true, WeightKg: 2.482}},
+	}}
+	uc := NewUseCase(&fakeOrderDetail{order: order, positions: positions}, submitCatalog(), &fakePicker{}, nil, nil)
+	uc.SetPickingJournal(j)
+
+	o, err := uc.Detail(context.Background(), order.ID)
+	if err != nil {
+		t.Fatalf("Detail: %v", err)
+	}
+
+	row := rowByID(t, o.Rows, "pos-2")
+	if row.ReturnWeightG != 2482 {
+		t.Errorf("ReturnWeightG = %d, want 2482", row.ReturnWeightG)
+	}
+	if row.ReturnWeightText != "2,482 кг" {
+		t.Errorf("ReturnWeightText = %q, want «2,482 кг»", row.ReturnWeightText)
+	}
+	if !slices.Equal(j.requested, []string{order.ID}) {
+		t.Errorf("журнал читали по %v, want [%s]", j.requested, order.ID)
+	}
+}
+
+// TestDetailReturnWeightDegradesOnJournalError — ошибка чтения журнала страницу
+// не роняет: строки без пометок, ошибки нет (журнал — вторичные данные).
+func TestDetailReturnWeightDegradesOnJournalError(t *testing.T) {
+	positions := []client.MSPosition{
+		position("pos-2", "00220002", "Стейк Нью-Йорк", 1.962, 279000, 1.962),
+	}
+	order := detailOrder()
+	j := &fakeShelfLifeJournal{err: errors.New("pg down")}
+	uc := NewUseCase(&fakeOrderDetail{order: order, positions: positions}, submitCatalog(), &fakePicker{}, nil, nil)
+	uc.SetPickingJournal(j)
+
+	o, err := uc.Detail(context.Background(), order.ID)
+	if err != nil {
+		t.Fatalf("Detail() error = %v, want nil (деградация при ошибке журнала)", err)
+	}
+	row := rowByID(t, o.Rows, "pos-2")
+	if row.ReturnWeightG != 0 || row.ReturnWeightText != "" {
+		t.Errorf("пометка при ошибке журнала = %d/%q, want 0/пусто", row.ReturnWeightG, row.ReturnWeightText)
+	}
+	if len(j.requested) != 1 {
+		t.Errorf("журнал читали %d раз, want 1", len(j.requested))
+	}
+}
+
+// TestDetailReturnWeightSkipsJournalWithoutWeightedRow — в заказе нет ни одной
+// весовой строки с кодом: журнал не читается вообще (лишний запрос не делаем).
+func TestDetailReturnWeightSkipsJournalWithoutWeightedRow(t *testing.T) {
+	positions := []client.MSPosition{
+		position("pos-1", "21110001", "Соус терияки", 5, 50000, 5),
+	}
+	order := detailOrder()
+	j := &fakeShelfLifeJournal{}
+	uc := NewUseCase(&fakeOrderDetail{order: order, positions: positions}, submitCatalog(), &fakePicker{}, nil, nil)
+	uc.SetPickingJournal(j)
+
+	if _, err := uc.Detail(context.Background(), order.ID); err != nil {
+		t.Fatalf("Detail: %v", err)
+	}
+	if len(j.requested) != 0 {
+		t.Errorf("журнал читали по %v, want ни одного запроса", j.requested)
 	}
 }

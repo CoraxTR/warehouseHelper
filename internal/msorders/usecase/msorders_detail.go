@@ -11,12 +11,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strconv"
 	"strings"
 
 	"warehouseHelper/internal/metrics"
 	"warehouseHelper/internal/msclient/client"
+	"warehouseHelper/internal/scanmatch"
 )
 
 // ErrEmptyOrderID — пустой id заказа (защита; в роуте id приходит из пути).
@@ -126,6 +128,13 @@ type OrderItem struct {
 	GroupQty     float64
 	GroupQtyText string
 	GroupLast    bool
+	// ReturnWeightG — вес куска (граммы), подлежащего возврату в «Сроки» по этой
+	// позиции, когда он тяжелее резерва строки: менеджер уменьшил вес вручную,
+	// физически с заказа снят прежний кусок (см. journal.go/pickedWeights).
+	// 0 — обычный случай, ожидание возврата = резерв строки.
+	ReturnWeightG int64
+	// ReturnWeightText — «2,482 кг» для подсказки оператору; пусто при нуле.
+	ReturnWeightText string
 	// productID — products.id (для чтения среднего веса); в шаблон не выводится.
 	productID string
 }
@@ -150,7 +159,11 @@ func (uc *UseCase) Detail(ctx context.Context, id string) (*Order, error) {
 		return nil, err
 	}
 
-	rows := buildItems(entry.positions, entry.catalog)
+	// Пометки возврата в «Сроки» по журналу подбора: нужны только строкам, где
+	// вес уменьшили вручную (журнал тяжелее резерва). Журнал не подключён или
+	// ошибка чтения — без пометок, страница не падает.
+	pickedG := uc.pickedGrams(ctx, id, entry.positions, entry.catalog)
+	rows := buildItems(entry.positions, entry.catalog, pickedG)
 
 	// Средний вес штучных — отдельное вторичное чтение; сумма и общий вес
 	// считаются поверх строк (копейки — moneyInt, см. applyTotals).
@@ -206,7 +219,11 @@ func (uc *UseCase) fetchForSubmit(ctx context.Context, id string) (*client.MSOrd
 }
 
 // buildItems резолвит позиции через каталог, сортирует и проставляет группы.
-func buildItems(positions []client.MSPosition, catalog map[string]CatalogProduct) []OrderItem {
+// pickedG — вес снятых с «Сроков» кусков по позициям (граммы, pickedWeights):
+// у весовой строки с кодом, где журнал тяжелее резерва, проставляется пометка
+// возврата (ReturnWeightG/ReturnWeightText) — иначе нули. Функция чистая:
+// журнал читает вызывающий.
+func buildItems(positions []client.MSPosition, catalog map[string]CatalogProduct, pickedG map[string]int64) []OrderItem {
 	items := make([]OrderItem, 0, len(positions))
 	for _, p := range positions {
 		code := strings.TrimSpace(p.Assortment.Code)
@@ -220,21 +237,35 @@ func buildItems(positions []client.MSPosition, catalog map[string]CatalogProduct
 			reserveText = qtyWeightText(p.Reserve)
 		}
 
+		// Возврат в «Сроки»: вес строки уменьшили вручную — с «Сроков» снят
+		// прежний кусок, он тяжелее текущего резерва (см. pickedWeights).
+		// Журнал легче резерва (рост веса) и штучные строки — не наш случай.
+		var returnG int64
+		var returnText string
+		if weighted {
+			if picked := pickedG[p.ID]; picked > scanmatch.QtyInt(p.Reserve, scanmatch.QtyGrams) {
+				returnG = picked
+				returnText = qtyWeightText(float64(picked) / 1000)
+			}
+		}
+
 		items = append(items, OrderItem{
-			ID:          p.ID,
-			Name:        orDash(strings.TrimSpace(p.Assortment.Name)),
-			Code:        code,
-			HasCode:     inCatalog,
-			Weighted:    weighted,
-			Qty:         p.Quantity,
-			QtyText:     qtyText,
-			Price:       p.Price,
-			PriceText:   moneyText(p.Price),
-			Reserve:     p.Reserve,
-			ReserveText: reserveText,
-			Active:      inCatalog && (p.Reserve == 0 || (!weighted && p.Reserve < p.Quantity)),
-			CanRepick:   inCatalog && p.Reserve > 0 && (weighted || p.Reserve >= p.Quantity),
-			productID:   product.ProductID,
+			ID:               p.ID,
+			Name:             orDash(strings.TrimSpace(p.Assortment.Name)),
+			Code:             code,
+			HasCode:          inCatalog,
+			Weighted:         weighted,
+			Qty:              p.Quantity,
+			QtyText:          qtyText,
+			Price:            p.Price,
+			PriceText:        moneyText(p.Price),
+			Reserve:          p.Reserve,
+			ReserveText:      reserveText,
+			Active:           inCatalog && (p.Reserve == 0 || (!weighted && p.Reserve < p.Quantity)),
+			CanRepick:        inCatalog && p.Reserve > 0 && (weighted || p.Reserve >= p.Quantity),
+			ReturnWeightG:    returnG,
+			ReturnWeightText: returnText,
+			productID:        product.ProductID,
 		})
 	}
 
@@ -243,6 +274,42 @@ func buildItems(positions []client.MSPosition, catalog map[string]CatalogProduct
 	assignGroupTotals(items)
 
 	return items
+}
+
+// pickedGrams читает журнал подбора для пометок возврата в «Сроки». Запрос
+// делается ТОЛЬКО когда в заказе есть хотя бы одна весовая строка с кодом в
+// каталоге (иначе журнал не при чём — лишнего запроса не делаем). Журнал не
+// подключён или ошибка чтения — пустая карта: страница заказа из-за журнала не
+// падает (пометки просто не ставятся), ошибку логируем.
+func (uc *UseCase) pickedGrams(ctx context.Context, orderID string, positions []client.MSPosition, catalog map[string]CatalogProduct) map[string]int64 {
+	if uc.journal == nil || !hasWeightedCodedRow(positions, catalog) {
+		return map[string]int64{}
+	}
+
+	picked, err := uc.pickedWeights(ctx, orderID)
+	if err != nil {
+		slog.Warn("msorders: журнал подбора не прочитан для пометок возврата",
+			"order", orderID, "err", err)
+
+		return map[string]int64{}
+	}
+	if picked == nil {
+		return map[string]int64{}
+	}
+
+	return picked
+}
+
+// hasWeightedCodedRow — есть ли в заказе весовая строка с кодом в каталоге:
+// только такие строки могут нести пометку возврата прежнего куска.
+func hasWeightedCodedRow(positions []client.MSPosition, catalog map[string]CatalogProduct) bool {
+	for _, p := range positions {
+		if product, ok := catalog[strings.TrimSpace(p.Assortment.Code)]; ok && product.Weighted {
+			return true
+		}
+	}
+
+	return false
 }
 
 // loadCatalog запрашивает каталог по уникальным кодам позиций. Пусто, когда

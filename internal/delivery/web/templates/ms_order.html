@@ -99,7 +99,8 @@ html.day .mark--done { color: #1A7F37; }
                 data-price="{{printf "%.0f" .Price}}"
                 data-group="{{.Group}}" data-gsize="{{.GroupSize}}"
                 data-reserve="{{.Reserve}}"
-                data-active="{{if .Active}}1{{else}}0{{end}}" data-canrepick="{{if .CanRepick}}1{{else}}0{{end}}">
+                data-active="{{if .Active}}1{{else}}0{{end}}" data-canrepick="{{if .CanRepick}}1{{else}}0{{end}}"
+                data-return-weight="{{.ReturnWeightG}}">
                 <td class="cell-name">{{.Name}}</td>
                 <td class="mono">{{if .HasCode}}{{.Code}}{{else}}—{{end}}</td>
                 <td class="cell-qty">{{.QtyText}}</td>
@@ -112,6 +113,7 @@ html.day .mark--done { color: #1A7F37; }
                     <div class="picked"></div>
                     {{else if .CanRepick}}
                     <button type="button" class="btn-secondary repick-btn">Переподобрать</button>
+                    {{if .ReturnWeightText}}<div class="muted">вес уменьшили вручную — в «Сроки» вернётся кусок {{.ReturnWeightText}}</div>{{end}}
                     {{else}}
                     <span class="muted">—</span>
                     {{end}}
@@ -138,7 +140,9 @@ html.day .mark--done { color: #1A7F37; }
         <h2>Возврат в сроки</h2>
         <div class="hint">
             Сканы этикеток снятых с заказа кусков. Строка гасится построчно: штучная — столько сканов,
-            сколько единиц; весовая — ровно один скан с тем же весом. Чужой или не тот по весу штрих-код
+            сколько единиц; весовая — ровно один скан с тем же весом. У строки, вес которой уменьшили вручную,
+            ожидается кусок ПРЕЖНЕГО (большего) веса — именно он физически снят с заказа и возвращается в «Сроки».
+            Чужой или не тот по весу штрих-код
             не принимается: бип и отказ. Строку, которую не гасит ни один скан, закройте вручную — складу
             уйдёт уведомление о пересчёте сроков. Пока возврат не сохранён и есть строки переподбора,
             «Отправить в МС» заблокирована.
@@ -212,6 +216,11 @@ html.day .mark--done { color: #1A7F37; }
                     group: parseInt(tr.getAttribute('data-group'), 10) || 0,
                     gsize: parseInt(tr.getAttribute('data-gsize'), 10) || 0,
                     reserve: parseFloat(tr.getAttribute('data-reserve')) || 0,
+                    // returnWeight — вес куска (граммы), снятого с «Сроков» по
+                    // строке и подлежащего возврату, когда вес строки уменьшили
+                    // вручную (сервер читает журнал подбора, см. OrderItem.ReturnWeightG);
+                    // 0 — обычный случай, ожидание возврата = резерв строки.
+                    returnWeight: parseInt(tr.getAttribute('data-return-weight'), 10) || 0,
                     active: tr.getAttribute('data-active') === '1',
                     done: false,
                     merged: false,
@@ -808,7 +817,7 @@ html.day .mark--done { color: #1A7F37; }
             // ровно один скан с тем же весом (строго), штучную — target сканов.
             // Незакрытая строка запрещает и сохранение возврата, и отправку в МС.
             var RET = {
-                expect: [],     // {ids, code, name, weighted, target, qtyText, overridden, saved}
+                expect: [],     // {ids, code, name, weighted, oldWeight, target, qtyText, overridden, saved}
                 scans: [],      // сырые этикетки (29 цифр); разбор — в порядке ожиданий
                 busy: false,
                 savedAny: false // хоть одна строка уже отдана на сервер
@@ -844,16 +853,19 @@ html.day .mark--done { color: #1A7F37; }
             }
 
             // Ожидание возврата (накопление: у каждого переподбора свой ids позиции
-            // и своё количество). Весовая — вес снятого куска из резерва МС,
-            // штучная — заявленное N.
+            // и своё количество). Весовая — вес снятого куска: резерв МС, а при
+            // ручном уменьшении веса (r.returnWeight из журнала подбора) — ПРЕЖНИЙ
+            // вес куска, он и снят физически; штучная — заявленное N.
             function addExpectation(r, units) {
                 var weighted = r.weighted;
-                var target = weighted ? Math.round(r.reserve * 1000) : units;
+                var oldWeight = weighted && r.returnWeight > 0;
+                var target = weighted ? (oldWeight ? r.returnWeight : Math.round(r.reserve * 1000)) : units;
                 RET.expect.push({
                     ids: [r.tr.getAttribute('data-id')],
                     code: r.code,
                     name: rowName(r),
                     weighted: weighted,
+                    oldWeight: oldWeight, // кусок до ручного уменьшения веса
                     target: target,    // граммы (весовая) или штуки (штучная)
                     qtyText: weighted ? fmtKgText(target) : String(units) + ' шт',
                     overridden: false, // закрыта вручную — пересчёт сроков
@@ -1030,7 +1042,9 @@ html.day .mark--done { color: #1A7F37; }
                 codeEl.textContent = exp.code;
                 var kindEl = document.createElement('span');
                 kindEl.className = 'meta';
-                kindEl.textContent = exp.weighted ? 'весовой кусок' : 'штучная строка';
+                kindEl.textContent = exp.weighted
+                    ? (exp.oldWeight ? 'весовой кусок, вес был уменьшен вручную' : 'весовой кусок')
+                    : 'штучная строка';
                 left.appendChild(nameEl);
                 left.appendChild(document.createTextNode(' '));
                 left.appendChild(codeEl);
