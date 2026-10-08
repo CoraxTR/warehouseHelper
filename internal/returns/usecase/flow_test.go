@@ -35,6 +35,57 @@ func cancelledDiffJSON() string {
 		`"newValue":{"meta":{"href":"https://api.moysklad.ru/api/remap/1.2/entity/customerorder/metadata/states/8737d8a5-c0b9-11e3-ac8e-002590a28eca"},"name":"Отменен"}}}`
 }
 
+// removalPosJSON — фрагмент diff.positions[] «строка удалена целиком»
+// (снимок в oldValue, newValue отсутствует).
+func removalPosJSON(productID, name, uom string, qty, reserve float64) string {
+	return `{"oldValue":{"assortment":{"meta":{"href":"https://api.moysklad.ru/api/remap/1.2/entity/product/` + productID + `"},"name":"` + name + `"},` +
+		`"quantity":` + f(qty) + `,"reserve":` + f(reserve) + `,"uom":"` + uom + `"}}`
+}
+
+// withPositions дополняет diff отмены секцией positions (фрагменты removalPosJSON).
+func withPositions(diff string, positions ...string) string {
+	if len(positions) == 0 {
+		return diff
+	}
+	return diff[:len(diff)-1] + `,"positions":[` + strings.Join(positions, ",") + `]}`
+}
+
+func positionsDiff(positions ...string) string {
+	return `{"positions":[` + strings.Join(positions, ",") + `]}`
+}
+
+// cancelledServiceDiffJSON — живой случай 08.10.2026, заказ 07268: в ОДНОМ
+// событии и перевод «Вес подобран» → «Отменен», и удаление служебной строки
+// «Доставка» (товара нет в каталоге склада — код отсеивает).
+func cancelledServiceDiffJSON() string {
+	return withPositions(cancelledDiffJSON(), removalPosJSON(prodDeliv, "Доставка", "шт", 1, 1))
+}
+
+// cancelledStockRemovalDiffJSON — отмена + удаление отложенной СКЛАДСКОЙ строки
+// в одном событии (плата варианта А: в живом заказе этой строки уже нет).
+func cancelledStockRemovalDiffJSON() string {
+	return withPositions(cancelledDiffJSON(), removalPosJSON(prodA, "Чак ролл", "кг", 0.657, 0.657))
+}
+
+// cancelledTrimmedDiffJSON — отмена + урезание ШТУЧНОЙ строки в одном событии
+// (количество и резерв уменьшены вместе, строка в заказе осталась).
+func cancelledTrimmedDiffJSON() string {
+	body := `{"assortment":{"meta":{"href":"https://api.moysklad.ru/api/remap/1.2/entity/product/` + prodD + `"},"name":"Соус"}`
+	before := body + `,"quantity":2,"reserve":2,"uom":"шт"}`
+	after := body + `,"quantity":1,"reserve":1,"uom":"шт"}`
+
+	return withPositions(cancelledDiffJSON(), `{"oldValue":`+before+`,"newValue":`+after+`}`)
+}
+
+// serviceAndStockRemovalDiffJSON — удаление служебной «Доставки» и отложенной
+// складской строки БЕЗ отмены (регресс: ветка удаления и состав из диффа).
+func serviceAndStockRemovalDiffJSON() string {
+	return positionsDiff(
+		removalPosJSON(prodDeliv, "Доставка", "шт", 1, 1),
+		removalPosJSON(prodA, "Чак ролл", "кг", 0.657, 0.657),
+	)
+}
+
 func pos(productID, name string, qty, reserve float64) client.MSPosition {
 	return client.MSPosition{
 		Assortment: client.MSAssortment{Meta: client.MSMeta{HREF: "https://api.moysklad.ru/api/remap/1.2/entity/product/" + productID}, Name: name},
@@ -345,6 +396,195 @@ func TestTick_CancelledSendsNotification(t *testing.T) {
 	}
 	if len(notify.sends) != 1 || notify.sends[0] != "Заказ 19379 был переведён в статус «Отменён»" {
 		t.Errorf("текст = %q", notify.sends)
+	}
+}
+
+// Живой случай 08.10.2026, заказ 07268: «Вес подобран» → «Отменен» И удаление
+// служебной строки «Доставка» в ОДНОМ событии. До правки событие получало вид
+// positions_removed, состав шёл из диффа, служебная строка отсеивалась (нет
+// кода склада) → ожиданий ноль → уведомление молча пропадало. Теперь отмена
+// приоритетнее удаления: состав берётся из ЖИВОГО заказа.
+func TestTick_CancelledBeatsServiceRemoval(t *testing.T) {
+	repo := newStubRepo()
+	repo.cursor = &[]time.Time{time.Now().Add(-time.Hour).UTC()}[0]
+	env := newTestEnv(repo)
+	uc, audit, notify := env.uc, env.audit, env.notify
+
+	audit.rows = []client.AuditRow{auditRow("app")}
+	audit.details[auditID] = []client.AuditEventRow{detailRow(cancelledServiceDiffJSON(), "07268")}
+	// Живой заказ: две отложенные строки Стейк Рибай (quantity == reserve); в
+	// диффе они не менялись — именно их и должен вернуть склад.
+	audit.positions[orderID] = []client.MSPosition{
+		pos(prodA, "Стейк Рибай Праймбиф. Охл.", 0.534, 0.534),
+		pos(prodA, "Стейк Рибай Праймбиф. Охл.", 0.428, 0.428),
+	}
+
+	if err := uc.tick(context.Background()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+
+	ev := repo.events[auditID]
+	if ev == nil || ev.Kind != returns.KindCancelled {
+		t.Fatalf("event = %+v, want order_cancelled", ev)
+	}
+	if ev.Status != returns.StatusSent {
+		t.Errorf("status = %s, want sent", ev.Status)
+	}
+	// Ожидания = обе строки из живого заказа, а НЕ служебная «Доставка» из диффа.
+	expected, err := uc.buildExpected(context.Background(), ev)
+	if err != nil {
+		t.Fatalf("buildExpected: %v", err)
+	}
+	if len(expected) != 2 || expected[0].ExpectedQty != 534 || expected[1].ExpectedQty != 428 {
+		t.Fatalf("expected = %+v, want 2 строки 534/428 г из живого заказа", expected)
+	}
+	if len(notify.sends) != 1 || notify.sends[0] != "Заказ 07268 был переведён в статус «Отменён»" {
+		t.Errorf("текст = %q", notify.sends)
+	}
+	if !strings.HasSuffix(notify.urls[0], "/goods/return?e="+auditID) {
+		t.Errorf("url кнопки = %q", notify.urls[0])
+	}
+}
+
+// Регресс к приоритету: БЕЗ перевода в «Отменён» удаление (пусть и вместе со
+// служебной строкой «Доставка») по-прежнему даёт positions_removed, а состав
+// берётся из диффа — служебная строка отсеивается, складская идёт в возврат.
+func TestTick_RemovalWithoutCancelStaysRemoved(t *testing.T) {
+	repo := newStubRepo()
+	repo.cursor = &[]time.Time{time.Now().Add(-time.Hour).UTC()}[0]
+	env := newTestEnv(repo)
+	uc, audit, notify := env.uc, env.audit, env.notify
+
+	audit.rows = []client.AuditRow{auditRow("app")}
+	audit.details[auditID] = []client.AuditEventRow{detailRow(serviceAndStockRemovalDiffJSON(), "07207")}
+
+	if err := uc.tick(context.Background()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+
+	ev := repo.events[auditID]
+	if ev == nil || ev.Kind != returns.KindRemoved {
+		t.Fatalf("event = %+v, want positions_removed", ev)
+	}
+	expected, err := uc.buildExpected(context.Background(), ev)
+	if err != nil {
+		t.Fatalf("buildExpected: %v", err)
+	}
+	if len(expected) != 1 || expected[0].ProductID != prodA {
+		t.Fatalf("expected = %+v, want 1 строку складского товара из диффа", expected)
+	}
+	if !strings.Contains(notify.sends[0], "Из заказа 07207 удалили:") ||
+		!strings.Contains(notify.sends[0], "Чак ролл 0.657 кг") {
+		t.Errorf("текст = %q", notify.sends[0])
+	}
+}
+
+// Объединение составов (решение владельца 08.10.2026): отмена + удаление
+// отложенной СКЛАДСКОЙ строки в одном событии → вид order_cancelled, а состав
+// включает И удалённую строку из диффа (в живом заказе её уже нет), И
+// отложенные строки живого заказа.
+func TestTick_CancelledMergesStockRemoval(t *testing.T) {
+	repo := newStubRepo()
+	repo.cursor = &[]time.Time{time.Now().Add(-time.Hour).UTC()}[0]
+	env := newTestEnv(repo)
+	uc, audit, notify := env.uc, env.audit, env.notify
+
+	audit.rows = []client.AuditRow{auditRow("app")}
+	audit.details[auditID] = []client.AuditEventRow{detailRow(cancelledStockRemovalDiffJSON(), "07268")}
+	// Живой заказ: удалённой строки (prodA) уже нет, осталась отложенная Соус.
+	audit.positions[orderID] = []client.MSPosition{pos(prodD, "Соус", 2, 2)}
+
+	if err := uc.tick(context.Background()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+
+	ev := repo.events[auditID]
+	if ev == nil || ev.Kind != returns.KindCancelled {
+		t.Fatalf("event = %+v, want order_cancelled", ev)
+	}
+	expected, err := uc.buildExpected(context.Background(), ev)
+	if err != nil {
+		t.Fatalf("buildExpected: %v", err)
+	}
+	if len(expected) != 2 {
+		t.Fatalf("expected = %+v, want 2 строки: из диффа и из заказа", expected)
+	}
+	byID := map[string]int64{}
+	for _, e := range expected {
+		byID[e.ProductID] = e.ExpectedQty
+	}
+	if byID[prodA] != 657 || byID[prodD] != 2 {
+		t.Errorf("состав = %+v, want prodA 657 г (дифф) + prodD 2 шт (заказ)", byID)
+	}
+	if len(notify.sends) != 1 || notify.sends[0] != "Заказ 07268 был переведён в статус «Отменён»" {
+		t.Errorf("текст = %q", notify.sends)
+	}
+}
+
+// Отмена + урезание ШТУЧНОЙ строки в одном событии: живой заказ отдаёт остаток,
+// дифф — снятую часть; вместе исходные 2 шт (объединение составов, иначе снятая
+// часть терялась).
+func TestTick_CancelledMergesTrimmedRelease(t *testing.T) {
+	repo := newStubRepo()
+	repo.cursor = &[]time.Time{time.Now().Add(-time.Hour).UTC()}[0]
+	env := newTestEnv(repo)
+	uc, audit := env.uc, env.audit
+
+	audit.rows = []client.AuditRow{auditRow("app")}
+	audit.details[auditID] = []client.AuditEventRow{detailRow(cancelledTrimmedDiffJSON(), "07268")}
+	audit.positions[orderID] = []client.MSPosition{pos(prodD, "Соус", 1, 1)}
+
+	if err := uc.tick(context.Background()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+
+	ev := repo.events[auditID]
+	if ev == nil || ev.Kind != returns.KindCancelled {
+		t.Fatalf("event = %+v, want order_cancelled", ev)
+	}
+	expected, err := uc.buildExpected(context.Background(), ev)
+	if err != nil {
+		t.Fatalf("buildExpected: %v", err)
+	}
+	var sum int64
+	for _, e := range expected {
+		sum += e.ExpectedQty
+	}
+	if len(expected) != 2 || sum != 2 {
+		t.Fatalf("expected = %+v (сумма %d), want остаток + снятая часть", expected, sum)
+	}
+}
+
+// Пустой MSAPI_CANCELLED_STATE_ID: перевод в «Отменён» не детектится, событие с
+// удалением идёт по ветке удаления (поведение как до правки). Настройка обязана
+// быть задана на проде, иначе приоритет отмены не включается.
+func TestTick_EmptyCancelledStateIDFallsBackToRemoval(t *testing.T) {
+	repo := newStubRepo()
+	repo.cursor = &[]time.Time{time.Now().Add(-time.Hour).UTC()}[0]
+	env := newTestEnvCfg(repo, Config{
+		CancelledStateID: "",
+		SkipSources:      []string{"remap-1.2"},
+		PublicURL:        "http://warehouse.local:8080",
+	})
+	uc, audit := env.uc, env.audit
+
+	audit.rows = []client.AuditRow{auditRow("app")}
+	audit.details[auditID] = []client.AuditEventRow{detailRow(cancelledStockRemovalDiffJSON(), "07268")}
+
+	if err := uc.tick(context.Background()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+
+	ev := repo.events[auditID]
+	if ev == nil || ev.Kind != returns.KindRemoved {
+		t.Fatalf("event = %+v, want positions_removed (отмена не детектится)", ev)
+	}
+	expected, err := uc.buildExpected(context.Background(), ev)
+	if err != nil {
+		t.Fatalf("buildExpected: %v", err)
+	}
+	if len(expected) != 1 || expected[0].ProductID != prodA {
+		t.Fatalf("expected = %+v, want 1 строку из диффа", expected)
 	}
 }
 
