@@ -74,6 +74,7 @@ type fakeInvMS struct {
 	err             error
 	storeConfigured bool
 	calls           int
+	trace           *[]string // общая лента порядка вызовов: сюда пишется "ms"
 }
 
 func (f *fakeInvMS) CreateInventory(
@@ -81,6 +82,9 @@ func (f *fakeInvMS) CreateInventory(
 	positions []client.MSInventoryPosition,
 ) (client.MSInventoryDocument, error) {
 	f.calls++
+	if f.trace != nil {
+		*f.trace = append(*f.trace, "ms")
+	}
 	f.positions = positions
 	return f.doc, f.err
 }
@@ -89,13 +93,33 @@ func (f *fakeInvMS) InventoryStoreConfigured() bool {
 	return f.storeConfigured
 }
 
+// fakeInvSroki — фейк модуля «Сроки» (шов Sroki): запоминает коды вида и сканы,
+// чтобы Conduct проверял замену остатков без реального стока.
+type fakeInvSroki struct {
+	codes []string
+	scans []string
+	err   error
+	calls int
+	trace *[]string // общая лента порядка вызовов: сюда пишется "sroki"
+}
+
+func (f *fakeInvSroki) ReplaceInventoryLots(_ context.Context, codes, scans []string) error {
+	f.calls++
+	if f.trace != nil {
+		*f.trace = append(*f.trace, "sroki")
+	}
+	f.codes = codes
+	f.scans = scans
+	return f.err
+}
+
 // 1. Types делегирует каталогу; ошибка каталога пробрасывается.
 func TestTypes(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("список каталога", func(t *testing.T) {
 		cat := &fakeInvCatalog{types: []string{"охл/Вагю", "заморозка"}}
-		uc := New(cat, &fakeInvMS{})
+		uc := New(cat, &fakeInvMS{}, &fakeInvSroki{})
 
 		got, err := uc.Types(ctx)
 		if err != nil {
@@ -108,7 +132,7 @@ func TestTypes(t *testing.T) {
 
 	t.Run("ошибка каталога пробрасывается", func(t *testing.T) {
 		wantErr := errors.New("каталог недоступен")
-		uc := New(&fakeInvCatalog{typesErr: wantErr}, &fakeInvMS{})
+		uc := New(&fakeInvCatalog{typesErr: wantErr}, &fakeInvMS{}, &fakeInvSroki{})
 
 		if _, err := uc.Types(ctx); !errors.Is(err, wantErr) {
 			t.Fatalf("Types() error = %v, want errors.Is %v", err, wantErr)
@@ -131,15 +155,15 @@ func TestNoType(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cat := &fakeInvCatalog{products: []inventory.Product{invWeightProduct}}
 			ms := &fakeInvMS{}
-			uc := New(cat, ms)
+			uc := New(cat, ms, &fakeInvSroki{})
 
 			if _, err := uc.Group(ctx, tt.view); !errors.Is(err, ErrNoType) {
 				t.Errorf("Group() error = %v, want ErrNoType", err)
 			}
-			if _, err := uc.Preview(ctx, tt.view, []string{invItem(invWeightCode, 250)}); !errors.Is(err, ErrNoType) {
+			if _, err := uc.Preview(ctx, tt.view, []string{invItem(invWeightCode, 250)}, nil); !errors.Is(err, ErrNoType) {
 				t.Errorf("Preview() error = %v, want ErrNoType", err)
 			}
-			if _, err := uc.Conduct(ctx, tt.view, []string{invItem(invWeightCode, 250)}); !errors.Is(err, ErrNoType) {
+			if _, _, err := uc.Conduct(ctx, tt.view, []string{invItem(invWeightCode, 250)}, nil); !errors.Is(err, ErrNoType) {
 				t.Errorf("Conduct() error = %v, want ErrNoType", err)
 			}
 
@@ -238,9 +262,9 @@ func TestPreview(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			cat := &fakeInvCatalog{products: tt.products}
-			uc := New(cat, &fakeInvMS{})
+			uc := New(cat, &fakeInvMS{}, &fakeInvSroki{})
 
-			got, err := uc.Preview(ctx, tt.view, tt.scans)
+			got, err := uc.Preview(ctx, tt.view, tt.scans, nil)
 			if err != nil {
 				t.Fatalf("Preview() error = %v, want nil", err)
 			}
@@ -257,9 +281,9 @@ func TestPreview(t *testing.T) {
 // 4. Preview: скан чужого кода — ошибка агрегации наружу как есть.
 func TestPreviewForeignCode(t *testing.T) {
 	cat := &fakeInvCatalog{products: []inventory.Product{invWeightProduct}}
-	uc := New(cat, &fakeInvMS{})
+	uc := New(cat, &fakeInvMS{}, &fakeInvSroki{})
 
-	_, err := uc.Preview(context.Background(), "охл", []string{invItem("21210005", 300)})
+	_, err := uc.Preview(context.Background(), "охл", []string{invItem("21210005", 300)}, nil)
 	if !errors.Is(err, inventory.ErrScanNotInGroup) {
 		t.Fatalf("Preview() error = %v, want errors.Is %v", err, inventory.ErrScanNotInGroup)
 	}
@@ -268,9 +292,9 @@ func TestPreviewForeignCode(t *testing.T) {
 // 4б. Preview: невалидный скан — тоже как есть.
 func TestPreviewInvalidScan(t *testing.T) {
 	cat := &fakeInvCatalog{products: []inventory.Product{invWeightProduct}}
-	uc := New(cat, &fakeInvMS{})
+	uc := New(cat, &fakeInvMS{}, &fakeInvSroki{})
 
-	_, err := uc.Preview(context.Background(), "охл", []string{"1234567890"})
+	_, err := uc.Preview(context.Background(), "охл", []string{"1234567890"}, nil)
 	if !errors.Is(err, inventory.ErrScanInvalid) {
 		t.Fatalf("Preview() error = %v, want errors.Is %v", err, inventory.ErrScanInvalid)
 	}
@@ -280,9 +304,9 @@ func TestPreviewInvalidScan(t *testing.T) {
 func TestPreviewCatalogError(t *testing.T) {
 	wantErr := errors.New("каталог упал")
 	cat := &fakeInvCatalog{productsErr: wantErr}
-	uc := New(cat, &fakeInvMS{})
+	uc := New(cat, &fakeInvMS{}, &fakeInvSroki{})
 
-	if _, err := uc.Preview(context.Background(), "охл", nil); !errors.Is(err, wantErr) {
+	if _, err := uc.Preview(context.Background(), "охл", nil, nil); !errors.Is(err, wantErr) {
 		t.Fatalf("Preview() error = %v, want errors.Is %v", err, wantErr)
 	}
 }
@@ -297,9 +321,9 @@ func TestConduct(t *testing.T) {
 	}
 	cat := &fakeInvCatalog{products: []inventory.Product{invWeightProduct, invNoCodeProduct}}
 	ms := &fakeInvMS{doc: doc}
-	uc := New(cat, ms)
+	uc := New(cat, ms, &fakeInvSroki{})
 
-	got, err := uc.Conduct(context.Background(), "охл", []string{invItem(invWeightCode, 250)})
+	got, _, err := uc.Conduct(context.Background(), "охл", []string{invItem(invWeightCode, 250)}, nil)
 	if err != nil {
 		t.Fatalf("Conduct() error = %v, want nil", err)
 	}
@@ -322,9 +346,9 @@ func TestConduct(t *testing.T) {
 func TestConductEmptyGroup(t *testing.T) {
 	cat := &fakeInvCatalog{products: nil}
 	ms := &fakeInvMS{}
-	uc := New(cat, ms)
+	uc := New(cat, ms, &fakeInvSroki{})
 
-	got, err := uc.Conduct(context.Background(), "сопутка", nil)
+	got, _, err := uc.Conduct(context.Background(), "сопутка", nil, nil)
 	if !errors.Is(err, ErrEmptyGroup) {
 		t.Fatalf("Conduct() error = %v, want ErrEmptyGroup", err)
 	}
@@ -341,9 +365,9 @@ func TestConductClientError(t *testing.T) {
 	wantErr := errors.New("МС 500")
 	cat := &fakeInvCatalog{products: []inventory.Product{invWeightProduct}}
 	ms := &fakeInvMS{err: wantErr}
-	uc := New(cat, ms)
+	uc := New(cat, ms, &fakeInvSroki{})
 
-	got, err := uc.Conduct(context.Background(), "охл", []string{invItem(invWeightCode, 250)})
+	got, _, err := uc.Conduct(context.Background(), "охл", []string{invItem(invWeightCode, 250)}, nil)
 	if !errors.Is(err, wantErr) {
 		t.Fatalf("Conduct() error = %v, want errors.Is %v", err, wantErr)
 	}
@@ -359,9 +383,9 @@ func TestConductClientError(t *testing.T) {
 func TestConductAggregateError(t *testing.T) {
 	cat := &fakeInvCatalog{products: []inventory.Product{invWeightProduct}}
 	ms := &fakeInvMS{}
-	uc := New(cat, ms)
+	uc := New(cat, ms, &fakeInvSroki{})
 
-	_, err := uc.Conduct(context.Background(), "охл", []string{invItem("21210005", 300)})
+	_, _, err := uc.Conduct(context.Background(), "охл", []string{invItem("21210005", 300)}, nil)
 	if !errors.Is(err, inventory.ErrScanNotInGroup) {
 		t.Fatalf("Conduct() error = %v, want errors.Is %v", err, inventory.ErrScanNotInGroup)
 	}
@@ -384,21 +408,21 @@ func TestMergeGuestScans(t *testing.T) {
 		}
 		want := []string{own[0], own[1], invItem(invWeightCode, 300), invItem(invPieceCode, 100)}
 
-		got, err := MergeGuestScans(own, guests)
+		got, err := MergeGuestScans(own, nil, guests)
 		if err != nil {
 			t.Fatalf("MergeGuestScans() error = %v, want nil", err)
 		}
-		if !reflect.DeepEqual(got, want) {
-			t.Fatalf("MergeGuestScans() = %v, want %v", got, want)
+		if !reflect.DeepEqual(got.Scans, want) {
+			t.Fatalf("MergeGuestScans() = %v, want %v", got.Scans, want)
 		}
 	})
 
 	t.Run("пустой список гостей — свои без изменений", func(t *testing.T) {
-		got, err := MergeGuestScans(own, nil)
+		got, err := MergeGuestScans(own, nil, nil)
 		if err != nil {
 			t.Fatalf("MergeGuestScans() error = %v, want nil", err)
 		}
-		if !reflect.DeepEqual(got, own) {
+		if !reflect.DeepEqual(got.Scans, own) {
 			t.Fatalf("MergeGuestScans() = %v, want свои %v", got, own)
 		}
 	})
@@ -408,18 +432,18 @@ func TestMergeGuestScans(t *testing.T) {
 		// переносит строку, чтобы отказ был один и с понятным текстом.
 		guests := []json.RawMessage{json.RawMessage(`{"raw":"1234567890","seq":1}`)}
 
-		got, err := MergeGuestScans(own, guests)
+		got, err := MergeGuestScans(own, nil, guests)
 		if err != nil {
 			t.Fatalf("MergeGuestScans() error = %v, want nil", err)
 		}
-		if want := []string{own[0], own[1], "1234567890"}; !reflect.DeepEqual(got, want) {
+		if want := []string{own[0], own[1], "1234567890"}; !reflect.DeepEqual(got.Scans, want) {
 			t.Fatalf("MergeGuestScans() = %v, want %v", got, want)
 		}
 	})
 
 	t.Run("мусорная строка (не JSON) — ошибка, строки не угадываем", func(t *testing.T) {
 		guests := []json.RawMessage{json.RawMessage(`{"raw":"` + invItem(invWeightCode, 300) + `"}`), json.RawMessage(`не json`)}
-		if got, err := MergeGuestScans(own, guests); err == nil {
+		if got, err := MergeGuestScans(own, nil, guests); err == nil {
 			t.Fatalf("MergeGuestScans() = %v, want ошибку разбора", got)
 		}
 	})
@@ -435,12 +459,12 @@ func TestMergeGuestScans(t *testing.T) {
 		}
 		want := []string{own[0], own[1], invItem(invPieceCode, 200)}
 
-		got, err := MergeGuestScans(own, guests)
+		got, err := MergeGuestScans(own, nil, guests)
 		if err != nil {
 			t.Fatalf("MergeGuestScans() error = %v, want nil", err)
 		}
-		if !reflect.DeepEqual(got, want) {
-			t.Fatalf("MergeGuestScans() = %v, want %v", got, want)
+		if !reflect.DeepEqual(got.Scans, want) {
+			t.Fatalf("MergeGuestScans() = %v, want %v", got.Scans, want)
 		}
 	})
 
@@ -450,7 +474,7 @@ func TestMergeGuestScans(t *testing.T) {
 		// должна дать отказ, а не исчезнуть из документа молча.
 		guests := []json.RawMessage{json.RawMessage(`{"manual_product_id":"prod-piece","seq":5}`)}
 
-		if got, err := MergeGuestScans(own, guests); err == nil {
+		if got, err := MergeGuestScans(own, nil, guests); err == nil {
 			t.Fatalf("MergeGuestScans() = %v, want ошибку про строку без штрих-кода", got)
 		}
 	})
@@ -468,10 +492,233 @@ func TestStoreConfigured(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			uc := New(&fakeInvCatalog{}, &fakeInvMS{storeConfigured: tt.flag})
+			uc := New(&fakeInvCatalog{}, &fakeInvMS{storeConfigured: tt.flag}, &fakeInvSroki{})
 			if got := uc.StoreConfigured(); got != tt.flag {
 				t.Fatalf("StoreConfigured() = %v, want %v", got, tt.flag)
 			}
 		})
 	}
+}
+
+// 10. Conduct со швом «Сроки»: порядок шагов сроки→документ и страховка от
+// обнуления вида (пустая общая строка). Состав аргументов шва и поведение при
+// сбоях шва/МС — в TestConductSrokiCalls.
+func TestConductSroki(t *testing.T) {
+	ctx := context.Background()
+	doc := client.MSInventoryDocument{
+		ID:   "doc-1",
+		Name: "Инвентаризация № 1",
+		URL:  "https://api.moysklad.ru/entity/inventory/doc-1",
+	}
+
+	t.Run("порядок вызовов сроки→документ, успех = SrokiUpdated", func(t *testing.T) {
+		trace := []string{}
+		cat := &fakeInvCatalog{products: []inventory.Product{invWeightProduct}}
+		ms := &fakeInvMS{doc: doc, trace: &trace}
+		sroki := &fakeInvSroki{trace: &trace}
+		uc := New(cat, ms, sroki)
+
+		got, outcome, err := uc.Conduct(ctx, "охл", []string{invItem(invWeightCode, 250)}, nil)
+		if err != nil {
+			t.Fatalf("Conduct() error = %v, want nil", err)
+		}
+		if !reflect.DeepEqual(got, doc) {
+			t.Fatalf("Conduct() doc = %+v, want %+v", got, doc)
+		}
+		if outcome != SrokiUpdated {
+			t.Fatalf("outcome = %q, want %q", outcome, SrokiUpdated)
+		}
+		if want := []string{"sroki", "ms"}; !reflect.DeepEqual(trace, want) {
+			t.Fatalf("порядок вызовов = %v, want %v", trace, want)
+		}
+	})
+
+	t.Run("только отложка: шов не вызван, документ создан, SrokiSkipped", func(t *testing.T) {
+		cat := &fakeInvCatalog{products: []inventory.Product{invPieceProduct}}
+		ms := &fakeInvMS{doc: doc}
+		sroki := &fakeInvSroki{}
+		uc := New(cat, ms, sroki)
+
+		got, outcome, err := uc.Conduct(ctx, "сопутка", nil, []string{invItem(invPieceCode, 100)})
+		if err != nil {
+			t.Fatalf("Conduct() error = %v, want nil", err)
+		}
+		if !reflect.DeepEqual(got, doc) {
+			t.Fatalf("Conduct() doc = %+v, want %+v", got, doc)
+		}
+		if outcome != SrokiSkipped {
+			t.Fatalf("outcome = %q, want %q", outcome, SrokiSkipped)
+		}
+		if sroki.calls != 0 {
+			t.Fatalf("шов сроков вызван %d раз без общей строки, want 0", sroki.calls)
+		}
+		if ms.calls != 1 {
+			t.Fatalf("CreateInventory вызван %d раз, want 1", ms.calls)
+		}
+		want := []client.MSInventoryPosition{{AssortmentID: "prod-piece", Quantity: 1, PriceKop: 50000}}
+		if !reflect.DeepEqual(ms.positions, want) {
+			t.Fatalf("позиции = %+v, want %+v (отложка входит в количество документа)", ms.positions, want)
+		}
+	})
+}
+
+// TestConductSrokiCalls — состав аргументов шва и поведение при сбоях: ошибка шва
+// не пускает создание документа (сканы снаружи живы), ошибка МС на шаге документа —
+// сроки уже заменены (outcome SrokiUpdated).
+func TestConductSrokiCalls(t *testing.T) {
+	ctx := context.Background()
+	doc := client.MSInventoryDocument{
+		ID:   "doc-1",
+		Name: "Инвентаризация № 1",
+		URL:  "https://api.moysklad.ru/entity/inventory/doc-1",
+	}
+
+	t.Run("ошибка шва: документ не создаём, сканы снаружи живы", func(t *testing.T) {
+		wantErr := errors.New("сток упал")
+		cat := &fakeInvCatalog{products: []inventory.Product{invWeightProduct}}
+		ms := &fakeInvMS{doc: doc}
+		sroki := &fakeInvSroki{err: wantErr}
+		uc := New(cat, ms, sroki)
+
+		scans := []string{invItem(invWeightCode, 250)}
+		got, outcome, err := uc.Conduct(ctx, "охл", scans, nil)
+		if !errors.Is(err, wantErr) {
+			t.Fatalf("Conduct() error = %v, want errors.Is %v", err, wantErr)
+		}
+		if got != (client.MSInventoryDocument{}) {
+			t.Fatalf("Conduct() doc = %+v, want пустой", got)
+		}
+		if outcome != "" {
+			t.Fatalf("outcome = %q, want пусто", outcome)
+		}
+		if ms.calls != 0 {
+			t.Fatalf("CreateInventory вызван %d раз при ошибке шва, want 0", ms.calls)
+		}
+		if sroki.calls != 1 {
+			t.Fatalf("шов вызван %d раз, want 1", sroki.calls)
+		}
+		if len(scans) != 1 || scans[0] != invItem(invWeightCode, 250) {
+			t.Fatalf("сканы оператора изменились при ошибке шва: %v", scans)
+		}
+	})
+
+	t.Run("шов получает коды всего вида и только сканы общей строки", func(t *testing.T) {
+		cat := &fakeInvCatalog{products: []inventory.Product{invWeightProduct, invNoCodeProduct, invPieceProduct}}
+		ms := &fakeInvMS{doc: doc}
+		sroki := &fakeInvSroki{}
+		uc := New(cat, ms, sroki)
+
+		scans := []string{invItem(invWeightCode, 250)}
+		hold := []string{invItem(invPieceCode, 100)}
+		_, outcome, err := uc.Conduct(ctx, "охл", scans, hold)
+		if err != nil {
+			t.Fatalf("Conduct() error = %v, want nil", err)
+		}
+		if outcome != SrokiUpdated {
+			t.Fatalf("outcome = %q, want %q", outcome, SrokiUpdated)
+		}
+		if want := []string{invWeightCode, invPieceCode}; !reflect.DeepEqual(sroki.codes, want) {
+			t.Fatalf("коды шва = %v, want %v (порядок группы, без товара без кода)", sroki.codes, want)
+		}
+		if !reflect.DeepEqual(sroki.scans, scans) {
+			t.Fatalf("сканы шва = %v, want только общую строку %v (отложка не уходит)", sroki.scans, scans)
+		}
+		if sroki.calls != 1 {
+			t.Fatalf("шов вызван %d раз, want 1", sroki.calls)
+		}
+	})
+
+	t.Run("ошибка МС на шаге документа: outcome всё равно SrokiUpdated", func(t *testing.T) {
+		wantErr := errors.New("МС 500")
+		cat := &fakeInvCatalog{products: []inventory.Product{invWeightProduct}}
+		ms := &fakeInvMS{err: wantErr}
+		sroki := &fakeInvSroki{}
+		uc := New(cat, ms, sroki)
+
+		got, outcome, err := uc.Conduct(ctx, "охл", []string{invItem(invWeightCode, 250)}, nil)
+		if !errors.Is(err, wantErr) {
+			t.Fatalf("Conduct() error = %v, want errors.Is %v", err, wantErr)
+		}
+		if got != (client.MSInventoryDocument{}) {
+			t.Fatalf("Conduct() doc = %+v, want пустой", got)
+		}
+		if outcome != SrokiUpdated {
+			t.Fatalf("outcome = %q, want %q (сроки уже заменены)", outcome, SrokiUpdated)
+		}
+		if sroki.calls != 1 {
+			t.Fatalf("шов вызван %d раз, want 1", sroki.calls)
+		}
+		if ms.calls != 1 {
+			t.Fatalf("CreateInventory вызван %d раз, want 1", ms.calls)
+		}
+	})
+}
+
+// 10б. MergeGuestScans: гостевой скан с hold:true идёт в Hold, без hold — в
+// Scans; свои отложка-сканы сохраняются в Hold; пустышки пропускаются.
+func TestMergeGuestScansHold(t *testing.T) {
+	own := []string{invItem(invWeightCode, 250)}
+	ownHold := []string{invItem(invPieceCode, 300)}
+
+	t.Run("hold:true → Hold, без hold → Scans, порядок свои→гостевые", func(t *testing.T) {
+		guests := []json.RawMessage{
+			json.RawMessage(`{"raw":"` + invItem(invWeightCode, 300) + `","seq":1}`),
+			json.RawMessage(`{"raw":"` + invItem(invPieceCode, 100) + `","hold":true,"seq":2}`),
+			json.RawMessage(`{"raw":"` + invItem(invWeightCode, 400) + `","hold":false,"seq":3}`),
+		}
+		wantScans := []string{own[0], invItem(invWeightCode, 300), invItem(invWeightCode, 400)}
+		wantHold := []string{ownHold[0], invItem(invPieceCode, 100)}
+
+		got, err := MergeGuestScans(own, ownHold, guests)
+		if err != nil {
+			t.Fatalf("MergeGuestScans() error = %v, want nil", err)
+		}
+		if !reflect.DeepEqual(got.Scans, wantScans) {
+			t.Fatalf("Scans = %v, want %v", got.Scans, wantScans)
+		}
+		if !reflect.DeepEqual(got.Hold, wantHold) {
+			t.Fatalf("Hold = %v, want %v", got.Hold, wantHold)
+		}
+	})
+
+	t.Run("свои отложка-сканы остаются в Hold и без гостей", func(t *testing.T) {
+		got, err := MergeGuestScans(own, ownHold, nil)
+		if err != nil {
+			t.Fatalf("MergeGuestScans() error = %v, want nil", err)
+		}
+		if !reflect.DeepEqual(got.Scans, own) {
+			t.Fatalf("Scans = %v, want %v", got.Scans, own)
+		}
+		if !reflect.DeepEqual(got.Hold, ownHold) {
+			t.Fatalf("Hold = %v, want %v", got.Hold, ownHold)
+		}
+	})
+
+	t.Run("пустышка в hold-строке пропускается", func(t *testing.T) {
+		guests := []json.RawMessage{
+			json.RawMessage(`{"raw":"   ","hold":true,"seq":1}`),
+			json.RawMessage(`{"hold":true,"seq":2}`),
+		}
+		got, err := MergeGuestScans(own, ownHold, guests)
+		if err != nil {
+			t.Fatalf("MergeGuestScans() error = %v, want nil", err)
+		}
+		if !reflect.DeepEqual(got.Scans, own) || !reflect.DeepEqual(got.Hold, ownHold) {
+			t.Fatalf("гостевые пустышки попали в набор: Scans=%v Hold=%v", got.Scans, got.Hold)
+		}
+	})
+
+	t.Run("мусорная hold-строка (не JSON) — ошибка", func(t *testing.T) {
+		guests := []json.RawMessage{json.RawMessage(`{"raw":"` + invItem(invPieceCode, 100) + `","hold":true`)}
+		if got, err := MergeGuestScans(own, ownHold, guests); err == nil {
+			t.Fatalf("MergeGuestScans() = %+v, want ошибку разбора", got)
+		}
+	})
+
+	t.Run("hold-строка с manual_product_id — ошибка, а не тихая потеря", func(t *testing.T) {
+		guests := []json.RawMessage{json.RawMessage(`{"hold":true,"manual_product_id":"prod-piece","seq":1}`)}
+		if got, err := MergeGuestScans(own, ownHold, guests); err == nil {
+			t.Fatalf("MergeGuestScans() = %+v, want ошибку про строку без штрих-кода", got)
+		}
+	})
 }

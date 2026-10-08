@@ -28,17 +28,24 @@ type Line struct {
 	UOM          string
 	Weighted     bool
 	Fact         float64 // весовой — килограммы (граммы/1000), штучный — штуки
-	Scans        int     // сколько сканов легло в строку
+	Scans        int     // сколько сканов легло в общую строку
+	HoldFact     float64 // отложка: то же правило единиц, что и Fact
+	HoldScans    int     // сколько сканов легло в строку «Отложка»
 	PriceKop     int64   // закупочная цена, копейки; 0 — не задана
 	Scanable     bool    // у товара есть код склада (можно сканировать)
 }
 
+// Total — итог по позиции в единицах товара: общая строка + отложка. Ровно он
+// уходит количеством в документ МС.
+func (l Line) Total() float64 { return l.Fact + l.HoldFact }
+
 // Preview — собранный отчёт по группе: ВСЕ позиции вида инвентаризации.
 type Preview struct {
-	Lines   []Line
-	Total   int // позиций в группе
-	Scanned int // позиций, у которых есть хотя бы один скан
-	Scans   int // принятых сканов
+	Lines     []Line
+	Total     int // позиций в группе
+	Scanned   int // позиций, у которых есть хотя бы один скан (общая строка или отложка)
+	Scans     int // принятых сканов в общую строку
+	HoldScans int // принятых сканов в отложку
 }
 
 // Position — строка документа МС.
@@ -96,10 +103,13 @@ func WeightDecimals(uom string) int {
 }
 
 // Aggregate собирает отчёт по группе: строки идут в порядке входа products,
-// сканы раскладываются по внутреннему коду товара. Весовые сканы суммируются
-// в граммах (Fact — килограммы), штучные — в штуках. Первый невалидный скан
-// останавливает разбор и возвращается как ошибка.
-func Aggregate(products []Product, scans []string) (Preview, error) {
+// сканы раскладываются по внутреннему коду товара. Сканы делятся на две строки:
+// общую (scans) и «Отложку» (hold) — считаются одним разбором и одним правилом
+// единиц, различие только в том, в какую колонку лечь. Весовые сканы суммируются
+// в граммах (Fact/HoldFact — килограммы), штучные — в штуках. Первый невалидный
+// скан останавливает разбор и возвращается ошибкой (сначала общая строка, затем
+// отложка — порядок ошибок детерминирован).
+func Aggregate(products []Product, scans, hold []string) (Preview, error) {
 	preview := Preview{
 		Lines: make([]Line, 0, len(products)),
 		Total: len(products),
@@ -125,32 +135,59 @@ func Aggregate(products []Product, scans []string) (Preview, error) {
 
 	grams := make([]int64, len(products))
 	qty := make([]float64, len(products))
+	holdGrams := make([]int64, len(products))
+	holdQty := make([]float64, len(products))
 
-	for _, raw := range scans {
-		scan := strings.TrimSpace(raw)
-		if scan == "" {
-			return Preview{}, fmt.Errorf("%w: пустой скан %q", ErrScanInvalid, raw)
-		}
-		parsed, err := innercode.Parse(scan)
-		if err != nil {
-			return Preview{}, fmt.Errorf("%w: скан %q: %w", ErrScanInvalid, scan, err)
-		}
-		i, ok := index[parsed.InternalCode]
-		if !ok {
-			return Preview{}, fmt.Errorf("%w: код %s, скан %q", ErrScanNotInGroup, parsed.InternalCode, scan)
-		}
+	// apply раскладывает один список сканов (общая строка или отложка) по строкам
+	// отчёта. hold=false — колонка Fact, hold=true — HoldFact.
+	apply := func(raws []string, isHold bool) error {
+		for _, raw := range raws {
+			scan := strings.TrimSpace(raw)
+			if scan == "" {
+				return fmt.Errorf("%w: пустой скан %q", ErrScanInvalid, raw)
+			}
+			parsed, err := innercode.Parse(scan)
+			if err != nil {
+				return fmt.Errorf("%w: скан %q: %w", ErrScanInvalid, scan, err)
+			}
+			i, ok := index[parsed.InternalCode]
+			if !ok {
+				return fmt.Errorf("%w: код %s, скан %q", ErrScanNotInGroup, parsed.InternalCode, scan)
+			}
 
-		line := &preview.Lines[i]
-		if line.Weighted {
-			grams[i] += int64(parsed.WeightG)
-		} else {
-			qty[i] += float64(parsed.Qty)
+			line := &preview.Lines[i]
+			switch {
+			case isHold && line.Weighted:
+				holdGrams[i] += int64(parsed.WeightG)
+				line.HoldScans++
+				preview.HoldScans++
+			case isHold:
+				holdQty[i] += float64(parsed.Qty)
+				line.HoldScans++
+				preview.HoldScans++
+			case line.Weighted:
+				grams[i] += int64(parsed.WeightG)
+				line.Scans++
+				preview.Scans++
+			default:
+				qty[i] += float64(parsed.Qty)
+				line.Scans++
+				preview.Scans++
+			}
+
+			// Позиция «просканирована», если скан лёг хоть в одну колонку.
+			if line.Scans+line.HoldScans == 1 {
+				preview.Scanned++
+			}
 		}
-		line.Scans++
-		preview.Scans++
-		if line.Scans == 1 {
-			preview.Scanned++
-		}
+		return nil
+	}
+
+	if err := apply(scans, false); err != nil {
+		return Preview{}, err
+	}
+	if err := apply(hold, true); err != nil {
+		return Preview{}, err
 	}
 
 	for i := range preview.Lines {
@@ -158,22 +195,26 @@ func Aggregate(products []Product, scans []string) (Preview, error) {
 			// Граммы целые: килограммы дают ровно три знака после точки,
 			// граммы — целое, тонны — шесть знаков.
 			preview.Lines[i].Fact = WeightQuantity(preview.Lines[i].UOM, grams[i])
+			preview.Lines[i].HoldFact = WeightQuantity(preview.Lines[i].UOM, holdGrams[i])
 			continue
 		}
 		preview.Lines[i].Fact = qty[i]
+		preview.Lines[i].HoldFact = holdQty[i]
 	}
 
 	return preview, nil
 }
 
 // Positions возвращает строки документа МС по всем строкам отчёта, включая
-// непросканированные (количество 0). Порядок — как в Lines.
+// непросканированные (количество 0). Количество — итог по позиции (общая строка
+// + отложка, Line.Total): отложка в документ отдельной строкой не идёт, её
+// единицы уже списаны подбором и лежат на «Отложке» склада. Порядок — как в Lines.
 func Positions(p Preview) []Position {
 	positions := make([]Position, 0, len(p.Lines))
 	for _, line := range p.Lines {
 		positions = append(positions, Position{
 			ProductID: line.ProductID,
-			Quantity:  line.Fact,
+			Quantity:  line.Total(),
 			PriceKop:  line.PriceKop,
 		})
 	}
