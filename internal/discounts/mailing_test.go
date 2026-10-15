@@ -90,6 +90,8 @@ func TestBuildMailingNumbersEveryItem(t *testing.T) {
 	}
 
 	got := BuildMailing(items)
+	// Курсор по тексту: проверяем и наличие строк, и их порядок.
+	prev := 0
 	for i, want := range []string{
 		"1. Томагавк |",
 		"Срок годности: 13.11",
@@ -101,10 +103,13 @@ func TestBuildMailingNumbersEveryItem(t *testing.T) {
 		"Срок годности: 15.11",
 		"Доступно по акции: 3 шт.",
 	} {
-		idx := strings.Index(got, want)
+		// Курсор: проверяем и наличие, и порядок (блок 2 идёт после блока 1,
+		// срок второго — после количества первого).
+		idx := strings.Index(got[prev:], want)
 		if idx < 0 {
 			t.Fatalf("в письме нет %q (шаг %d):\n%s", want, i, got)
 		}
+		prev += idx + len(want)
 	}
 }
 
