@@ -73,7 +73,7 @@ func BuildMailing(items []MailingItem) string {
 func mailingBlock(n int, it MailingItem) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%d. %s | %s\n", n, mailingName(it), mailingPrice(it))
-	fmt.Fprintf(&b, "Срок годности: %s\n", it.BestBefore.Format("02.01"))
+	fmt.Fprintf(&b, "Срок годности: %s\n", it.BestBefore.Format("02.01.2006"))
 	fmt.Fprintf(&b, "Доступно по акции: %d шт.\n", it.Qty)
 	fmt.Fprintf(&b, "Остаток по акции: %d шт.\n", it.Qty)
 

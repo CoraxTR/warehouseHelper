@@ -45,7 +45,7 @@ func TestRunSlotPlanSendsMailingToWarehouse(t *testing.T) {
 	for _, want := range []string{
 		"Привет, друзья! Вот что мы приготовили на сегодня:",
 		`1. <a href="https://www.steakhome.ru/catalog/element/sausage/?utm_source=tg_sale">Колбаса</a> | 2599,00 руб./кг. - 20% => 2079,20 руб./кг.`,
-		"Срок годности: 23.09",
+		"Срок годности: 23.09.2026",
 		"Доступно по акции: 100 шт.",
 		// Остаток по акции — то же число, что доступное (решение владельца
 		// 15.10.2026): поле сайта проставится равным плану публикации.
@@ -83,7 +83,7 @@ func TestRunSlotPlanMailingSurplusPlanQty(t *testing.T) {
 	if !strings.Contains(text, "Доступно по акции: 51 шт.") {
 		t.Errorf("план продаж добора не попал в письмо:\n%s", text)
 	}
-	if !strings.Contains(text, "Срок годности: 25.09") {
+	if !strings.Contains(text, "Срок годности: 25.09.2026") {
 		t.Errorf("срок позиции добора не попал в письмо:\n%s", text)
 	}
 	// Адреса карточки нет — название печатается текстом, цена остаётся.
