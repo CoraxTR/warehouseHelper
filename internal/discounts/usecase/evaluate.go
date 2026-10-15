@@ -30,6 +30,12 @@ type PairState struct {
 	ShelfLife  *int16 // NULL — срок годности не задан
 	Qty        int64  // остаток лота
 
+	// Данные карточки (из Input): нужны письму складу — цена, единица измерения
+	// и адрес позиции на сайте. Расчёту не нужны.
+	UOM       string
+	SalePrice *int64
+	SiteURL   string
+
 	// Накопленный остаток: Q пары плюс все пары товара с меньшим сроком
 	// (передние по FIFO), включая саму пару.
 	CumQty int64
@@ -386,6 +392,9 @@ func evaluatePair(in discounts.Input, cumQty int64, rates map[string]float64, da
 		DaysLeft:      daysLeft,
 		ShelfLife:     in.ShelfLife,
 		Qty:           in.Qty,
+		UOM:           in.UOM,
+		SalePrice:     in.SalePrice,
+		SiteURL:       in.SiteURL,
 		CumQty:        cumQty,
 		Turnover:      turnover,
 		PeriodDays:    periodDays,

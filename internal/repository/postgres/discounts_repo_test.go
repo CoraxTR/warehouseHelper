@@ -35,11 +35,14 @@ func TestScanDiscountInput(t *testing.T) {
 	}{
 		{
 			name: "недельный товар — период 7 дней",
-			vals: []any{"p-week", "Молоко 3,2%", "Молочка", false, 14, true, bb, 24,
+			vals: []any{"p-week", "Молоко 3,2%", "Молочка", false, 14, true,
+				"кг", int64(129900), "https://www.steakhome.ru/catalog/element/milk/", bb, 24,
 				int16(20), nil, nil, int16(15), "expiry", "expiry", "escalation"},
 			want: discounts.Input{
 				ProductID: "p-week", Name: "Молоко 3,2%", GroupName: "Молочка",
 				ShelfLife: new(int16(14)), TrackWeekly: true, BestBefore: bb, Qty: 24,
+				UOM: "кг", SalePrice: new(int64(129900)),
+				SiteURL:      "https://www.steakhome.ru/catalog/element/milk/",
 				PeriodDays:   7,
 				GeneralPlain: new(int16(20)), TelegramManual: new(int16(15)), DiscountSource: "expiry",
 				GeneralOwner: "expiry", TelegramOwner: "escalation",
@@ -47,28 +50,33 @@ func TestScanDiscountInput(t *testing.T) {
 		},
 		{
 			name: "месячный товар — период 30 дней",
-			vals: []any{"p-month", "Сыр", "Молочка", true, 90, false, bb, 8,
+			vals: []any{"p-month", "Сыр", "Молочка", true, 90, false,
+				"кг", int64(219000), nil, bb, 8,
 				nil, int16(10), int16(30), nil, "", nil, nil},
 			want: discounts.Input{
 				ProductID: "p-month", Name: "Сыр", GroupName: "Молочка", ShortList: true,
 				ShelfLife: new(int16(90)), BestBefore: bb, Qty: 8,
+				UOM: "кг", SalePrice: new(int64(219000)), SiteURL: "",
 				PeriodDays:    30,
 				TelegramPlain: new(int16(10)), GeneralManual: new(int16(30)),
 			},
 		},
 		{
 			name: "нет данных о продажах — дни периода всё равно из товарного признака",
-			vals: []any{"p-new", "Новинка", "Разное", false, 30, true, bb, 5,
+			vals: []any{"p-new", "Новинка", "Разное", false, 30, true,
+				"шт", nil, nil, bb, 5,
 				nil, nil, nil, nil, nil, nil, nil},
 			want: discounts.Input{
 				ProductID: "p-new", Name: "Новинка", GroupName: "Разное",
 				ShelfLife: new(int16(30)), TrackWeekly: true, BestBefore: bb, Qty: 5,
+				UOM: "шт", SalePrice: nil, SiteURL: "",
 				PeriodDays: 7,
 			},
 		},
 		{
 			name: "срок годности не задан — NULL",
-			vals: []any{"p-null", "Без срока", "Разное", false, nil, false, bb, 3,
+			vals: []any{"p-null", "Без срока", "Разное", false, nil, false,
+				"", nil, nil, bb, 3,
 				nil, nil, nil, nil, nil, nil, nil},
 			want: discounts.Input{
 				ProductID: "p-null", Name: "Без срока", GroupName: "Разное",
@@ -77,11 +85,13 @@ func TestScanDiscountInput(t *testing.T) {
 		},
 		{
 			name: "нулевая скидка — ноль, а не NULL (трактовка — в домене)",
-			vals: []any{"p-zero", "Йогурт", "Молочка", false, 5, false, bb, 4,
+			vals: []any{"p-zero", "Йогурт", "Молочка", false, 5, false,
+				"шт", int64(5990), "", bb, 4,
 				int16(0), nil, int16(0), nil, "surplus", nil, nil},
 			want: discounts.Input{
 				ProductID: "p-zero", Name: "Йогурт", GroupName: "Молочка",
 				ShelfLife: new(int16(5)), BestBefore: bb, Qty: 4,
+				UOM: "шт", SalePrice: new(int64(5990)),
 				PeriodDays:   30,
 				GeneralPlain: new(int16(0)), GeneralManual: new(int16(0)), DiscountSource: "surplus",
 			},
@@ -93,7 +103,8 @@ func TestScanDiscountInput(t *testing.T) {
 			// («cannot scan NULL into *string»), а подделка Scan клала NULL в
 			// string как пустую строку — тест этого не видел (см. scanValue).
 			name: "группы нет и метки нет — NULL в обеих TEXT-колонках",
-			vals: []any{"p-nogroup", "Без группы", nil, false, 20, true, bb, 7,
+			vals: []any{"p-nogroup", "Без группы", nil, false, 20, true,
+				"", nil, nil, bb, 7,
 				nil, int16(15), nil, nil, nil, nil, nil},
 			want: discounts.Input{
 				ProductID: "p-nogroup", Name: "Без группы", GroupName: "",
@@ -158,11 +169,13 @@ func TestScanDiscountInputColumnCount(t *testing.T) {
 	if row.dests != want {
 		t.Errorf("scan-хелпер разбирает %d колонок, в списке — %d", row.dests, want)
 	}
-	// 15 колонок: товарные признаки (6), срок и остаток лота (2), четыре скидки,
-	// метка источника и владельцы значений обеих колонок (7). Колонки оборота
-	// здесь нет — оборот приходит швом модуля средних продаж, а не из снапшота.
-	if want != 15 {
-		t.Errorf("в списке колонок %d, want 15 (оборота в снапшоте нет)", want)
+	// 18 колонок: товарные признаки товара, включая данные карточки для письма
+	// складу (9: группа, срок, признак недельного ряда, единица измерения, цена
+	// продажи, адрес на сайте), срок и остаток лота (2), четыре скидки, метка
+	// источника и владельцы значений обеих колонок (7). Колонки оборота здесь
+	// нет — оборот приходит швом модуля средних продаж, а не из снапшота.
+	if want != 18 {
+		t.Errorf("в списке колонок %d, want 18 (оборота в снапшоте нет)", want)
 	}
 }
 
