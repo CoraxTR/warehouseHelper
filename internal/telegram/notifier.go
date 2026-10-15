@@ -73,6 +73,22 @@ func (n *Notifier) NotifyWarehouse(text string) error {
 	return n.sendMessage(context.Background(), n.warehouseChatID, text)
 }
 
+// NotifyWarehouseHTML отправляет в чат склада сообщение с HTML-разметкой (письмо
+// складу: название товара ссылкой на карточку). Отдельный метод, а не флаг у
+// NotifyWarehouse: тот шлёт обычный текст, и разметка в нём не разбирается.
+// Без настроенного токена или chat_id склада — no-op.
+func (n *Notifier) NotifyWarehouseHTML(text string) error {
+	if n.botToken == "" || n.warehouseChatID == 0 {
+		return nil
+	}
+
+	return n.postJSON(context.Background(), "sendMessage", map[string]any{
+		fieldChatID:  n.warehouseChatID,
+		fieldText:    text,
+		"parse_mode": "HTML",
+	})
+}
+
 // NotifyEveryone отправляет сообщение в общий чат сотрудников.
 // Без настроенного токена или chat_id общего чата — no-op.
 func (n *Notifier) NotifyEveryone(text string) error {

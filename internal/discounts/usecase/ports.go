@@ -76,9 +76,14 @@ type DiscountWriter interface {
 	SetDiscounts(ctx context.Context, writes []discounts.DiscountWrite) error
 }
 
-// WarehouseNotifier — список позиций слота в чат склада (14:00).
+// WarehouseNotifier — список позиций слота в чат склада (14:00) и письмо с
+// позициями рассылки вторым сообщением (шапка со ссылкой на карточку товара —
+// поэтому отдельный метод с разметкой).
 type WarehouseNotifier interface {
 	NotifyWarehouse(text string) error
+	// NotifyWarehouseHTML — то же в чат склада, но с HTML-разметкой: название
+	// позиции ссылкой на карточку (телеграм-нотифаер решает, как нести текст).
+	NotifyWarehouseHTML(text string) error
 }
 
 // CommonNotifier — уведомления об изменениях скидок и дайджест в общий канал,

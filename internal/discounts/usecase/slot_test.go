@@ -92,13 +92,21 @@ func slotItems(items []discounts.DigestItem) []discounts.SlotItem {
 	return out
 }
 
-// fakeWarehouseNotifier — чат склада: список позиций слота.
+// fakeWarehouseNotifier — чат склада: список позиций слота и письмо с позициями
+// рассылки (второе сообщение, с HTML-разметкой).
 type fakeWarehouseNotifier struct {
-	texts []string
+	texts   []string
+	mailing []string
 }
 
 func (n *fakeWarehouseNotifier) NotifyWarehouse(text string) error {
 	n.texts = append(n.texts, text)
+
+	return nil
+}
+
+func (n *fakeWarehouseNotifier) NotifyWarehouseHTML(text string) error {
+	n.mailing = append(n.mailing, text)
 
 	return nil
 }

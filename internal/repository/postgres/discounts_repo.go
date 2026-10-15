@@ -24,6 +24,7 @@ import (
 // NULL здесь — «скидка не задана»).
 const discountInputColumns = `
     s.product_id, p.name, p.group_name, p.short_list, p.shelf_life, p.track_weekly,
+    p.uom, p.sale_price, p.site_url,
     s.best_before, s.qty,
     s.discount_general, s.discount_telegram,
     s.discount_general_manual, s.discount_telegram_manual, s.discount_source,
@@ -114,12 +115,15 @@ func scanDiscountInput(row pgx.Row) (discounts.Input, error) {
 	var (
 		in             discounts.Input
 		groupName      *string // NULL — товар без группы (products.group_name)
+		siteURL        *string // NULL — адрес карточки не задан (products.site_url)
+		salePrice      *int64  // NULL — МС не отдала цену продажи
 		discountSource *string // NULL — метки источника нет (product_stock.discount_source)
 		generalOwner   *string // NULL — владельца значения нет
 		telegramOwner  *string // NULL — владельца значения нет
 	)
 	if err := row.Scan(
 		&in.ProductID, &in.Name, &groupName, &in.ShortList, &in.ShelfLife, &in.TrackWeekly,
+		&in.UOM, &salePrice, &siteURL,
 		&in.BestBefore, &in.Qty,
 		&in.GeneralPlain, &in.TelegramPlain, &in.GeneralManual, &in.TelegramManual, &discountSource,
 		&generalOwner, &telegramOwner,
@@ -127,6 +131,8 @@ func scanDiscountInput(row pgx.Row) (discounts.Input, error) {
 		return discounts.Input{}, fmt.Errorf("scan discount input: %w", err)
 	}
 	in.GroupName = textValue(groupName)
+	in.SiteURL = textValue(siteURL)
+	in.SalePrice = salePrice
 	in.DiscountSource = textValue(discountSource)
 	in.GeneralOwner = textValue(generalOwner)
 	in.TelegramOwner = textValue(telegramOwner)

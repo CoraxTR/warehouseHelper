@@ -618,6 +618,11 @@ func (uc *UseCase) writeSlot(ctx context.Context, pairs []PairState, plan dayPla
 		slog.Info(fmt.Sprintf("discounts: план слота (канал склада не подключён): %s", text))
 	}
 
+	// Второе сообщение — позиции рассылки текстом для подписчиков (см. mailing.go).
+	if err := uc.sendMailing(plan.slot); err != nil {
+		return err
+	}
+
 	// Маркер отправки — только после успешной отправки: иначе подъём 16:00
 	// считал бы несобранную рассылку отправленной.
 	return uc.repo.MarkDigestSent(ctx, discounts.ChatWarehouse, beginningOfDay(now), now)
