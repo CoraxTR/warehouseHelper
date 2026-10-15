@@ -20,10 +20,6 @@ import (
 // настройках.
 const (
 	mailingHeader = "Привет, друзья! Вот что мы приготовили на сегодня:"
-	// mailingStockNote — строка про остаток по акции: поле сайта на момент
-	// публикации проставится равным «Доступно по акции», отдельного числа у нас
-	// нет.
-	mailingStockNote = `Остаток по акции: На момент публикации будет = "Доступно по акции"`
 	// mailChannelURL — канал рассылок; в тексте печатается сам адрес.
 	mailChannelURL = "https://t.me/steakhomeru"
 	// mailSpecialURL — страница акций: в тексте короткий адрес, в ссылке полный
@@ -71,14 +67,15 @@ func BuildMailing(items []MailingItem) string {
 }
 
 // mailingBlock — блок позиции: номер, название со ссылкой и цена со скидкой,
-// срок годности, доступное количество и примечание про остаток по акции.
+// срок годности, доступное количество и остаток по акции (то же число: поле
+// сайта на момент публикации проставляется равным доступному — решение владельца
+// 15.10.2026).
 func mailingBlock(n int, it MailingItem) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%d. %s | %s\n", n, mailingName(it), mailingPrice(it))
 	fmt.Fprintf(&b, "Срок годности: %s\n", it.BestBefore.Format("02.01"))
 	fmt.Fprintf(&b, "Доступно по акции: %d шт.\n", it.Qty)
-	b.WriteString(mailingStockNote)
-	b.WriteString("\n")
+	fmt.Fprintf(&b, "Остаток по акции: %d шт.\n", it.Qty)
 
 	return b.String()
 }

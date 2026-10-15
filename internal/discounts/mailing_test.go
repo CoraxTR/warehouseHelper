@@ -35,7 +35,7 @@ func TestBuildMailingText(t *testing.T) {
 1. <a href="https://www.steakhome.ru/catalog/element/syr/?utm_source=tg_sale">Сыр Тома</a> | 1249,50 руб./кг. - 20% => 999,60 руб./кг.
 Срок годности: 13.11
 Доступно по акции: 2 шт.
-Остаток по акции: На момент публикации будет = "Доступно по акции"
+Остаток по акции: 2 шт.
 
 На сегодня это все. Для заказа пишите <a href="https://t.me/steakhomeru">https://t.me/steakhomeru</a>
 Все актуальные предложения здесь <a href="https://www.steakhome.ru/catalog/special/">steakhome.ru/catalog/special</a>

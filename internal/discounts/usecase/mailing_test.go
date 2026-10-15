@@ -47,7 +47,9 @@ func TestRunSlotPlanSendsMailingToWarehouse(t *testing.T) {
 		`1. <a href="https://www.steakhome.ru/catalog/element/sausage/?utm_source=tg_sale">Колбаса</a> | 2599,00 руб./кг. - 20% => 2079,20 руб./кг.`,
 		"Срок годности: 23.09",
 		"Доступно по акции: 100 шт.",
-		`Остаток по акции: На момент публикации будет = "Доступно по акции"`,
+		// Остаток по акции — то же число, что доступное (решение владельца
+		// 15.10.2026): поле сайта проставится равным плану публикации.
+		"Остаток по акции: 100 шт.",
 		`На сегодня это все. Для заказа пишите <a href="https://t.me/steakhomeru">https://t.me/steakhomeru</a>`,
 		`Все актуальные предложения здесь <a href="https://www.steakhome.ru/catalog/special/">steakhome.ru/catalog/special</a>`,
 	} {
