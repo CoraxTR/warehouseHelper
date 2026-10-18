@@ -60,7 +60,7 @@ type Repository interface {
 	// текущие числа (правка идёт до следующей рассылки — поэтому в БД).
 	SetDigestShopMessage(ctx context.Context, chatKind string, plannedAt time.Time, messageID int64) error
 	LastShopDigest(ctx context.Context) (*discounts.DigestState, error)
-	UpdateDigestItemShop(ctx context.Context, plannedAt time.Time, key discounts.LotKey, qty int64, listed bool) error
+	UpdateDigestItemShop(ctx context.Context, plannedAt time.Time, key discounts.LotKey, qty, available int64, listed bool) error
 	// MarkGeneralRaised — отметить подъём general до telegram по позициям.
 	MarkGeneralRaised(ctx context.Context, pairs []discounts.LotKey, at time.Time) error
 	// DayFlagDone — сделан ли шаг дня (повтор после рестарта/сна пропускается).

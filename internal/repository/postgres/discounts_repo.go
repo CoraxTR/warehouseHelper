@@ -532,7 +532,7 @@ func (pg *PGClient) TodayDigest(ctx context.Context, date time.Time, chatKind st
 
 	rows, err := pg.Pool.Query(ctx, `
         SELECT product_id, best_before, percent, reason, initial_qty, plan_qty,
-               block_qty, stock_qty, message_id, shop_qty, shop_listed
+               block_qty, stock_qty, message_id, shop_qty, shop_available, shop_listed
         FROM discount_telegram_digest_item
         WHERE digest_id = $1
         ORDER BY best_before, product_id`, digestID)
@@ -547,7 +547,7 @@ func (pg *PGClient) TodayDigest(ctx context.Context, date time.Time, chatKind st
 		if err := rows.Scan(
 			&it.ProductID, &it.BestBefore, &it.Percent, &it.Reason,
 			&it.InitialQty, &it.PlanQty, &it.BlockQty, &it.StockQty, &it.MessageID,
-			&it.ShopQty, &it.Listed,
+			&it.ShopQty, &it.ShopAvailable, &it.Listed,
 		); err != nil {
 			return nil, fmt.Errorf("scan today digest item: %w", err)
 		}
@@ -709,7 +709,7 @@ func (pg *PGClient) LastShopDigest(ctx context.Context) (*discounts.DigestState,
 
 	rows, err := pg.Pool.Query(ctx, `
         SELECT product_id, best_before, percent, reason, initial_qty, plan_qty,
-               block_qty, stock_qty, message_id, shop_qty, shop_listed
+               block_qty, stock_qty, message_id, shop_qty, shop_available, shop_listed
         FROM discount_telegram_digest_item
         WHERE digest_id = $1
         ORDER BY best_before, product_id`, digestID)
@@ -724,7 +724,7 @@ func (pg *PGClient) LastShopDigest(ctx context.Context) (*discounts.DigestState,
 		if err := rows.Scan(
 			&it.ProductID, &it.BestBefore, &it.Percent, &it.Reason,
 			&it.InitialQty, &it.PlanQty, &it.BlockQty, &it.StockQty, &it.MessageID,
-			&it.ShopQty, &it.Listed,
+			&it.ShopQty, &it.ShopAvailable, &it.Listed,
 		); err != nil {
 			return nil, fmt.Errorf("scan last shop digest item: %w", err)
 		}
@@ -740,16 +740,16 @@ func (pg *PGClient) LastShopDigest(ctx context.Context) (*discounts.DigestState,
 // UpdateDigestItemShop сохраняет число и признак показа позиции в посте чата
 // скидок: по ним следующий проход отличает продажу от возврата и переживает
 // рестарт.
-func (pg *PGClient) UpdateDigestItemShop(ctx context.Context, plannedAt time.Time, key discounts.LotKey, qty int64, listed bool) error {
+func (pg *PGClient) UpdateDigestItemShop(ctx context.Context, plannedAt time.Time, key discounts.LotKey, qty, available int64, listed bool) error {
 	if _, err := pg.Pool.Exec(ctx, `
         UPDATE discount_telegram_digest_item i
-        SET shop_qty = $3, shop_listed = $4
-        WHERE i.product_id = $5 AND i.best_before = $6::date
+        SET shop_qty = $3, shop_available = $4, shop_listed = $5
+        WHERE i.product_id = $6 AND i.best_before = $7::date
           AND i.digest_id = (
               SELECT id FROM discount_telegram_digest
               WHERE chat_kind = $1 AND planned_at = $2::date
               ORDER BY id DESC LIMIT 1)`,
-		discounts.ChatWarehouse, plannedAt, qty, listed, key.ProductID, key.BestBefore); err != nil {
+		discounts.ChatWarehouse, plannedAt, qty, available, listed, key.ProductID, key.BestBefore); err != nil {
 		return fmt.Errorf("update digest item shop %s %s: %w", key.ProductID, plannedAt.Format(time.DateOnly), err)
 	}
 

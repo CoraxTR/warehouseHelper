@@ -37,6 +37,7 @@
 --   ALTER TABLE discount_telegram_digest_item ADD COLUMN IF NOT EXISTS block_qty BIGINT NOT NULL DEFAULT 0;
 --   ALTER TABLE discount_telegram_digest_item ADD COLUMN IF NOT EXISTS stock_qty BIGINT NOT NULL DEFAULT 0;
 --   ALTER TABLE discount_telegram_digest_item ADD COLUMN IF NOT EXISTS shop_qty BIGINT NOT NULL DEFAULT 0;
+--   ALTER TABLE discount_telegram_digest_item ADD COLUMN IF NOT EXISTS shop_available BIGINT NOT NULL DEFAULT 0;
 --   ALTER TABLE discount_telegram_digest_item ADD COLUMN IF NOT EXISTS shop_listed BOOLEAN NOT NULL DEFAULT FALSE;
 
 -- Рассылка (слот ТГ): одна строка = один собранный/отправленный дайджест.
@@ -79,7 +80,8 @@ CREATE TABLE IF NOT EXISTS discount_telegram_digest_item (
     message_id        BIGINT NOT NULL DEFAULT 0,  -- сообщение-запрос фото (0 — запроса нет)
     general_raised_at TIMESTAMPTZ,        -- когда general подняли до telegram (16:00); NULL — не поднимали
     PRIMARY KEY (digest_id, product_id, best_before)
-    shop_qty          BIGINT NOT NULL DEFAULT 0,   -- остаток по акции в посте чата скидок
+    shop_qty          BIGINT NOT NULL DEFAULT 0,   -- остаток по акции в посте (меняется)
+    shop_available    BIGINT NOT NULL DEFAULT 0,   -- «доступно по акции» поста (заморожено публикацией)
     shop_listed       BOOLEAN NOT NULL DEFAULT FALSE, -- позиция есть в опубликованном посте
 );
 

@@ -86,6 +86,8 @@ func TestSyncShopPostSaleAndSoldMark(t *testing.T) {
 	}
 	if last := h.chat.shopEdits[len(h.chat.shopEdits)-1]; !strings.Contains(last.Text, "97 шт.") {
 		t.Errorf("пост после продажи: %q, want 97 шт.", last.Text)
+	} else if !strings.Contains(last.Text, "Доступно по акции: 100 шт.") {
+		t.Errorf("продажа сдвинула «доступно»: %q", last.Text)
 	}
 
 	h.repo.inputs[0].Qty = 0
@@ -96,8 +98,11 @@ func TestSyncShopPostSaleAndSoldMark(t *testing.T) {
 	if !strings.Contains(last.Text, discounts.ShopSoldMark) {
 		t.Errorf("пост без метки продано: %q", last.Text)
 	}
-	if !strings.Contains(last.Text, "0 шт.") {
+	if !strings.Contains(last.Text, "Остаток по акции: 0 шт.") {
 		t.Errorf("пост без нулевого остатка: %q", last.Text)
+	}
+	if !strings.Contains(last.Text, "Доступно по акции: 100 шт.") {
+		t.Errorf("ноль сдвинул «доступно»: %q", last.Text)
 	}
 
 	h.repo.inputs[0].Qty = 4
@@ -105,8 +110,11 @@ func TestSyncShopPostSaleAndSoldMark(t *testing.T) {
 		t.Fatalf("правка (возврат): %v", err)
 	}
 	last = h.chat.shopEdits[len(h.chat.shopEdits)-1]
-	if strings.Contains(last.Text, discounts.ShopSoldMark) || !strings.Contains(last.Text, "4 шт.") {
-		t.Errorf("пост после возврата: %q, want 4 шт. без метки", last.Text)
+	if strings.Contains(last.Text, discounts.ShopSoldMark) || !strings.Contains(last.Text, "Остаток по акции: 4 шт.") {
+		t.Errorf("пост после возврата: %q, want остаток 4 шт. без метки", last.Text)
+	}
+	if !strings.Contains(last.Text, "Доступно по акции: 100 шт.") {
+		t.Errorf("возврат сдвинул «доступно»: %q", last.Text)
 	}
 }
 
@@ -212,14 +220,15 @@ func TestPublishShopClosesPreviousPost(t *testing.T) {
 		ChatKind:      discounts.ChatWarehouse,
 		ShopMessageID: prevID,
 		Items: []discounts.DigestItem{{
-			ProductID:  "p1",
-			BestBefore: day(9),
-			Percent:    20,
-			Reason:     discounts.ReasonExpiry,
-			BlockQty:   100,
-			StockQty:   100,
-			ShopQty:    4,
-			Listed:     true,
+			ProductID:     "p1",
+			BestBefore:    day(9),
+			Percent:       20,
+			Reason:        discounts.ReasonExpiry,
+			BlockQty:      100,
+			StockQty:      100,
+			ShopQty:       4,
+			ShopAvailable: 4,
+			Listed:        true,
 		}},
 	}
 
@@ -241,6 +250,9 @@ func TestPublishShopClosesPreviousPost(t *testing.T) {
 	}
 	if !strings.Contains(closed.Text, "Остаток по акции: 0 шт.") {
 		t.Errorf("подчистка без нуля: %q", closed.Text)
+	}
+	if !strings.Contains(closed.Text, "Доступно по акции: 4 шт.") {
+		t.Errorf("подчистка изменила «доступно»: %q", closed.Text)
 	}
 	if h.repo.prevShop.Items[0].ShopQty != 0 {
 		t.Errorf("ноль не записан в историю: %+v", h.repo.prevShop.Items[0])

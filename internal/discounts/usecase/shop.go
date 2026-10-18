@@ -67,6 +67,7 @@ func (uc *UseCase) publishShop(ctx context.Context, now time.Time) error {
 		key := lotKey(it.ProductID, it.BestBefore)
 		it.ShopQty = max(0, min(it.BlockQty, data[key].Qty))
 		it.Listed = it.ShopQty > 0
+		it.ShopAvailable = it.ShopQty
 		if !it.Listed {
 			continue
 		}
@@ -106,7 +107,7 @@ func (uc *UseCase) publishShop(ctx context.Context, now time.Time) error {
 	}
 	for _, it := range items {
 		key := lotKey(it.ProductID, it.BestBefore)
-		if err := uc.repo.UpdateDigestItemShop(ctx, day, key, it.ShopQty, it.Listed); err != nil {
+		if err := uc.repo.UpdateDigestItemShop(ctx, day, key, it.ShopQty, it.ShopAvailable, it.Listed); err != nil {
 			return err
 		}
 	}
@@ -155,7 +156,7 @@ func (uc *UseCase) closeShopPost(ctx context.Context, day time.Time, data map[di
 			continue
 		}
 		key := lotKey(it.ProductID, it.BestBefore)
-		if err := uc.repo.UpdateDigestItemShop(ctx, prev.PlannedAt, key, 0, true); err != nil {
+		if err := uc.repo.UpdateDigestItemShop(ctx, prev.PlannedAt, key, 0, it.ShopAvailable, true); err != nil {
 			return err
 		}
 	}
@@ -206,9 +207,12 @@ func (uc *UseCase) syncShopPost(ctx context.Context, now time.Time) error {
 			continue
 		}
 
+		if listed && !it.Listed {
+			it.ShopAvailable = qty // позиция входит в пост: «доступно» — на момент входа
+		}
 		it.ShopQty, it.Listed = qty, listed
 		changed = true
-		if err := uc.repo.UpdateDigestItemShop(ctx, st.PlannedAt, key, qty, it.Listed); err != nil {
+		if err := uc.repo.UpdateDigestItemShop(ctx, st.PlannedAt, key, qty, it.ShopAvailable, it.Listed); err != nil {
 			return err
 		}
 		if returned && it.Reason != discounts.ReasonSurplus {
@@ -243,6 +247,7 @@ func shopText(items []discounts.DigestItem, data map[discounts.LotKey]lotData) s
 			continue
 		}
 		d := data[lotKey(it.ProductID, it.BestBefore)]
+		available := it.ShopAvailable
 		mailing = append(mailing, discounts.MailingItem{
 			Name:       d.Name,
 			SiteURL:    d.SiteURL,
@@ -250,6 +255,7 @@ func shopText(items []discounts.DigestItem, data map[discounts.LotKey]lotData) s
 			SalePrice:  d.SalePrice,
 			Percent:    it.Percent,
 			Qty:        it.ShopQty,
+			Available:  &available,
 			BestBefore: it.BestBefore,
 			Sold:       it.ShopQty == 0,
 		})

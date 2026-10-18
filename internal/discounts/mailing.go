@@ -49,6 +49,11 @@ type MailingItem struct {
 	// Sold — позиция распродана: печатается с меткой ShopSoldMark и нулём.
 	// Только для поста чата скидок; складской вариант такие блоки убирает.
 	Sold bool
+	// Available — «Доступно по акции» для поста чата скидок: фиксируется при
+	// публикации и дальше НЕ меняется (решение владельца 18.10.2026), меняется
+	// только «Остаток по акции». nil — печатать Qty (письмо склада: там числа
+	// равны и живут вместе).
+	Available *int64
 }
 
 // MailingSkippedText — чем заменяется письмо после нажатия «Пропустить
@@ -112,7 +117,11 @@ func mailingBlock(n int, it MailingItem) string {
 	}
 	fmt.Fprintf(&b, "%d. %s%s | %s\n", n, sold, mailingName(it), mailingPrice(it))
 	fmt.Fprintf(&b, "Срок годности: %s\n", it.BestBefore.Format("02.01.2006"))
-	fmt.Fprintf(&b, "Доступно по акции: %d шт.\n", it.Qty)
+	available := it.Qty
+	if it.Available != nil {
+		available = *it.Available
+	}
+	fmt.Fprintf(&b, "Доступно по акции: %d шт.\n", available)
 	fmt.Fprintf(&b, "Остаток по акции: %d шт.\n", it.Qty)
 
 	return b.String()
