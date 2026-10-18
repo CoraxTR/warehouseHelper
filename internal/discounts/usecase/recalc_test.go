@@ -77,6 +77,8 @@ type fakeDiscountRepo struct {
 	// digest — сохранённая рассылка склада (живое письмо: правка сообщения,
 	// снимок блоков, пропуск рассылки).
 	digest *discounts.DigestState
+	// prevShop — пост прошлого ТГ-дня: нужен подчистке перед новой рассылкой.
+	prevShop *discounts.DigestState
 }
 
 func newFakeDiscountRepo(inputs ...discounts.Input) *fakeDiscountRepo {
@@ -1184,23 +1186,32 @@ func (r *fakeDiscountRepo) SetDigestShopMessage(_ context.Context, chatKind stri
 }
 
 func (r *fakeDiscountRepo) LastShopDigest(context.Context) (*discounts.DigestState, error) {
-	if r.digest == nil || r.digest.ShopMessageID == 0 {
+	var best *discounts.DigestState
+	if r.digest != nil && r.digest.ShopMessageID != 0 {
+		best = r.digest
+	}
+	if r.prevShop != nil && (best == nil || r.prevShop.PlannedAt.After(best.PlannedAt)) {
+		best = r.prevShop
+	}
+	if best == nil {
 		return nil, nil
 	}
-	cp := *r.digest
-	cp.Items = append([]discounts.DigestItem(nil), r.digest.Items...)
+	cp := *best
+	cp.Items = append([]discounts.DigestItem(nil), best.Items...)
 
 	return &cp, nil
 }
 
 func (r *fakeDiscountRepo) UpdateDigestItemShop(_ context.Context, plannedAt time.Time, key discounts.LotKey, qty int64, listed bool) error {
-	if r.digest == nil {
-		return nil
-	}
-	for i := range r.digest.Items {
-		it := &r.digest.Items[i]
-		if it.ProductID == key.ProductID && beginningOfDay(it.BestBefore).Equal(beginningOfDay(key.BestBefore)) {
-			it.ShopQty, it.Listed = qty, listed
+	for _, st := range []*discounts.DigestState{r.digest, r.prevShop} {
+		if st == nil || !beginningOfDay(st.PlannedAt).Equal(beginningOfDay(plannedAt)) {
+			continue
+		}
+		for i := range st.Items {
+			it := &st.Items[i]
+			if it.ProductID == key.ProductID && beginningOfDay(it.BestBefore).Equal(beginningOfDay(key.BestBefore)) {
+				it.ShopQty, it.Listed = qty, listed
+			}
 		}
 	}
 

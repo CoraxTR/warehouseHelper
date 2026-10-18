@@ -199,3 +199,53 @@ func TestSyncShopSurplusReturnNeedsSurplus(t *testing.T) {
 		t.Errorf("на сайт ушла правка по избытку: %+v", h.writer.batches[before:])
 	}
 }
+
+// Перед публикацией новой рассылки прошлый пост «подчищается»: все блоки в ноль
+// и с меткой «ПРОДАНО», числа нуля пишутся и в историю.
+func TestPublishShopClosesPreviousPost(t *testing.T) {
+	h := publishHarness(t, lotInput("p1", "Колбаса", day(9), 100, shelfLifeInput(26)))
+	ctx := context.Background()
+
+	const prevID int64 = 77
+	h.repo.prevShop = &discounts.DigestState{
+		PlannedAt:     h.now.AddDate(0, 0, -2),
+		ChatKind:      discounts.ChatWarehouse,
+		ShopMessageID: prevID,
+		Items: []discounts.DigestItem{{
+			ProductID:  "p1",
+			BestBefore: day(9),
+			Percent:    20,
+			Reason:     discounts.ReasonExpiry,
+			BlockQty:   100,
+			StockQty:   100,
+			ShopQty:    4,
+			Listed:     true,
+		}},
+	}
+
+	if err := h.uc.publishShop(ctx, h.now.Add(time.Hour)); err != nil {
+		t.Fatalf("публикация: %v", err)
+	}
+
+	var closed *fakeEdit
+	for i := range h.chat.shopEdits {
+		if h.chat.shopEdits[i].ID == prevID {
+			closed = &h.chat.shopEdits[i]
+		}
+	}
+	if closed == nil {
+		t.Fatalf("прошлый пост не подчищен: правки %+v", h.chat.shopEdits)
+	}
+	if !strings.Contains(closed.Text, discounts.ShopSoldMark) {
+		t.Errorf("подчистка без метки продано: %q", closed.Text)
+	}
+	if !strings.Contains(closed.Text, "Остаток по акции: 0 шт.") {
+		t.Errorf("подчистка без нуля: %q", closed.Text)
+	}
+	if h.repo.prevShop.Items[0].ShopQty != 0 {
+		t.Errorf("ноль не записан в историю: %+v", h.repo.prevShop.Items[0])
+	}
+	if len(h.chat.shopTexts) != 1 {
+		t.Errorf("новый пост не отправлен: %d", len(h.chat.shopTexts))
+	}
+}

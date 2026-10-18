@@ -79,6 +79,12 @@ func (uc *UseCase) publishShop(ctx context.Context, now time.Time) error {
 		uc.askPhoto(ctx, day, *it, data[key].Name)
 	}
 
+	// Прошлую рассылку «подчищаем» перед отправкой новой: все блоки в ноль и с
+	// меткой «ПРОДАНО» — читатель видит, что акция кончилась (18.10.2026).
+	if err := uc.closeShopPost(ctx, day, data); err != nil {
+		return err
+	}
+
 	text := shopText(items, data)
 	if text == "" {
 		return nil
@@ -106,6 +112,53 @@ func (uc *UseCase) publishShop(ctx context.Context, now time.Time) error {
 	}
 	uc.setShopText(text)
 	slog.Info(fmt.Sprintf("discounts: пост в чат скидок (%d позиций, %d фото)", len(items), len(photos)))
+
+	return nil
+}
+
+// closeShopPost — подчистка предыдущей рассылки перед публикацией новой: все
+// блоки получают 0 в «Остаток по акции» и метку ❗️ПРОДАНО❗️ перед названием
+// (решение владельца 18.10.2026). Пост остаётся в чате честной историей: акция
+// кончилась. Ноль пишем и в историю — чтобы повторный заход публикации не правил
+// сообщение второй раз.
+func (uc *UseCase) closeShopPost(ctx context.Context, day time.Time, data map[discounts.LotKey]lotData) error {
+	prev, err := uc.repo.LastShopDigest(ctx)
+	if err != nil || prev == nil || prev.ShopMessageID == 0 || len(prev.Items) == 0 {
+		return err
+	}
+	if beginningOfDay(prev.PlannedAt).Equal(day) {
+		return nil // сегодняшний пост ещё живой: его закрывать рано
+	}
+
+	items := make([]discounts.DigestItem, len(prev.Items))
+	copy(items, prev.Items)
+	closed := true
+	for i := range items {
+		if items[i].Listed && items[i].ShopQty > 0 {
+			closed = false
+		}
+		items[i].ShopQty = 0
+	}
+	if closed {
+		return nil // уже подчищен
+	}
+
+	text := shopText(items, data)
+	if text == "" {
+		return nil
+	}
+	if err := uc.warehouse.EditShopHTML(prev.ShopMessageID, text); err != nil {
+		return fmt.Errorf("подчистка прошлой рассылки: %w", err)
+	}
+	for _, it := range items {
+		if !it.Listed {
+			continue
+		}
+		key := lotKey(it.ProductID, it.BestBefore)
+		if err := uc.repo.UpdateDigestItemShop(ctx, prev.PlannedAt, key, 0, true); err != nil {
+			return err
+		}
+	}
 
 	return nil
 }
