@@ -177,13 +177,11 @@ func (uc *UseCase) RunSlotPlan(ctx context.Context, now time.Time, capacity int)
 		return err
 	}
 
-	// Позициям слота — ТГ-колонка; «лишние» ждут 14:45. Слота нет вовсе —
-	// рассылки не будет, и финальной сборки тоже: «лишние» пишутся сразу, иначе
-	// их повышение не дошло бы до сайта ни в этот день, ни позже.
+	// Позициям слота — ТГ-колонка. «Лишние» ждут 14:45 ВСЕГДА: до финальной
+	// сборки позиция может уйти из слота или встать в него, и скидка сайта,
+	// выданная заранее, сделала бы возврат в слот бессмысленным (решение
+	// владельца 18.10.2026).
 	writes := slotWrites(plan)
-	if len(plan.slot) == 0 {
-		writes = append(writes, extraWrites(plan)...)
-	}
 	if len(writes) > 0 {
 		if err := uc.writer.SetDiscounts(ctx, writes); err != nil {
 			return fmt.Errorf("план дня: %w", err)
@@ -333,13 +331,9 @@ func (uc *UseCase) refreshMailing(ctx context.Context, now time.Time, capacity i
 	}
 
 	// 14:45: «лишние» получают скидку сайта — один раз, здесь.
-	if extra := extraWrites(plan); len(extra) > 0 {
-		if err := uc.writer.SetDiscounts(ctx, extra); err != nil {
-			return fmt.Errorf("финальная сборка: скидка лишним: %w", err)
-		}
-		applyWrites(pairs, extra)
+	if err := uc.applyExtras(ctx, now, capacity); err != nil {
+		return err
 	}
-	uc.notifyChanges(ctx, uc.replaceRegistry(pairs, now))
 
 	if err := uc.repo.MarkDigestFrozen(ctx, discounts.ChatWarehouse, day, now); err != nil {
 		return err
@@ -348,6 +342,32 @@ func (uc *UseCase) refreshMailing(ctx context.Context, now time.Time, capacity i
 		return err
 	}
 	slog.Info(fmt.Sprintf("discounts: письмо складу зафиксировано (%d позиций)", len(items)))
+
+	return nil
+}
+
+// applyExtras — скидка сайта «лишним» позициям дня. Единственная точка
+// правила: 14:45, финальная сборка. Работает и БЕЗ письма (пустой слот или
+// рассылка выключена ёмкостью 0): иначе повышениям дня некуда деться, а
+// выдавать их раньше нельзя — до 14:45 позиция может вернуться в слот.
+func (uc *UseCase) applyExtras(ctx context.Context, now time.Time, capacity int) error {
+	day := beginningOfDay(now)
+
+	pairs, plan, err := uc.planDay(ctx, day, capacity)
+	if err != nil {
+		return err
+	}
+	extra := extraWrites(plan)
+	if len(extra) > 0 {
+		if err := uc.writer.SetDiscounts(ctx, extra); err != nil {
+			return fmt.Errorf("финальная сборка: скидка лишним: %w", err)
+		}
+		applyWrites(pairs, extra)
+	}
+	changes := uc.replaceRegistry(pairs, now)
+	if len(changes) > 0 {
+		uc.notifyChanges(ctx, changes)
+	}
 
 	return nil
 }

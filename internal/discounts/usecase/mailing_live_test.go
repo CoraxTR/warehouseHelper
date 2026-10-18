@@ -113,6 +113,53 @@ func TestRefreshMailingEditsSameMessageAndClearsTG(t *testing.T) {
 	}
 }
 
+// Позиция была «лишней» в 14:00 и встала в слот к 14:35: скидка сайта ей НЕ
+// выдаётся — до 14:45 она ещё может уйти из слота, а на сайт скидка попадает
+// только на финальной сборке (решение владельца 18.10.2026). В слоте она
+// получает только ТГ-колонку.
+func TestExtraMovesIntoSlotWithoutSiteDiscount(t *testing.T) {
+	h := newSlotHarness(recalcNow(1),
+		lotInput("p1", "Колбаса", day(5), 100, shelfLifeInput(26)), // D=4 → 40 %, в слоте
+		lotInput("p2", "Сыр", day(9), 50, shelfLifeInput(26)),      // D=8 → 20 %, лишняя
+	)
+	ctx := context.Background()
+
+	if err := h.uc.RunSlotPlan(ctx, h.now, 1); err != nil {
+		t.Fatalf("план дня: %v", err)
+	}
+	if writes := h.allWrites(); len(writes) != 1 || writes[0].ProductID != "p1" {
+		t.Fatalf("14:00 тронул лишнюю позицию: %+v", writes)
+	}
+
+	// p1 уже несёт скидку 40 % на сайте — из плана выбывает, p2 встаёт в слот.
+	forty := int16(40)
+	h.repo.inputs[0].GeneralPlain = &forty
+
+	if err := h.uc.refreshMailing(ctx, h.now.Add(35*time.Minute), 1, false); err != nil {
+		t.Fatalf("пересборка: %v", err)
+	}
+
+	var p2 *discounts.DiscountWrite
+	for i := range h.writer.batches[len(h.writer.batches)-1] {
+		if w := &h.writer.batches[len(h.writer.batches)-1][i]; w.ProductID == "p2" {
+			p2 = w
+		}
+	}
+	if p2 == nil {
+		t.Fatalf("правки: %+v, want ТГ-колонку p2", h.writer.batches)
+	}
+	if p2.Telegram == nil || *p2.Telegram != 20 {
+		t.Errorf("ТГ-колонка p2: %+v, want 20", p2)
+	}
+	if discountPercent(p2.General) != 0 {
+		t.Errorf("general p2 = %d, want 0 (сайт до 14:45 не трогаем)", discountPercent(p2.General))
+	}
+
+	if last := h.chat.edits[len(h.chat.edits)-1]; !strings.Contains(last.Text, "Сыр") {
+		t.Errorf("письмо без вставшей в слот позиции: %q", last.Text)
+	}
+}
+
 // ---- окно количеств ----
 
 // Продажа уменьшает блоки, ноль убирает блок и его запрос фото, возврат

@@ -669,27 +669,36 @@ func TestRunSlotPlanWithoutCandidatesIsSilent(t *testing.T) {
 	}
 }
 
-// Нулевая ёмкость слота: публиковать нечего, но повышения дня (они все —
-// «лишние») применяются на сайте сразу, а маркеры дня ставятся.
-func TestRunSlotPlanZeroCapacityAppliesExtras(t *testing.T) {
+// Нулевая ёмкость слота: рассылки нет, но повышения дня («лишние») ждут
+// 14:45 — до финальной сборки их выдавать нельзя (решение владельца 18.10.2026).
+func TestRunSlotPlanZeroCapacityExtrasWaitForFinalPass(t *testing.T) {
 	h := newSlotHarness(recalcNow(1),
 		lotInput("p1", "Колбаса", day(5), 100, shelfLifeInput(26)), // D=4 → ступень 40
 	)
+	ctx := context.Background()
 
-	if err := h.uc.RunSlotPlan(context.Background(), h.now, 0); err != nil {
+	if err := h.uc.RunSlotPlan(ctx, h.now, 0); err != nil {
 		t.Fatalf("план дня: %v", err)
 	}
 
-	writes := h.writesOf(t)
-	if len(writes) != 1 || writes[0].General == nil || *writes[0].General != 40 {
-		t.Fatalf("правки: %+v, want одна general=40", writes)
+	if len(h.writer.batches) != 0 {
+		t.Fatalf("14:00 выдал скидки сайта: %+v", h.writer.batches)
 	}
 	if len(h.chat.texts) != 0 || len(h.repo.digests) != 0 || h.repo.sent != 0 {
 		t.Errorf("пустой слот отправил рассылку: сообщения %v, рассылки %v, отметок %d",
 			h.chat.texts, h.repo.digests, h.repo.sent)
 	}
 	if !h.repo.flags[fakeFlagKey(h.today, discounts.FlagPlan)] || !h.repo.flags[fakeFlagKey(h.today, discounts.FlagExpiry)] {
-		t.Error("маркеры дня плана и пересчёта по сроку не поставлены")
+		t.Error("маркеры дня не поставлены")
+	}
+
+	if err := h.uc.applyExtras(ctx, h.now.Add(mailingFreezeAfter), 0); err != nil {
+		t.Fatalf("финальная сборка: %v", err)
+	}
+
+	writes := h.writesOf(t)
+	if len(writes) != 1 || writes[0].General == nil || *writes[0].General != 40 {
+		t.Fatalf("правки: %+v, want одна general=40", writes)
 	}
 }
 

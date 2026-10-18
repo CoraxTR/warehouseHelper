@@ -97,6 +97,15 @@ func (uc *UseCase) runMailing(ctx context.Context, now time.Time, s Schedule) er
 		if uc.mailPassDone(slot) {
 			return nil
 		}
+		// Письма нет (пустой слот) — править нечего: «лишние» всё равно ждут
+		// 14:45, разбирать их раньше нельзя.
+		st, err := uc.repo.TodayDigest(ctx, beginningOfDay(now), discounts.ChatWarehouse)
+		if err != nil {
+			return err
+		}
+		if st == nil || st.SentAt == nil {
+			return nil
+		}
 		if err := uc.refreshMailing(ctx, now, s.TelegramCap, false); err != nil {
 			return err
 		}
@@ -106,7 +115,18 @@ func (uc *UseCase) runMailing(ctx context.Context, now time.Time, s Schedule) er
 	case now.Before(planAt.Add(mailingPublishHour)):
 		freeze := planAt.Add(mailingFreezeAfter)
 		if !uc.mailPassDone(freeze) {
-			if err := uc.refreshMailing(ctx, now, s.TelegramCap, true); err != nil {
+			st, err := uc.repo.TodayDigest(ctx, beginningOfDay(now), discounts.ChatWarehouse)
+			if err != nil {
+				return err
+			}
+			if st != nil && st.SentAt != nil {
+				err = uc.refreshMailing(ctx, now, s.TelegramCap, true)
+			} else {
+				// Рассылки нет вовсе — 14:45 всё равно наступает: «лишние»
+				// получают скидку сайта, письма и фото не будет.
+				err = uc.applyExtras(ctx, now, s.TelegramCap)
+			}
+			if err != nil {
 				return err
 			}
 			uc.markMailPass(freeze)
