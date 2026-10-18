@@ -73,8 +73,48 @@ func (uc *UseCase) runSteps(ctx context.Context, s Schedule) {
 	if err := uc.runSlotPlan(ctx, day, now, s); err != nil {
 		slog.Info(fmt.Sprintf("discounts: план ТГ-слота: %v", err))
 	}
+	if err := uc.runMailing(ctx, now, s); err != nil {
+		slog.Info(fmt.Sprintf("discounts: живое письмо складу: %v", err))
+	}
 	if err := uc.runRaise(ctx, day, now, s); err != nil {
 		slog.Info(fmt.Sprintf("discounts: подъём general: %v", err))
+	}
+}
+
+// runMailing — живое письмо складу (решение владельца 18.10.2026): с 14:00 до
+// 14:45 письмо пересобирается по жёсткой сетке 5 минут (по часам, а не от конца
+// предыдущего пересчёта: не успели — такт пропущен, очередь не копится), в 14:45
+// — финальная сборка снимка и запросы фото (с повторами до 14:50, если первый
+// заход упал), с 14:45 до 15:00 — окно количеств каждую минуту.
+func (uc *UseCase) runMailing(ctx context.Context, now time.Time, s Schedule) error {
+	planAt := beginningOfDay(now).Add(s.Plan)
+
+	switch {
+	case now.Before(planAt.Add(mailingRefreshStep)):
+		return nil // 14:00–14:04: письмо только что отправлено
+	case now.Before(planAt.Add(mailingFreezeAfter)):
+		slot := now.Truncate(mailingRefreshStep)
+		if uc.mailPassDone(slot) {
+			return nil
+		}
+		if err := uc.refreshMailing(ctx, now, s.TelegramCap, false); err != nil {
+			return err
+		}
+		uc.markMailPass(slot)
+
+		return nil
+	case now.Before(planAt.Add(mailingPublishHour)):
+		freeze := planAt.Add(mailingFreezeAfter)
+		if !uc.mailPassDone(freeze) {
+			if err := uc.refreshMailing(ctx, now, s.TelegramCap, true); err != nil {
+				return err
+			}
+			uc.markMailPass(freeze)
+		}
+
+		return uc.syncMailingQty(ctx, now, planAt)
+	default:
+		return nil // 15:00 — рассылка публикуется, письмо больше не правим
 	}
 }
 

@@ -74,6 +74,9 @@ type fakeDiscountRepo struct {
 	// plans — план продаж добора по парам (LastPlanQty): выход скидки,
 	// поставленной ТГ-днём. Пустая карта = планов нет (пара держится избытком).
 	plans map[discounts.LotKey]discounts.LotPlan
+	// digest — сохранённая рассылка склада (живое письмо: правка сообщения,
+	// снимок блоков, пропуск рассылки).
+	digest *discounts.DigestState
 }
 
 func newFakeDiscountRepo(inputs ...discounts.Input) *fakeDiscountRepo {
@@ -1110,4 +1113,62 @@ func TestRecalcSurplusClearsTelegramWithoutSiteValue(t *testing.T) {
 	if w.General != nil || w.GeneralOwner != "" {
 		t.Errorf("колонку сайта правка не трогает: general %v, владелец %q", w.General, w.GeneralOwner)
 	}
+}
+
+// --- живое письмо (18.10.2026): история рассылки в фейке ---
+
+func (r *fakeDiscountRepo) TodayDigest(_ context.Context, date time.Time, chatKind string) (*discounts.DigestState, error) {
+	if r.digest == nil || r.digest.ChatKind != chatKind ||
+		!beginningOfDay(r.digest.PlannedAt).Equal(beginningOfDay(date)) {
+		return nil, nil
+	}
+	cp := *r.digest
+	cp.Items = append([]discounts.DigestItem(nil), r.digest.Items...)
+
+	return &cp, nil
+}
+
+func (r *fakeDiscountRepo) ReplaceDigestItems(_ context.Context, chatKind string, plannedAt time.Time, items []discounts.DigestItem) error {
+	if r.digest == nil {
+		return discounts.ErrNoDigest
+	}
+	r.digest.Items = append([]discounts.DigestItem(nil), items...)
+
+	return nil
+}
+
+func (r *fakeDiscountRepo) SetDigestMessage(_ context.Context, chatKind string, plannedAt time.Time, messageID int64) error {
+	if r.digest != nil {
+		r.digest.MessageID = messageID
+	}
+
+	return nil
+}
+
+func (r *fakeDiscountRepo) SetDigestItemMessage(_ context.Context, chatKind string, plannedAt time.Time, key discounts.LotKey, messageID int64) error {
+	if r.digest == nil {
+		return nil
+	}
+	for i := range r.digest.Items {
+		if r.digest.Items[i].ProductID == key.ProductID &&
+			beginningOfDay(r.digest.Items[i].BestBefore).Equal(beginningOfDay(key.BestBefore)) {
+			r.digest.Items[i].MessageID = messageID
+		}
+	}
+
+	return nil
+}
+
+func (r *fakeDiscountRepo) MarkDigestFrozen(_ context.Context, chatKind string, plannedAt, at time.Time) error {
+	if r.digest != nil {
+		r.digest.FrozenAt = &at
+	}
+
+	return nil
+}
+
+func (r *fakeDiscountRepo) DeleteDigest(_ context.Context, chatKind string, plannedAt time.Time) error {
+	r.digest = nil
+
+	return nil
 }

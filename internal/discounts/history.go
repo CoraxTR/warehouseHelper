@@ -88,6 +88,12 @@ type SlotItem struct {
 // считается проданной, если её остаток к 16:00 опустился до InitialQty−PlanQty
 // или ниже; у сроковых позиций план продаж не считается (nil) — там контроль
 // проще: пара не должна обнулиться.
+//
+// BlockQty/StockQty — снимок последнего пересчёта письма (решение владельца
+// 18.10.2026): BlockQty — число, напечатанное в блоке, StockQty — остаток лота
+// на тот же момент. По ним окно 14:45–15:00 считает дельты продаж/возвратов, не
+// пересобирая план (см. mailing_live.go). MessageID — сообщение-запрос фото этой
+// позиции (0 — запроса нет).
 type DigestItem struct {
 	ProductID  string
 	BestBefore time.Time
@@ -96,4 +102,20 @@ type DigestItem struct {
 	Reason     string
 	InitialQty *int64
 	PlanQty    *int64
+	BlockQty   int64
+	StockQty   int64
+	MessageID  int64
+}
+
+// DigestState — сегодняшняя рассылка склада вместе с позициями: то, что нужно
+// живому письму (правка того же сообщения, окно количеств, пропуск рассылки).
+// MessageID — сообщение письма (0 — не отправлено или отправлено без id);
+// FrozenAt — момент финальной сборки 14:45 (nil — план ещё пересобирается).
+type DigestState struct {
+	PlannedAt time.Time
+	ChatKind  string
+	SentAt    *time.Time
+	FrozenAt  *time.Time
+	MessageID int64
+	Items     []DigestItem
 }

@@ -42,12 +42,22 @@ func (r *fakeSlotRepo) SaveDigest(_ context.Context, d discounts.DigestRecord, i
 	// Отправленный план становится планом дня: 16:00 работает по той же
 	// рассылке, что собрал 14:00.
 	r.plan = slotItems(items)
+	// Живое письмо читает ту же рассылку через TodayDigest.
+	r.digest = &discounts.DigestState{
+		PlannedAt: d.PlannedAt,
+		ChatKind:  d.ChatKind,
+		SentAt:    d.SentAt,
+		Items:     append([]discounts.DigestItem(nil), items...),
+	}
 
 	return nil
 }
 
-func (r *fakeSlotRepo) MarkDigestSent(context.Context, string, time.Time, time.Time) error {
+func (r *fakeSlotRepo) MarkDigestSent(_ context.Context, _ string, _ time.Time, at time.Time) error {
 	r.sent++
+	if r.digest != nil {
+		r.digest.SentAt = &at
+	}
 
 	return nil
 }
@@ -97,6 +107,62 @@ func slotItems(items []discounts.DigestItem) []discounts.SlotItem {
 type fakeWarehouseNotifier struct {
 	texts   []string
 	mailing []string
+
+	// Живое письмо (18.10.2026): кнопка пропуска, запросы фото, правки того же
+	// сообщения и удаления запросов.
+	buttons  []string
+	requests []string
+	edits    []fakeEdit
+	deleted  []int64
+	alerts   []string
+	acked    int
+	nextID   int64
+}
+
+// fakeEdit — правка письма: id сообщения, текст и кнопка (пусто — снята).
+type fakeEdit struct {
+	ID    int64
+	Text  string
+	Label string
+}
+
+func (n *fakeWarehouseNotifier) NotifyWarehouseHTMLButton(text, buttonText, callbackData string) (int64, error) {
+	n.nextID++
+	n.mailing = append(n.mailing, text)
+	n.buttons = append(n.buttons, buttonText+"|"+callbackData)
+
+	return n.nextID, nil
+}
+
+func (n *fakeWarehouseNotifier) NotifyWarehouseReplyRequest(text string) (int64, error) {
+	n.nextID++
+	n.requests = append(n.requests, text)
+
+	return n.nextID, nil
+}
+
+func (n *fakeWarehouseNotifier) EditWarehouseHTML(messageID int64, text, buttonText, callbackData string) error {
+	n.edits = append(n.edits, fakeEdit{ID: messageID, Text: text, Label: buttonText})
+
+	return nil
+}
+
+func (n *fakeWarehouseNotifier) DeleteWarehouseReply(messageID int64) error {
+	n.deleted = append(n.deleted, messageID)
+
+	return nil
+}
+
+func (n *fakeWarehouseNotifier) WarehouseCallbackAck(string) error {
+	n.acked++
+
+	return nil
+}
+
+func (n *fakeWarehouseNotifier) WarehouseCallbackAlert(_, alert string) error {
+	n.alerts = append(n.alerts, alert)
+
+	return nil
 }
 
 func (n *fakeWarehouseNotifier) NotifyWarehouse(text string) error {
@@ -168,6 +234,26 @@ func (h *slotHarness) writesOf(t *testing.T) []discounts.DiscountWrite {
 	}
 
 	return h.writer.batches[0]
+}
+
+// allWrites — все правки шва записи за тест: 14:00 пишет только ТГ-колонку
+// слота, «лишние» — на финальной сборке 14:45 (второй батч).
+func (h *slotHarness) allWrites() []discounts.DiscountWrite {
+	var out []discounts.DiscountWrite
+	for _, b := range h.writer.batches {
+		out = append(out, b...)
+	}
+
+	return out
+}
+
+// finalPass — финальная сборка живого письма (14:45): снимок блоков, скидка
+// сайта «лишним», запросы фото.
+func (h *slotHarness) finalPass(t *testing.T, capacity int) {
+	t.Helper()
+	if err := h.uc.refreshMailing(context.Background(), h.now.Add(mailingFreezeAfter), capacity, true); err != nil {
+		t.Fatalf("финальная сборка: %v", err)
+	}
 }
 
 // В слот плана дня идут только позиции с ПОВЫШЕНИЕМ: ручная скидка ≥ 20 % (её
@@ -410,9 +496,10 @@ func TestRunSlotPlanFreshTenPercentExtraWhenSlotFull(t *testing.T) {
 	if err := h.uc.RunSlotPlan(context.Background(), h.now, 10); err != nil {
 		t.Fatalf("план дня: %v", err)
 	}
+	h.finalPass(t, 10)
 
 	byPID := map[string]discounts.DiscountWrite{}
-	for _, w := range h.writesOf(t) {
+	for _, w := range h.allWrites() {
 		byPID[w.ProductID] = w
 	}
 	got, ok := byPID["p9"]
@@ -514,7 +601,9 @@ func TestRunSlotPlanAppliesExtraImmediately(t *testing.T) {
 		t.Fatalf("план дня: %v", err)
 	}
 
-	writes := h.writesOf(t)
+	h.finalPass(t, 1)
+
+	writes := h.allWrites()
 	if len(writes) != 2 {
 		t.Fatalf("правки: %+v, want две (ТГ-колонка слота и general лишней)", writes)
 	}

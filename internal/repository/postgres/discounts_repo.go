@@ -178,9 +178,11 @@ func (pg *PGClient) SaveDigest(ctx context.Context, d discounts.DigestRecord, it
 	for _, it := range items {
 		if _, err := tx.Exec(ctx, `
             INSERT INTO discount_telegram_digest_item
-                (digest_id, product_id, best_before, percent, coeff, reason, initial_qty, plan_qty)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-			digestID, it.ProductID, it.BestBefore, it.Percent, it.Coeff, it.Reason, it.InitialQty, it.PlanQty,
+                (digest_id, product_id, best_before, percent, coeff, reason,
+                 initial_qty, plan_qty, block_qty, stock_qty, message_id)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+			digestID, it.ProductID, it.BestBefore, it.Percent, it.Coeff, it.Reason,
+			it.InitialQty, it.PlanQty, it.BlockQty, it.StockQty, it.MessageID,
 		); err != nil {
 			return fmt.Errorf("insert digest item %s %s: %w", it.ProductID, it.BestBefore.Format(time.DateOnly), err)
 		}
@@ -496,6 +498,170 @@ func (pg *PGClient) MarkDigestSent(ctx context.Context, chatKind string, planned
 	}
 	if tag.RowsAffected() == 0 {
 		return fmt.Errorf("%w: %s %s", discounts.ErrNoDigest, plannedAt.Format(time.DateOnly), chatKind)
+	}
+	return nil
+}
+
+// TodayDigest — сегодняшняя рассылка склада с позициями: id сообщения письма,
+// момент финальной сборки и снимок блоков. Нужна живому письму: правка того же
+// сообщения каждые 5 минут, окно количеств 14:45–15:00, кнопка «Пропустить».
+//
+// Рассылки за день и канал нет — (nil, nil): это штатное состояние (не ТГ-день,
+// пустой слот, пропущенная рассылка), а не ошибка.
+func (pg *PGClient) TodayDigest(ctx context.Context, date time.Time, chatKind string) (*discounts.DigestState, error) {
+	var (
+		st       discounts.DigestState
+		digestID int64
+	)
+	err := pg.Pool.QueryRow(ctx, `
+        SELECT id, planned_at, chat_kind, sent_at, frozen_at, message_id
+        FROM discount_telegram_digest
+        WHERE planned_at = $1::date AND chat_kind = $2
+        ORDER BY id DESC
+        LIMIT 1`,
+		date, chatKind,
+	).Scan(&digestID, &st.PlannedAt, &st.ChatKind, &st.SentAt, &st.FrozenAt, &st.MessageID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("today digest %s %s: %w", date.Format(time.DateOnly), chatKind, err)
+	}
+
+	rows, err := pg.Pool.Query(ctx, `
+        SELECT product_id, best_before, percent, reason, initial_qty, plan_qty,
+               block_qty, stock_qty, message_id
+        FROM discount_telegram_digest_item
+        WHERE digest_id = $1
+        ORDER BY best_before, product_id`, digestID)
+	if err != nil {
+		return nil, fmt.Errorf("today digest items %s %s: %w", date.Format(time.DateOnly), chatKind, err)
+	}
+	defer rows.Close()
+
+	st.Items = make([]discounts.DigestItem, 0, 16)
+	for rows.Next() {
+		var it discounts.DigestItem
+		if err := rows.Scan(
+			&it.ProductID, &it.BestBefore, &it.Percent, &it.Reason,
+			&it.InitialQty, &it.PlanQty, &it.BlockQty, &it.StockQty, &it.MessageID,
+		); err != nil {
+			return nil, fmt.Errorf("scan today digest item: %w", err)
+		}
+		st.Items = append(st.Items, it)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("today digest items rows: %w", err)
+	}
+
+	return &st, nil
+}
+
+// ReplaceDigestItems заменяет позиции сегодняшней рассылки целиком: пересборка
+// письма меняет и состав (позиция ушла из слота, добор подтянул новую), и
+// снимок блока. Строка рассылки остаётся — в ней живут id сообщения, отметка
+// отправки и момент финальной сборки.
+func (pg *PGClient) ReplaceDigestItems(ctx context.Context, chatKind string, plannedAt time.Time, items []discounts.DigestItem) error {
+	if err := checkDigestItems(items); err != nil {
+		return err
+	}
+
+	tx, err := pg.Pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("replace digest items begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }() // после Commit — no-op
+
+	var digestID int64
+	if err := tx.QueryRow(ctx, `
+        SELECT id FROM discount_telegram_digest
+        WHERE chat_kind = $1 AND planned_at = $2::date
+        ORDER BY id DESC
+        LIMIT 1`,
+		chatKind, plannedAt,
+	).Scan(&digestID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("%w: %s %s", discounts.ErrNoDigest, plannedAt.Format(time.DateOnly), chatKind)
+		}
+		return fmt.Errorf("replace digest items %s %s: %w", plannedAt.Format(time.DateOnly), chatKind, err)
+	}
+
+	if _, err := tx.Exec(ctx, `DELETE FROM discount_telegram_digest_item WHERE digest_id = $1`, digestID); err != nil {
+		return fmt.Errorf("clear digest items %s %s: %w", plannedAt.Format(time.DateOnly), chatKind, err)
+	}
+	for _, it := range items {
+		if _, err := tx.Exec(ctx, `
+            INSERT INTO discount_telegram_digest_item
+                (digest_id, product_id, best_before, percent, coeff, reason,
+                 initial_qty, plan_qty, block_qty, stock_qty, message_id)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+			digestID, it.ProductID, it.BestBefore, it.Percent, it.Coeff, it.Reason,
+			it.InitialQty, it.PlanQty, it.BlockQty, it.StockQty, it.MessageID,
+		); err != nil {
+			return fmt.Errorf("insert digest item %s %s: %w", it.ProductID, it.BestBefore.Format(time.DateOnly), err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("replace digest items %s %s commit: %w", plannedAt.Format(time.DateOnly), chatKind, err)
+	}
+	return nil
+}
+
+// SetDigestMessage запоминает id сообщения письма: по нему живое письмо правит
+// ТО ЖЕ сообщение, а не плодит новые.
+func (pg *PGClient) SetDigestMessage(ctx context.Context, chatKind string, plannedAt time.Time, messageID int64) error {
+	if _, err := pg.Pool.Exec(ctx, `
+        UPDATE discount_telegram_digest
+        SET message_id = $3
+        WHERE chat_kind = $1 AND planned_at = $2::date`,
+		chatKind, plannedAt, messageID); err != nil {
+		return fmt.Errorf("set digest message %s %s: %w", plannedAt.Format(time.DateOnly), chatKind, err)
+	}
+	return nil
+}
+
+// SetDigestItemMessage запоминает id сообщения-запроса фото у позиции (0 —
+// запроса нет: блок ушёл, сообщение удалено).
+func (pg *PGClient) SetDigestItemMessage(ctx context.Context, chatKind string, plannedAt time.Time, key discounts.LotKey, messageID int64) error {
+	if _, err := pg.Pool.Exec(ctx, `
+        UPDATE discount_telegram_digest_item i
+        SET message_id = $3
+        WHERE i.product_id = $4 AND i.best_before = $5::date
+          AND i.digest_id = (
+              SELECT id FROM discount_telegram_digest
+              WHERE chat_kind = $1 AND planned_at = $2::date
+              ORDER BY id DESC
+              LIMIT 1
+          )`,
+		chatKind, plannedAt, messageID, key.ProductID, key.BestBefore); err != nil {
+		return fmt.Errorf("set digest item message %s %s: %w", key.ProductID, key.BestBefore.Format(time.DateOnly), err)
+	}
+	return nil
+}
+
+// MarkDigestFrozen фиксирует финальную сборку письма (14:45): после неё состав и
+// числа блоков не пересобираются, окно 14:45–15:00 меняет только количества.
+func (pg *PGClient) MarkDigestFrozen(ctx context.Context, chatKind string, plannedAt, at time.Time) error {
+	if _, err := pg.Pool.Exec(ctx, `
+        UPDATE discount_telegram_digest
+        SET frozen_at = $3
+        WHERE chat_kind = $1 AND planned_at = $2::date AND frozen_at IS NULL`,
+		chatKind, plannedAt, at); err != nil {
+		return fmt.Errorf("mark digest frozen %s %s: %w", plannedAt.Format(time.DateOnly), chatKind, err)
+	}
+	return nil
+}
+
+// DeleteDigest удаляет сегодняшнюю рассылку вместе с позициями: «Пропустить
+// рассылку» — рассылки не было, значит её нет ни в антидубле следующей (лоты
+// должны попасть в следующую рассылку), ни в плане продаж для 16:00.
+func (pg *PGClient) DeleteDigest(ctx context.Context, chatKind string, plannedAt time.Time) error {
+	if _, err := pg.Pool.Exec(ctx, `
+        DELETE FROM discount_telegram_digest
+        WHERE chat_kind = $1 AND planned_at = $2::date`,
+		chatKind, plannedAt); err != nil {
+		return fmt.Errorf("delete digest %s %s: %w", plannedAt.Format(time.DateOnly), chatKind, err)
 	}
 	return nil
 }

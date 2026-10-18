@@ -37,6 +37,24 @@ type Repository interface {
 	// плана плюс контроль «не продано» (остаток пары и план продаж у добора из
 	// избытка). По ним поднимают general (16:00).
 	TodaySlot(ctx context.Context, date time.Time) ([]discounts.SlotItem, error)
+	// TodayDigest — сегодняшняя рассылка склада с позициями и id сообщения
+	// письма: живое письмо правит то же сообщение, окно 14:45–15:00 считает
+	// дельты по снимку блока, «Пропустить» удаляет рассылку из истории.
+	// Рассылки нет — (nil, nil).
+	TodayDigest(ctx context.Context, date time.Time, chatKind string) (*discounts.DigestState, error)
+	// ReplaceDigestItems — переписать позиции сегодняшней рассылки (пересборка
+	// письма меняет состав и снимок блоков).
+	ReplaceDigestItems(ctx context.Context, chatKind string, plannedAt time.Time, items []discounts.DigestItem) error
+	// SetDigestMessage — запомнить id сообщения письма (правка того же сообщения).
+	SetDigestMessage(ctx context.Context, chatKind string, plannedAt time.Time, messageID int64) error
+	// SetDigestItemMessage — запомнить id сообщения-запроса фото у позиции
+	// (0 — запроса нет).
+	SetDigestItemMessage(ctx context.Context, chatKind string, plannedAt time.Time, key discounts.LotKey, messageID int64) error
+	// MarkDigestFrozen — финальная сборка 14:45: дальше только количества.
+	MarkDigestFrozen(ctx context.Context, chatKind string, plannedAt, at time.Time) error
+	// DeleteDigest — «Пропустить рассылку»: рассылки не было (антидубль и план
+	// продаж её не видят).
+	DeleteDigest(ctx context.Context, chatKind string, plannedAt time.Time) error
 	// MarkGeneralRaised — отметить подъём general до telegram по позициям.
 	MarkGeneralRaised(ctx context.Context, pairs []discounts.LotKey, at time.Time) error
 	// DayFlagDone — сделан ли шаг дня (повтор после рестарта/сна пропускается).
@@ -84,6 +102,24 @@ type WarehouseNotifier interface {
 	// NotifyWarehouseHTML — то же в чат склада, но с HTML-разметкой: название
 	// позиции ссылкой на карточку (телеграм-нотифаер решает, как нести текст).
 	NotifyWarehouseHTML(text string) error
+	// NotifyWarehouseHTMLButton — письмо складу с inline-кнопкой «Пропустить
+	// рассылку»; возвращает id сообщения: по нему письмо правится каждый
+	// пересчёт (решение владельца 18.10.2026).
+	NotifyWarehouseHTMLButton(text, buttonText, callbackData string) (int64, error)
+	// NotifyWarehouseReplyRequest — сообщение-запрос фото с force_reply: фото
+	// приходит ОТВЕТОМ, по reply_to_message находим позицию. Возвращает id.
+	NotifyWarehouseReplyRequest(text string) (int64, error)
+	// EditWarehouseHTML — правка письма тем же сообщением. Пустой buttonText —
+	// снять клавиатуру (после пропуска рассылки кнопки нет).
+	EditWarehouseHTML(messageID int64, text, buttonText, callbackData string) error
+	// DeleteWarehouseMessage — убрать сообщение-запрос фото (блок ушёл в 0).
+	DeleteWarehouseReply(messageID int64) error
+	// WarehouseCallbackAck/WarehouseCallbackAlert — закрыть нажатие кнопки:
+	// «часики» и причина отказа (нажали после публикации, рассылка уже
+	// пропущена). Имена отличаются от AnswerCallback нотифаера: у него уже есть
+	// метод с ctx для других модулей.
+	WarehouseCallbackAck(callbackQueryID string) error
+	WarehouseCallbackAlert(callbackQueryID, alert string) error
 }
 
 // CommonNotifier — уведомления об изменениях скидок и дайджест в общий канал,

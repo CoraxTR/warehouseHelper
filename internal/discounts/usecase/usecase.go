@@ -11,6 +11,8 @@ package usecase
 import (
 	"sync"
 	"time"
+
+	"warehouseHelper/internal/discounts"
 )
 
 // UseCase — сценарии модуля скидок.
@@ -54,6 +56,29 @@ type UseCase struct {
 	// ступенью по сроку вне КТ-дней (см. MarkGrown и RecalcAffected). Пустой
 	// список — роста не было.
 	dirty map[string][]time.Time
+
+	// mailMu — состояние живого письма складу (решение владельца 18.10.2026):
+	// его трогают и тик расписания, и нажатия кнопок/фото из поллера — поэтому
+	// карты и время под отдельным мьютексом.
+	mailMu sync.Mutex
+	// planAt — время плана дня (14:00): от него считаются сетка пересборки,
+	// фиксация 14:45 и граница публикации 15:00.
+	planAt time.Time
+	// ratesDay/rates — снимок оборота первого расчёта дня: числа плана меняются
+	// только от остатков, а не от обновления текущего периода оборота.
+	ratesDay time.Time
+	rates    map[string]float64
+	// lastMailPass — такт сетки 5 минут, который уже отработал.
+	lastMailPass time.Time
+	// mailText — последний отредактированный текст письма: правка отправляется,
+	// только когда текст изменился.
+	mailText string
+	// photos — file_id присланных фото по лоту (одно фото на лот). Живут в
+	// памяти: нужны только до публикации рассылки (следующая фича).
+	photos map[discounts.LotKey]string
+	// photoNames — название лота для подтверждения «фото принято» и повторного
+	// запроса после рестарта.
+	photoNames map[discounts.LotKey]string
 }
 
 // NewUseCase собирает сценарии модуля. Все зависимости — швы (ports.go);
@@ -71,15 +96,17 @@ func NewUseCase(
 		now = time.Now
 	}
 	return &UseCase{
-		repo:      repo,
-		turnover:  turnover,
-		writer:    writer,
-		common:    common,
-		tasks:     tasks,
-		warehouse: warehouse,
-		now:       now,
-		reg:       NewRegistry(),
-		dirty:     make(map[string][]time.Time),
+		repo:       repo,
+		turnover:   turnover,
+		writer:     writer,
+		common:     common,
+		tasks:      tasks,
+		warehouse:  warehouse,
+		now:        now,
+		reg:        NewRegistry(),
+		dirty:      make(map[string][]time.Time),
+		photos:     make(map[discounts.LotKey]string),
+		photoNames: make(map[discounts.LotKey]string),
 	}
 }
 

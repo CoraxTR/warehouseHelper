@@ -231,6 +231,89 @@ func (n *Notifier) SendWarehouseButton(ctx context.Context, text, buttonText, bu
 	return n.warehouseChatID, messageID, err
 }
 
+// NotifyWarehouseHTMLButton — письмо складу (HTML) с одной inline-кнопкой;
+// возвращает message_id: по нему письмо правится каждым пересчётом, чтобы в
+// чате жило ОДНО сообщение, а не пять копий (решение владельца 18.10.2026).
+// Без токена или chat_id склада — no-op (0, nil).
+func (n *Notifier) NotifyWarehouseHTMLButton(text, buttonText, callbackData string) (int64, error) {
+	if n.botToken == "" || n.warehouseChatID == 0 {
+		return 0, nil
+	}
+
+	button := map[string]string{fieldText: buttonText, fieldCallbackData: callbackData}
+
+	return n.postJSONResult(context.Background(), "sendMessage", map[string]any{
+		fieldChatID:  n.warehouseChatID,
+		fieldText:    text,
+		"parse_mode": "HTML",
+		fieldReplyMarkup: map[string]any{
+			fieldInlineKbd: [][]map[string]string{{button}},
+		},
+	})
+}
+
+// NotifyWarehouseReplyRequest — сообщение-запрос фото с force_reply: клиент
+// подставляет ответ на это сообщение, и фото приходит с reply_to_message —
+// только так бот понимает, к какому блоку оно относится (inline-кнопка камеру
+// не открывает). Возвращает message_id. Без токена — no-op (0, nil).
+func (n *Notifier) NotifyWarehouseReplyRequest(text string) (int64, error) {
+	if n.botToken == "" || n.warehouseChatID == 0 {
+		return 0, nil
+	}
+
+	return n.postJSONResult(context.Background(), "sendMessage", map[string]any{
+		fieldChatID:  n.warehouseChatID,
+		fieldText:    text,
+		"parse_mode": "HTML",
+		fieldReplyMarkup: map[string]any{
+			"force_reply":             true,
+			"input_field_placeholder": "Фото",
+		},
+	})
+}
+
+// EditWarehouseHTML — правка письма складу тем же сообщением. Пустой buttonText
+// снимает клавиатуру (после пропуска кнопки нет); непустой — оставляет кнопку на
+// месте. Без токена — no-op.
+func (n *Notifier) EditWarehouseHTML(messageID int64, text, buttonText, callbackData string) error {
+	if n.botToken == "" || n.warehouseChatID == 0 || messageID == 0 {
+		return nil
+	}
+
+	keyboard := make([][]map[string]string, 0, 1)
+	if buttonText != "" {
+		keyboard = append(keyboard, []map[string]string{{
+			fieldText: buttonText, fieldCallbackData: callbackData,
+		}})
+	}
+
+	return n.postJSON(context.Background(), "editMessageText", map[string]any{
+		fieldChatID:      n.warehouseChatID,
+		fieldMessageID:   messageID,
+		fieldText:        text,
+		"parse_mode":     "HTML",
+		fieldReplyMarkup: map[string]any{fieldInlineKbd: keyboard},
+	})
+}
+
+// DeleteWarehouseReply удаляет сообщение-запрос фото (блок ушёл в 0). Отдельное
+// имя: DeleteWarehouseMessage уже занят удалением уведомлений reservewatch с ctx.
+func (n *Notifier) DeleteWarehouseReply(messageID int64) error {
+	return n.DeleteWarehouseMessage(context.Background(), messageID)
+}
+
+// WarehouseCallbackAck закрывает нажатие кнопки склада («часики»). Обёртка над
+// AnswerCallback: юзкейс скидок не носит ctx в шов нотифаера.
+func (n *Notifier) WarehouseCallbackAck(callbackQueryID string) error {
+	return n.AnswerCallback(context.Background(), callbackQueryID)
+}
+
+// WarehouseCallbackAlert закрывает нажатие склада всплывающим окном с причиной
+// отказа (рассылка уже пропущена, публикация прошла).
+func (n *Notifier) WarehouseCallbackAlert(callbackQueryID, alert string) error {
+	return n.AnswerCallbackAlert(context.Background(), callbackQueryID, alert)
+}
+
 // DeleteWarehouseMessage удаляет сообщение из чата склада по message_id
 // (модуль reservewatch убирает уведомление, когда проблема резерва исчезла).
 // Telegram молча игнорирует удаление несуществующего сообщения. Без токена —
