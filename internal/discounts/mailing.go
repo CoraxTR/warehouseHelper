@@ -33,6 +33,11 @@ const (
 // MailingItem — позиция письма: одна пара (товар, срок) плана дня. Скидка и
 // количество в позиции положительные (их дают правила слота), поэтому блок
 // печатается всегда — цены может не быть, но позицию из письма не выбрасываем.
+// ShopSoldMark — метка распроданной позиции в посте чата скидок: ставится перед
+// названием, блок остаётся с нулём, чтобы читатель видел, что акция закончилась
+// (решение владельца 18.10.2026).
+const ShopSoldMark = "❗️ПРОДАНО❗️"
+
 type MailingItem struct {
 	Name       string
 	SiteURL    string // products.site_url (ручное поле); пусто — название без ссылки
@@ -41,6 +46,9 @@ type MailingItem struct {
 	Percent    int16  // скидка позиции (значение ТГ-колонки = скидка дня)
 	Qty        int64  // сколько идёт в ТГ по этой паре
 	BestBefore time.Time
+	// Sold — позиция распродана: печатается с меткой ShopSoldMark и нулём.
+	// Только для поста чата скидок; складской вариант такие блоки убирает.
+	Sold bool
 }
 
 // MailingSkippedText — чем заменяется письмо после нажатия «Пропустить
@@ -98,7 +106,11 @@ func BuildMailing(items []MailingItem) string {
 // 15.10.2026).
 func mailingBlock(n int, it MailingItem) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%d. %s | %s\n", n, mailingName(it), mailingPrice(it))
+	sold := ""
+	if it.Sold {
+		sold = ShopSoldMark + " "
+	}
+	fmt.Fprintf(&b, "%d. %s%s | %s\n", n, sold, mailingName(it), mailingPrice(it))
 	fmt.Fprintf(&b, "Срок годности: %s\n", it.BestBefore.Format("02.01.2006"))
 	fmt.Fprintf(&b, "Доступно по акции: %d шт.\n", it.Qty)
 	fmt.Fprintf(&b, "Остаток по акции: %d шт.\n", it.Qty)

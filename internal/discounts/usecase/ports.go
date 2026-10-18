@@ -55,6 +55,12 @@ type Repository interface {
 	// DeleteDigest — «Пропустить рассылку»: рассылки не было (антидубль и план
 	// продаж её не видят).
 	DeleteDigest(ctx context.Context, chatKind string, plannedAt time.Time) error
+
+	// Пост чата скидок: id сообщения, последний опубликованный пост и его
+	// текущие числа (правка идёт до следующей рассылки — поэтому в БД).
+	SetDigestShopMessage(ctx context.Context, chatKind string, plannedAt time.Time, messageID int64) error
+	LastShopDigest(ctx context.Context) (*discounts.DigestState, error)
+	UpdateDigestItemShop(ctx context.Context, plannedAt time.Time, key discounts.LotKey, qty int64, listed bool) error
 	// MarkGeneralRaised — отметить подъём general до telegram по позициям.
 	MarkGeneralRaised(ctx context.Context, pairs []discounts.LotKey, at time.Time) error
 	// DayFlagDone — сделан ли шаг дня (повтор после рестарта/сна пропускается).
@@ -120,6 +126,12 @@ type WarehouseNotifier interface {
 	// метод с ctx для других модулей.
 	WarehouseCallbackAck(callbackQueryID string) error
 	WarehouseCallbackAlert(callbackQueryID, alert string) error
+
+	// Чат скидок (решение владельца 18.10.2026): альбом фото позиций и
+	// пост-копия письма склада, который живёт до следующей рассылки.
+	SendShopPhotos(fileIDs []string) error
+	NotifyShopHTML(text string) (int64, error)
+	EditShopHTML(messageID int64, text string) error
 }
 
 // CommonNotifier — уведомления об изменениях скидок и дайджест в общий канал,

@@ -1172,3 +1172,37 @@ func (r *fakeDiscountRepo) DeleteDigest(_ context.Context, chatKind string, plan
 
 	return nil
 }
+
+// --- пост в чате скидок: история поста в фейке ---
+
+func (r *fakeDiscountRepo) SetDigestShopMessage(_ context.Context, chatKind string, plannedAt time.Time, messageID int64) error {
+	if r.digest != nil {
+		r.digest.ShopMessageID = messageID
+	}
+
+	return nil
+}
+
+func (r *fakeDiscountRepo) LastShopDigest(context.Context) (*discounts.DigestState, error) {
+	if r.digest == nil || r.digest.ShopMessageID == 0 {
+		return nil, nil
+	}
+	cp := *r.digest
+	cp.Items = append([]discounts.DigestItem(nil), r.digest.Items...)
+
+	return &cp, nil
+}
+
+func (r *fakeDiscountRepo) UpdateDigestItemShop(_ context.Context, plannedAt time.Time, key discounts.LotKey, qty int64, listed bool) error {
+	if r.digest == nil {
+		return nil
+	}
+	for i := range r.digest.Items {
+		it := &r.digest.Items[i]
+		if it.ProductID == key.ProductID && beginningOfDay(it.BestBefore).Equal(beginningOfDay(key.BestBefore)) {
+			it.ShopQty, it.Listed = qty, listed
+		}
+	}
+
+	return nil
+}

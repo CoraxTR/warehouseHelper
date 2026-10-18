@@ -818,6 +818,20 @@ func (uc *UseCase) mailingTextValue() string {
 	return uc.mailText
 }
 
+func (uc *UseCase) shopTextValue() string {
+	uc.mailMu.Lock()
+	defer uc.mailMu.Unlock()
+
+	return uc.shopPost
+}
+
+func (uc *UseCase) setShopText(text string) {
+	uc.mailMu.Lock()
+	defer uc.mailMu.Unlock()
+
+	uc.shopPost = text
+}
+
 func (uc *UseCase) setMailingText(text string) {
 	uc.mailMu.Lock()
 	defer uc.mailMu.Unlock()

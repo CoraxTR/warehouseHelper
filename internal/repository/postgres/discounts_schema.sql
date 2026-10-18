@@ -32,9 +32,12 @@
 -- правки того же письма, момент финальной сборки 14:45 и снимок блока:
 --   ALTER TABLE discount_telegram_digest ADD COLUMN IF NOT EXISTS message_id BIGINT NOT NULL DEFAULT 0;
 --   ALTER TABLE discount_telegram_digest ADD COLUMN IF NOT EXISTS frozen_at TIMESTAMPTZ;
+--   ALTER TABLE discount_telegram_digest ADD COLUMN IF NOT EXISTS shop_message_id BIGINT NOT NULL DEFAULT 0;
 --   ALTER TABLE discount_telegram_digest_item ADD COLUMN IF NOT EXISTS message_id BIGINT NOT NULL DEFAULT 0;
 --   ALTER TABLE discount_telegram_digest_item ADD COLUMN IF NOT EXISTS block_qty BIGINT NOT NULL DEFAULT 0;
 --   ALTER TABLE discount_telegram_digest_item ADD COLUMN IF NOT EXISTS stock_qty BIGINT NOT NULL DEFAULT 0;
+--   ALTER TABLE discount_telegram_digest_item ADD COLUMN IF NOT EXISTS shop_qty BIGINT NOT NULL DEFAULT 0;
+--   ALTER TABLE discount_telegram_digest_item ADD COLUMN IF NOT EXISTS shop_listed BOOLEAN NOT NULL DEFAULT FALSE;
 
 -- Рассылка (слот ТГ): одна строка = один собранный/отправленный дайджест.
 -- 14:00 — план ТГ-слота в чат склада (chat_kind='warehouse'), 09:00 — дайджест
@@ -46,6 +49,7 @@ CREATE TABLE IF NOT EXISTS discount_telegram_digest (
     chat_kind  TEXT NOT NULL,        -- канал рассылки: 'warehouse' — чат склада, 'general' — общий
     sent_at    TIMESTAMPTZ,          -- факт отправки; NULL — собрано, но не отправлено
     message_id BIGINT NOT NULL DEFAULT 0,  -- сообщение письма в чате склада (0 — id не знаем: правки нет)
+    shop_message_id BIGINT NOT NULL DEFAULT 0,  -- пост в чате скидок (0 — не опубликован)
     frozen_at  TIMESTAMPTZ           -- финальная сборка 14:45; NULL — план ещё пересобирается
 );
 
@@ -75,6 +79,8 @@ CREATE TABLE IF NOT EXISTS discount_telegram_digest_item (
     message_id        BIGINT NOT NULL DEFAULT 0,  -- сообщение-запрос фото (0 — запроса нет)
     general_raised_at TIMESTAMPTZ,        -- когда general подняли до telegram (16:00); NULL — не поднимали
     PRIMARY KEY (digest_id, product_id, best_before)
+    shop_qty          BIGINT NOT NULL DEFAULT 0,   -- остаток по акции в посте чата скидок
+    shop_listed       BOOLEAN NOT NULL DEFAULT FALSE, -- позиция есть в опубликованном посте
 );
 
 -- Антидубль: «был ли лот в предыдущей рассылке» ищется по лоту.

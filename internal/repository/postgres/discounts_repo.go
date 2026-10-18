@@ -179,10 +179,12 @@ func (pg *PGClient) SaveDigest(ctx context.Context, d discounts.DigestRecord, it
 		if _, err := tx.Exec(ctx, `
             INSERT INTO discount_telegram_digest_item
                 (digest_id, product_id, best_before, percent, coeff, reason,
-                 initial_qty, plan_qty, block_qty, stock_qty, message_id)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+                 initial_qty, plan_qty, block_qty, stock_qty, message_id,
+                 shop_qty, shop_listed)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
 			digestID, it.ProductID, it.BestBefore, it.Percent, it.Coeff, it.Reason,
 			it.InitialQty, it.PlanQty, it.BlockQty, it.StockQty, it.MessageID,
+			it.ShopQty, it.Listed,
 		); err != nil {
 			return fmt.Errorf("insert digest item %s %s: %w", it.ProductID, it.BestBefore.Format(time.DateOnly), err)
 		}
@@ -514,13 +516,13 @@ func (pg *PGClient) TodayDigest(ctx context.Context, date time.Time, chatKind st
 		digestID int64
 	)
 	err := pg.Pool.QueryRow(ctx, `
-        SELECT id, planned_at, chat_kind, sent_at, frozen_at, message_id
+        SELECT id, planned_at, chat_kind, sent_at, frozen_at, message_id, shop_message_id
         FROM discount_telegram_digest
         WHERE planned_at = $1::date AND chat_kind = $2
         ORDER BY id DESC
         LIMIT 1`,
 		date, chatKind,
-	).Scan(&digestID, &st.PlannedAt, &st.ChatKind, &st.SentAt, &st.FrozenAt, &st.MessageID)
+	).Scan(&digestID, &st.PlannedAt, &st.ChatKind, &st.SentAt, &st.FrozenAt, &st.MessageID, &st.ShopMessageID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -530,7 +532,7 @@ func (pg *PGClient) TodayDigest(ctx context.Context, date time.Time, chatKind st
 
 	rows, err := pg.Pool.Query(ctx, `
         SELECT product_id, best_before, percent, reason, initial_qty, plan_qty,
-               block_qty, stock_qty, message_id
+               block_qty, stock_qty, message_id, shop_qty, shop_listed
         FROM discount_telegram_digest_item
         WHERE digest_id = $1
         ORDER BY best_before, product_id`, digestID)
@@ -545,6 +547,7 @@ func (pg *PGClient) TodayDigest(ctx context.Context, date time.Time, chatKind st
 		if err := rows.Scan(
 			&it.ProductID, &it.BestBefore, &it.Percent, &it.Reason,
 			&it.InitialQty, &it.PlanQty, &it.BlockQty, &it.StockQty, &it.MessageID,
+			&it.ShopQty, &it.Listed,
 		); err != nil {
 			return nil, fmt.Errorf("scan today digest item: %w", err)
 		}
@@ -593,10 +596,12 @@ func (pg *PGClient) ReplaceDigestItems(ctx context.Context, chatKind string, pla
 		if _, err := tx.Exec(ctx, `
             INSERT INTO discount_telegram_digest_item
                 (digest_id, product_id, best_before, percent, coeff, reason,
-                 initial_qty, plan_qty, block_qty, stock_qty, message_id)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+                 initial_qty, plan_qty, block_qty, stock_qty, message_id,
+                 shop_qty, shop_listed)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
 			digestID, it.ProductID, it.BestBefore, it.Percent, it.Coeff, it.Reason,
 			it.InitialQty, it.PlanQty, it.BlockQty, it.StockQty, it.MessageID,
+			it.ShopQty, it.Listed,
 		); err != nil {
 			return fmt.Errorf("insert digest item %s %s: %w", it.ProductID, it.BestBefore.Format(time.DateOnly), err)
 		}
@@ -663,5 +668,90 @@ func (pg *PGClient) DeleteDigest(ctx context.Context, chatKind string, plannedAt
 		chatKind, plannedAt); err != nil {
 		return fmt.Errorf("delete digest %s %s: %w", plannedAt.Format(time.DateOnly), chatKind, err)
 	}
+	return nil
+}
+
+// SetDigestShopMessage запоминает id поста в чате скидок: по нему пост правится
+// до публикации следующего (решение владельца 18.10.2026).
+func (pg *PGClient) SetDigestShopMessage(ctx context.Context, chatKind string, plannedAt time.Time, messageID int64) error {
+	if _, err := pg.Pool.Exec(ctx, `
+        UPDATE discount_telegram_digest
+        SET shop_message_id = $3
+        WHERE chat_kind = $1 AND planned_at = $2::date`,
+		chatKind, plannedAt, messageID); err != nil {
+		return fmt.Errorf("set digest shop message %s %s: %w", plannedAt.Format(time.DateOnly), chatKind, err)
+	}
+
+	return nil
+}
+
+// LastShopDigest — последний опубликованный пост чата скидок с позициями: по нему
+// идут правки количеств и метки «продано» до следующей рассылки. nil — постов
+// ещё не было.
+func (pg *PGClient) LastShopDigest(ctx context.Context) (*discounts.DigestState, error) {
+	var (
+		st       discounts.DigestState
+		digestID int64
+	)
+	err := pg.Pool.QueryRow(ctx, `
+        SELECT id, planned_at, chat_kind, sent_at, frozen_at, message_id, shop_message_id
+        FROM discount_telegram_digest
+        WHERE shop_message_id > 0
+        ORDER BY planned_at DESC, id DESC
+        LIMIT 1`).Scan(
+		&digestID, &st.PlannedAt, &st.ChatKind, &st.SentAt, &st.FrozenAt, &st.MessageID, &st.ShopMessageID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("last shop digest: %w", err)
+	}
+
+	rows, err := pg.Pool.Query(ctx, `
+        SELECT product_id, best_before, percent, reason, initial_qty, plan_qty,
+               block_qty, stock_qty, message_id, shop_qty, shop_listed
+        FROM discount_telegram_digest_item
+        WHERE digest_id = $1
+        ORDER BY best_before, product_id`, digestID)
+	if err != nil {
+		return nil, fmt.Errorf("last shop digest items: %w", err)
+	}
+	defer rows.Close()
+
+	st.Items = make([]discounts.DigestItem, 0, 16)
+	for rows.Next() {
+		var it discounts.DigestItem
+		if err := rows.Scan(
+			&it.ProductID, &it.BestBefore, &it.Percent, &it.Reason,
+			&it.InitialQty, &it.PlanQty, &it.BlockQty, &it.StockQty, &it.MessageID,
+			&it.ShopQty, &it.Listed,
+		); err != nil {
+			return nil, fmt.Errorf("scan last shop digest item: %w", err)
+		}
+		st.Items = append(st.Items, it)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("last shop digest items rows: %w", err)
+	}
+
+	return &st, nil
+}
+
+// UpdateDigestItemShop сохраняет число и признак показа позиции в посте чата
+// скидок: по ним следующий проход отличает продажу от возврата и переживает
+// рестарт.
+func (pg *PGClient) UpdateDigestItemShop(ctx context.Context, plannedAt time.Time, key discounts.LotKey, qty int64, listed bool) error {
+	if _, err := pg.Pool.Exec(ctx, `
+        UPDATE discount_telegram_digest_item i
+        SET shop_qty = $3, shop_listed = $4
+        WHERE i.product_id = $5 AND i.best_before = $6::date
+          AND i.digest_id = (
+              SELECT id FROM discount_telegram_digest
+              WHERE chat_kind = $1 AND planned_at = $2::date
+              ORDER BY id DESC LIMIT 1)`,
+		discounts.ChatWarehouse, plannedAt, qty, listed, key.ProductID, key.BestBefore); err != nil {
+		return fmt.Errorf("update digest item shop %s %s: %w", key.ProductID, plannedAt.Format(time.DateOnly), err)
+	}
+
 	return nil
 }

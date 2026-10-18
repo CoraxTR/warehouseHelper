@@ -117,6 +117,12 @@ type fakeWarehouseNotifier struct {
 	alerts   []string
 	acked    int
 	nextID   int64
+
+	// Пост в чате скидок: альбомы фото, тексты и правки.
+	shopPhotos [][]string
+	shopTexts  []string
+	shopEdits  []fakeEdit
+	shopNextID int64
 }
 
 // fakeEdit — правка письма: id сообщения, текст и кнопка (пусто — снята).
@@ -1056,4 +1062,25 @@ func TestRunSlotPlanThenRaiseHonoursSaleControl(t *testing.T) {
 			}
 		})
 	}
+}
+
+// SendShopPhotos — альбом фото в чате скидок (тест копит состав).
+func (n *fakeWarehouseNotifier) SendShopPhotos(fileIDs []string) error {
+	n.shopPhotos = append(n.shopPhotos, append([]string(nil), fileIDs...))
+
+	return nil
+}
+
+// NotifyShopHTML — публикация поста; id считается отдельно от письма склада.
+func (n *fakeWarehouseNotifier) NotifyShopHTML(text string) (int64, error) {
+	n.shopNextID++
+	n.shopTexts = append(n.shopTexts, text)
+
+	return n.shopNextID, nil
+}
+
+func (n *fakeWarehouseNotifier) EditShopHTML(messageID int64, text string) error {
+	n.shopEdits = append(n.shopEdits, fakeEdit{ID: messageID, Text: text})
+
+	return nil
 }

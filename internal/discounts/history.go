@@ -105,6 +105,11 @@ type DigestItem struct {
 	BlockQty   int64
 	StockQty   int64
 	MessageID  int64
+	// ShopQty — остаток по акции в посте чата скидок (0 — «ПРОДАНО»);
+	// ShopListed — позиция есть в опубликованном посте. Вместе они отличают
+	// продажу от возврата и переживают рестарт (решение владельца 18.10.2026).
+	ShopQty int64
+	Listed  bool
 }
 
 // DigestState — сегодняшняя рассылка склада вместе с позициями: то, что нужно
@@ -117,5 +122,7 @@ type DigestState struct {
 	SentAt    *time.Time
 	FrozenAt  *time.Time
 	MessageID int64
-	Items     []DigestItem
+	// ShopMessageID — id поста в чате скидок (0 — пост ещё не опубликован).
+	ShopMessageID int64
+	Items         []DigestItem
 }

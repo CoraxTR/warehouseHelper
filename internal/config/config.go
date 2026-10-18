@@ -847,6 +847,11 @@ type TelegramConfig struct {
 	WarehouseChatID int64
 	EveryoneChatID  int64
 	CommonChatID    int64
+	// DiscountChatID — чат скидок: туда в 15:00 уходит альбом фото и пост-копия
+	// письма склада, который потом правится до следующей рассылки (решение
+	// владельца 18.10.2026). Отдельное значение: у чата своя аудитория и свои
+	// правила правок, складской чат живёт по своим.
+	DiscountChatID int64
 }
 
 func loadTelegramConfig() *TelegramConfig {
@@ -855,6 +860,7 @@ func loadTelegramConfig() *TelegramConfig {
 		WarehouseChatID: parseEnvInt64("TG_WAREHOUSE_CHAT_ID"),
 		EveryoneChatID:  parseEnvInt64("TG_EVERYONE_CHAT_ID"),
 		CommonChatID:    parseEnvInt64("TG_COMMON_CHAT_ID"),
+		DiscountChatID:  parseEnvInt64("TG_DISCOUNT_CHAT_ID"),
 	}
 }
 

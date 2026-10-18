@@ -49,6 +49,7 @@ type Notifier struct {
 	warehouseChatID int64
 	everyoneChatID  int64
 	commonChatID    int64
+	discountChatID  int64
 }
 
 // NewNotifier собирает Notifier из конфигурации Telegram.
@@ -60,6 +61,7 @@ func NewNotifier(cfg *config.TelegramConfig) *Notifier {
 		warehouseChatID: cfg.WarehouseChatID,
 		everyoneChatID:  cfg.EveryoneChatID,
 		commonChatID:    cfg.CommonChatID,
+		discountChatID:  cfg.DiscountChatID,
 	}
 }
 
@@ -592,4 +594,58 @@ func (n *Notifier) postJSONResult(ctx context.Context, method string, payload ma
 		return 0, fmt.Errorf("failed to parse telegram result: %w", err)
 	}
 	return res.MessageID, nil
+}
+
+// SendShopPhotos отправляет фото позиций в чат скидок ОДНИМ альбомом (по 10 штук
+// на сообщение — предел Telegram). Не файлами: sendMediaGroup с типом photo
+// показывает их лентой, файлы склад не смотрит (решение владельца 18.10.2026).
+// Без настроенного чата скидок — no-op.
+func (n *Notifier) SendShopPhotos(fileIDs []string) error {
+	if n.botToken == "" || n.discountChatID == 0 || len(fileIDs) == 0 {
+		return nil
+	}
+	for start := 0; start < len(fileIDs); start += mediaGroupMaxPhotos {
+		end := min(start+mediaGroupMaxPhotos, len(fileIDs))
+		media := make([]map[string]string, 0, end-start)
+		for _, id := range fileIDs[start:end] {
+			media = append(media, map[string]string{"type": "photo", "media": id})
+		}
+		if err := n.postJSON(context.Background(), "sendMediaGroup", map[string]any{
+			fieldChatID: n.discountChatID,
+			"media":     media,
+		}); err != nil {
+			return fmt.Errorf("фото в чат скидок: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// NotifyShopHTML публикует пост в чате скидок и возвращает id сообщения: по нему
+// пост правится до следующей рассылки.
+func (n *Notifier) NotifyShopHTML(text string) (int64, error) {
+	if n.botToken == "" || n.discountChatID == 0 {
+		return 0, nil
+	}
+
+	return n.postJSONResult(context.Background(), "sendMessage", map[string]any{
+		fieldChatID:  n.discountChatID,
+		fieldText:    text,
+		"parse_mode": "HTML",
+	})
+}
+
+// EditShopHTML правит пост в чате скидок (то же сообщение, без кнопок).
+func (n *Notifier) EditShopHTML(messageID int64, text string) error {
+	if n.botToken == "" || n.discountChatID == 0 || messageID == 0 {
+		return nil
+	}
+	_, err := n.postJSONResult(context.Background(), "editMessageText", map[string]any{
+		fieldChatID:    n.discountChatID,
+		fieldMessageID: messageID,
+		fieldText:      text,
+		"parse_mode":   "HTML",
+	})
+
+	return err
 }
