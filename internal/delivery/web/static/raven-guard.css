@@ -759,10 +759,9 @@ tr.group-hidden { display: none !important; }
    Без этого столбец дня растягивался под самый длинный текст («10% → 20% → 10%»),
    и сетка читалась как поехавшая (владелец, 19.10.2026). Шапка с числами
    закреплена: страница длинная, при прокрутке числа дней уезжали. */
-.av-report { table-layout: fixed; border-collapse: separate; border-spacing: 0; border-top: 1px solid #26262E; border-left: 1px solid #26262E; font-size: 12px; }
+.av-report { border-collapse: separate; border-spacing: 0; border-top: 1px solid #26262E; border-left: 1px solid #26262E; font-size: 12px; }
 .av-report th, .av-report td { border: 0; border-right: 1px solid #26262E; border-bottom: 1px solid #26262E; padding: 2px 3px; vertical-align: middle; }
 .av-col-name { width: 280px; }
-.av-col-day { width: 58px; }
 .av-report thead th { position: sticky; top: 0; z-index: 3; height: 24px; background: #16161C; color: #8A887E; font-weight: 400; }
 .av-report thead th.av-name-col { left: 0; z-index: 4; text-align: left; padding-left: 46px; }
 .av-report thead th.today { background: #2A1119; color: #E4636B; }
@@ -770,7 +769,11 @@ tr.group-hidden { display: none !important; }
 /* Метка группы — липкая внутри своей colspan-ячейки: иначе при горизонтальной
    прокрутке название группы уезжает за левый край и полоса читается пустой. */
 .av-report .av-group-label { position: sticky; left: 6px; display: inline-block; }
-.av-report .av-cell { width: auto; height: 34px; line-height: 1.15; white-space: normal; }
+/* Ширина столбца дня = самый длинный текст в этом столбце (владелец,
+   19.10.2026): «10% → 30% → 20%» расширяет столбец ровно на свою длину, короткие
+   дни остаются узкими, текст не переносится и не выезжает за границы. Высота
+   строки при этом одна у всех — 34px (полоса «пилой» не идёт). */
+.av-report .av-cell { width: auto; min-width: 44px; height: 34px; line-height: 1.15; white-space: nowrap; }
 
 /* Заливки: специфичность выше полосатости и hover — иначе цвет клетки терялся.
    Клетка без скидки — цвет бренд-палитры (не белая: столбцы «полосили»),
