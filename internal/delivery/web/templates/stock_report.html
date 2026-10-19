@@ -34,11 +34,19 @@
         <button type="button" onclick="exportReport()" class="export-btn">Выгрузить xlsx</button>
     </div>
     <div class="av-hint">
-        Серая — в наличии без скидки, жёлтая — скидка, красная — закончилась, чёрная — недоступна
-        для заказа; текст: скидка на начало → повышения → состояние конца дня (x — нет в наличии).
+        Серая — в наличии без скидки, жёлтая — скидка (в том числе снятая за день), жёлтая с красным
+        текстом — скидка и позиция закончилась, красная с x — закончилась или её не было в наличии
+        весь день, чёрная — недоступна для заказа; текст: скидка на начало → повышения → состояние
+        конца дня.
     </div>
 
-    <table class="av-table">
+    <table class="av-table av-report">
+        <colgroup>
+            <col class="av-col-name">
+            {{range seq .Days}}
+            <col class="av-col-day">
+            {{end}}
+        </colgroup>
         <thead>
             <tr>
                 <th class="av-name-col">Товар</th>
@@ -52,12 +60,12 @@
             {{range $p := .Products}}
             {{if ne $p.GroupName $prev}}
             <tr class="group-row">
-                <td colspan="{{plus $.Days 1}}">{{$p.GroupName}}</td>
+                <td colspan="{{plus $.Days 1}}"><span class="av-group-label">{{$p.GroupName}}</span></td>
             </tr>
             {{$prev = $p.GroupName}}
             {{end}}
             <tr class="av-row">
-                <td class="av-name">{{$p.Name}}</td>
+                <td class="av-name" title="{{$p.Name}}">{{$p.Name}}</td>
                 {{range $c := $p.Cells}}
                 <td class="av-cell cell-{{$c.Kind}}">{{$c.Text}}</td>
                 {{end}}
