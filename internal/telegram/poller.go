@@ -29,11 +29,20 @@ type CallbackQuery struct {
 // CallbackHandler обрабатывает одно нажатие кнопки (диспетчеризует по Data).
 type CallbackHandler func(ctx context.Context, cb CallbackQuery) error
 
-// Message — текстовое сообщение, пришедшее боту (бот-команда, например
-// /discounts). ChatID — чат отправителя: ответ на команду идёт в него же.
+// Message — сообщение, пришедшее боту: текст (бот-команда, например /discounts)
+// или фото. ChatID — чат отправителя: ответ на команду идёт в него же.
+//
+// MessageID/ReplyToMessageID/PhotoFileID заполняются у фото: склад присылает
+// снимок ОТВЕТОМ на сообщение-запрос позиции (force_reply), и по
+// ReplyToMessageID модуль скидок понимает, к какому блоку рассылки он относится
+// (решение владельца 18.10.2026). PhotoFileID — самый крупный размер из
+// message.photo (file_id живёт в Telegram, скачивать снимок незачем).
 type Message struct {
-	ChatID int64
-	Text   string
+	ChatID           int64
+	Text             string
+	MessageID        int64
+	ReplyToMessageID int64
+	PhotoFileID      string
 }
 
 // MessageHandler обрабатывает одно текстовое сообщение (бот-команду).
@@ -99,6 +108,17 @@ type tgChat struct {
 type tgMessage struct {
 	Chat *tgChat `json:"chat"`
 	Text string  `json:"text"`
+	// MessageID — id сообщения (нужен ответу на фото).
+	MessageID int64 `json:"message_id"`
+	// ReplyTo — сообщение, ответом на которое пришёл апдейт (force_reply).
+	ReplyTo *tgMsg `json:"reply_to_message"`
+	// Photo — размеры снимка от меньшего к большему: берём последний.
+	Photo []tgPhotoSize `json:"photo"`
+}
+
+// tgPhotoSize — один размер фото в message.photo.
+type tgPhotoSize struct {
+	FileID string `json:"file_id"`
 }
 
 // tgUpdatesResponse — ответ Bot API на getUpdates.
@@ -189,20 +209,32 @@ func (p *Poller) handle(ctx context.Context, u tgUpdate) {
 	}
 }
 
-// handleMessage отдаёт текстовое сообщение обработчику бот-команд. Сообщение
-// без чата или без текста (фото, стикер, служебные апдейты) пропускается:
-// отвечать некуда или команды нет. Обработчика нет — сообщение игнорируется
-// (штатно: команды не подключены). Ошибка обработчика логируется: курсор
-// апдейтов уже сдвинут вызывающим, повторной доставки не будет.
+// handleMessage отдаёт сообщение обработчику бот-команд: текст команды или фото
+// (склад отвечает снимком на запрос позиции). Стикеры, служебные апдейты и
+// сообщения без чата пропускаются: отвечать некуда или модулю они не нужны.
+// Обработчика нет — сообщение игнорируется (штатно: команды не подключены).
+// Ошибка обработчика логируется: курсор апдейтов уже сдвинут вызывающим,
+// повторной доставки не будет.
 func (p *Poller) handleMessage(ctx context.Context, u tgUpdate) {
 	msg := u.Message
-	if msg.Chat == nil || msg.Text == "" {
+	if msg.Chat == nil {
+		return
+	}
+	photo := ""
+	if len(msg.Photo) > 0 {
+		photo = msg.Photo[len(msg.Photo)-1].FileID
+	}
+	if msg.Text == "" && photo == "" {
 		return
 	}
 	if p.messageHandler == nil {
 		return
 	}
-	if err := p.messageHandler(ctx, Message{ChatID: msg.Chat.ID, Text: msg.Text}); err != nil {
+	out := Message{ChatID: msg.Chat.ID, Text: msg.Text, MessageID: msg.MessageID, PhotoFileID: photo}
+	if msg.ReplyTo != nil {
+		out.ReplyToMessageID = msg.ReplyTo.MessageID
+	}
+	if err := p.messageHandler(ctx, out); err != nil {
 		slog.Info(fmt.Sprintf("telegram: обработка сообщения чата %d: %v", msg.Chat.ID, err))
 	}
 }

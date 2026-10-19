@@ -28,6 +28,17 @@
 -- контроля вечернего подъёма (16:00) — идемпотентный ALTER:
 --   ALTER TABLE discount_telegram_digest_item ADD COLUMN IF NOT EXISTS initial_qty BIGINT;
 --   ALTER TABLE discount_telegram_digest_item ADD COLUMN IF NOT EXISTS plan_qty BIGINT;
+-- ЖИВАЯ БД: живое письмо (решение владельца 18.10.2026) — id сообщения для
+-- правки того же письма, момент финальной сборки 14:45 и снимок блока:
+--   ALTER TABLE discount_telegram_digest ADD COLUMN IF NOT EXISTS message_id BIGINT NOT NULL DEFAULT 0;
+--   ALTER TABLE discount_telegram_digest ADD COLUMN IF NOT EXISTS frozen_at TIMESTAMPTZ;
+--   ALTER TABLE discount_telegram_digest ADD COLUMN IF NOT EXISTS shop_message_id BIGINT NOT NULL DEFAULT 0;
+--   ALTER TABLE discount_telegram_digest_item ADD COLUMN IF NOT EXISTS message_id BIGINT NOT NULL DEFAULT 0;
+--   ALTER TABLE discount_telegram_digest_item ADD COLUMN IF NOT EXISTS block_qty BIGINT NOT NULL DEFAULT 0;
+--   ALTER TABLE discount_telegram_digest_item ADD COLUMN IF NOT EXISTS stock_qty BIGINT NOT NULL DEFAULT 0;
+--   ALTER TABLE discount_telegram_digest_item ADD COLUMN IF NOT EXISTS shop_qty BIGINT NOT NULL DEFAULT 0;
+--   ALTER TABLE discount_telegram_digest_item ADD COLUMN IF NOT EXISTS shop_available BIGINT NOT NULL DEFAULT 0;
+--   ALTER TABLE discount_telegram_digest_item ADD COLUMN IF NOT EXISTS shop_listed BOOLEAN NOT NULL DEFAULT FALSE;
 
 -- Рассылка (слот ТГ): одна строка = один собранный/отправленный дайджест.
 -- 14:00 — план ТГ-слота в чат склада (chat_kind='warehouse'), 09:00 — дайджест
@@ -37,7 +48,10 @@ CREATE TABLE IF NOT EXISTS discount_telegram_digest (
     id         BIGSERIAL PRIMARY KEY,
     planned_at DATE NOT NULL,        -- день плана (локальная дата склада, для которой собирали слот)
     chat_kind  TEXT NOT NULL,        -- канал рассылки: 'warehouse' — чат склада, 'general' — общий
-    sent_at    TIMESTAMPTZ           -- факт отправки; NULL — собрано, но не отправлено
+    sent_at    TIMESTAMPTZ,          -- факт отправки; NULL — собрано, но не отправлено
+    message_id BIGINT NOT NULL DEFAULT 0,  -- сообщение письма в чате склада (0 — id не знаем: правки нет)
+    shop_message_id BIGINT NOT NULL DEFAULT 0,  -- пост в чате скидок (0 — не опубликован)
+    frozen_at  TIMESTAMPTZ           -- финальная сборка 14:45; NULL — план ещё пересобирается
 );
 
 -- Позиции рассылки: одна строка = лот в рассылке (товар + срок годности).
@@ -58,7 +72,16 @@ CREATE TABLE IF NOT EXISTS discount_telegram_digest_item (
     -- у сроковых позиций план продаж не считается, поэтому NULL («не задано»).
     initial_qty       BIGINT,             -- остаток пары на 14:00; NULL — не задано
     plan_qty          BIGINT,             -- сколько штук пары надо продать до 16:00; NULL — не задано
+    -- Живое письмо (решение владельца 18.10.2026): снимок последнего пересчёта.
+    -- block_qty — число, напечатанное в блоке письма; stock_qty — остаток лота на
+    -- тот же момент. По ним окно 14:45–15:00 считает дельты продаж и возвратов.
+    block_qty         BIGINT NOT NULL DEFAULT 0,  -- число в блоке письма
+    stock_qty         BIGINT NOT NULL DEFAULT 0,  -- остаток лота на момент снимка
+    message_id        BIGINT NOT NULL DEFAULT 0,  -- сообщение-запрос фото (0 — запроса нет)
     general_raised_at TIMESTAMPTZ,        -- когда general подняли до telegram (16:00); NULL — не поднимали
+    shop_qty          BIGINT NOT NULL DEFAULT 0,   -- остаток по акции в посте (меняется)
+    shop_available    BIGINT NOT NULL DEFAULT 0,   -- «доступно по акции» поста (заморожено публикацией)
+    shop_listed       BOOLEAN NOT NULL DEFAULT FALSE, -- позиция есть в опубликованном посте
     PRIMARY KEY (digest_id, product_id, best_before)
 );
 

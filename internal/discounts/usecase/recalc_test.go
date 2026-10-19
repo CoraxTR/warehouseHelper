@@ -74,6 +74,11 @@ type fakeDiscountRepo struct {
 	// plans — план продаж добора по парам (LastPlanQty): выход скидки,
 	// поставленной ТГ-днём. Пустая карта = планов нет (пара держится избытком).
 	plans map[discounts.LotKey]discounts.LotPlan
+	// digest — сохранённая рассылка склада (живое письмо: правка сообщения,
+	// снимок блоков, пропуск рассылки).
+	digest *discounts.DigestState
+	// prevShop — пост прошлого ТГ-дня: нужен подчистке перед новой рассылкой.
+	prevShop *discounts.DigestState
 }
 
 func newFakeDiscountRepo(inputs ...discounts.Input) *fakeDiscountRepo {
@@ -1110,4 +1115,105 @@ func TestRecalcSurplusClearsTelegramWithoutSiteValue(t *testing.T) {
 	if w.General != nil || w.GeneralOwner != "" {
 		t.Errorf("колонку сайта правка не трогает: general %v, владелец %q", w.General, w.GeneralOwner)
 	}
+}
+
+// --- живое письмо (18.10.2026): история рассылки в фейке ---
+
+func (r *fakeDiscountRepo) TodayDigest(_ context.Context, date time.Time, chatKind string) (*discounts.DigestState, error) {
+	if r.digest == nil || r.digest.ChatKind != chatKind ||
+		!beginningOfDay(r.digest.PlannedAt).Equal(beginningOfDay(date)) {
+		return nil, nil //nolint:nilnil // фейк: рассылки нет
+	}
+	cp := *r.digest
+	cp.Items = append([]discounts.DigestItem(nil), r.digest.Items...)
+
+	return &cp, nil
+}
+
+func (r *fakeDiscountRepo) ReplaceDigestItems(_ context.Context, _ string, _ time.Time, items []discounts.DigestItem) error {
+	if r.digest == nil {
+		return discounts.ErrNoDigest
+	}
+	r.digest.Items = append([]discounts.DigestItem(nil), items...)
+
+	return nil
+}
+
+func (r *fakeDiscountRepo) SetDigestMessage(_ context.Context, _ string, _ time.Time, messageID int64) error {
+	if r.digest != nil {
+		r.digest.MessageID = messageID
+	}
+
+	return nil
+}
+
+func (r *fakeDiscountRepo) SetDigestItemMessage(_ context.Context, _ string, _ time.Time, key discounts.LotKey, messageID int64) error {
+	if r.digest == nil {
+		return nil
+	}
+	for i := range r.digest.Items {
+		if r.digest.Items[i].ProductID == key.ProductID &&
+			beginningOfDay(r.digest.Items[i].BestBefore).Equal(beginningOfDay(key.BestBefore)) {
+			r.digest.Items[i].MessageID = messageID
+		}
+	}
+
+	return nil
+}
+
+func (r *fakeDiscountRepo) MarkDigestFrozen(_ context.Context, _ string, _, at time.Time) error {
+	if r.digest != nil {
+		r.digest.FrozenAt = &at
+	}
+
+	return nil
+}
+
+func (r *fakeDiscountRepo) DeleteDigest(_ context.Context, _ string, _ time.Time) error {
+	r.digest = nil
+
+	return nil
+}
+
+// --- пост в чате скидок: история поста в фейке ---
+
+func (r *fakeDiscountRepo) SetDigestShopMessage(_ context.Context, _ string, _ time.Time, messageID int64) error {
+	if r.digest != nil {
+		r.digest.ShopMessageID = messageID
+	}
+
+	return nil
+}
+
+func (r *fakeDiscountRepo) LastShopDigest(context.Context) (*discounts.DigestState, error) {
+	var best *discounts.DigestState
+	if r.digest != nil && r.digest.ShopMessageID != 0 {
+		best = r.digest
+	}
+	if r.prevShop != nil && (best == nil || r.prevShop.PlannedAt.After(best.PlannedAt)) {
+		best = r.prevShop
+	}
+	if best == nil {
+		return nil, nil //nolint:nilnil // фейк: поста нет
+	}
+	cp := *best
+	cp.Items = append([]discounts.DigestItem(nil), best.Items...)
+
+	return &cp, nil
+}
+
+func (r *fakeDiscountRepo) UpdateDigestItemShop(_ context.Context, plannedAt time.Time, key discounts.LotKey, qty, available int64, listed bool) error {
+	for _, st := range []*discounts.DigestState{r.digest, r.prevShop} {
+		if st == nil || !beginningOfDay(st.PlannedAt).Equal(beginningOfDay(plannedAt)) {
+			continue
+		}
+		for i := range st.Items {
+			it := &st.Items[i]
+			if it.ProductID == key.ProductID && beginningOfDay(it.BestBefore).Equal(beginningOfDay(key.BestBefore)) {
+				it.ShopQty, it.ShopAvailable, it.Listed = qty, available, listed
+			}
+		}
+	}
+
+	return nil
 }

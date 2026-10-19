@@ -20,7 +20,7 @@ import (
 	"warehouseHelper/internal/tempdir"
 
 	"github.com/boombuler/barcode"
-	"github.com/boombuler/barcode/code128"
+	"github.com/boombuler/barcode/qr"
 	"github.com/xuri/excelize/v2"
 )
 
@@ -33,10 +33,14 @@ import (
 const (
 	colWidthChars = 39.85546875
 
-	// Штрих-код: 33 цифры Code128 дают минимум 233 px, растягиваем до 72 × 15 мм —
-	// модуль шире, читаемость лучше. 272 px < 283 px колонки.
-	barcodeW = 272
-	barcodeH = 57
+	// Поле картинки в колонке (px): QR центрируется внутри него по ширине.
+	labelFieldW = 272
+	// QR-код вместо штрих-кода (решение владельца 18.10.2026): коробки читают
+	// QR-сканером. Квадрат 64 × 64 px ≈ 17 мм, модуль ≈ 0,6 мм при 33 цифрах —
+	// читается и сканером, и камерой телефона. Высота строки картинки (65 px)
+	// не меняется, поэтому на листе 120 × 75 мм по-прежнему пусто 40–50 %.
+	qrSize    = 64
+	qrOffsetX = imgOffsetX + (labelFieldW-qrSize)/2
 
 	// fontSize — шрифт строк подписей: цифры кода, наименование, вес с числом
 	// вложений, даты.
@@ -120,7 +124,7 @@ func newWorkbook(boxes []Box) (*excelize.File, int, error) {
 			continue // наклейку из этого кода не собрать — коробка пропускается
 		}
 
-		pngBytes, err := generateBarcodePNG(code, barcodeW, barcodeH)
+		pngBytes, err := generateQRPNG(code, qrSize)
 		if err != nil {
 			return nil, 0, fmt.Errorf("штрих-код %s: %w", code, err)
 		}
@@ -133,7 +137,7 @@ func newWorkbook(boxes []Box) (*excelize.File, int, error) {
 			Format: &excelize.GraphicOptions{
 				ScaleX:      1.0,
 				ScaleY:      1.0,
-				OffsetX:     imgOffsetX,
+				OffsetX:     qrOffsetX,
 				OffsetY:     imgOffsetY,
 				Positioning: "oneCell",
 			},
@@ -302,7 +306,7 @@ func newMarkerWorkbook(code string) (*excelize.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	pngBytes, err := generateBarcodePNG(code, barcodeW, barcodeH)
+	pngBytes, err := generateQRPNG(code, qrSize)
 	if err != nil {
 		return nil, fmt.Errorf("штрих-код %s: %w", code, err)
 	}
@@ -342,13 +346,13 @@ func zeroMargins() *excelize.PageLayoutMarginsOptions {
 	}
 }
 
-// generateBarcodePNG создаёт PNG-байты штрих-кода Code128.
-func generateBarcodePNG(data string, width, height int) ([]byte, error) {
-	bc, err := code128.Encode(data)
+// generateQRPNG создаёт PNG-байты QR-кода (коробки читают QR-сканером).
+func generateQRPNG(data string, size int) ([]byte, error) {
+	bc, err := qr.Encode(data, qr.M, qr.Auto)
 	if err != nil {
 		return nil, err
 	}
-	scaled, err := barcode.Scale(bc, width, height)
+	scaled, err := barcode.Scale(bc, size, size)
 	if err != nil {
 		return nil, err
 	}

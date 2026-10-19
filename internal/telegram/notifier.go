@@ -28,6 +28,11 @@ const (
 	telegramPhotoMaxBytes = 10 << 20
 	telegramDocMaxBytes   = 50 << 20
 
+	// parseModeHTML — разметка сообщений: ссылки и жирный в письмах склада
+	// и посте чата скидок.
+	parseModeHTML  = "HTML"
+	fieldParseMode = "parse_mode"
+
 	// Имена полей payload'ов Bot API — повторяются в каждом методе нотифаера
 	// (goconst: вынесены в константы, 16.09.2026).
 	fieldChatID       = "chat_id"
@@ -49,6 +54,7 @@ type Notifier struct {
 	warehouseChatID int64
 	everyoneChatID  int64
 	commonChatID    int64
+	discountChatID  int64
 }
 
 // NewNotifier собирает Notifier из конфигурации Telegram.
@@ -60,6 +66,7 @@ func NewNotifier(cfg *config.TelegramConfig) *Notifier {
 		warehouseChatID: cfg.WarehouseChatID,
 		everyoneChatID:  cfg.EveryoneChatID,
 		commonChatID:    cfg.CommonChatID,
+		discountChatID:  cfg.DiscountChatID,
 	}
 }
 
@@ -83,9 +90,9 @@ func (n *Notifier) NotifyWarehouseHTML(text string) error {
 	}
 
 	return n.postJSON(context.Background(), "sendMessage", map[string]any{
-		fieldChatID:  n.warehouseChatID,
-		fieldText:    text,
-		"parse_mode": "HTML",
+		fieldChatID:    n.warehouseChatID,
+		fieldText:      text,
+		fieldParseMode: parseModeHTML,
 	})
 }
 
@@ -120,9 +127,9 @@ func (n *Notifier) NotifyCommonStatus(ctx context.Context, textHTML, callbackDat
 	}
 
 	payload := map[string]any{
-		fieldChatID:  n.commonChatID,
-		fieldText:    textHTML,
-		"parse_mode": "HTML",
+		fieldChatID:    n.commonChatID,
+		fieldText:      textHTML,
+		fieldParseMode: parseModeHTML,
 		fieldReplyMarkup: map[string]any{
 			fieldInlineKbd: [][]map[string]string{{
 				{fieldText: "Получить подробности", fieldCallbackData: callbackData},
@@ -229,6 +236,89 @@ func (n *Notifier) SendWarehouseButton(ctx context.Context, text, buttonText, bu
 
 	messageID, err = n.postJSONResult(ctx, "sendMessage", payload)
 	return n.warehouseChatID, messageID, err
+}
+
+// NotifyWarehouseHTMLButton — письмо складу (HTML) с одной inline-кнопкой;
+// возвращает message_id: по нему письмо правится каждым пересчётом, чтобы в
+// чате жило ОДНО сообщение, а не пять копий (решение владельца 18.10.2026).
+// Без токена или chat_id склада — no-op (0, nil).
+func (n *Notifier) NotifyWarehouseHTMLButton(text, buttonText, callbackData string) (int64, error) {
+	if n.botToken == "" || n.warehouseChatID == 0 {
+		return 0, nil
+	}
+
+	button := map[string]string{fieldText: buttonText, fieldCallbackData: callbackData}
+
+	return n.postJSONResult(context.Background(), "sendMessage", map[string]any{
+		fieldChatID:    n.warehouseChatID,
+		fieldText:      text,
+		fieldParseMode: parseModeHTML,
+		fieldReplyMarkup: map[string]any{
+			fieldInlineKbd: [][]map[string]string{{button}},
+		},
+	})
+}
+
+// NotifyWarehouseReplyRequest — сообщение-запрос фото с force_reply: клиент
+// подставляет ответ на это сообщение, и фото приходит с reply_to_message —
+// только так бот понимает, к какому блоку оно относится (inline-кнопка камеру
+// не открывает). Возвращает message_id. Без токена — no-op (0, nil).
+func (n *Notifier) NotifyWarehouseReplyRequest(text string) (int64, error) {
+	if n.botToken == "" || n.warehouseChatID == 0 {
+		return 0, nil
+	}
+
+	return n.postJSONResult(context.Background(), "sendMessage", map[string]any{
+		fieldChatID:    n.warehouseChatID,
+		fieldText:      text,
+		fieldParseMode: parseModeHTML,
+		fieldReplyMarkup: map[string]any{
+			"force_reply":             true,
+			"input_field_placeholder": "Фото",
+		},
+	})
+}
+
+// EditWarehouseHTML — правка письма складу тем же сообщением. Пустой buttonText
+// снимает клавиатуру (после пропуска кнопки нет); непустой — оставляет кнопку на
+// месте. Без токена — no-op.
+func (n *Notifier) EditWarehouseHTML(messageID int64, text, buttonText, callbackData string) error {
+	if n.botToken == "" || n.warehouseChatID == 0 || messageID == 0 {
+		return nil
+	}
+
+	keyboard := make([][]map[string]string, 0, 1)
+	if buttonText != "" {
+		keyboard = append(keyboard, []map[string]string{{
+			fieldText: buttonText, fieldCallbackData: callbackData,
+		}})
+	}
+
+	return n.postJSON(context.Background(), "editMessageText", map[string]any{
+		fieldChatID:      n.warehouseChatID,
+		fieldMessageID:   messageID,
+		fieldText:        text,
+		fieldParseMode:   parseModeHTML,
+		fieldReplyMarkup: map[string]any{fieldInlineKbd: keyboard},
+	})
+}
+
+// DeleteWarehouseReply удаляет сообщение-запрос фото (блок ушёл в 0). Отдельное
+// имя: DeleteWarehouseMessage уже занят удалением уведомлений reservewatch с ctx.
+func (n *Notifier) DeleteWarehouseReply(messageID int64) error {
+	return n.DeleteWarehouseMessage(context.Background(), messageID)
+}
+
+// WarehouseCallbackAck закрывает нажатие кнопки склада («часики»). Обёртка над
+// AnswerCallback: юзкейс скидок не носит ctx в шов нотифаера.
+func (n *Notifier) WarehouseCallbackAck(callbackQueryID string) error {
+	return n.AnswerCallback(context.Background(), callbackQueryID)
+}
+
+// WarehouseCallbackAlert закрывает нажатие склада всплывающим окном с причиной
+// отказа (рассылка уже пропущена, публикация прошла).
+func (n *Notifier) WarehouseCallbackAlert(callbackQueryID, alert string) error {
+	return n.AnswerCallbackAlert(context.Background(), callbackQueryID, alert)
 }
 
 // DeleteWarehouseMessage удаляет сообщение из чата склада по message_id
@@ -509,4 +599,58 @@ func (n *Notifier) postJSONResult(ctx context.Context, method string, payload ma
 		return 0, fmt.Errorf("failed to parse telegram result: %w", err)
 	}
 	return res.MessageID, nil
+}
+
+// SendShopPhotos отправляет фото позиций в чат скидок ОДНИМ альбомом (по 10 штук
+// на сообщение — предел Telegram). Не файлами: sendMediaGroup с типом photo
+// показывает их лентой, файлы склад не смотрит (решение владельца 18.10.2026).
+// Без настроенного чата скидок — no-op.
+func (n *Notifier) SendShopPhotos(fileIDs []string) error {
+	if n.botToken == "" || n.discountChatID == 0 || len(fileIDs) == 0 {
+		return nil
+	}
+	for start := 0; start < len(fileIDs); start += mediaGroupMaxPhotos {
+		end := min(start+mediaGroupMaxPhotos, len(fileIDs))
+		media := make([]map[string]string, 0, end-start)
+		for _, id := range fileIDs[start:end] {
+			media = append(media, map[string]string{"type": "photo", "media": id})
+		}
+		if err := n.postJSON(context.Background(), "sendMediaGroup", map[string]any{
+			fieldChatID: n.discountChatID,
+			"media":     media,
+		}); err != nil {
+			return fmt.Errorf("фото в чат скидок: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// NotifyShopHTML публикует пост в чате скидок и возвращает id сообщения: по нему
+// пост правится до следующей рассылки.
+func (n *Notifier) NotifyShopHTML(text string) (int64, error) {
+	if n.botToken == "" || n.discountChatID == 0 {
+		return 0, nil
+	}
+
+	return n.postJSONResult(context.Background(), "sendMessage", map[string]any{
+		fieldChatID:    n.discountChatID,
+		fieldText:      text,
+		fieldParseMode: parseModeHTML,
+	})
+}
+
+// EditShopHTML правит пост в чате скидок (то же сообщение, без кнопок).
+func (n *Notifier) EditShopHTML(messageID int64, text string) error {
+	if n.botToken == "" || n.discountChatID == 0 || messageID == 0 {
+		return nil
+	}
+	_, err := n.postJSONResult(context.Background(), "editMessageText", map[string]any{
+		fieldChatID:    n.discountChatID,
+		fieldMessageID: messageID,
+		fieldText:      text,
+		fieldParseMode: parseModeHTML,
+	})
+
+	return err
 }

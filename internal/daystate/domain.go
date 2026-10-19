@@ -230,24 +230,33 @@ func TextFor(d *DayState) string {
 	if d == nil {
 		return ""
 	}
+	// Повторы не дублируются (10 → 10 → 20 — это 10 → 20), а 0 % в ячейку не
+	// пишем вовсе: пустая скидка — пустой текст, заливка клетки говорит сама
+	// (решение владельца 18.10.2026).
 	parts := make([]string, 0, len(d.DiscountIncreases)+2)
+	add := func(v string) {
+		if v == "" || v == "0%" {
+			return
+		}
+		if len(parts) > 0 && parts[len(parts)-1] == v {
+			return
+		}
+		parts = append(parts, v)
+	}
 	if d.DiscountStart != nil {
-		parts = append(parts, fmt.Sprintf("%d%%", *d.DiscountStart))
+		add(fmt.Sprintf("%d%%", *d.DiscountStart))
 	}
 	for _, v := range d.DiscountIncreases {
-		parts = append(parts, fmt.Sprintf("%d%%", v))
+		add(fmt.Sprintf("%d%%", v))
 	}
-	var final string
 	switch {
 	case d.InStock != nil && !*d.InStock:
-		final = "x"
+		add("x")
 	case d.Discount != nil:
-		final = fmt.Sprintf("%d%%", *d.Discount)
+		add(fmt.Sprintf("%d%%", *d.Discount))
 	default:
-		final = "0%"
+		// скидки нет — в ячейку ничего не пишем (0 % не показываем)
 	}
-	if len(parts) == 0 || parts[len(parts)-1] != final {
-		parts = append(parts, final)
-	}
+
 	return strings.Join(parts, " → ")
 }

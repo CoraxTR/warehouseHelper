@@ -32,6 +32,15 @@ func (s *stubTasks) HandleWho(_ context.Context, callbackQueryID string, chatID,
 	return nil
 }
 
+// stubMailing — кнопка «Пропустить рассылку» в тесте диспетчера.
+type stubMailing struct{ calls []string }
+
+func (s *stubMailing) SkipMailing(_ context.Context, callbackQueryID string, chatID, messageID int64) error {
+	s.calls = append(s.calls, fmt.Sprintf("skip:%s:%d:%d", callbackQueryID, chatID, messageID))
+
+	return nil
+}
+
 // Диспетчер нажатий: кнопка уходит своему модулю по префиксу данных, чужие
 // данные не трогают никого. message_id доезжает до модуля задач — по нему тот
 // правит кнопки и текст в том же сообщении.
@@ -44,20 +53,21 @@ func TestHandleCallbackRoutes(t *testing.T) {
 		{"кнопка жалобы", "complaint_details:12", []string{"complaint:cb-1:-1005:12"}},
 		{"отметка задачи", "task_done:7", []string{"done:cb-1:-1005:777:7"}},
 		{"выбор сотрудника", "task_who:7:3", []string{"who:cb-1:-1005:777:7:3"}},
+		{"пропуск рассылки", "ds:skip", []string{"skip:cb-1:-1005:777"}},
 		{"чужие данные", "some_button:1", nil},
 		{"пустые данные", "", nil},
 		{"битые данные задачи", "task_done:семь", nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.title, func(t *testing.T) {
-			complaints, tasks := &stubComplaints{}, &stubTasks{}
+			complaints, tasks, mailing := &stubComplaints{}, &stubTasks{}, &stubMailing{}
 			cb := telegram.CallbackQuery{ID: "cb-1", ChatID: -1005, MessageID: 777, Data: tt.data}
 
-			if err := handleCallback(context.Background(), complaints, tasks, cb); err != nil {
+			if err := handleCallback(context.Background(), complaints, tasks, mailing, cb); err != nil {
 				t.Fatalf("диспетчер: %v", err)
 			}
 
-			got := append(append([]string{}, complaints.calls...), tasks.calls...)
+			got := append(append(append([]string{}, complaints.calls...), tasks.calls...), mailing.calls...)
 			if len(got) != len(tt.want) {
 				t.Fatalf("вызовы %v, want %v", got, tt.want)
 			}

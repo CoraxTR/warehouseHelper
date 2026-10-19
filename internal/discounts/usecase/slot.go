@@ -71,78 +71,6 @@ type slotPosition struct {
 	writeTelegram bool
 }
 
-// RunSlotPlan — план дня (14:00): применить сегодняшние повышения, опубликовать
-// слот в чат склада и отметить маркеры дня.
-//
-// Раскладка применения: позиции слота получают только ТГ-колонку (скидка сайта
-// ждёт 16:00 — подписчики узнают раньше), лишние повышения получают скидку сайта
-// сразу и уведомление об изменении в общий канал. Ручные скидки дня в слот идут
-// как есть: сайт их уже несёт. Позиции предыдущей рассылки не повторяем
-// (антидубль по лоту). Пустой слот — молчание: сообщение «позиций нет» ничего
-// не сообщает, а дайджест 09:00 про это уже сказал.
-//
-// Шаг идемпотентен: перед работой проверяется маркер дня (флаг стоит — шаг
-// пропускается), после успеха ставятся FlagPlan и FlagExpiry: этим же шагом
-// применяется лестница по сроку, которую в ТГ-дни утренний пересчёт не пишет.
-func (uc *UseCase) RunSlotPlan(ctx context.Context, now time.Time, capacity int) error {
-	day := beginningOfDay(now)
-
-	done, err := uc.repo.DayFlagDone(ctx, day, discounts.FlagPlan)
-	if err != nil {
-		return err
-	}
-	if done {
-		return nil
-	}
-
-	inputs, err := uc.repo.LoadDiscountInput(ctx, day)
-	if err != nil {
-		return err
-	}
-	// Оборот обязателен: этим же расчётом заменяется снапшот реестра — без
-	// оборота из него пропали бы избыточные пары, и страница с отчётом показала
-	// бы пустую очередь.
-	rates, err := uc.turnover.Averages(ctx, inputProductIDs(inputs))
-	if err != nil {
-		return fmt.Errorf("оборот товаров плана дня: %w", err)
-	}
-	pairs := Evaluate(inputs, rates, day)
-
-	prev, err := uc.repo.LastDigestPairs(ctx)
-	if err != nil {
-		return err
-	}
-	plan := buildDayPlan(pairs, prev, capacity)
-
-	// Применение плана: слот — ТГ-колонка, лишние — скидка сайта сразу.
-	writes := dayPlanWrites(plan)
-	if len(writes) > 0 {
-		if err := uc.writer.SetDiscounts(ctx, writes); err != nil {
-			return fmt.Errorf("план дня: %w", err)
-		}
-	}
-	applyWrites(pairs, writes)
-	// Уведомления: у лишних меняется скидка канала сайта — человеку надо её
-	// поставить. У слота меняется только ТГ-колонка, эффективная скидка сайта та
-	// же, поэтому изменений реестр не видит и уведомлений по ним нет.
-	uc.notifyChanges(ctx, uc.replaceRegistry(pairs, now))
-
-	if err := uc.writeSlot(ctx, pairs, plan, now); err != nil {
-		return err
-	}
-
-	if err := uc.repo.MarkDayFlag(ctx, day, discounts.FlagExpiry); err != nil {
-		return fmt.Errorf("маркер дня пересчёта по сроку: %w", err)
-	}
-	if err := uc.repo.MarkDayFlag(ctx, day, discounts.FlagPlan); err != nil {
-		return err
-	}
-	if len(plan.slot) == 0 {
-		slog.Info("discounts: план ТГ-слота пуст — рассылка не отправлена")
-	}
-	return nil
-}
-
 // buildDayPlan — план дня из состояний пар: ручные скидки дня и сегодняшние
 // повышения по сроку в порядке приоритета отчёта (ручные → срок ↑) идут в слот
 // до заполнения ёмкости, не влезшие повышения — в лишние (скидка сайта сразу).
@@ -354,11 +282,10 @@ func surplusFills(pairs []PairState) []surplusFill {
 	return out
 }
 
-// dayPlanWrites — правки плана дня: позициям слота — ТГ-колонка (сайт не
-// трогаем), лишним — скидка канала сайта сразу. Ручные скидки слотов не трогаем
-// вовсе: их значение уже на сайте.
-func dayPlanWrites(plan dayPlan) []discounts.DiscountWrite {
-	writes := make([]discounts.DiscountWrite, 0, len(plan.slot)+len(plan.extra))
+// slotWrites — ТГ-колонка позиций слота: её пишет план, сайт остаётся как есть до
+// подъёма 16:00.
+func slotWrites(plan dayPlan) []discounts.DiscountWrite {
+	writes := make([]discounts.DiscountWrite, 0, len(plan.slot))
 	for _, s := range plan.slot {
 		if !s.writeTelegram {
 			continue
@@ -374,6 +301,15 @@ func dayPlanWrites(plan dayPlan) []discounts.DiscountWrite {
 		w.TelegramOwner = discounts.OwnerEscalation.String()
 		writes = append(writes, w)
 	}
+
+	return writes
+}
+
+// extraWrites — скидка канала сайта «лишним» позициям: они не влезли в слот, и
+// сайт получает их повышение сразу. Живое письмо пишет их один раз — на
+// финальной сборке 14:45.
+func extraWrites(plan dayPlan) []discounts.DiscountWrite {
+	writes := make([]discounts.DiscountWrite, 0, len(plan.extra))
 	for _, s := range plan.extra {
 		percent := s.percent
 		w := writeFor(s.pair)
@@ -384,6 +320,7 @@ func dayPlanWrites(plan dayPlan) []discounts.DiscountWrite {
 		w.GeneralOwner = ownerForReason(s.reason).String()
 		writes = append(writes, w)
 	}
+
 	return writes
 }
 
@@ -577,55 +514,6 @@ func soldOut(item discounts.SlotItem, p PairState) bool {
 		return false
 	}
 	return p.Qty <= *item.InitialQty-*item.PlanQty
-}
-
-// writeSlot — сохранить план рассылки и отправить сообщение складу. История —
-// позиции плана (по ним работает подъём 16:00 и антидубль следующей рассылки);
-// текст сообщения — всё окно активных скидок с метками канала: склад должен
-// видеть, что уходит в канал ((ТГ)), а что просто стоит на сайте
-// ((Срок)/(Избыток)/(Ручная)) — решение владельца 24.09.2026. Пустой слот —
-// молчание, сообщение «позиций нет» ничего не сообщает.
-func (uc *UseCase) writeSlot(ctx context.Context, pairs []PairState, plan dayPlan, now time.Time) error {
-	if len(plan.slot) == 0 {
-		return nil
-	}
-
-	items := make([]discounts.DigestItem, 0, len(plan.slot))
-	for _, s := range plan.slot {
-		items = append(items, discounts.DigestItem{
-			ProductID:  s.pair.ProductID,
-			BestBefore: s.pair.BestBefore,
-			Percent:    s.percent,
-			Reason:     s.reason,
-			InitialQty: s.initialQty,
-			PlanQty:    s.planQty,
-		})
-	}
-
-	record := discounts.DigestRecord{PlannedAt: beginningOfDay(now), ChatKind: discounts.ChatWarehouse}
-	if err := uc.repo.SaveDigest(ctx, record, items); err != nil {
-		return err
-	}
-
-	digest := discounts.BuildDigest(uc.windowRows(pairs, plan.slot), uc.WindowCap())
-	digest.Date = now
-	text := digest.Text()
-	if uc.warehouse != nil {
-		if err := uc.warehouse.NotifyWarehouse(text); err != nil {
-			return err
-		}
-	} else {
-		slog.Info(fmt.Sprintf("discounts: план слота (канал склада не подключён): %s", text))
-	}
-
-	// Второе сообщение — позиции рассылки текстом для подписчиков (см. mailing.go).
-	if err := uc.sendMailing(plan.slot); err != nil {
-		return err
-	}
-
-	// Маркер отправки — только после успешной отправки: иначе подъём 16:00
-	// считал бы несобранную рассылку отправленной.
-	return uc.repo.MarkDigestSent(ctx, discounts.ChatWarehouse, beginningOfDay(now), now)
 }
 
 // windowRows — строки сообщения складу: активные пары окна (как в дайджесте), а

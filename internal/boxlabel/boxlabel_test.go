@@ -157,8 +157,8 @@ func TestNewWorkbookWeightBox(t *testing.T) {
 	if len(pics) != 1 || pics[0] != "B1" {
 		t.Errorf("картинки = %v, want [B1]", pics)
 	}
-	if w, h := imageSize(t, f); w != barcodeW || h != barcodeH {
-		t.Errorf("размер штрих-кода = %d×%d px, want %d×%d", w, h, barcodeW, barcodeH)
+	if w, h := imageSize(t, f); w != qrSize || h != qrSize {
+		t.Errorf("размер QR = %d×%d px, want %d×%d", w, h, qrSize, qrSize)
 	}
 
 	assertLabelLayout(t, f)
@@ -315,8 +315,8 @@ func TestMarkerWorkbook(t *testing.T) {
 		if len(pics) != 1 || pics[0] != "B1" {
 			t.Errorf("%s: картинки = %v, want [B1]", code, pics)
 		}
-		if w, h := imageSize(t, f); w != barcodeW || h != barcodeH {
-			t.Errorf("%s: размер штрих-кода = %d×%d px, want %d×%d", code, w, h, barcodeW, barcodeH)
+		if w, h := imageSize(t, f); w != qrSize || h != qrSize {
+			t.Errorf("%s: размер QR = %d×%d px, want %d×%d", code, w, h, qrSize, qrSize)
 		}
 		if got, err := f.GetRowHeight(sheet, 1); err != nil || math.Abs(got-rowHeightPt[0]) > 0.01 {
 			t.Errorf("%s: высота строки штрих-кода = %v (err %v), want %.2f", code, got, err, rowHeightPt[0])

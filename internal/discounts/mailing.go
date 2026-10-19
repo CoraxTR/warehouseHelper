@@ -33,6 +33,11 @@ const (
 // MailingItem — позиция письма: одна пара (товар, срок) плана дня. Скидка и
 // количество в позиции положительные (их дают правила слота), поэтому блок
 // печатается всегда — цены может не быть, но позицию из письма не выбрасываем.
+// ShopSoldMark — метка распроданной позиции в посте чата скидок: ставится перед
+// названием, блок остаётся с нулём, чтобы читатель видел, что акция закончилась
+// (решение владельца 18.10.2026).
+const ShopSoldMark = "❗️ПРОДАНО❗️"
+
 type MailingItem struct {
 	Name       string
 	SiteURL    string // products.site_url (ручное поле); пусто — название без ссылки
@@ -41,6 +46,40 @@ type MailingItem struct {
 	Percent    int16  // скидка позиции (значение ТГ-колонки = скидка дня)
 	Qty        int64  // сколько идёт в ТГ по этой паре
 	BestBefore time.Time
+	// Sold — позиция распродана: печатается с меткой ShopSoldMark и нулём.
+	// Только для поста чата скидок; складской вариант такие блоки убирает.
+	Sold bool
+	// Available — «Доступно по акции» для поста чата скидок: фиксируется при
+	// публикации и дальше НЕ меняется (решение владельца 18.10.2026), меняется
+	// только «Остаток по акции». nil — печатать Qty (письмо склада: там числа
+	// равны и живут вместе).
+	Available *int64
+}
+
+// MailingSkippedText — чем заменяется письмо после нажатия «Пропустить
+// рассылку»: рассылки не будет, скидки уходят на сайт сразу, позиции остаются
+// доступными следующей рассылке (решение владельца 18.10.2026, см. SkipMailing).
+const MailingSkippedText = "Рассылка пропущена: скидки подняты на сайт, " +
+	"позиции остаются для следующей рассылки."
+
+// MailingSoldOutText — письмо, когда в окне 14:45–15:00 распродали все блоки:
+// публиковать нечего, но и молчать нельзя — склад ждёт рассылку (решение
+// владельца 18.10.2026). Публикация в чат скидок этот текст не отправляет.
+const MailingSoldOutText = "Все позиции рассылки проданы — рассылки не будет."
+
+// PhotoRequest — сообщение-запрос фото по блоку позиции. Отправляется складу
+// отдельным сообщением с force_reply: бот не умеет открывать камеру кнопкой,
+// поэтому фото приходит ОТВЕТОМ на этот запрос (по reply_to_message и находим
+// позицию). Название экранируется: сообщение уходит с parse_mode=HTML.
+func PhotoRequest(name string, bestBefore time.Time) string {
+	return fmt.Sprintf("Сделайте фото для %s до %s",
+		html.EscapeString(name), bestBefore.Format("02.01.2006"))
+}
+
+// PhotoAccepted — подтверждение принятого фото (ответ в чат склада).
+func PhotoAccepted(name string, bestBefore time.Time) string {
+	return fmt.Sprintf("✅ Фото для %s до %s принято",
+		name, bestBefore.Format("02.01.2006"))
 }
 
 // BuildMailing собирает текст письма: шапка, блоки позиций по порядку, хвост с
@@ -72,9 +111,17 @@ func BuildMailing(items []MailingItem) string {
 // 15.10.2026).
 func mailingBlock(n int, it MailingItem) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "%d. %s | %s\n", n, mailingName(it), mailingPrice(it))
+	sold := ""
+	if it.Sold {
+		sold = ShopSoldMark + " "
+	}
+	fmt.Fprintf(&b, "%d. %s%s | %s\n", n, sold, mailingName(it), mailingPrice(it))
 	fmt.Fprintf(&b, "Срок годности: %s\n", it.BestBefore.Format("02.01.2006"))
-	fmt.Fprintf(&b, "Доступно по акции: %d шт.\n", it.Qty)
+	available := it.Qty
+	if it.Available != nil {
+		available = *it.Available
+	}
+	fmt.Fprintf(&b, "Доступно по акции: %d шт.\n", available)
 	fmt.Fprintf(&b, "Остаток по акции: %d шт.\n", it.Qty)
 
 	return b.String()

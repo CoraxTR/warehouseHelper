@@ -88,6 +88,12 @@ type SlotItem struct {
 // считается проданной, если её остаток к 16:00 опустился до InitialQty−PlanQty
 // или ниже; у сроковых позиций план продаж не считается (nil) — там контроль
 // проще: пара не должна обнулиться.
+//
+// BlockQty/StockQty — снимок последнего пересчёта письма (решение владельца
+// 18.10.2026): BlockQty — число, напечатанное в блоке, StockQty — остаток лота
+// на тот же момент. По ним окно 14:45–15:00 считает дельты продаж/возвратов, не
+// пересобирая план (см. mailing_live.go). MessageID — сообщение-запрос фото этой
+// позиции (0 — запроса нет).
 type DigestItem struct {
 	ProductID  string
 	BestBefore time.Time
@@ -96,4 +102,30 @@ type DigestItem struct {
 	Reason     string
 	InitialQty *int64
 	PlanQty    *int64
+	BlockQty   int64
+	StockQty   int64
+	MessageID  int64
+	// ShopQty — остаток по акции в посте чата скидок (0 — «ПРОДАНО»);
+	// ShopListed — позиция есть в опубликованном посте. Вместе они отличают
+	// продажу от возврата и переживают рестарт (решение владельца 18.10.2026).
+	ShopQty int64
+	// ShopAvailable — «Доступно по акции» поста: фиксируется при публикации и не
+	// меняется до конца жизни поста (решение владельца 18.10.2026).
+	ShopAvailable int64
+	Listed        bool
+}
+
+// DigestState — сегодняшняя рассылка склада вместе с позициями: то, что нужно
+// живому письму (правка того же сообщения, окно количеств, пропуск рассылки).
+// MessageID — сообщение письма (0 — не отправлено или отправлено без id);
+// FrozenAt — момент финальной сборки 14:45 (nil — план ещё пересобирается).
+type DigestState struct {
+	PlannedAt time.Time
+	ChatKind  string
+	SentAt    *time.Time
+	FrozenAt  *time.Time
+	MessageID int64
+	// ShopMessageID — id поста в чате скидок (0 — пост ещё не опубликован).
+	ShopMessageID int64
+	Items         []DigestItem
 }

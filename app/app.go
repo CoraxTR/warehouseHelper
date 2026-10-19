@@ -15,6 +15,7 @@ import (
 
 	cucase "warehouseHelper/internal/complaints/usecase"
 	"warehouseHelper/internal/config"
+	ducase "warehouseHelper/internal/discounts/usecase"
 	"warehouseHelper/internal/metrics"
 	tusecase "warehouseHelper/internal/tasks/usecase"
 	"warehouseHelper/internal/telegram"
@@ -322,8 +323,9 @@ func (a *App) initBotPoller() {
 
 	complaintsUC := a.di.ComplaintsUC()
 	tasksUC := a.di.TasksUC()
+	mailingUC := a.di.DiscountsUC()
 	poller := telegram.NewPoller(token, func(ctx context.Context, cb telegram.CallbackQuery) error {
-		return handleCallback(ctx, complaintsUC, tasksUC, cb)
+		return handleCallback(ctx, complaintsUC, tasksUC, mailingUC, cb)
 	})
 	poller.SetMessageHandler(a.botMessageHandler())
 
@@ -356,11 +358,21 @@ type taskCallbackHandler interface {
 	HandleWho(ctx context.Context, callbackQueryID string, chatID, messageID, taskID, employeeID int64) error
 }
 
+// mailingCallbackHandler — кнопка «Пропустить рассылку» под живым письмом склада
+// (модуль «Скидки»): рассылки не будет, скидки уходят на сайт сразу, позиции
+// остаются доступными следующей рассылке.
+type mailingCallbackHandler interface {
+	SkipMailing(ctx context.Context, callbackQueryID string, chatID, messageID int64) error
+}
+
 // handleCallback — диспетчер нажатий inline-кнопок бота: по префиксу данных
 // кнопки нажатие уходит своему модулю. Поллер один на токен, а кнопки
-// принадлежат разным модулям (жалобы, внутренние задачи) — диспетчер живёт
-// здесь, а не внутри модуля. Чужие данные — не наше нажатие, молчание.
-func handleCallback(ctx context.Context, complaints complaintCallbackHandler, tasks taskCallbackHandler, cb telegram.CallbackQuery) error {
+// принадлежат разным модулям (жалобы, внутренние задачи, скидки) — диспетчер
+// живёт здесь, а не внутри модуля. Чужие данные — не наше нажатие, молчание.
+func handleCallback(ctx context.Context, complaints complaintCallbackHandler, tasks taskCallbackHandler, mailing mailingCallbackHandler, cb telegram.CallbackQuery) error {
+	if cb.Data == ducase.MailingSkipCallback {
+		return mailing.SkipMailing(ctx, cb.ID, cb.ChatID, cb.MessageID)
+	}
 	if complaintID, ok := cucase.ParseCallbackData(cb.Data); ok {
 		return complaints.HandleDetailsButton(ctx, cb.ID, cb.ChatID, complaintID)
 	}
@@ -420,11 +432,12 @@ func botCommands() []telegram.BotCommand {
 	}
 }
 
-// botMessageHandler — обработчик текстовых команд бота: /discounts (и /скидки) —
+// botMessageHandler — обработчик сообщений бота: /discounts (и /скидки) —
 // отчёт по скидкам (тот же текст, что в дайджест 09:00), /sroki <номер>
 // (и /сроки <номер>) — сроки годности подобранных единиц заказа; оба отвечают в
-// чат отправителя. Чужие сообщения игнорируются: отвечать на них — дело других
-// модулей.
+// чат отправителя. Фото от склада — ответ на запрос позиции живой рассылки
+// (reply_to_message): модуль скидок держит file_id в памяти до публикации.
+// Чужие сообщения игнорируются: отвечать на них — дело других модулей.
 //
 // Юзкейс собирается ЗДЕСЬ, до подписки обработчика: за ленивым геттером стоит
 // создание пула БД (context.Background() внутри NewPGClient), а такая цепочка
@@ -435,6 +448,9 @@ func (a *App) botMessageHandler() func(context.Context, telegram.Message) error 
 	msOrdersUC := a.di.MSOrdersUC()
 
 	return func(ctx context.Context, msg telegram.Message) error {
+		if msg.PhotoFileID != "" {
+			return discountsUC.HandlePhoto(ctx, msg.ChatID, msg.ReplyToMessageID, msg.PhotoFileID)
+		}
 		if isDiscountsCommand(msg.Text) {
 			return discountsUC.ReplyDigest(ctx, msg.ChatID)
 		}
