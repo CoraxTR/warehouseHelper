@@ -17,8 +17,15 @@ import (
 	"warehouseHelper/internal/discounts"
 )
 
-// mailingPass — какой проход живого письма выполняется.
+// mailingPass — какой проход живого письма выполняется: пересборка
+// (14:05–14:40) или финальная сборка 14:45. Отдельный тип вместо bool: проход —
+// состояние шага, а не «флажок поведения» (revive flag-parameter).
 type mailingPass int
+
+const (
+	mailingRebuild mailingPass = iota
+	mailingFreeze
+)
 
 const (
 	// MailingSkipButton — кнопка под письмом: рассылки не будет, скидки уходят
@@ -32,12 +39,6 @@ const (
 	mailingRefreshStep = 5 * time.Minute
 	// mailingFreezeAfter — финальная сборка: 45 минут после плана.
 	mailingFreezeAfter = 45 * time.Minute
-	// mailingRebuild/mailingFreeze — два прохода живого письма: пересборка
-	// (14:05–14:40) и финальная сборка 14:45. Отдельный тип вместо bool:
-	// проход — состояние шага, а не «флажок поведения» (revive flag-parameter).
-	mailingRebuild mailingPass = iota
-	mailingFreeze
-
 	// mailingPublishHour — через час после плана рассылка публикуется (следующая
 	// фича). После этого письмо не правится, кнопка пропуска не работает.
 	mailingPublishHour = time.Hour
@@ -516,6 +517,8 @@ func (uc *UseCase) syncPhotoRequests(ctx context.Context, day time.Time, items [
 			if err := uc.repo.SetDigestItemMessage(ctx, discounts.ChatWarehouse, day, key, 0); err != nil {
 				return err
 			}
+		default:
+			// фото и запрос уже на месте — делать нечего
 		}
 	}
 
@@ -550,7 +553,7 @@ func displayedQty(items []discounts.DigestItem, data map[discounts.LotKey]lotDat
 //   - письмо заменяем сообщением о пропуске, кнопку снимаем, запросы фото удаляем;
 //   - историю рассылки удаляем: лоты не считаются «бывшими в ТГ» и попадут в
 //     следующую, а 16:00 поднимать нечего (маркер подъёма ставим).
-func (uc *UseCase) SkipMailing(ctx context.Context, callbackQueryID string, chatID, messageID int64) error {
+func (uc *UseCase) SkipMailing(ctx context.Context, callbackQueryID string, _, messageID int64) error {
 	if err := uc.warehouse.WarehouseCallbackAck(callbackQueryID); err != nil {
 		slog.Info(fmt.Sprintf("discounts: ответ на кнопку пропуска: %v", err))
 	}

@@ -1130,7 +1130,7 @@ func (r *fakeDiscountRepo) TodayDigest(_ context.Context, date time.Time, chatKi
 	return &cp, nil
 }
 
-func (r *fakeDiscountRepo) ReplaceDigestItems(_ context.Context, chatKind string, plannedAt time.Time, items []discounts.DigestItem) error {
+func (r *fakeDiscountRepo) ReplaceDigestItems(_ context.Context, _ string, plannedAt time.Time, items []discounts.DigestItem) error {
 	if r.digest == nil {
 		return discounts.ErrNoDigest
 	}
@@ -1139,7 +1139,7 @@ func (r *fakeDiscountRepo) ReplaceDigestItems(_ context.Context, chatKind string
 	return nil
 }
 
-func (r *fakeDiscountRepo) SetDigestMessage(_ context.Context, chatKind string, plannedAt time.Time, messageID int64) error {
+func (r *fakeDiscountRepo) SetDigestMessage(_ context.Context, _ string, plannedAt time.Time, messageID int64) error {
 	if r.digest != nil {
 		r.digest.MessageID = messageID
 	}
@@ -1147,7 +1147,7 @@ func (r *fakeDiscountRepo) SetDigestMessage(_ context.Context, chatKind string, 
 	return nil
 }
 
-func (r *fakeDiscountRepo) SetDigestItemMessage(_ context.Context, chatKind string, plannedAt time.Time, key discounts.LotKey, messageID int64) error {
+func (r *fakeDiscountRepo) SetDigestItemMessage(_ context.Context, _ string, plannedAt time.Time, key discounts.LotKey, messageID int64) error {
 	if r.digest == nil {
 		return nil
 	}
@@ -1161,7 +1161,7 @@ func (r *fakeDiscountRepo) SetDigestItemMessage(_ context.Context, chatKind stri
 	return nil
 }
 
-func (r *fakeDiscountRepo) MarkDigestFrozen(_ context.Context, chatKind string, plannedAt, at time.Time) error {
+func (r *fakeDiscountRepo) MarkDigestFrozen(_ context.Context, _ string, plannedAt, at time.Time) error {
 	if r.digest != nil {
 		r.digest.FrozenAt = &at
 	}
@@ -1169,7 +1169,7 @@ func (r *fakeDiscountRepo) MarkDigestFrozen(_ context.Context, chatKind string, 
 	return nil
 }
 
-func (r *fakeDiscountRepo) DeleteDigest(_ context.Context, chatKind string, plannedAt time.Time) error {
+func (r *fakeDiscountRepo) DeleteDigest(_ context.Context, _ string, plannedAt time.Time) error {
 	r.digest = nil
 
 	return nil
