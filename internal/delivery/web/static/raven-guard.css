@@ -756,7 +756,9 @@ tr.group-hidden { display: none !important; }
 /* Клетка без скидки — серая (была белая: полосы «серо-белый» на отчёте
    читались как шахматка), недоступная для заказа — чёрная (владелец,
    18.10.2026). */
-.cell-plain { background: #CCCCCC; color: #000; }
+/* Клетка без скидки — в цвет бренд-палитры, а не белая: столбцы не «полосят»,
+   таблица читается ровным серым полем (решение владельца 18.10.2026). */
+.cell-plain { background: #16161C; color: #E9E6DD; }
 .cell-yellow { background: #FFEB3B; color: #000; }
 .cell-yellow-red { background: #FFEB3B; color: #C00000; font-weight: 700; }
 .cell-red { background: #F1948A; color: #000; }
@@ -1212,6 +1214,7 @@ html.day .av-cell.on { background: #FFFFFF; }
 html.day .av-cell.off { background: #DDE3E9; }
 html.day .av-cell.sel { outline: 2px solid #9A6700; }
 html.day .cell-empty { background: #FFFFFF; color: #6E7781; }
+html.day .cell-plain { background: #DDE3E9; color: #000000; }
 html.day .product-results { background: #FAFBFC; border: 1px solid #D0D7DE; }
 html.day .complaint-photo img { border: 1px solid #D0D7DE; }
 html.day .picked { color: #1A7F37; }
