@@ -718,7 +718,7 @@ func skipTarget(p PairState, it discounts.DigestItem) (int16, discounts.Owner, b
 // reply_to_message находим блок и держим file_id в памяти (фото нужно только до
 // публикации рассылки, в БД его не кладём). Фото без ответа на наш запрос
 // игнорируется: привязать его к позиции нельзя.
-func (uc *UseCase) HandlePhoto(ctx context.Context, chatID, replyToMessageID int64, fileID string) error {
+func (uc *UseCase) HandlePhoto(ctx context.Context, _, replyToMessageID int64, fileID string) error {
 	if fileID == "" || replyToMessageID == 0 {
 		return nil
 	}

@@ -1161,7 +1161,7 @@ func (r *fakeDiscountRepo) SetDigestItemMessage(_ context.Context, _ string, _ t
 	return nil
 }
 
-func (r *fakeDiscountRepo) MarkDigestFrozen(_ context.Context, _ string, plannedAt, at time.Time) error {
+func (r *fakeDiscountRepo) MarkDigestFrozen(_ context.Context, _ string, _, at time.Time) error {
 	if r.digest != nil {
 		r.digest.FrozenAt = &at
 	}
