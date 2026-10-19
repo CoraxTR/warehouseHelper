@@ -1122,7 +1122,7 @@ func TestRecalcSurplusClearsTelegramWithoutSiteValue(t *testing.T) {
 func (r *fakeDiscountRepo) TodayDigest(_ context.Context, date time.Time, chatKind string) (*discounts.DigestState, error) {
 	if r.digest == nil || r.digest.ChatKind != chatKind ||
 		!beginningOfDay(r.digest.PlannedAt).Equal(beginningOfDay(date)) {
-		return nil, nil
+		return nil, nil //nolint:nilnil // фейк: рассылки нет
 	}
 	cp := *r.digest
 	cp.Items = append([]discounts.DigestItem(nil), r.digest.Items...)
@@ -1194,7 +1194,7 @@ func (r *fakeDiscountRepo) LastShopDigest(context.Context) (*discounts.DigestSta
 		best = r.prevShop
 	}
 	if best == nil {
-		return nil, nil
+		return nil, nil //nolint:nilnil // фейк: поста нет
 	}
 	cp := *best
 	cp.Items = append([]discounts.DigestItem(nil), best.Items...)

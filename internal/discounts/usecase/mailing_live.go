@@ -17,6 +17,9 @@ import (
 	"warehouseHelper/internal/discounts"
 )
 
+// mailingPass — какой проход живого письма выполняется.
+type mailingPass int
+
 const (
 	// MailingSkipButton — кнопка под письмом: рассылки не будет, скидки уходят
 	// на сайт сразу, позиции остаются доступными следующей рассылке.
@@ -29,6 +32,12 @@ const (
 	mailingRefreshStep = 5 * time.Minute
 	// mailingFreezeAfter — финальная сборка: 45 минут после плана.
 	mailingFreezeAfter = 45 * time.Minute
+	// mailingRebuild/mailingFreeze — два прохода живого письма: пересборка
+	// (14:05–14:40) и финальная сборка 14:45. Отдельный тип вместо bool:
+	// проход — состояние шага, а не «флажок поведения» (revive flag-parameter).
+	mailingRebuild mailingPass = iota
+	mailingFreeze
+
 	// mailingPublishHour — через час после плана рассылка публикуется (следующая
 	// фича). После этого письмо не правится, кнопка пропуска не работает.
 	mailingPublishHour = time.Hour
@@ -282,7 +291,7 @@ func blockQty(items []discounts.DigestItem) map[discounts.LotKey]int64 {
 // снимок блоков и уходят запросы фото.
 //
 // Ничего не делает, если рассылки нет, она пропущена или уже зафиксирована.
-func (uc *UseCase) refreshMailing(ctx context.Context, now time.Time, capacity int, final bool) error {
+func (uc *UseCase) refreshMailing(ctx context.Context, now time.Time, capacity int, pass mailingPass) error {
 	day := beginningOfDay(now)
 
 	st, err := uc.repo.TodayDigest(ctx, day, discounts.ChatWarehouse)
@@ -326,7 +335,7 @@ func (uc *UseCase) refreshMailing(ctx context.Context, now time.Time, capacity i
 		uc.setMailingText(text)
 	}
 
-	if !final {
+	if pass != mailingFreeze {
 		return nil
 	}
 
@@ -477,11 +486,7 @@ func (uc *UseCase) syncMailingQty(ctx context.Context, now, planAt time.Time) er
 		uc.setMailingText(text)
 	}
 
-	if err := uc.syncPhotoRequests(ctx, day, st.Items, qty, data); err != nil {
-		return err
-	}
-
-	return nil
+	return uc.syncPhotoRequests(ctx, day, st.Items, qty, data)
 }
 
 // syncPhotoRequests — сообщения-запросы фото под текущие блоки: блок ушёл —

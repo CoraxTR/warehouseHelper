@@ -53,7 +53,7 @@ func (r *fakeSlotRepo) SaveDigest(_ context.Context, d discounts.DigestRecord, i
 	return nil
 }
 
-func (r *fakeSlotRepo) MarkDigestSent(_ context.Context, _ string, _ time.Time, at time.Time) error {
+func (r *fakeSlotRepo) MarkDigestSent(_ context.Context, _ string, _, at time.Time) error {
 	r.sent++
 	if r.digest != nil {
 		r.digest.SentAt = &at
@@ -257,7 +257,7 @@ func (h *slotHarness) allWrites() []discounts.DiscountWrite {
 // сайта «лишним», запросы фото.
 func (h *slotHarness) finalPass(t *testing.T, capacity int) {
 	t.Helper()
-	if err := h.uc.refreshMailing(context.Background(), h.now.Add(mailingFreezeAfter), capacity, true); err != nil {
+	if err := h.uc.refreshMailing(context.Background(), h.now.Add(mailingFreezeAfter), capacity, mailingFreeze); err != nil {
 		t.Fatalf("финальная сборка: %v", err)
 	}
 }

@@ -524,7 +524,7 @@ func (pg *PGClient) TodayDigest(ctx context.Context, date time.Time, chatKind st
 		date, chatKind,
 	).Scan(&digestID, &st.PlannedAt, &st.ChatKind, &st.SentAt, &st.FrozenAt, &st.MessageID, &st.ShopMessageID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, nil
+		return nil, nil //nolint:nilnil // «рассылки нет» — не ошибка: вызывающий работает без неё
 	}
 	if err != nil {
 		return nil, fmt.Errorf("today digest %s %s: %w", date.Format(time.DateOnly), chatKind, err)
@@ -701,7 +701,7 @@ func (pg *PGClient) LastShopDigest(ctx context.Context) (*discounts.DigestState,
         LIMIT 1`).Scan(
 		&digestID, &st.PlannedAt, &st.ChatKind, &st.SentAt, &st.FrozenAt, &st.MessageID, &st.ShopMessageID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, nil
+		return nil, nil //nolint:nilnil // «рассылки нет» — не ошибка: вызывающий работает без неё
 	}
 	if err != nil {
 		return nil, fmt.Errorf("last shop digest: %w", err)

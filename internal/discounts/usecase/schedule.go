@@ -106,7 +106,7 @@ func (uc *UseCase) runMailing(ctx context.Context, now time.Time, s Schedule) er
 		if st == nil || st.SentAt == nil {
 			return nil
 		}
-		if err := uc.refreshMailing(ctx, now, s.TelegramCap, false); err != nil {
+		if err := uc.refreshMailing(ctx, now, s.TelegramCap, mailingRebuild); err != nil {
 			return err
 		}
 		uc.markMailPass(slot)
@@ -120,7 +120,7 @@ func (uc *UseCase) runMailing(ctx context.Context, now time.Time, s Schedule) er
 				return err
 			}
 			if st != nil && st.SentAt != nil {
-				err = uc.refreshMailing(ctx, now, s.TelegramCap, true)
+				err = uc.refreshMailing(ctx, now, s.TelegramCap, mailingFreeze)
 			} else {
 				// Рассылки нет вовсе — 14:45 всё равно наступает: «лишние»
 				// получают скидку сайта, письма и фото не будет.

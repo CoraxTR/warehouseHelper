@@ -254,6 +254,8 @@ func TextFor(d *DayState) string {
 		add("x")
 	case d.Discount != nil:
 		add(fmt.Sprintf("%d%%", *d.Discount))
+	default:
+		// скидки нет — в ячейку ничего не пишем (0 % не показываем)
 	}
 
 	return strings.Join(parts, " → ")

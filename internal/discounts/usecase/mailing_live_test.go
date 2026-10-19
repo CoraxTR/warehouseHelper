@@ -88,7 +88,7 @@ func TestRefreshMailingEditsSameMessageAndClearsTG(t *testing.T) {
 	twenty := int16(20)
 	h.repo.inputs[0].GeneralPlain = &twenty
 
-	if err := h.uc.refreshMailing(ctx, h.now.Add(5*time.Minute), 2, false); err != nil {
+	if err := h.uc.refreshMailing(ctx, h.now.Add(5*time.Minute), 2, mailingRebuild); err != nil {
 		t.Fatalf("пересборка: %v", err)
 	}
 
@@ -135,7 +135,7 @@ func TestExtraMovesIntoSlotWithoutSiteDiscount(t *testing.T) {
 	forty := int16(40)
 	h.repo.inputs[0].GeneralPlain = &forty
 
-	if err := h.uc.refreshMailing(ctx, h.now.Add(35*time.Minute), 1, false); err != nil {
+	if err := h.uc.refreshMailing(ctx, h.now.Add(35*time.Minute), 1, mailingRebuild); err != nil {
 		t.Fatalf("пересборка: %v", err)
 	}
 
@@ -228,7 +228,7 @@ func TestSyncMailingQtyWindow(t *testing.T) {
 func TestSkipMailingRaisesOnlyOwnStepAndManualTG(t *testing.T) {
 	h := newSlotHarness(recalcNow(1),
 		lotInput("p1", "Колбаса", day(9), 100, shelfLifeInput(26)), // своя ступень 20 %
-		lotInput("p2", "Сыр", day(11), 100),                        // избыток (добор)
+		lotInput("p2", "Сыр", day(11), 100),                        // лишний избыток
 		lotInput("p3", "Творог", day(20), 10, func(in *discounts.Input) { // ручная ТГ вне плана
 			tg := int16(25)
 			in.TelegramManual = &tg

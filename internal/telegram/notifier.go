@@ -28,6 +28,10 @@ const (
 	telegramPhotoMaxBytes = 10 << 20
 	telegramDocMaxBytes   = 50 << 20
 
+	// parseModeHTML — разметка сообщений: ссылки и жирный в письмах склада
+	// и посте чата скидок.
+	parseModeHTML = "HTML"
+
 	// Имена полей payload'ов Bot API — повторяются в каждом методе нотифаера
 	// (goconst: вынесены в константы, 16.09.2026).
 	fieldChatID       = "chat_id"
@@ -87,7 +91,7 @@ func (n *Notifier) NotifyWarehouseHTML(text string) error {
 	return n.postJSON(context.Background(), "sendMessage", map[string]any{
 		fieldChatID:  n.warehouseChatID,
 		fieldText:    text,
-		"parse_mode": "HTML",
+		"parse_mode": parseModeHTML,
 	})
 }
 
@@ -124,7 +128,7 @@ func (n *Notifier) NotifyCommonStatus(ctx context.Context, textHTML, callbackDat
 	payload := map[string]any{
 		fieldChatID:  n.commonChatID,
 		fieldText:    textHTML,
-		"parse_mode": "HTML",
+		"parse_mode": parseModeHTML,
 		fieldReplyMarkup: map[string]any{
 			fieldInlineKbd: [][]map[string]string{{
 				{fieldText: "Получить подробности", fieldCallbackData: callbackData},
@@ -247,7 +251,7 @@ func (n *Notifier) NotifyWarehouseHTMLButton(text, buttonText, callbackData stri
 	return n.postJSONResult(context.Background(), "sendMessage", map[string]any{
 		fieldChatID:  n.warehouseChatID,
 		fieldText:    text,
-		"parse_mode": "HTML",
+		"parse_mode": parseModeHTML,
 		fieldReplyMarkup: map[string]any{
 			fieldInlineKbd: [][]map[string]string{{button}},
 		},
@@ -266,7 +270,7 @@ func (n *Notifier) NotifyWarehouseReplyRequest(text string) (int64, error) {
 	return n.postJSONResult(context.Background(), "sendMessage", map[string]any{
 		fieldChatID:  n.warehouseChatID,
 		fieldText:    text,
-		"parse_mode": "HTML",
+		"parse_mode": parseModeHTML,
 		fieldReplyMarkup: map[string]any{
 			"force_reply":             true,
 			"input_field_placeholder": "Фото",
@@ -293,7 +297,7 @@ func (n *Notifier) EditWarehouseHTML(messageID int64, text, buttonText, callback
 		fieldChatID:      n.warehouseChatID,
 		fieldMessageID:   messageID,
 		fieldText:        text,
-		"parse_mode":     "HTML",
+		"parse_mode":     parseModeHTML,
 		fieldReplyMarkup: map[string]any{fieldInlineKbd: keyboard},
 	})
 }
@@ -631,7 +635,7 @@ func (n *Notifier) NotifyShopHTML(text string) (int64, error) {
 	return n.postJSONResult(context.Background(), "sendMessage", map[string]any{
 		fieldChatID:  n.discountChatID,
 		fieldText:    text,
-		"parse_mode": "HTML",
+		"parse_mode": parseModeHTML,
 	})
 }
 
@@ -644,7 +648,7 @@ func (n *Notifier) EditShopHTML(messageID int64, text string) error {
 		fieldChatID:    n.discountChatID,
 		fieldMessageID: messageID,
 		fieldText:      text,
-		"parse_mode":   "HTML",
+		"parse_mode":   parseModeHTML,
 	})
 
 	return err
