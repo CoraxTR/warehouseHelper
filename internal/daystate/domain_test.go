@@ -207,13 +207,13 @@ func TestCellFor(t *testing.T) {
 		{"будущая дата — пусто", nil, today.Add(24 * time.Hour), CellEmpty, ""},
 		{"нет строки — пусто", nil, today, CellEmpty, ""},
 		{"in_stock NULL — пусто", &DayState{Date: today, InStock: nil, Orderable: true}, today, CellEmpty, ""},
-		{"недоступна — серая", &DayState{Date: today, InStock: new(true), Orderable: false}, today, CellGray, "0%"},
+		{"недоступна — чёрная", &DayState{Date: today, InStock: new(true), Orderable: false}, today, CellGray, ""},
 		{"закончилась — красная x", &DayState{Date: today, InStock: new(false), Orderable: true}, today, CellRed, "x"},
-		{"в наличии — белая", &DayState{Date: today, InStock: new(true), Orderable: true}, today, CellPlain, "0%"},
+		{"в наличии без скидки — серая", &DayState{Date: today, InStock: new(true), Orderable: true}, today, CellPlain, ""},
 		{"в наличии + скидка — жёлтая", &DayState{Date: today, InStock: new(true), Discount: new(int16(15)), Orderable: true}, today, CellYellow, "15%"},
 		{"sold_out + скидка — жёлтая с красным шрифтом", &DayState{Date: today, InStock: new(true), Discount: new(int16(15)), SoldOutToday: true, Orderable: true}, today, CellYellowRed, "15%"},
-		{"sold_out — красная", &DayState{Date: today, InStock: new(true), SoldOutToday: true, Orderable: true}, today, CellRed, "0%"},
-		{"серая выигрывает у sold_out", &DayState{Date: today, InStock: new(true), SoldOutToday: true, Orderable: false}, today, CellGray, "0%"},
+		{"sold_out — красная", &DayState{Date: today, InStock: new(true), SoldOutToday: true, Orderable: true}, today, CellRed, ""},
+		{"чёрная выигрывает у sold_out", &DayState{Date: today, InStock: new(true), SoldOutToday: true, Orderable: false}, today, CellGray, ""},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -232,7 +232,10 @@ func TestTextFor(t *testing.T) {
 		d    *DayState
 		want string
 	}{
-		{"скидки нет — 0%", &DayState{InStock: new(true)}, "0%"},
+		{"скидки нет — пусто (0 % не пишем)", &DayState{InStock: new(true)}, ""},
+		{"повтор не дублируется", &DayState{InStock: new(true), DiscountStart: new(int16(10)), DiscountIncreases: []int16{10, 20}, Discount: new(int16(20))}, "10% → 20%"},
+		{"повтор в конце не дублируется", &DayState{InStock: new(true), DiscountStart: new(int16(20)), DiscountIncreases: []int16{10}, Discount: new(int16(10))}, "20% → 10%"},
+		{"старт 0 % не пишем", &DayState{InStock: new(true), DiscountStart: new(int16(0)), DiscountIncreases: []int16{10}, Discount: new(int16(10))}, "10%"},
 		{"старт без изменений", &DayState{InStock: new(true), DiscountStart: new(int16(10)), Discount: new(int16(10))}, "10%"},
 		{"цепочка повышений", &DayState{InStock: new(true), DiscountStart: new(int16(10)), DiscountIncreases: []int16{15, 20}, Discount: new(int16(20))}, "10% → 15% → 20%"},
 		{"понижение — финал отличается", &DayState{InStock: new(true), DiscountStart: new(int16(10)), Discount: new(int16(5))}, "10% → 5%"},

@@ -749,12 +749,18 @@ details.multi-select .ms-empty { color: #66645C; font-size: 13px; margin-top: 6p
 .pc-input--price { width: 152px; }
 tr.group-hidden { display: none !important; }
 
-/* Отчёт по наличию: заливки совпадают с xlsx-выгрузкой */
-.cell-plain { background: #FFFFFF; color: #000; }
+/* Отчёт по наличию: заливки совпадают с xlsx-выгрузкой. Глобальная полосатость
+   таблиц (tr:nth-child(even)) внутри отчёта выключена: она перебивала заливку
+   клеток по специфичности. */
+.av-table tr:nth-child(even) td { background: inherit; }
+/* Клетка без скидки — серая (была белая: полосы «серо-белый» на отчёте
+   читались как шахматка), недоступная для заказа — чёрная (владелец,
+   18.10.2026). */
+.cell-plain { background: #CCCCCC; color: #000; }
 .cell-yellow { background: #FFEB3B; color: #000; }
 .cell-yellow-red { background: #FFEB3B; color: #C00000; font-weight: 700; }
 .cell-red { background: #F1948A; color: #000; }
-.cell-gray { background: #CCCCCC; color: #000; }
+.cell-gray { background: #000000; color: #C8C6BE; }
 .cell-empty { background: #101014; color: #66645C; }
 
 /* ===== Жалобы (complaints) ===== */

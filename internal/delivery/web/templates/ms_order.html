@@ -516,11 +516,19 @@ html.day .mark--done { color: #1A7F37; }
 
                 var picked = r.tr.querySelector('.picked');
                 if (picked) { picked.textContent = rowPickedText(r); }
-                if (r.done) { markDone(r); }
 
                 recalcWeights();
                 checkMergeGroups();
-                focusNext(r);
+                // Штучная позиция на N штук: пока не набрано N, курсор остаётся
+                // в её поле — иначе после первого скана прыгал на следующую
+                // строку и остаток приходилось добирать мышкой (владелец,
+                // 18.10.2026). Взвешенная и добор — один скан на строку.
+                if (r.done) {
+                    markDone(r);
+                    focusNext(r);
+                } else {
+                    input.focus();
+                }
             }
 
             function markDone(r) {

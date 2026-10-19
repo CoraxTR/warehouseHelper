@@ -18,7 +18,8 @@ const (
 	xlsxFillWhite     = "#FFFFFF"
 	xlsxFillYellow    = "#FFEB3B"
 	xlsxFillRed       = "#F1948A"
-	xlsxFillGray      = "#CCCCCC"
+	xlsxFillGray      = "#000000"
+	xlsxFontGray      = "#C8C6BE"
 	xlsxFontRed       = "#C00000"
 	xlsxFontDefault   = "#000000"
 	xlsxColGroupWidth = 30.0
@@ -95,10 +96,6 @@ func reportStyles(f *excelize.File) (map[daystate.CellKind]int, error) {
 			Font: &excelize.Font{Color: font},
 		})
 	}
-	plain, err := newStyle(xlsxFillWhite, xlsxFontDefault)
-	if err != nil {
-		return nil, fmt.Errorf("стиль plain: %w", err)
-	}
 	yellow, err := newStyle(xlsxFillYellow, xlsxFontDefault)
 	if err != nil {
 		return nil, fmt.Errorf("стиль yellow: %w", err)
@@ -111,12 +108,13 @@ func reportStyles(f *excelize.File) (map[daystate.CellKind]int, error) {
 	if err != nil {
 		return nil, fmt.Errorf("стиль yellow-red: %w", err)
 	}
-	gray, err := newStyle(xlsxFillGray, xlsxFontDefault)
+	gray, err := newStyle(xlsxFillGray, xlsxFontGray)
 	if err != nil {
 		return nil, fmt.Errorf("стиль gray: %w", err)
 	}
+	// CellPlain в карту не входит: клетка без скидки остаётся без заливки
+	// (решение владельца 18.10.2026) — xlsx и страница совпадают по смыслу.
 	return map[daystate.CellKind]int{
-		daystate.CellPlain:     plain,
 		daystate.CellYellow:    yellow,
 		daystate.CellRed:       red,
 		daystate.CellYellowRed: yellowRed,
