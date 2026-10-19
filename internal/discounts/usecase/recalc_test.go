@@ -307,6 +307,11 @@ func manualInput(v int16) func(*discounts.Input) {
 	return func(in *discounts.Input) { in.GeneralManual = &v }
 }
 
+// telegramManualInput — ручная скидка ТГ-канала (попап по количеству на «Сроки»).
+func telegramManualInput(v int16) func(*discounts.Input) {
+	return func(in *discounts.Input) { in.TelegramManual = &v }
+}
+
 // plainInput — «простая» скидка канала сайта (её пишет движок расчёта).
 func plainInput(v int16) func(*discounts.Input) {
 	return func(in *discounts.Input) { in.GeneralPlain = &v }
