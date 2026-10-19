@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"warehouseHelper/internal/daystate"
 )
@@ -599,6 +600,35 @@ func TestStockReport(t *testing.T) {
 	}
 	if cells[2].Kind != daystate.CellRed || cells[2].Text != "x" {
 		t.Errorf("день 3 (нет строки, день прошёл): %s %q, want red \"x\"", cells[2].Kind, cells[2].Text)
+	}
+}
+
+// Ширина колонки дня в xlsx — по самой длинной клетке столбца: в выгрузке
+// столбцы должны выглядеть как на странице (владелец, 19.10.2026).
+func TestDayColWidths(t *testing.T) {
+	report := &StockReportPage{Days: 3, Products: []ReportProduct{
+		{Cells: []daystate.ReportCell{{Text: "10%"}, {Text: "10% → 20%"}, {}}},
+		{Cells: []daystate.ReportCell{{Text: "20%"}, {Text: "10% → 20% → 30%"}, {}}},
+	}}
+
+	got := dayColWidths(report)
+
+	if len(got) != 3 {
+		t.Fatalf("ширин = %d, want 3", len(got))
+	}
+	// «20%» = 3 символа + поле = 5, но пустой/короткий столбец не сжимается
+	// меньше xlsxColDayMin.
+	if got[0] != xlsxColDayMin {
+		t.Errorf("день 1: ширина = %v, want минимум %v", got[0], xlsxColDayMin)
+	}
+	if want := float64(utf8.RuneCountInString("10% → 20% → 30%")) + xlsxColDayPad; got[1] != want {
+		t.Errorf("день 2: ширина = %v, want %v", got[1], want)
+	}
+	if got[2] != xlsxColDayMin {
+		t.Errorf("день 3 (пустой): ширина = %v, want минимум %v", got[2], xlsxColDayMin)
+	}
+	if got[1] <= got[0] {
+		t.Errorf("столбец с цепочкой уже столбца с «20%%»: %v <= %v", got[1], got[0])
 	}
 }
 
