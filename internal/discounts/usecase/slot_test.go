@@ -147,7 +147,7 @@ func (n *fakeWarehouseNotifier) NotifyWarehouseReplyRequest(text string) (int64,
 	return n.nextID, nil
 }
 
-func (n *fakeWarehouseNotifier) EditWarehouseHTML(messageID int64, text, buttonText, callbackData string) error {
+func (n *fakeWarehouseNotifier) EditWarehouseHTML(messageID int64, text, buttonText, _ string) error {
 	n.edits = append(n.edits, fakeEdit{ID: messageID, Text: text, Label: buttonText})
 
 	return nil

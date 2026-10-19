@@ -194,34 +194,24 @@ func (uc *UseCase) syncShopPost(ctx context.Context, now time.Time) error {
 	for i := range st.Items {
 		it := &st.Items[i]
 		key := lotKey(it.ProductID, it.BestBefore)
-		qty := max(0, min(it.BlockQty, data[key].Qty))
-		returned := it.ShopQty == 0 && qty > 0
-
-		if returned && it.Reason == discounts.ReasonSurplus && !surplusNow(pairs, key) {
-			continue // избытка больше нет — позицию не возвращаем
-		}
-		// Позиция, попавшая в пост, остаётся в нём и при нуле (метка «ПРОДАНО»):
-		// listed — «есть в посте», а не «есть в наличии».
-		listed := it.Listed || qty > 0
-		if it.ShopQty == qty && it.Listed == listed {
+		dec := shopDecide(*it, data[key].Qty, pairs, key)
+		if dec.skip || (it.ShopQty == dec.qty && it.Listed == dec.listed) {
 			continue
 		}
-
-		if listed && !it.Listed {
-			it.ShopAvailable = qty // позиция входит в пост: «доступно» — на момент входа
+		it.ShopQty, it.Listed = dec.qty, dec.listed
+		if it.ShopAvailable == 0 && dec.qty > 0 {
+			it.ShopAvailable = dec.qty
 		}
-		it.ShopQty, it.Listed = qty, listed
 		changed = true
-		if err := uc.repo.UpdateDigestItemShop(ctx, st.PlannedAt, key, qty, it.ShopAvailable, it.Listed); err != nil {
+		if err := uc.repo.UpdateDigestItemShop(ctx, st.PlannedAt, key, it.ShopQty, it.ShopAvailable, it.Listed); err != nil {
 			return err
 		}
-		if returned && it.Reason != discounts.ReasonSurplus {
+		if dec.restore {
 			if err := uc.restoreShopDiscount(ctx, *it); err != nil {
 				return err
 			}
 		}
 	}
-
 	if !changed {
 		return nil
 	}
@@ -327,4 +317,29 @@ func (uc *UseCase) askPhoto(ctx context.Context, day time.Time, it discounts.Dig
 		}
 	}
 	uc.setPhotoName(key, name)
+}
+
+// shopDecide — что делать с позицией поста по текущему остатку: сколько
+// показывать, остаётся ли она в посте и надо ли вернуть ей скидку. Возврат
+// избыточной позиции без избытка не возвращаем (решение владельца 18.10.2026).
+func shopDecide(it discounts.DigestItem, stock int64, pairs []PairState, key discounts.LotKey) shopDecideResult {
+	qty := max(0, min(it.BlockQty, stock))
+	returned := it.ShopQty == 0 && qty > 0
+	if returned && it.Reason == discounts.ReasonSurplus && !surplusNow(pairs, key) {
+		return shopDecideResult{skip: true}
+	}
+
+	return shopDecideResult{
+		qty:     qty,
+		listed:  it.Listed || qty > 0,
+		restore: returned && it.Reason != discounts.ReasonSurplus,
+	}
+}
+
+// shopDecideResult — результат shopDecide: skip — позицию не трогаем.
+type shopDecideResult struct {
+	qty     int64
+	listed  bool
+	restore bool
+	skip    bool
 }
