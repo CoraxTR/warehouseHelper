@@ -222,9 +222,14 @@ th {
     font-weight: 600;
     white-space: nowrap;
 }
-/* Строки «Отчёта по наличию» (.av-row/.group-row) из полосатости исключены:
-   полоса перебивала заливку клеток по специфичности (решение 19.10.2026). */
-tr:nth-child(even):not(.av-row):not(.group-row) td { background: rgba(255, 255, 255, 0.015); }
+/* Полосатость чётных строк — самый СЛАБЫЙ слой заливки, специфичность (0,1,2).
+   Любая заливка клетки (td.cell-pair.has-discount, .av-report td.cell-*, …)
+   должна её перебивать, поэтому :not(.av-row):not(.group-row) сюда НЕ добавлять:
+   два :not() поднимают вес до (0,3,2) и гасят подсветку на чётных строках
+   «Сроков», отчёта и мини-календаря (регресс 19.10.2026, PR #171).
+   В дневной теме полоса весит (0,2,3) — там заливки заданы с html.day и
+   третьим классом (0,3,2), см. блок html.day. */
+tr:nth-child(even) td { background: rgba(255, 255, 255, 0.015); }
 tbody tr:hover td { background: #16161C; }
 td:first-child { white-space: nowrap; }
 
@@ -821,7 +826,10 @@ tr.group-hidden { display: none !important; }
 .merge-btn { margin-top: 4px; }
 .row-done .scan-input { display: none; }
 .row-done .cell-action { color: #9ccc65; }
-.row-flash td { background: rgba(192, 40, 50, 0.25); }
+/* tbody+tr в селекторе — чтобы перебить полосатость чётных строк (0,1,2):
+   с одним лишь td вес (0,1,1) и мигание найденной строки на чётных строках
+   не видно (было так же и до правки #171). */
+tbody tr.row-flash td { background: rgba(192, 40, 50, 0.25); }
 tr[data-href] { cursor: pointer; }
 
 /* Блоки ручного ввода на странице приёмки (receive.html) */
@@ -1110,7 +1118,7 @@ html.day .back:hover { color: #000000; }
 html.day table { background: #FFFFFF; }
 html.day th, html.day td { border: 1px solid #D0D7DE; }
 html.day th { background: #F3F5F7; color: #57606A; }
-html.day tr:nth-child(even):not(.av-row):not(.group-row) td { background: rgba(0, 0, 0, 0.03); }
+html.day tr:nth-child(even) td { background: rgba(0, 0, 0, 0.03); }
 html.day tbody tr:hover td { background: #F3F5F7; }
 html.day .error-cell { background: #FDD8D8 !important; color: #8E1F27 !important; }
 html.day [contenteditable="true"] { background: #F3F5F7; color: #000000; }
@@ -1242,12 +1250,21 @@ html.day .av-report thead th.today { background: #FDECEC; color: #8E1F27; }
 html.day .av-report .av-row .av-name { background: #FAFBFC; }
 html.day .av-report td.cell-empty { background: #FFFFFF; color: #6E7781; }
 html.day .av-report td.cell-plain { background: #DDE3E9; color: #000000; }
+/* Цветные клетки отчёта в дневной теме: значения те же, что в тёмной (желтизна
+   и красный читаются на белом), но с весом (0,3,2) — иначе их гасит полосатость
+   чётных строк html.day (0,2,3). */
+html.day .av-report td.cell-yellow { background: #FFEB3B; color: #000; }
+html.day .av-report td.cell-yellow-red { background: #FFEB3B; color: #C00000; font-weight: 700; }
+html.day .av-report td.cell-red { background: #F1948A; color: #000; }
+html.day .av-report td.cell-gray { background: #000000; color: #C8C6BE; }
 html.day .product-results { background: #FAFBFC; border: 1px solid #D0D7DE; }
 html.day .complaint-photo img { border: 1px solid #D0D7DE; }
 html.day .picked { color: #1A7F37; }
 html.day .merge-row td { border-left: 3px solid #B07D0A; }
 html.day .row-done .cell-action { color: #1A7F37; }
-html.day .row-flash td { background: rgba(192, 40, 50, 0.12); }
+/* tbody в селекторе — только чтобы перебить полосатость чётных строк (0,2,3):
+   без него мигание найденной строки в дневной теме на чётных строках не видно. */
+html.day tbody tr.row-flash td { background: rgba(192, 40, 50, 0.12); }
 html.day .scan-card.block { border-left-color: #E0C97A; }
 html.day .scan-card.block.active { border-left-color: #C02832; }
 html.day .navtoggle { background: #FFFFFF; color: #000000; border: 1px solid #D0D7DE; }
