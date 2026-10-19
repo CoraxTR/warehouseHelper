@@ -571,7 +571,7 @@ func TestAvailability(t *testing.T) {
 	}
 }
 
-// Отчёт по наличию: ячейки по правилам, отсутствующие строки — пустые.
+// Отчёт по наличию: ячейки по правилам; прошедший день без строки — красная x.
 func TestStockReport(t *testing.T) {
 	now := day(15) // середина месяца: дни 1..2 уже прошли
 	repo := &fakeRepo{days: map[string]*daystate.DayState{
@@ -597,8 +597,8 @@ func TestStockReport(t *testing.T) {
 	if cells[1].Kind != daystate.CellRed {
 		t.Errorf("день 2: kind = %s, want red", cells[1].Kind)
 	}
-	if cells[2].Kind != daystate.CellEmpty {
-		t.Errorf("день 3 (нет строки): kind = %s, want empty", cells[2].Kind)
+	if cells[2].Kind != daystate.CellRed || cells[2].Text != "x" {
+		t.Errorf("день 3 (нет строки, день прошёл): %s %q, want red \"x\"", cells[2].Kind, cells[2].Text)
 	}
 }
 

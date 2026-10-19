@@ -196,6 +196,7 @@ func reportDate() time.Time {
 // Приоритет правил ячейки отчёта (сверху вниз).
 func TestCellFor(t *testing.T) {
 	today := reportDate()
+	yesterday := today.AddDate(0, 0, -1)
 
 	tests := []struct {
 		name string
@@ -205,10 +206,15 @@ func TestCellFor(t *testing.T) {
 		text string
 	}{
 		{"будущая дата — пусто", nil, today.Add(24 * time.Hour), CellEmpty, ""},
-		{"нет строки — пусто", nil, today, CellEmpty, ""},
-		{"in_stock NULL — пусто", &DayState{Date: today, InStock: nil, Orderable: true}, today, CellEmpty, ""},
+		{"нет строки вчера — красная x (не было весь день)", nil, yesterday, CellRed, "x"},
+		{"нет строки сегодня — пусто (день не сведён)", nil, today, CellEmpty, ""},
+		{"in_stock NULL вчера — красная x", &DayState{Date: yesterday, InStock: nil, Orderable: true}, yesterday, CellRed, "x"},
+		{"in_stock NULL сегодня — пусто", &DayState{Date: today, InStock: nil, Orderable: true}, today, CellEmpty, ""},
 		{"недоступна — чёрная", &DayState{Date: today, InStock: new(true), Orderable: false}, today, CellGray, ""},
 		{"закончилась — красная x", &DayState{Date: today, InStock: new(false), Orderable: true}, today, CellRed, "x"},
+		{"скидка → закончилась — жёлтая, красный шрифт", &DayState{Date: today, InStock: new(false), DiscountStart: new(int16(10)), Discount: new(int16(10)), Orderable: true}, today, CellYellowRed, "10% → x"},
+		{"скидка снята 10 % → 0 % — жёлтая", &DayState{Date: today, InStock: new(true), DiscountStart: new(int16(10)), Orderable: true}, today, CellYellow, "10%"},
+		{"скидка снята 10 % → 0 % (колонка 0) — жёлтая", &DayState{Date: today, InStock: new(true), DiscountStart: new(int16(10)), Discount: new(int16(0)), Orderable: true}, today, CellYellow, "10%"},
 		{"в наличии без скидки — серая", &DayState{Date: today, InStock: new(true), Orderable: true}, today, CellPlain, ""},
 		{"в наличии + скидка — жёлтая", &DayState{Date: today, InStock: new(true), Discount: new(int16(15)), Orderable: true}, today, CellYellow, "15%"},
 		{"sold_out + скидка — жёлтая с красным шрифтом", &DayState{Date: today, InStock: new(true), Discount: new(int16(15)), SoldOutToday: true, Orderable: true}, today, CellYellowRed, "15%"},

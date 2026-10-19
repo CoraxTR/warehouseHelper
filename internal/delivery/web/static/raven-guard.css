@@ -222,7 +222,9 @@ th {
     font-weight: 600;
     white-space: nowrap;
 }
-tr:nth-child(even) td { background: rgba(255, 255, 255, 0.015); }
+/* Строки «Отчёта по наличию» (.av-row/.group-row) из полосатости исключены:
+   полоса перебивала заливку клеток по специфичности (решение 19.10.2026). */
+tr:nth-child(even):not(.av-row):not(.group-row) td { background: rgba(255, 255, 255, 0.015); }
 tbody tr:hover td { background: #16161C; }
 td:first-child { white-space: nowrap; }
 
@@ -749,21 +751,36 @@ details.multi-select .ms-empty { color: #66645C; font-size: 13px; margin-top: 6p
 .pc-input--price { width: 152px; }
 tr.group-hidden { display: none !important; }
 
-/* Отчёт по наличию: заливки совпадают с xlsx-выгрузкой. Глобальная полосатость
-   таблиц (tr:nth-child(even)) внутри отчёта выключена: она перебивала заливку
-   клеток по специфичности. */
-.av-table tr:nth-child(even) td { background: inherit; }
-/* Клетка без скидки — серая (была белая: полосы «серо-белый» на отчёте
-   читались как шахматка), недоступная для заказа — чёрная (владелец,
-   18.10.2026). */
-/* Клетка без скидки — в цвет бренд-палитры, а не белая: столбцы не «полосят»,
-   таблица читается ровным серым полем (решение владельца 18.10.2026). */
-.cell-plain { background: #16161C; color: #E9E6DD; }
-.cell-yellow { background: #FFEB3B; color: #000; }
-.cell-yellow-red { background: #FFEB3B; color: #C00000; font-weight: 700; }
-.cell-red { background: #F1948A; color: #000; }
-.cell-gray { background: #000000; color: #C8C6BE; }
-.cell-empty { background: #101014; color: #66645C; }
+/* Отчёт по наличию: заливки совпадают с xlsx-выгрузкой. Полосатость таблиц
+   внутри отчёта выключена в самих глобальных правилах (см. :not(.av-row)) —
+   прежний сброс через `background: inherit` отдавал фон строки (прозрачный) и
+   тем самым гасил заливку клеток на каждой чётной строке. */
+/* ---- Сетка отчёта: ширины колонок жёсткие (colgroup + table-layout: fixed).
+   Без этого столбец дня растягивался под самый длинный текст («10% → 20% → 10%»),
+   и сетка читалась как поехавшая (владелец, 19.10.2026). Шапка с числами
+   закреплена: страница длинная, при прокрутке числа дней уезжали. */
+.av-report { table-layout: fixed; border-collapse: separate; border-spacing: 0; border-top: 1px solid #26262E; border-left: 1px solid #26262E; font-size: 12px; }
+.av-report th, .av-report td { border: 0; border-right: 1px solid #26262E; border-bottom: 1px solid #26262E; padding: 2px 3px; vertical-align: middle; }
+.av-col-name { width: 280px; }
+.av-col-day { width: 58px; }
+.av-report thead th { position: sticky; top: 0; z-index: 3; height: 24px; background: #16161C; color: #8A887E; font-weight: 400; }
+.av-report thead th.av-name-col { left: 0; z-index: 4; text-align: left; padding-left: 46px; }
+.av-report thead th.today { background: #2A1119; color: #E4636B; }
+.av-report .av-row .av-name { z-index: 2; max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Метка группы — липкая внутри своей colspan-ячейки: иначе при горизонтальной
+   прокрутке название группы уезжает за левый край и полоса читается пустой. */
+.av-report .av-group-label { position: sticky; left: 6px; display: inline-block; }
+.av-report .av-cell { width: auto; height: 34px; line-height: 1.15; white-space: normal; }
+
+/* Заливки: специфичность выше полосатости и hover — иначе цвет клетки терялся.
+   Клетка без скидки — цвет бренд-палитры (не белая: столбцы «полосили»),
+   недоступная для заказа — чёрная (владелец, 18.10.2026). */
+.av-report td.cell-plain { background: #16161C; color: #E9E6DD; }
+.av-report td.cell-yellow { background: #FFEB3B; color: #000; }
+.av-report td.cell-yellow-red { background: #FFEB3B; color: #C00000; font-weight: 700; }
+.av-report td.cell-red { background: #F1948A; color: #000; }
+.av-report td.cell-gray { background: #000000; color: #C8C6BE; }
+.av-report td.cell-empty { background: #101014; color: #66645C; }
 
 /* ===== Жалобы (complaints) ===== */
 /* Строка товара на карточке/в поиске: текстовое поле + подсказки */
@@ -1090,7 +1107,7 @@ html.day .back:hover { color: #000000; }
 html.day table { background: #FFFFFF; }
 html.day th, html.day td { border: 1px solid #D0D7DE; }
 html.day th { background: #F3F5F7; color: #57606A; }
-html.day tr:nth-child(even) td { background: rgba(0, 0, 0, 0.03); }
+html.day tr:nth-child(even):not(.av-row):not(.group-row) td { background: rgba(0, 0, 0, 0.03); }
 html.day tbody tr:hover td { background: #F3F5F7; }
 html.day .error-cell { background: #FDD8D8 !important; color: #8E1F27 !important; }
 html.day [contenteditable="true"] { background: #F3F5F7; color: #000000; }
@@ -1215,6 +1232,13 @@ html.day .av-cell.off { background: #DDE3E9; }
 html.day .av-cell.sel { outline: 2px solid #9A6700; }
 html.day .cell-empty { background: #FFFFFF; color: #6E7781; }
 html.day .cell-plain { background: #DDE3E9; color: #000000; }
+html.day .av-report { border-top-color: #D0D7DE; border-left-color: #D0D7DE; }
+html.day .av-report th, html.day .av-report td { border-right-color: #D0D7DE; border-bottom-color: #D0D7DE; }
+html.day .av-report thead th { background: #F3F5F7; color: #57606A; }
+html.day .av-report thead th.today { background: #FDECEC; color: #8E1F27; }
+html.day .av-report .av-row .av-name { background: #FAFBFC; }
+html.day .av-report td.cell-empty { background: #FFFFFF; color: #6E7781; }
+html.day .av-report td.cell-plain { background: #DDE3E9; color: #000000; }
 html.day .product-results { background: #FAFBFC; border: 1px solid #D0D7DE; }
 html.day .complaint-photo img { border: 1px solid #D0D7DE; }
 html.day .picked { color: #1A7F37; }

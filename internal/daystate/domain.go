@@ -177,7 +177,7 @@ const (
 	CellPlain     CellKind = "plain"      // в наличии
 	CellYellow    CellKind = "yellow"     // в наличии + скидка
 	CellRed       CellKind = "red"        // закончилась ('x')
-	CellYellowRed CellKind = "yellow-red" // в наличии + скидка + закончилась: жёлтая, шрифт красный
+	CellYellowRed CellKind = "yellow-red" // скидка и позиция закончилась: жёлтая, шрифт красный
 	CellGray      CellKind = "gray"       // недоступна для заказа
 )
 
@@ -188,26 +188,41 @@ type ReportCell struct {
 }
 
 // CellFor вычисляет ячейку отчёта по строке дня (d nil — строки нет).
-// Приоритет правил сверху вниз (владелец, 01.09.2026):
+// Приоритет правил сверху вниз (владелец, 01.09.2026; уточнения 19.10.2026):
 //  1. дата > сегодня → пустая (таблица дополняется по мере накопления данных);
-//  2. in_stock = NULL → пустая;
+//  2. прошлый день без данных (строки нет / in_stock = NULL) → красная с 'x':
+//     «позиции не было в наличии весь день» помечается так же, как «закончилась»
+//     (решение владельца 19.10.2026). Строки нет у товара без лотов в
+//     product_stock (списанный в ноль лот удаляется), NULL in_stock — день, до
+//     которого утренний снапшот не дошёл. Сегодняшний день без данных остаётся
+//     пустым: он ещё не сведён, красный 'x' там был бы враньём до снапшота;
 //  3. !orderable (любое состояние) → серая;
-//  4. !in_stock → красная, текст 'x';
-//  5. in_stock + sold_out + discount != NULL → жёлтая, шрифт красный;
-//  6. in_stock + sold_out → красная;
-//  7. in_stock + discount != NULL → жёлтая;
-//  8. in_stock → белая.
+//  4. !in_stock + скидка была (start или текущая) → жёлтая, шрифт красный:
+//     «скидка → отсутствие»;
+//  5. !in_stock → красная, текст 'x';
+//  6. in_stock + sold_out + discount != NULL → жёлтая, шрифт красный;
+//  7. in_stock + sold_out → красная;
+//  8. in_stock + скидка (текущая ИЛИ снятая за день) → жёлтая: переход
+//     10 % → 0 % выделяется тем же жёлтым, что и появление скидки (владелец,
+//     19.10.2026);
+//  9. in_stock → серая (без скидки).
 func CellFor(d *DayState, date, today time.Time) ReportCell {
 	if date.After(today) {
 		return ReportCell{Kind: CellEmpty}
 	}
 	if d == nil || d.InStock == nil {
+		if date.Before(today) {
+			return ReportCell{Kind: CellRed, Text: "x"}
+		}
 		return ReportCell{Kind: CellEmpty}
 	}
 	if !d.Orderable {
 		return ReportCell{Kind: CellGray, Text: TextFor(d)}
 	}
 	if !*d.InStock {
+		if d.DiscountStart != nil || d.Discount != nil {
+			return ReportCell{Kind: CellYellowRed, Text: TextFor(d)}
+		}
 		return ReportCell{Kind: CellRed, Text: TextFor(d)}
 	}
 	if d.SoldOutToday && d.Discount != nil {
@@ -216,7 +231,7 @@ func CellFor(d *DayState, date, today time.Time) ReportCell {
 	if d.SoldOutToday {
 		return ReportCell{Kind: CellRed, Text: TextFor(d)}
 	}
-	if d.Discount != nil {
+	if d.Discount != nil || d.DiscountStart != nil {
 		return ReportCell{Kind: CellYellow, Text: TextFor(d)}
 	}
 	return ReportCell{Kind: CellPlain, Text: TextFor(d)}
