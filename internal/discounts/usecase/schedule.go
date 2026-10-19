@@ -67,6 +67,10 @@ func (uc *UseCase) runSteps(ctx context.Context, s Schedule) {
 	if err := uc.runDigest(ctx, now, s); err != nil {
 		slog.Info(fmt.Sprintf("discounts: дайджест: %v", err))
 	}
+	// Пост чата скидок живёт и в не-ТГ дни: правка идёт до следующей рассылки.
+	if err := uc.runShop(ctx, now, s); err != nil {
+		slog.Info(fmt.Sprintf("discounts: пост в чат скидок: %v", err))
+	}
 	if !isTelegramDay(now) {
 		return // слот ТГ и подъём — только вт/чт
 	}

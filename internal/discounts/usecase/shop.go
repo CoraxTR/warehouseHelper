@@ -179,13 +179,9 @@ func (uc *UseCase) syncShopPost(ctx context.Context, now time.Time) error {
 
 	// Пары нужны только для проверки избытка: остальные позиции считаются по
 	// остаткам, оборот им не нужен.
-	var pairs []PairState
-	if shopNeedsSurplusCheck(st.Items, data) {
-		rates, err := uc.ratesFor(ctx, day, inputProductIDs(inputs))
-		if err != nil {
-			return err
-		}
-		pairs = Evaluate(inputs, rates, day)
+	pairs, err := uc.shopSurplusPairs(ctx, day, st.Items, data, inputs)
+	if err != nil {
+		return err
 	}
 
 	changed := false
@@ -340,4 +336,20 @@ type shopDecideResult struct {
 	listed  bool
 	restore bool
 	skip    bool
+}
+
+// shopSurplusPairs — пары дня для перепроверки избытка: считаем их только когда
+// в посте есть проданная избыточная позиция с вернувшимся остатком, иначе
+// лишний расчёт на каждой минуте.
+func (uc *UseCase) shopSurplusPairs(ctx context.Context, day time.Time, items []discounts.DigestItem,
+	data map[discounts.LotKey]lotData, inputs []discounts.Input) ([]PairState, error) {
+	if !shopNeedsSurplusCheck(items, data) {
+		return nil, nil
+	}
+	rates, err := uc.ratesFor(ctx, day, inputProductIDs(inputs))
+	if err != nil {
+		return nil, err
+	}
+
+	return Evaluate(inputs, rates, day), nil
 }

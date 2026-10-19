@@ -1177,7 +1177,7 @@ func (r *fakeDiscountRepo) DeleteDigest(_ context.Context, _ string, _ time.Time
 
 // --- пост в чате скидок: история поста в фейке ---
 
-func (r *fakeDiscountRepo) SetDigestShopMessage(_ context.Context, chatKind string, plannedAt time.Time, messageID int64) error {
+func (r *fakeDiscountRepo) SetDigestShopMessage(_ context.Context, _ string, _ time.Time, messageID int64) error {
 	if r.digest != nil {
 		r.digest.ShopMessageID = messageID
 	}
