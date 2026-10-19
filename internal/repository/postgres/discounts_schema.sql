@@ -79,10 +79,10 @@ CREATE TABLE IF NOT EXISTS discount_telegram_digest_item (
     stock_qty         BIGINT NOT NULL DEFAULT 0,  -- остаток лота на момент снимка
     message_id        BIGINT NOT NULL DEFAULT 0,  -- сообщение-запрос фото (0 — запроса нет)
     general_raised_at TIMESTAMPTZ,        -- когда general подняли до telegram (16:00); NULL — не поднимали
-    PRIMARY KEY (digest_id, product_id, best_before)
     shop_qty          BIGINT NOT NULL DEFAULT 0,   -- остаток по акции в посте (меняется)
     shop_available    BIGINT NOT NULL DEFAULT 0,   -- «доступно по акции» поста (заморожено публикацией)
     shop_listed       BOOLEAN NOT NULL DEFAULT FALSE, -- позиция есть в опубликованном посте
+    PRIMARY KEY (digest_id, product_id, best_before)
 );
 
 -- Антидубль: «был ли лот в предыдущей рассылке» ищется по лоту.
