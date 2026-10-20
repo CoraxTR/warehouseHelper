@@ -102,6 +102,9 @@ func buildDayPlan(pairs []PairState, prev map[discounts.LotKey]struct{}, capacit
 	// weak — пары со СВЕЖЕЙ ступенью ровно 10 % (site 0 → 10): материал добора,
 	// местом в слоте они не пользуются.
 	weak := make([]PairState, 0, capacity)
+	// prevSeen — пары, бывшие в прошлой рассылке: повторно не публикуем, но
+	// свежую ступень дня отдаём сайту (см. ниже).
+	prevSeen := make([]PairState, 0, capacity)
 	for _, p := range pairs {
 		if p.Frozen() {
 			continue // ручной ноль сайта замораживает пару целиком
@@ -115,6 +118,14 @@ func buildDayPlan(pairs []PairState, prev map[discounts.LotKey]struct{}, capacit
 				reason:   discounts.ReasonManual,
 				tgManual: true,
 			})
+			continue
+		}
+		if _, seen := prev[p.Key]; seen {
+			// Пара была в прошлой рассылке: в слот её не берём (антидубль), но
+			// ступень дня не теряем — она уходит на сайт сразу, как у «лишних»
+			// (решение владельца 20.10.2026). До этого такая пара выпадала из
+			// плана целиком, и лесенка в ТГ-день по ней не срабатывала вовсе.
+			prevSeen = append(prevSeen, p)
 			continue
 		}
 		if !slotEligible(p, prev) {
@@ -193,6 +204,19 @@ func buildDayPlan(pairs []PairState, prev map[discounts.LotKey]struct{}, capacit
 			reason:  discounts.ReasonExpiry,
 		})
 	}
+	// Ступень дня по паре из прошлой рассылки: в рассылке её нет, значит сайт
+	// должен получить повышение сегодня, а не в 16:00 и не в следующий КТ-день.
+	for _, p := range prevSeen {
+		if p.Manual != nil || p.Expiry == nil || *p.Expiry <= appliedTop(p) {
+			continue // сегодняшнего повышения по сроку нет — писать нечего
+		}
+		extra = append(extra, slotPosition{
+			pair:    p,
+			percent: *p.Expiry,
+			reason:  discounts.ReasonExpiry,
+		})
+	}
+
 	return dayPlan{slot: slot, extra: extra}
 }
 
