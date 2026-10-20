@@ -36,11 +36,19 @@ const (
 	// Поле картинки в колонке (px): QR центрируется внутри него по ширине.
 	labelFieldW = 272
 	// QR-код вместо штрих-кода (решение владельца 18.10.2026): коробки читают
-	// QR-сканером. Квадрат 64 × 64 px ≈ 17 мм, модуль ≈ 0,6 мм при 33 цифрах —
-	// читается и сканером, и камерой телефона. Высота строки картинки (65 px)
-	// не меняется, поэтому на листе 120 × 75 мм по-прежнему пусто 40–50 %.
-	qrSize    = 64
+	// QR-сканером. Размер — замер владельца 20.10.2026 по печати: 2,78 см,
+	// квадратом (2,78 × 2,78 см = 105 × 105 px при 96 dpi). Квадрат выбран
+	// владельцем 20.10.2026 взамен неквадратных 2,78 × 2,65: сжатие модулей по
+	// высоте давало 5 px экономии и риск для сканера. Под него высота строки
+	// картинки — 111 px (83,25 pt).
+	qrSize = 105
+	// qrOffsetX — QR по центру поля картинки; qrOffsetY — отступ от верха ячейки.
 	qrOffsetX = imgOffsetX + (labelFieldW-qrSize)/2
+	qrOffsetY = imgOffsetY
+
+	// markerQRSize — QR наклеек спец-кодов приёмки (555/666): геометрия не
+	// менялась (замер владельца касается только наклеек коробок).
+	markerQRSize = 64
 
 	// fontSize — шрифт строк подписей: цифры кода, наименование, вес с числом
 	// вложений, даты.
@@ -56,11 +64,15 @@ const (
 	sentinelWeightG int64 = 1
 )
 
-// rowHeightPt — высоты строк одной наклейки: штрих-код, цифры кода,
-// наименование, вес с числом вложений, выработка, срок. 48,75 pt = 65 px —
-// строка под картинку штрих-кода (15 мм + смещение 3 px), 15,75 pt — строка
+// rowHeightPt — высоты строк одной наклейки коробки: QR, цифры кода,
+// наименование, вес с числом вложений, выработка, срок. 83,25 pt = 111 px —
+// строка под картинку QR (100 px + смещение 3 px + запас), 15,75 pt — строка
 // шрифта 12.
-var rowHeightPt = []float64{48.75, 15.75, 15.75, 15.75, 15.75, 15.75}
+var rowHeightPt = []float64{83.25, 15.75, 15.75, 15.75, 15.75, 15.75}
+
+// markerRowHeightPt — высоты строк наклейки спец-кода (QR 64 px + цифры):
+// прежняя геометрия наклейки коробки до замера 20.10.2026.
+var markerRowHeightPt = []float64{48.75, 15.75}
 
 // Box — данные наклейки коробки. Достаточно для 33-значного кода и подписей:
 // товар, вес (у штучных — ноль), число вложений и обе даты (без них код не
@@ -138,29 +150,29 @@ func newWorkbook(boxes []Box) (*excelize.File, int, error) {
 				ScaleX:      1.0,
 				ScaleY:      1.0,
 				OffsetX:     qrOffsetX,
-				OffsetY:     imgOffsetY,
+				OffsetY:     qrOffsetY,
 				Positioning: "oneCell",
 			},
 		})
-		setRow(f, sheet, styles.plain, row, "")
+		setRow(f, sheet, styles.plain, row, "", rowHeightPt)
 		row++
 
 		// Строка 2: цифры кода (ручной ввод, если сканер не читает).
-		setRow(f, sheet, styles.digits, row, code)
+		setRow(f, sheet, styles.digits, row, code, rowHeightPt)
 		row++
 
 		// Строка 3: наименование товара.
-		setRow(f, sheet, styles.text, row, b.ProductName)
+		setRow(f, sheet, styles.text, row, b.ProductName, rowHeightPt)
 		row++
 
 		// Строка 4: вес и число вложений.
-		setRow(f, sheet, styles.amount, row, caption(b))
+		setRow(f, sheet, styles.amount, row, caption(b), rowHeightPt)
 		row++
 
 		// Строки 5-6: даты — выработка («от») и срок годности («до»).
-		setRow(f, sheet, styles.text, row, producedCaption(b))
+		setRow(f, sheet, styles.text, row, producedCaption(b), rowHeightPt)
 		row++
-		setRow(f, sheet, styles.text, row, bestBeforeCaption(b))
+		setRow(f, sheet, styles.text, row, bestBeforeCaption(b), rowHeightPt)
 		row++
 
 		labels++
@@ -222,12 +234,12 @@ func newStyles(f *excelize.File) (labelStyles, error) {
 }
 
 // setRow пишет значение в колонку B заданной строки, ставит стиль и высоту
-// строки по раскладке наклейки (rowHeightPt).
-func setRow(f *excelize.File, sheet string, style, row int, value string) {
+// строки по раскладке наклейки (heights — высоты её строк по кругу).
+func setRow(f *excelize.File, sheet string, style, row int, value string, heights []float64) {
 	axis := fmt.Sprintf("B%d", row)
 	_ = f.SetCellValue(sheet, axis, value)
 	_ = f.SetCellStyle(sheet, axis, axis, style)
-	_ = f.SetRowHeight(sheet, row, rowHeightPt[(row-1)%len(rowHeightPt)])
+	_ = f.SetRowHeight(sheet, row, heights[(row-1)%len(heights)])
 }
 
 // caption — строка под наименованием: вес и число вложений. У штучного товара
@@ -306,7 +318,7 @@ func newMarkerWorkbook(code string) (*excelize.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	pngBytes, err := generateQRPNG(code, qrSize)
+	pngBytes, err := generateQRPNG(code, markerQRSize)
 	if err != nil {
 		return nil, fmt.Errorf("штрих-код %s: %w", code, err)
 	}
@@ -322,8 +334,8 @@ func newMarkerWorkbook(code string) (*excelize.File, error) {
 			Positioning: "oneCell",
 		},
 	})
-	setRow(f, sheet, styles.plain, 1, "")
-	setRow(f, sheet, styles.digits, 2, code)
+	setRow(f, sheet, styles.plain, 1, "", markerRowHeightPt)
+	setRow(f, sheet, styles.digits, 2, code, markerRowHeightPt)
 
 	_ = f.SetColWidth(sheet, "B", "B", colWidthChars)
 	_ = f.SetPageMargins(sheet, zeroMargins())
@@ -346,7 +358,9 @@ func zeroMargins() *excelize.PageLayoutMarginsOptions {
 	}
 }
 
-// generateQRPNG создаёт PNG-байты QR-кода (коробки читают QR-сканером).
+// generateQRPNG создаёт PNG-байты QR-кода со стороной size пикселей (коробки
+// читают QR-сканером): QR всегда квадрат — иначе модули получаются
+// прямоугольными, и сканер читает хуже.
 func generateQRPNG(data string, size int) ([]byte, error) {
 	bc, err := qr.Encode(data, qr.M, qr.Auto)
 	if err != nil {

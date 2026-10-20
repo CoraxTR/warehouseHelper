@@ -149,7 +149,8 @@ func TestNewWorkbookWeightBox(t *testing.T) {
 		t.Errorf("строка срока = %q", got)
 	}
 
-	// Штрих-код — картинка в первой строке блока, 72 × 15 мм.
+	// QR-код — картинка в первой строке блока; размер по замеру владельца
+	// 20.10.2026: 2,78 см квадратом (105 × 105 px при 96 dpi).
 	pics, err := f.GetPictureCells(sheet)
 	if err != nil {
 		t.Fatalf("GetPictureCells: %v", err)
@@ -164,13 +165,26 @@ func TestNewWorkbookWeightBox(t *testing.T) {
 	assertLabelLayout(t, f)
 }
 
+// TestBoxQRPrintSize — печатный размер QR наклейки коробки: 96 dpi, 1 см =
+// 96/2,54 px. Квадрат 105 px = 2,78 см (замер владельца 20.10.2026), и он обязан
+// влезать в строку картинки вместе с отступом сверху — иначе Excel обрежет код.
+func TestBoxQRPrintSize(t *testing.T) {
+	const pxPerCm = 96 / 2.54
+	if cm := float64(qrSize) / pxPerCm; math.Abs(cm-2.78) > 0.01 {
+		t.Errorf("сторона QR = %.2f см, want 2,78", cm)
+	}
+	if px := rowHeightPt[0] * 96 / 72; px < float64(qrSize+imgOffsetY) {
+		t.Errorf("высота строки %.0f px меньше QR %d px + отступ %d px", px, qrSize, imgOffsetY)
+	}
+}
+
 // assertLabelLayout проверяет геометрию печати одной наклейки: высоты строк,
 // ширину колонки, область печати и разрыв страницы после блока.
 func assertLabelLayout(t *testing.T, f *excelize.File) {
 	t.Helper()
 	sheet := f.GetSheetName(0)
 
-	// Высоты строк — лейаут наклейки (pt), блок = 48,75 + 5 × 15,75 pt.
+	// Высоты строк — лейаут наклейки (pt), блок = 83,25 + 5 × 15,75 pt.
 	var totalPt float64
 	for i, wantPt := range rowHeightPt {
 		got, err := f.GetRowHeight(sheet, i+1)
@@ -182,8 +196,8 @@ func assertLabelLayout(t *testing.T, f *excelize.File) {
 			t.Errorf("высота строки %d = %.2f pt, want %.2f pt", i+1, got, wantPt)
 		}
 	}
-	if totalPt != 127.5 {
-		t.Errorf("сумма высот блока = %.2f pt, want 127,5", totalPt)
+	if totalPt != 162.0 {
+		t.Errorf("сумма высот блока = %.2f pt, want 162", totalPt)
 	}
 
 	// Ширина колонки — 75 мм в «символах».
@@ -315,11 +329,11 @@ func TestMarkerWorkbook(t *testing.T) {
 		if len(pics) != 1 || pics[0] != "B1" {
 			t.Errorf("%s: картинки = %v, want [B1]", code, pics)
 		}
-		if w, h := imageSize(t, f); w != qrSize || h != qrSize {
-			t.Errorf("%s: размер QR = %d×%d px, want %d×%d", code, w, h, qrSize, qrSize)
+		if w, h := imageSize(t, f); w != markerQRSize || h != markerQRSize {
+			t.Errorf("%s: размер QR = %d×%d px, want %d×%d", code, w, h, markerQRSize, markerQRSize)
 		}
-		if got, err := f.GetRowHeight(sheet, 1); err != nil || math.Abs(got-rowHeightPt[0]) > 0.01 {
-			t.Errorf("%s: высота строки штрих-кода = %v (err %v), want %.2f", code, got, err, rowHeightPt[0])
+		if got, err := f.GetRowHeight(sheet, 1); err != nil || math.Abs(got-markerRowHeightPt[0]) > 0.01 {
+			t.Errorf("%s: высота строки штрих-кода = %v (err %v), want %.2f", code, got, err, markerRowHeightPt[0])
 		}
 		if area := printArea(t, f); !strings.HasSuffix(area, "$B$1:$B$2") {
 			t.Errorf("%s: область печати = %q, want …$B$1:$B$2", code, area)
