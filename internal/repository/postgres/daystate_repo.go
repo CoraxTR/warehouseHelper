@@ -121,14 +121,32 @@ func (pg *PGClient) SetOrderable(ctx context.Context, productID string, dates []
 	return nil
 }
 
-// SnapshotDone — есть ли строки за дату (маркер утреннего снапшота:
-// снапшот сделан, если за день уже что-то создано — событиями или им самим).
+// snapshotDoneSQL — маркер утреннего снапшота дня: покрыты ли строкой дня ВСЕ
+// товары, у которых есть лоты в стоке. Вынесен в константу, чтобы тест читал
+// настоящий запрос (см. TestSnapshotDoneCoversAllLots).
+const snapshotDoneSQL = `
+        WITH lots AS (SELECT DISTINCT product_id FROM product_stock)
+        SELECT EXISTS (SELECT 1 FROM lots)
+           AND NOT EXISTS (
+               SELECT 1 FROM lots l
+               LEFT JOIN product_day_state d
+                      ON d.product_id = l.product_id AND d.date = $1
+               WHERE d.product_id IS NULL)`
+
+// SnapshotDone — сделан ли утренний снапшот за дату. Признак — не «есть хоть
+// одна строка за день», а «покрыты ВСЕ товары, у которых есть лоты в стоке»:
+// строки дня пишут ещё события стока и календарь «Доступность», поэтому прежний
+// маркер врал — одно утреннее событие по товару отменяло снапшот всего дня
+// (инцидент 19.10.2026: за 19-е создано 26 строк вместо ~200, и отчёт показал
+// 224 позиции как «не было в наличии», хотя остатки были).
+//
+// Пустой product_stock снапшотом не считается: маркер не ставится, ретрай весь
+// день (прежнее поведение — сток мог не загрузиться к 09:00). Новый лот,
+// появившийся после снапшота, снова делает день «не покрытым» — снапшот
+// дополнит его строкой (COALESCE не перезаписывает уже посчитанное).
 func (pg *PGClient) SnapshotDone(ctx context.Context, date time.Time) (bool, error) {
 	var ok bool
-	if err := pg.Pool.QueryRow(ctx, `
-        SELECT EXISTS (SELECT 1 FROM product_day_state WHERE date = $1 LIMIT 1)`,
-		date,
-	).Scan(&ok); err != nil {
+	if err := pg.Pool.QueryRow(ctx, snapshotDoneSQL, date).Scan(&ok); err != nil {
 		return false, fmt.Errorf("snapshot done %s: %w", date.Format(time.DateOnly), err)
 	}
 	return ok, nil
