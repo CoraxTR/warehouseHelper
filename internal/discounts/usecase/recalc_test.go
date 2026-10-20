@@ -157,7 +157,7 @@ func (r *fakeDiscountRepo) MarkDigestSent(context.Context, string, time.Time, ti
 	return errRepoMethodUnused
 }
 
-func (r *fakeDiscountRepo) LastDigestPairs(context.Context) (map[discounts.LotKey]struct{}, error) {
+func (r *fakeDiscountRepo) LastDigestPairs(context.Context, time.Time) (map[discounts.LotKey]struct{}, error) {
 	return nil, errRepoMethodUnused
 }
 

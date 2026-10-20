@@ -53,7 +53,13 @@ const (
 // совпадает со scanLotPair. Префикс i — алиас discount_telegram_digest_item.
 const digestPairColumns = `i.product_id, i.best_before`
 
-// latestSentDigestSQL — подзапрос «последняя отправленная рассылка КАНАЛА»
+// latestSentDigestSQL — подзапрос «предыдущая отправленная рассылка КАНАЛА»:
+// строго РАНЬШЕ дня плана ($2 — день плана в date). Сегодняшний план в
+// антидубль попадать не должен: письмо 14:00 сохраняется в историю с sent_at,
+// и без отсечения по planned_at живое письмо с 14:05 видело в «предыдущей
+// рассылке» сам себя и вычёркивало из слота все позиции дня (инцидент
+// 20.10.2026: из восьми позиций в письме и посте остались две — ручные ТГ,
+// которые антидубль обходят).
 // (по дню плана, затем по id — в один день бывает два слота: дайджест 09:00 в
 // общий чат и план 14:00 в чат склада). $1 — канал (chat_kind).
 //
@@ -65,6 +71,19 @@ const digestPairColumns = `i.product_id, i.best_before`
 const latestSentDigestSQL = `
     SELECT id FROM discount_telegram_digest
     WHERE sent_at IS NOT NULL AND chat_kind = $1
+    ORDER BY planned_at DESC, id DESC
+    LIMIT 1`
+
+// prevSentDigestSQL — подзапрос «ПРЕДЫДУЩАЯ отправленная рассылка канала» для
+// антидубля: строго раньше дня плана ($2 — день плана). Отличается от
+// latestSentDigestSQL намеренно: подъёму 16:00 нужен именно СЕГОДНЯШНИЙ план, а
+// антидублю — вчерашний. Без отсечения по planned_at живое письмо с 14:05 (план
+// уже сохранён с sent_at) видело в «предыдущей рассылке» само себя и вычёркивало
+// из слота все позиции дня — инцидент 20.10.2026: из восьми позиций в письме и
+// посте остались две, которые антидубль обходят (ручная ТГ).
+const prevSentDigestSQL = `
+    SELECT id FROM discount_telegram_digest
+    WHERE sent_at IS NOT NULL AND chat_kind = $1 AND planned_at < $2::date
     ORDER BY planned_at DESC, id DESC
     LIMIT 1`
 
@@ -219,12 +238,12 @@ func checkDigestItems(items []discounts.DigestItem) error {
 // рассылки — антидубль «не было в предыдущей рассылке» (по лоту, не по товару).
 //
 // Рассылки в истории нет — пустая карта, не ошибка: первый слот публикует всё.
-func (pg *PGClient) LastDigestPairs(ctx context.Context) (map[discounts.LotKey]struct{}, error) {
+func (pg *PGClient) LastDigestPairs(ctx context.Context, before time.Time) (map[discounts.LotKey]struct{}, error) {
 	rows, err := pg.Pool.Query(ctx, `
         SELECT `+digestPairColumns+`
         FROM discount_telegram_digest_item i
-        WHERE i.digest_id = (`+latestSentDigestSQL+`)`,
-		discounts.ChatWarehouse,
+        WHERE i.digest_id = (`+prevSentDigestSQL+`)`,
+		discounts.ChatWarehouse, before,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("last digest pairs: %w", err)

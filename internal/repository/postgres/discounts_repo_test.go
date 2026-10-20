@@ -322,6 +322,16 @@ func TestLatestSentDigestSQL(t *testing.T) {
 			t.Errorf("в latestSentDigestSQL нет %q", want)
 		}
 	}
+	// Антидубль смотрит на ПРЕДЫДУЩУЮ рассылку: без planned_at < дня плана
+	// живое письмо видело в «предыдущей» сегодняшний план и вычёркивало все
+	// позиции дня (инцидент 20.10.2026). Сам latestSentDigestSQL при этом
+	// остаётся без отсечения — он нужен подъёму 16:00 по СЕГОДНЯШНЕМУ плану.
+	if !strings.Contains(prevSentDigestSQL, "planned_at < $2::date") {
+		t.Errorf("в prevSentDigestSQL нет %q", "planned_at < $2::date")
+	}
+	if strings.Contains(latestSentDigestSQL, "planned_at <") {
+		t.Error("latestSentDigestSQL не должен отсекать сегодняшний план: он нужен подъёму 16:00")
+	}
 }
 
 // TestDiscountInputColumnsIncludeDiscounts — снапшот расчёта обязан нести

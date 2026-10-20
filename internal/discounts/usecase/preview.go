@@ -44,7 +44,7 @@ func (uc *UseCase) PlanPreview(ctx context.Context, capacity int) (DayPlanPrevie
 	if err != nil {
 		return DayPlanPreview{}, fmt.Errorf("предпросмотр плана дня: оборот: %w", err)
 	}
-	prev, err := uc.repo.LastDigestPairs(ctx)
+	prev, err := uc.repo.LastDigestPairs(ctx, day)
 	if err != nil {
 		return DayPlanPreview{}, fmt.Errorf("предпросмотр плана дня: прошлая рассылка: %w", err)
 	}
