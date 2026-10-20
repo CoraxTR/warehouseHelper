@@ -102,6 +102,9 @@ func buildDayPlan(pairs []PairState, prev map[discounts.LotKey]struct{}, capacit
 	// weak — пары со СВЕЖЕЙ ступенью ровно 10 % (site 0 → 10): материал добора,
 	// местом в слоте они не пользуются.
 	weak := make([]PairState, 0, capacity)
+	// prevSeen — пары, бывшие в прошлой рассылке: повторно не публикуем, но
+	// свежую ступень дня отдаём сайту (см. ниже).
+	prevSeen := make([]PairState, 0, capacity)
 	for _, p := range pairs {
 		if p.Frozen() {
 			continue // ручной ноль сайта замораживает пару целиком
@@ -115,6 +118,14 @@ func buildDayPlan(pairs []PairState, prev map[discounts.LotKey]struct{}, capacit
 				reason:   discounts.ReasonManual,
 				tgManual: true,
 			})
+			continue
+		}
+		if inPrev(prev, p.Key) {
+			// Пара была в прошлой рассылке: в слот её не берём (антидубль), но
+			// ступень дня не теряем — она уходит на сайт сразу, как у «лишних»
+			// (решение владельца 20.10.2026). До этого такая пара выпадала из
+			// плана целиком, и лесенка в ТГ-день по ней не срабатывала вовсе.
+			prevSeen = append(prevSeen, p)
 			continue
 		}
 		if !slotEligible(p, prev) {
@@ -193,7 +204,37 @@ func buildDayPlan(pairs []PairState, prev map[discounts.LotKey]struct{}, capacit
 			reason:  discounts.ReasonExpiry,
 		})
 	}
+	// Ступень дня по парам из прошлой рассылки — сайту, не в рассылку.
+	extra = append(extra, prevSeenExtra(prevSeen)...)
+
 	return dayPlan{slot: slot, extra: extra}
+}
+
+// inPrev — пара была в прошлой отправленной рассылке (антидубль по лоту).
+func inPrev(prev map[discounts.LotKey]struct{}, key discounts.LotKey) bool {
+	_, ok := prev[key]
+
+	return ok
+}
+
+// prevSeenExtra — ступени дня по парам из прошлой рассылки: в рассылке их нет
+// (антидубль), поэтому свежее повышение по сроку уходит на сайт сразу, как у
+// «лишних» — иначе в ТГ-день лесенка по такой паре не срабатывает вовсе и сайт
+// стоит на прошлой ступени до следующего КТ-дня (решение владельца 20.10.2026).
+func prevSeenExtra(prevSeen []PairState) []slotPosition {
+	out := make([]slotPosition, 0, len(prevSeen))
+	for _, p := range prevSeen {
+		if p.Manual != nil || p.Expiry == nil || *p.Expiry <= appliedTop(p) {
+			continue // сегодняшнего повышения по сроку нет — писать нечего
+		}
+		out = append(out, slotPosition{
+			pair:    p,
+			percent: *p.Expiry,
+			reason:  discounts.ReasonExpiry,
+		})
+	}
+
+	return out
 }
 
 // slotHasPair — пара уже попала в позиции слота (её мог забрать добор).

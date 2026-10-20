@@ -1084,3 +1084,40 @@ func (n *fakeWarehouseNotifier) EditShopHTML(messageID int64, text string) error
 
 	return nil
 }
+
+// Пара из прошлой рассылки в слот не идёт (антидубль), но её свежая ступень
+// уходит на сайт сразу — как у «лишних» (решение владельца 20.10.2026).
+// До правки такая пара выпадала из плана целиком: лесенка в ТГ-день по ней не
+// срабатывала, сайт стоял на прошлой ступени до следующего КТ-дня.
+func TestRunSlotPlanPrevPairGetsSiteStep(t *testing.T) {
+	h := newSlotHarness(recalcNow(1),
+		lotInput("p1", "Колбаса", day(5), 100, shelfLifeInput(26), plainInput(20)), // D=4 → ступень 40, сайт 20
+		lotInput("p2", "Сыр", day(9), 50, shelfLifeInput(26)),                      // обычная позиция слота
+	)
+	h.repo.lastPairs = map[discounts.LotKey]struct{}{h.key("p1", day(5)): {}}
+
+	if err := h.uc.RecalcSurplus(context.Background(), h.now); err != nil {
+		t.Fatalf("RecalcSurplus (наполнение): %v", err)
+	}
+	h.tasks.texts, h.tasks.tries = nil, nil
+
+	if err := h.uc.RunSlotPlan(context.Background(), h.now, 10); err != nil {
+		t.Fatalf("план дня: %v", err)
+	}
+	h.finalPass(t, 10)
+
+	byPID := map[string]discounts.DiscountWrite{}
+	for _, w := range h.allWrites() {
+		byPID[w.ProductID] = w
+	}
+	prev := byPID["p1"]
+	if prev.General == nil || *prev.General != 40 {
+		t.Errorf("пара из прошлой рассылки: %+v, want general=40 (ступень сайта сразу)", prev)
+	}
+	if prev.Telegram != nil {
+		t.Errorf("пара из прошлой рассылки telegram %v, want nil (в рассылку не идёт)", prev.Telegram)
+	}
+	if _, inSlot := byPID["p2"]; !inSlot {
+		t.Error("вторая позиция не попала в слот")
+	}
+}
