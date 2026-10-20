@@ -10,6 +10,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
+	"strings"
 	"time"
 
 	"warehouseHelper/internal/config"
@@ -568,6 +569,15 @@ func (n *Notifier) postJSONResult(ctx context.Context, method string, payload ma
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		// «message is not modified» (400 у edit-методов) — не ошибка: сообщение
+		// уже такое, каким его просят сделать. Иначе вызывающий считает правку
+		// сбойной и не идёт дальше (инцидент 20.10.2026: живое письмо каждую
+		// минуту получало 400, из-за чего не выполнялись applyExtras, фиксация
+		// дня, запросы фото и пост в чат скидок).
+		if strings.HasPrefix(method, "edit") && bytes.Contains(respBody, []byte("message is not modified")) {
+			return 0, nil
+		}
+
 		return 0, fmt.Errorf("telegram API returned %s: %s", resp.Status, string(respBody))
 	}
 
