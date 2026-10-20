@@ -120,7 +120,7 @@ func buildDayPlan(pairs []PairState, prev map[discounts.LotKey]struct{}, capacit
 			})
 			continue
 		}
-		if _, seen := prev[p.Key]; seen {
+		if inPrev(prev, p.Key) {
 			// Пара была в прошлой рассылке: в слот её не берём (антидубль), но
 			// ступень дня не теряем — она уходит на сайт сразу, как у «лишних»
 			// (решение владельца 20.10.2026). До этого такая пара выпадала из
@@ -204,20 +204,37 @@ func buildDayPlan(pairs []PairState, prev map[discounts.LotKey]struct{}, capacit
 			reason:  discounts.ReasonExpiry,
 		})
 	}
-	// Ступень дня по паре из прошлой рассылки: в рассылке её нет, значит сайт
-	// должен получить повышение сегодня, а не в 16:00 и не в следующий КТ-день.
+	// Ступень дня по парам из прошлой рассылки — сайту, не в рассылку.
+	extra = append(extra, prevSeenExtra(prevSeen)...)
+
+	return dayPlan{slot: slot, extra: extra}
+}
+
+// inPrev — пара была в прошлой отправленной рассылке (антидубль по лоту).
+func inPrev(prev map[discounts.LotKey]struct{}, key discounts.LotKey) bool {
+	_, ok := prev[key]
+
+	return ok
+}
+
+// prevSeenExtra — ступени дня по парам из прошлой рассылки: в рассылке их нет
+// (антидубль), поэтому свежее повышение по сроку уходит на сайт сразу, как у
+// «лишних» — иначе в ТГ-день лесенка по такой паре не срабатывает вовсе и сайт
+// стоит на прошлой ступени до следующего КТ-дня (решение владельца 20.10.2026).
+func prevSeenExtra(prevSeen []PairState) []slotPosition {
+	out := make([]slotPosition, 0, len(prevSeen))
 	for _, p := range prevSeen {
 		if p.Manual != nil || p.Expiry == nil || *p.Expiry <= appliedTop(p) {
 			continue // сегодняшнего повышения по сроку нет — писать нечего
 		}
-		extra = append(extra, slotPosition{
+		out = append(out, slotPosition{
 			pair:    p,
 			percent: *p.Expiry,
 			reason:  discounts.ReasonExpiry,
 		})
 	}
 
-	return dayPlan{slot: slot, extra: extra}
+	return out
 }
 
 // slotHasPair — пара уже попала в позиции слота (её мог забрать добор).
