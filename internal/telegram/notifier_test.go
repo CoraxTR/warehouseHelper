@@ -125,3 +125,43 @@ func TestNotifyEveryoneSendsToEveryoneChat(t *testing.T) {
 		t.Errorf("chat_id = %v, want -1009998887777", gotBody["chat_id"])
 	}
 }
+
+// Правка «нечего менять» — успех, а не сбой: Telegram отвечает 400
+// «message is not modified». Пока это считалось ошибкой, живое письмо не
+// доходило до фиксации дня, запроса фото и поста (инцидент 20.10.2026).
+func TestEditMessageNotModifiedIsSuccess(t *testing.T) {
+	const body = `{"ok":false,"error_code":400,"description":"Bad Request: message is not modified: specified new message content and reply markup are exactly the same as a current content and reply markup of the message"}`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(body))
+	}))
+	defer srv.Close()
+
+	n := testNotifier(&config.TelegramConfig{
+		BotToken:        "test-token",
+		WarehouseChatID: -1001234567890,
+	}, srv.URL)
+
+	if err := n.EditWarehouseHTML(4058, "текст", "Пропустить рассылку", "skip"); err != nil {
+		t.Errorf("EditWarehouseHTML = %v, want nil: «не изменено» — не ошибка", err)
+	}
+}
+
+// Другой 400 у правки остаётся ошибкой: проглатываем только «не изменено».
+func TestEditMessageOtherBadRequestStillError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"ok":false,"error_code":400,"description":"Bad Request: message to edit not found"}`))
+	}))
+	defer srv.Close()
+
+	n := testNotifier(&config.TelegramConfig{
+		BotToken:        "test-token",
+		WarehouseChatID: -1001234567890,
+	}, srv.URL)
+
+	if err := n.EditWarehouseHTML(4058, "текст", "", ""); err == nil {
+		t.Error("EditWarehouseHTML = nil, want ошибку: сообщение не найдено")
+	}
+}
