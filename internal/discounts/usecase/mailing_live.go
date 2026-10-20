@@ -156,7 +156,10 @@ func (uc *UseCase) planDay(ctx context.Context, day time.Time, capacity int) ([]
 		return nil, dayPlan{}, fmt.Errorf("живое письмо: оборот: %w", err)
 	}
 	pairs := Evaluate(inputs, rates, day)
-	prev, err := uc.repo.LastDigestPairs(ctx)
+	// before = день плана: сегодняшний план в истории уже есть (sent_at), но
+	// «предыдущая рассылка» для антидубля — вчерашняя, иначе пересборка
+	// вычёркивает из слота все позиции дня (инцидент 20.10.2026).
+	prev, err := uc.repo.LastDigestPairs(ctx, day)
 	if err != nil {
 		return nil, dayPlan{}, err
 	}

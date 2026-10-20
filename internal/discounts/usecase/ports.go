@@ -25,9 +25,10 @@ type Repository interface {
 	// MarkDigestSent — отметить сохранённую рассылку отправленной (по каналу и
 	// дню плана: id наружу не отдаём, история пишется один раз за день).
 	MarkDigestSent(ctx context.Context, chatKind string, plannedAt, at time.Time) error
-	// LastDigestPairs — лоты последней ОТПРАВЛЕННОЙ рассылки (антидубль
+	// LastDigestPairs — лоты ПРЕДЫДУЩЕЙ ОТПРАВЛЕННОЙ рассылки, строго раньше
+	// дня before (антидубль
 	// «не было в предыдущей рассылке»; пустая карта — рассылок не было).
-	LastDigestPairs(ctx context.Context) (map[discounts.LotKey]struct{}, error)
+	LastDigestPairs(ctx context.Context, before time.Time) (map[discounts.LotKey]struct{}, error)
 	// LastPlanQty — план продаж добора по лотам: последняя позиция рассылки с
 	// заданным контролем продаж (initial_qty/plan_qty — только добор из
 	// избытка). По нему расчёт понимает, что план дня выполнен, и снимает

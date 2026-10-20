@@ -62,7 +62,7 @@ func (r *fakeSlotRepo) MarkDigestSent(_ context.Context, _ string, _, at time.Ti
 	return nil
 }
 
-func (r *fakeSlotRepo) LastDigestPairs(context.Context) (map[discounts.LotKey]struct{}, error) {
+func (r *fakeSlotRepo) LastDigestPairs(context.Context, time.Time) (map[discounts.LotKey]struct{}, error) {
 	if r.lastPairs == nil {
 		return map[discounts.LotKey]struct{}{}, nil
 	}
