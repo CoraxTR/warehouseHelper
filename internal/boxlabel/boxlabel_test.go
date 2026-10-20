@@ -150,7 +150,7 @@ func TestNewWorkbookWeightBox(t *testing.T) {
 	}
 
 	// QR-код — картинка в первой строке блока; размер по замеру владельца
-	// 20.10.2026: 2,78 × 2,65 см (105 × 100 px при 96 dpi).
+	// 20.10.2026: 2,78 см квадратом (105 × 105 px при 96 dpi).
 	pics, err := f.GetPictureCells(sheet)
 	if err != nil {
 		t.Fatalf("GetPictureCells: %v", err)
@@ -158,11 +158,24 @@ func TestNewWorkbookWeightBox(t *testing.T) {
 	if len(pics) != 1 || pics[0] != "B1" {
 		t.Errorf("картинки = %v, want [B1]", pics)
 	}
-	if w, h := imageSize(t, f); w != qrWidth || h != qrHeight {
-		t.Errorf("размер QR = %d×%d px, want %d×%d", w, h, qrWidth, qrHeight)
+	if w, h := imageSize(t, f); w != qrSize || h != qrSize {
+		t.Errorf("размер QR = %d×%d px, want %d×%d", w, h, qrSize, qrSize)
 	}
 
 	assertLabelLayout(t, f)
+}
+
+// TestBoxQRPrintSize — печатный размер QR наклейки коробки: 96 dpi, 1 см =
+// 96/2,54 px. Квадрат 105 px = 2,78 см (замер владельца 20.10.2026), и он обязан
+// влезать в строку картинки вместе с отступом сверху — иначе Excel обрежет код.
+func TestBoxQRPrintSize(t *testing.T) {
+	const pxPerCm = 96 / 2.54
+	if cm := float64(qrSize) / pxPerCm; math.Abs(cm-2.78) > 0.01 {
+		t.Errorf("сторона QR = %.2f см, want 2,78", cm)
+	}
+	if px := rowHeightPt[0] * 96 / 72; px < float64(qrSize+imgOffsetY) {
+		t.Errorf("высота строки %.0f px меньше QR %d px + отступ %d px", px, qrSize, imgOffsetY)
+	}
 }
 
 // assertLabelLayout проверяет геометрию печати одной наклейки: высоты строк,

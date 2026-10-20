@@ -36,14 +36,14 @@ const (
 	// Поле картинки в колонке (px): QR центрируется внутри него по ширине.
 	labelFieldW = 272
 	// QR-код вместо штрих-кода (решение владельца 18.10.2026): коробки читают
-	// QR-сканером. Размер — замер владельца 20.10.2026 по печати: 2,78 × 2,65 см,
-	// то есть 105 × 100 px при 96 dpi (не квадрат: по высоте QR сжат на 5 %,
-	// модули остаются читаемыми). Под него высота строки картинки — 111 px
-	// (83,25 pt).
-	qrWidth  = 105
-	qrHeight = 100
+	// QR-сканером. Размер — замер владельца 20.10.2026 по печати: 2,78 см,
+	// квадратом (2,78 × 2,78 см = 105 × 105 px при 96 dpi). Квадрат выбран
+	// владельцем 20.10.2026 взамен неквадратных 2,78 × 2,65: сжатие модулей по
+	// высоте давало 5 px экономии и риск для сканера. Под него высота строки
+	// картинки — 111 px (83,25 pt).
+	qrSize = 105
 	// qrOffsetX — QR по центру поля картинки; qrOffsetY — отступ от верха ячейки.
-	qrOffsetX = imgOffsetX + (labelFieldW-qrWidth)/2
+	qrOffsetX = imgOffsetX + (labelFieldW-qrSize)/2
 	qrOffsetY = imgOffsetY
 
 	// markerQRSize — QR наклеек спец-кодов приёмки (555/666): геометрия не
@@ -136,7 +136,7 @@ func newWorkbook(boxes []Box) (*excelize.File, int, error) {
 			continue // наклейку из этого кода не собрать — коробка пропускается
 		}
 
-		pngBytes, err := generateQRPNG(code, qrWidth, qrHeight)
+		pngBytes, err := generateQRPNG(code, qrSize)
 		if err != nil {
 			return nil, 0, fmt.Errorf("штрих-код %s: %w", code, err)
 		}
@@ -318,7 +318,7 @@ func newMarkerWorkbook(code string) (*excelize.File, error) {
 	if err != nil {
 		return nil, err
 	}
-	pngBytes, err := generateQRPNG(code, markerQRSize, markerQRSize)
+	pngBytes, err := generateQRPNG(code, markerQRSize)
 	if err != nil {
 		return nil, fmt.Errorf("штрих-код %s: %w", code, err)
 	}
@@ -358,15 +358,15 @@ func zeroMargins() *excelize.PageLayoutMarginsOptions {
 	}
 }
 
-// generateQRPNG создаёт PNG-байты QR-кода заданного размера в пикселях (коробки
-// читают QR-сканером); width и height независимы — наклейка коробки печатает
-// 2,78 × 2,65 см, спец-коды — квадрат.
-func generateQRPNG(data string, width, height int) ([]byte, error) {
+// generateQRPNG создаёт PNG-байты QR-кода со стороной size пикселей (коробки
+// читают QR-сканером): QR всегда квадрат — иначе модули получаются
+// прямоугольными, и сканер читает хуже.
+func generateQRPNG(data string, size int) ([]byte, error) {
 	bc, err := qr.Encode(data, qr.M, qr.Auto)
 	if err != nil {
 		return nil, err
 	}
-	scaled, err := barcode.Scale(bc, width, height)
+	scaled, err := barcode.Scale(bc, size, size)
 	if err != nil {
 		return nil, err
 	}
