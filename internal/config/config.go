@@ -96,6 +96,10 @@ type AppConfig struct {
 	// DayStateSnapshotTime — время утреннего снапшота состояний по дням
 	// (модуль daystate), от полуночи, локальное время процесса.
 	DayStateSnapshotTime time.Duration
+	// StockFreezeTime — время ежедневной уборки пар под заморозку (модуль
+	// «Сроки»), от полуночи, локальное время процесса: пары со сроком ≤ завтра
+	// убираются из сроков, склад получает список на заморозку.
+	StockFreezeTime time.Duration
 	// DiscountWindowCap — ёмкость окна сайта (модуль скидок): сколько позиций
 	// показываем менеджеру в окне распродажи.
 	DiscountWindowCap int
@@ -416,6 +420,16 @@ func loadAppconfig() *AppConfig {
 		}
 	}
 
+	// Время ежедневной уборки пар под заморозку (модуль «Сроки»):
+	// APP_STOCK_FREEZE_TIME в формате "HH:MM" (локальное время процесса); по
+	// умолчанию 20:00; невалидное значение — дефолт.
+	stockFreezeTime := 20 * time.Hour
+	if tStr := os.Getenv("APP_STOCK_FREEZE_TIME"); tStr != "" {
+		if t, err := time.Parse("15:04", tStr); err == nil {
+			stockFreezeTime = time.Duration(t.Hour())*time.Hour + time.Duration(t.Minute())*time.Minute
+		}
+	}
+
 	// Модуль скидок: ёмкости окна сайта и слота ТГ (APP_DISCOUNT_WINDOW_CAP=12,
 	// APP_DISCOUNT_TELEGRAM_CAP=10) — неположительное значение сбрасывается на
 	// дефолт, как у остальных счётчиков приложения.
@@ -455,6 +469,7 @@ func loadAppconfig() *AppConfig {
 		TempCleanupMaxAge:    tempCleanupMaxAge,
 		WeightsHistoryLimit:  weightsHistoryLimit,
 		DayStateSnapshotTime: dayStateSnapshotTime,
+		StockFreezeTime:      stockFreezeTime,
 		DiscountWindowCap:    discountWindowCap,
 		DiscountTelegramCap:  discountTelegramCap,
 		DiscountTGPlanTime:   discountTGPlanTime,

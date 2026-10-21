@@ -152,6 +152,7 @@ func (a *App) initDeps() {
 	inits := []func(){
 		a.initHTTPServer,
 		a.initStockCache,
+		a.initStockFreeze,
 		a.initDayState,
 		a.initAverageSales,
 		a.initDiscounts,
@@ -234,6 +235,20 @@ func (a *App) initStockCache() {
 		return
 	}
 	slog.Info(fmt.Sprintf("кэш остатков прогрет: %d товаров (страницы «Сроки»/«Шорт-лист»)", len(uc.Snapshot())))
+}
+
+// initStockFreeze запускает ежедневную уборку пар под заморозку (модуль
+// «Сроки»): время — APP_STOCK_FREEZE_TIME (локальное, default 20:00). Пары со
+// сроком ≤ завтра убираются из сроков, склад получает сообщение со списком на
+// заморозку. Ошибки не роняют приложение — ретрай на следующем тике (спящий
+// ПК, недоступная БД, отказ Telegram). Start блокируется до отмены ctx,
+// поэтому идёт в фон под учётом wg.
+func (a *App) initStockFreeze() {
+	freezeTime := a.di.Config().StockFreezeTime
+
+	a.background("сроки: уборка пар под заморозку", func() {
+		a.di.StockUC().StartExpiryWatch(a.ctx, freezeTime)
+	})
 }
 
 // initDayState запускает фоновую задачу утреннего снапшота состояний по дням
