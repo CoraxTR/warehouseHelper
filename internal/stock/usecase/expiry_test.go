@@ -161,7 +161,7 @@ func TestFreezeNoticeRetry(t *testing.T) {
 	repo := &mockRepo{products: testStock()}
 	notify := &mockNotifier{err: errors.New("telegram down")}
 	uc := NewStockUseCase(repo, &mockPub{}, nil, notify)
-	uc.now = func() time.Time { return time.Date(2026, 9, 4, 20, 1, 0, 0, msk) }
+	uc.now = func() time.Time { return time.Date(2026, time.September, 4, 20, 1, 0, 0, msk) }
 	if err := uc.WarmUp(context.Background()); err != nil {
 		t.Fatalf("WarmUp: %v", err)
 	}
@@ -198,7 +198,7 @@ func TestExpiryWatchOncePerDay(t *testing.T) {
 	notify := &mockNotifier{}
 	uc := NewStockUseCase(repo, &mockPub{}, nil, notify)
 
-	now := time.Date(2026, 9, 4, 19, 59, 0, 0, msk)
+	now := time.Date(2026, time.September, 4, 19, 59, 0, 0, msk)
 	uc.now = func() time.Time { return now }
 	if err := uc.WarmUp(context.Background()); err != nil {
 		t.Fatalf("WarmUp: %v", err)
@@ -211,7 +211,7 @@ func TestExpiryWatchOncePerDay(t *testing.T) {
 	}
 
 	// 20:01 — уборка пар ≤ 05.09 (05.09 — «завтра»).
-	now = time.Date(2026, 9, 4, 20, 1, 0, 0, msk)
+	now = time.Date(2026, time.September, 4, 20, 1, 0, 0, msk)
 	uc.tryExpiryCleanup(context.Background(), 20*time.Hour)
 	if repo.replaceCalls != 1 {
 		t.Fatalf("replaceCalls = %d, want 1", repo.replaceCalls)
@@ -223,14 +223,14 @@ func TestExpiryWatchOncePerDay(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("AcceptStock: %v", err)
 	}
-	now = time.Date(2026, 9, 4, 21, 30, 0, 0, msk)
+	now = time.Date(2026, time.September, 4, 21, 30, 0, 0, msk)
 	uc.tryExpiryCleanup(context.Background(), 20*time.Hour)
 	if repo.replaceCalls != 1 {
 		t.Errorf("replaceCalls = %d, want 1 (один проход в сутки)", repo.replaceCalls)
 	}
 
 	// Следующий день — проход снова, пара 05.09 (уже «сегодня») уходит.
-	now = time.Date(2026, 9, 5, 20, 1, 0, 0, msk)
+	now = time.Date(2026, time.September, 5, 20, 1, 0, 0, msk)
 	uc.tryExpiryCleanup(context.Background(), 20*time.Hour)
 	if repo.replaceCalls != 2 {
 		t.Fatalf("replaceCalls = %d, want 2", repo.replaceCalls)
