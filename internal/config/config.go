@@ -423,12 +423,7 @@ func loadAppconfig() *AppConfig {
 	// Время ежедневной уборки пар под заморозку (модуль «Сроки»):
 	// APP_STOCK_FREEZE_TIME в формате "HH:MM" (локальное время процесса); по
 	// умолчанию 20:00; невалидное значение — дефолт.
-	stockFreezeTime := 20 * time.Hour
-	if tStr := os.Getenv("APP_STOCK_FREEZE_TIME"); tStr != "" {
-		if t, err := time.Parse("15:04", tStr); err == nil {
-			stockFreezeTime = time.Duration(t.Hour())*time.Hour + time.Duration(t.Minute())*time.Minute
-		}
-	}
+	stockFreezeTime := loadStockFreezeTime()
 
 	// Модуль скидок: ёмкости окна сайта и слота ТГ (APP_DISCOUNT_WINDOW_CAP=12,
 	// APP_DISCOUNT_TELEGRAM_CAP=10) — неположительное значение сбрасывается на
@@ -492,6 +487,22 @@ func loadPickingRetention() time.Duration {
 	}
 
 	return defaultRetention
+}
+
+// loadStockFreezeTime — время ежедневной уборки пар под заморозку (модуль
+// «Сроки»): APP_STOCK_FREEZE_TIME в формате "HH:MM" (локальное время
+// процесса), по умолчанию 20:00. Неразбираемое значение — дефолт (как у
+// остальных времён приложения).
+func loadStockFreezeTime() time.Duration {
+	const defaultFreezeTime = 20 * time.Hour
+
+	if tStr := os.Getenv("APP_STOCK_FREEZE_TIME"); tStr != "" {
+		if t, err := time.Parse("15:04", tStr); err == nil {
+			return time.Duration(t.Hour())*time.Hour + time.Duration(t.Minute())*time.Minute
+		}
+	}
+
+	return defaultFreezeTime
 }
 
 type MSWorker struct {
