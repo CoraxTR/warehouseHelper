@@ -63,6 +63,16 @@ type ProductWrite struct {
 	Deletes   []time.Time // best_before удаляемых лотов
 }
 
+// ExpiringLot — пара (товар, срок), убранная из «Сроков» под заморозку:
+// срок годности истекает завтра или уже истёк, физический остаток есть.
+// Ведёт список для сообщения складу («нужно заморозить»).
+type ExpiringLot struct {
+	ProductID  string
+	Name       string
+	Qty        int64
+	BestBefore time.Time
+}
+
 // LotWrite — целевое состояние лота при upsert (скидки передаёт usecase —
 // он решил, что сохранить, а что сбросить).
 type LotWrite struct {

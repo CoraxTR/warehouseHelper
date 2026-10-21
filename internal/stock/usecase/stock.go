@@ -125,6 +125,10 @@ type StockUseCase struct {
 	dayState DayStateRecorder
 	notifier WarehouseNotifier
 
+	// now — часы юзкейса (подменяются в тестах): ежедневная уборка пар под
+	// заморозку решает по ЛОКАЛЬНОЙ дате склада, а не по UTC процесса.
+	now func() time.Time
+
 	// lotListener — шов «лоты товара изменились» (модуль расчёта скидок).
 	// Ставится сеттером при сборке (di.go) до первой записи, дальше только
 	// читается — как dayState/notifier, без мутекса.
@@ -133,13 +137,22 @@ type StockUseCase struct {
 	mu     sync.RWMutex
 	cache  map[string]*stock.Product // product_id → товар каталога (Lots — по возрастанию best_before, может быть пустым)
 	byCode map[string]string         // internal_code → product_id (шов для будущей приёмки)
+
+	// pendingFreeze — сообщения складу «позиции убраны из сроков», которые
+	// Telegram ещё не принял: ретрай на каждом минутном тике. Теряется при
+	// рестарте (сообщение — уведомление, а не данные; лоты уже удалены).
+	pendingFreeze []string
+	// lastFreezeDay — дата последней уборки под заморозку в этом процессе
+	// (маркер «один проход в сутки»). Только в памяти: повторный проход после
+	// рестарта идемпотентен — удалённых пар в кэше уже нет.
+	lastFreezeDay time.Time
 }
 
 // NewStockUseCase создаёт сценарий с хранилищем и публикатором (хаб может
 // быть nil); dayState — наблюдатель состояния по дням, notifier — уведомления
 // в чат склада (оба могут быть nil — тесты/выключенные каналы).
 func NewStockUseCase(repo Repository, pub Publisher, dayState DayStateRecorder, notifier WarehouseNotifier) *StockUseCase {
-	return &StockUseCase{repo: repo, pub: pub, dayState: dayState, notifier: notifier}
+	return &StockUseCase{repo: repo, pub: pub, dayState: dayState, notifier: notifier, now: time.Now}
 }
 
 // notifyDayState уведомляет daystate об изменении остатков товаров (без
