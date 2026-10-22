@@ -323,8 +323,14 @@ func TestHandlePhotoByReply(t *testing.T) {
 	if got := h.uc.photo(lotKey(h.repo.digest.Items[0].ProductID, h.repo.digest.Items[0].BestBefore)); got != "file-1" {
 		t.Errorf("file_id %q, want file-1", got)
 	}
-	if len(h.chat.texts) == 0 || !strings.Contains(h.chat.texts[len(h.chat.texts)-1], "принято") {
-		t.Errorf("подтверждение не отправлено: %v", h.chat.texts)
+	if len(h.chat.mailing) == 0 || !strings.Contains(h.chat.mailing[len(h.chat.mailing)-1], "принято") {
+		t.Errorf("подтверждение не отправлено: %v", h.chat.mailing)
+	}
+	// Под подтверждением — кнопка «Переделать фото» на этот лот: фото могло
+	// прийти не то (решение владельца 22.10.2026).
+	wantBtn := discounts.PhotoRedoButton + "|" + PhotoRedoCallback(lotKey(h.repo.digest.Items[0].ProductID, h.repo.digest.Items[0].BestBefore))
+	if len(h.chat.buttons) == 0 || h.chat.buttons[len(h.chat.buttons)-1] != wantBtn {
+		t.Errorf("кнопка подтверждения %v, want %q", h.chat.buttons, wantBtn)
 	}
 
 	if err := h.uc.HandlePhoto(ctx, -1005, 999999, "file-2"); err != nil {
@@ -332,5 +338,79 @@ func TestHandlePhotoByReply(t *testing.T) {
 	}
 	if got := h.uc.photo(lotKey(h.repo.digest.Items[0].ProductID, h.repo.digest.Items[0].BestBefore)); got != "file-1" {
 		t.Errorf("чужой reply перезаписал фото: %q", got)
+	}
+}
+
+// Кнопка «Переделать фото»: старое фото забыто, сообщение с кнопкой убрано,
+// запрос ушёл заново — новое фото приходит ответом на НОВЫЙ запрос и заменяет
+// старое в альбоме (решение владельца 22.10.2026).
+func TestRedoPhotoRequestsNewPhoto(t *testing.T) {
+	h := newSlotHarness(recalcNow(1), lotInput("p1", "Колбаса", day(9), 100, shelfLifeInput(26)))
+	ctx := context.Background()
+
+	if err := h.uc.RunSlotPlan(ctx, h.now, 2); err != nil {
+		t.Fatalf("план дня: %v", err)
+	}
+	h.finalPass(t, 2)
+
+	it := h.repo.digest.Items[0]
+	key := lotKey(it.ProductID, it.BestBefore)
+	if err := h.uc.HandlePhoto(ctx, -1005, it.MessageID, "file-1"); err != nil {
+		t.Fatalf("фото: %v", err)
+	}
+	acceptID := h.chat.nextID // подтверждение с кнопкой — это же сообщение нажимают
+	requests := len(h.chat.requests)
+
+	if err := h.uc.RedoPhoto(ctx, "cb-3", -1005, acceptID, PhotoRedoCallback(key)); err != nil {
+		t.Fatalf("переделать фото: %v", err)
+	}
+
+	if got := h.uc.photo(key); got != "" {
+		t.Errorf("старое фото осталось в памяти: %q", got)
+	}
+	if len(h.chat.deleted) == 0 || h.chat.deleted[len(h.chat.deleted)-1] != acceptID {
+		t.Errorf("подтверждение не убрано: %v", h.chat.deleted)
+	}
+	if len(h.chat.requests) != requests+1 {
+		t.Errorf("нового запроса фото нет: %v", h.chat.requests)
+	}
+	if h.chat.acked == 0 {
+		t.Error("нажатие не закрыто")
+	}
+
+	// Новое фото приходит ответом на новый запрос — принимается как обычно.
+	newReq := h.repo.digest.Items[0].MessageID
+	if newReq == 0 || newReq == it.MessageID {
+		t.Fatalf("id запроса не обновлён: %d (было %d)", newReq, it.MessageID)
+	}
+	if err := h.uc.HandlePhoto(ctx, -1005, newReq, "file-2"); err != nil {
+		t.Fatalf("новое фото: %v", err)
+	}
+	if got := h.uc.photo(key); got != "file-2" {
+		t.Errorf("фото %q, want file-2", got)
+	}
+}
+
+// После публикации поста альбом уже в чате: кнопка объясняет отказ, а не просит
+// фото, которое никуда не попадёт.
+func TestRedoPhotoRefusedAfterPublish(t *testing.T) {
+	h := publishHarness(t, lotInput("p1", "Колбаса", day(9), 100, shelfLifeInput(26)))
+	ctx := context.Background()
+
+	if err := h.uc.publishShop(ctx, h.now.Add(time.Hour)); err != nil {
+		t.Fatalf("публикация: %v", err)
+	}
+	it := h.repo.digest.Items[0]
+	requests := len(h.chat.requests)
+
+	if err := h.uc.RedoPhoto(ctx, "cb-4", -1005, 500, PhotoRedoCallback(lotKey(it.ProductID, it.BestBefore))); err != nil {
+		t.Fatalf("переделать фото: %v", err)
+	}
+
+	if len(h.chat.alerts) == 0 {
+		t.Error("отказ после публикации не показан")
+	}
+	if len(h.chat.requests) != requests {
+		t.Errorf("запрос фото ушёл после публикации: %v", h.chat.requests[requests:])
 	}
 }

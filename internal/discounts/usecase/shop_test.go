@@ -261,3 +261,58 @@ func TestPublishShopClosesPreviousPost(t *testing.T) {
 		t.Errorf("новый пост не отправлен: %d", len(h.chat.shopTexts))
 	}
 }
+
+// Лот, распроданный до нуля, сток УДАЛЯЕТ (`DELETE FROM product_stock` в
+// списании подбора): строки в снапшоте остатков нет. Блок поста при этом обязан
+// остаться с названием, единицей и ценой — «ПРОДАНО» ставится ПЕРЕД названием,
+// а не вместо него (инцидент 22.10.2026: «1. ❗️ПРОДАНО❗️  | 30%»).
+func TestSyncShopPostKeepsNameWhenLotDeleted(t *testing.T) {
+	h := publishHarness(t, lotInput("p1", "Стейк Филе-Миньон", day(9), 3, shelfLifeInput(26),
+		catalogInput(529000, "шт", "")))
+	ctx := context.Background()
+
+	if err := h.uc.publishShop(ctx, h.now.Add(time.Hour)); err != nil {
+		t.Fatalf("публикация: %v", err)
+	}
+
+	h.repo.inputs = nil // подбор списал лот до нуля — пары в остатках больше нет
+	if err := h.uc.syncShopPost(ctx, h.now.Add(time.Hour+time.Minute)); err != nil {
+		t.Fatalf("правка: %v", err)
+	}
+
+	if len(h.chat.shopEdits) == 0 {
+		t.Fatal("пост не отредактирован: продажа не замечена")
+	}
+	last := h.chat.shopEdits[len(h.chat.shopEdits)-1].Text
+	if !strings.Contains(last, discounts.ShopSoldMark+" Стейк Филе-Миньон") {
+		t.Errorf("метка «продано» не перед названием: %q", last)
+	}
+	if !strings.Contains(last, "5290,00 руб./шт.") {
+		t.Errorf("в блоке нет цены: %q", last)
+	}
+	if !strings.Contains(last, "Остаток по акции: 0 шт.") {
+		t.Errorf("нет нулевого остатка: %q", last)
+	}
+}
+
+// Событие стока будит правку поста: подбор обнулил лот — пост правится сразу, а
+// не минутным тиком. Пачка событий не копится (канал на один сигнал), и запись
+// остатков на сигнале не блокируется.
+func TestOnLotsChangedKicksShopPost(t *testing.T) {
+	h := newSlotHarness(recalcNow(1), lotInput("p1", "Колбаса", day(9), 10, shelfLifeInput(26)))
+
+	if err := h.uc.OnLotsChanged(context.Background(), "p1", nil); err != nil {
+		t.Fatalf("событие стока: %v", err)
+	}
+	select {
+	case <-h.uc.shopKick:
+	default:
+		t.Fatal("событие стока не разбудило правку поста")
+	}
+
+	for i := 0; i < 5; i++ {
+		if err := h.uc.OnLotsChanged(context.Background(), "p1", nil); err != nil {
+			t.Fatalf("событие стока: %v", err)
+		}
+	}
+}

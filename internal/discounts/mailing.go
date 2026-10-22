@@ -76,11 +76,18 @@ func PhotoRequest(name string, bestBefore time.Time) string {
 		html.EscapeString(name), bestBefore.Format("02.01.2006"))
 }
 
-// PhotoAccepted — подтверждение принятого фото (ответ в чат склада).
+// PhotoAccepted — подтверждение принятого фото (ответ в чат склада). Название
+// экранируется: сообщение уходит с HTML-разметкой и кнопкой «Переделать фото».
 func PhotoAccepted(name string, bestBefore time.Time) string {
 	return fmt.Sprintf("✅ Фото для %s до %s принято",
-		name, bestBefore.Format("02.01.2006"))
+		html.EscapeString(name), bestBefore.Format("02.01.2006"))
 }
+
+// PhotoRedoButton — кнопка под подтверждением фото: склад просит новое фото
+// вместо принятого (размытое, не тот лот). Нажатие забывает старое фото и
+// заново запрашивает снимок; после публикации поста недоступна (альбом уже в
+// чате) — решение владельца 22.10.2026.
+const PhotoRedoButton = "🔄 Переделать фото"
 
 // BuildMailing собирает текст письма: шапка, блоки позиций по порядку, хвост с
 // двумя ссылками. Пустой список — пустая строка: сообщения нет, и вызывающему

@@ -373,11 +373,13 @@ type taskCallbackHandler interface {
 	HandleWho(ctx context.Context, callbackQueryID string, chatID, messageID, taskID, employeeID int64) error
 }
 
-// mailingCallbackHandler — кнопка «Пропустить рассылку» под живым письмом склада
-// (модуль «Скидки»): рассылки не будет, скидки уходят на сайт сразу, позиции
-// остаются доступными следующей рассылке.
+// mailingCallbackHandler — кнопки модуля «Скидки»: «Пропустить рассылку» под
+// живым письмом склада (рассылки не будет, скидки уходят на сайт сразу,
+// позиции остаются доступными следующей рассылке) и «Переделать фото» под
+// подтверждением принятого фото (фото пришло не то — запрашиваем новое).
 type mailingCallbackHandler interface {
 	SkipMailing(ctx context.Context, callbackQueryID string, chatID, messageID int64) error
+	RedoPhoto(ctx context.Context, callbackQueryID string, chatID, messageID int64, callbackData string) error
 }
 
 // handleCallback — диспетчер нажатий inline-кнопок бота: по префиксу данных
@@ -387,6 +389,11 @@ type mailingCallbackHandler interface {
 func handleCallback(ctx context.Context, complaints complaintCallbackHandler, tasks taskCallbackHandler, mailing mailingCallbackHandler, cb telegram.CallbackQuery) error {
 	if cb.Data == ducase.MailingSkipCallback {
 		return mailing.SkipMailing(ctx, cb.ID, cb.ChatID, cb.MessageID)
+	}
+	// Кнопка «Переделать фото»: данные кнопки разбирает модуль скидок — здесь
+	// только префикс, чтобы не отдавать ему нажатия других модулей.
+	if _, ok := ducase.ParsePhotoRedoCallback(cb.Data); ok {
+		return mailing.RedoPhoto(ctx, cb.ID, cb.ChatID, cb.MessageID, cb.Data)
 	}
 	if complaintID, ok := cucase.ParseCallbackData(cb.Data); ok {
 		return complaints.HandleDetailsButton(ctx, cb.ID, cb.ChatID, complaintID)

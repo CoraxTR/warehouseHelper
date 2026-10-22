@@ -12,6 +12,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"warehouseHelper/internal/discounts"
@@ -33,6 +34,12 @@ const (
 	MailingSkipButton = "Пропустить рассылку"
 	// MailingSkipCallback — данные кнопки (префикс ds: — модуль скидок).
 	MailingSkipCallback = "ds:skip"
+	// photoRedoPrefix — данные кнопки «Переделать фото» под подтверждением
+	// принятого фото: фото пришло не то (размытое, не тот лот) — склад просит
+	// новое, альбом собирается заново (решение владельца 22.10.2026).
+	// Формат: ds:ph:<product_id>@<срок годности, 2006-01-02> — 53 байта, предел
+	// callback_data 64.
+	photoRedoPrefix = "ds:ph:"
 
 	// mailingRefreshStep — такт пересборки письма до финальной сборки. Сетка
 	// жёсткая, по часам: 14:05, 14:10 … 14:45; пропущенный такт не копится.
@@ -743,10 +750,125 @@ func (uc *UseCase) HandlePhoto(ctx context.Context, _, replyToMessageID int64, f
 			name = it.ProductID
 		}
 
-		return uc.warehouse.NotifyWarehouse(discounts.PhotoAccepted(name, it.BestBefore))
+		// Подтверждение с кнопкой «Переделать фото»: фото могло прийти не то
+		// (размытое, не тот лот) — склад просит новое, не дожидаясь публикации
+		// (решение владельца 22.10.2026).
+		if _, err := uc.warehouse.NotifyWarehouseHTMLButton(
+			discounts.PhotoAccepted(name, it.BestBefore),
+			discounts.PhotoRedoButton,
+			PhotoRedoCallback(key),
+		); err != nil {
+			return fmt.Errorf("подтверждение фото %s: %w", it.ProductID, err)
+		}
+
+		return nil
 	}
 
 	return nil
+}
+
+// PhotoRedoCallback — данные кнопки «Переделать фото» под подтверждением
+// принятого фото: лот, к которому оно относится.
+func PhotoRedoCallback(key discounts.LotKey) string {
+	return photoRedoPrefix + key.ProductID + "@" + key.BestBefore.Format(time.DateOnly)
+}
+
+// ParsePhotoRedoCallback — разбор данных кнопки: лот, чьё фото переделываем.
+// false — данные не наши (кнопка другого модуля или чужая разметка).
+func ParsePhotoRedoCallback(data string) (discounts.LotKey, bool) {
+	rest, ok := strings.CutPrefix(data, photoRedoPrefix)
+	if !ok {
+		return discounts.LotKey{}, false
+	}
+	productID, date, ok := strings.Cut(rest, "@")
+	if !ok || productID == "" {
+		return discounts.LotKey{}, false
+	}
+	bestBefore, err := time.Parse(time.DateOnly, date)
+	if err != nil {
+		return discounts.LotKey{}, false
+	}
+
+	return lotKey(productID, bestBefore), true
+}
+
+// RedoPhoto — кнопка «Переделать фото» под подтверждением: склад просит новое
+// фото вместо принятого (размытое, не тот лот). Старое фото забываем, сообщение
+// с кнопкой убираем, запрос уходит заново — новое фото придёт ответом на новый
+// запрос и заменит старое в альбоме (решение владельца 22.10.2026).
+//
+// Ответ на нажатие даём ОДИН раз: сначала отказы (alert), в конце «часики».
+// Порядок как в Telegram: на один callback_query уходит один ответ, поэтому
+// ack в начале съел бы причину отказа.
+func (uc *UseCase) RedoPhoto(ctx context.Context, callbackQueryID string, _, messageID int64, callbackData string) error {
+	key, ok := ParsePhotoRedoCallback(callbackData)
+	if !ok {
+		return uc.warehouse.WarehouseCallbackAck(callbackQueryID)
+	}
+
+	day := beginningOfDay(uc.now())
+	st, err := uc.repo.TodayDigest(ctx, day, discounts.ChatWarehouse)
+	if err != nil {
+		uc.alert(callbackQueryID, "Не удалось прочитать рассылку")
+
+		return err
+	}
+	if st == nil || st.SentAt == nil {
+		uc.alert(callbackQueryID, "Активной рассылки нет")
+
+		return nil
+	}
+
+	var item *discounts.DigestItem
+	for i := range st.Items {
+		if lotKey(st.Items[i].ProductID, st.Items[i].BestBefore) == key {
+			item = &st.Items[i]
+
+			break
+		}
+	}
+	if item == nil {
+		uc.alert(callbackQueryID, "Позиции уже нет в рассылке")
+
+		return nil
+	}
+	if st.ShopMessageID != 0 {
+		uc.alert(callbackQueryID, "Пост в чате скидок уже отправлен: фото в альбоме не заменить")
+
+		return nil
+	}
+
+	// Старое фото забываем: иначе проход фото решит, что оно уже есть, и нового
+	// запроса не будет.
+	uc.clearPhoto(key)
+	if messageID != 0 {
+		if err := uc.warehouse.DeleteWarehouseReply(messageID); err != nil {
+			slog.Info(fmt.Sprintf("discounts: удаление подтверждения фото: %v", err))
+		}
+	}
+	uc.askPhoto(ctx, day, *item, uc.photoLotName(ctx, day, key))
+
+	return uc.warehouse.WarehouseCallbackAck(callbackQueryID)
+}
+
+// photoLotName — название лота для запроса фото: память процесса, а после
+// рестарта (её нет) — карточка из снапшота остатков. Совсем не нашли — id
+// товара: запрос без названия хуже, чем запрос с id.
+func (uc *UseCase) photoLotName(ctx context.Context, day time.Time, key discounts.LotKey) string {
+	if name := uc.photoName(key); name != "" {
+		return name
+	}
+	inputs, err := uc.repo.LoadDiscountInput(ctx, day)
+	if err != nil {
+		return key.ProductID
+	}
+	for _, in := range inputs {
+		if lotKey(in.ProductID, in.BestBefore) == key {
+			return in.Name
+		}
+	}
+
+	return key.ProductID
 }
 
 // alert — всплывающее окно с причиной отказа на нажатие кнопки.
@@ -862,6 +984,15 @@ func (uc *UseCase) setPhoto(key discounts.LotKey, fileID string) {
 	defer uc.mailMu.Unlock()
 
 	uc.photos[key] = fileID
+}
+
+// clearPhoto — фото лота забыто: склад нажал «Переделать фото» (фото пришло не
+// то) или блок ушёл в ноль. Следующий проход фото запросит его заново.
+func (uc *UseCase) clearPhoto(key discounts.LotKey) {
+	uc.mailMu.Lock()
+	defer uc.mailMu.Unlock()
+
+	delete(uc.photos, key)
 }
 
 func (uc *UseCase) setPhotoName(key discounts.LotKey, name string) {
