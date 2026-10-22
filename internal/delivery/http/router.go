@@ -59,6 +59,8 @@ func NewRouter(h *Handler) *http.ServeMux {
 	mux.HandleFunc("POST /goods/withdraw/save", h.GoodsWithdrawSave)         // вывод из продажи: списать сканы
 	mux.HandleFunc("GET /goods/box", h.GoodsBoxPage)                         // «Создать коробку»: страница сканирования кусков
 	mux.HandleFunc("POST /goods/box/save", h.GoodsBoxSave)                   // «Создать коробку»: наклейка коробки (xlsx)
+	mux.HandleFunc("GET /goods/reprint", h.GoodsReprintPage)                 // «Перепечатать наклейку»: страница сканирования
+	mux.HandleFunc("POST /goods/reprint/save", h.GoodsReprintSave)           // «Перепечатать наклейку»: наклейки по сканам (xlsx)
 	mux.HandleFunc("GET /goods/inventory", h.GoodsInventoryPage)             // выбор вида инвентаризации
 	mux.HandleFunc("GET /goods/inventory/scan", h.GoodsInventoryScanPage)    // сканирование позиций вида
 	mux.HandleFunc("POST /goods/inventory/preview", h.GoodsInventoryPreview) // предпросмотр документа (JSON)

@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Перепечатать наклейку</title>
+    <link rel="stylesheet" href="/static/raven-guard.css">
+    <script src="/static/theme.js"></script>
+</head>
+
+<body>
+
+    <header class="brandbar">
+        <a class="brandbar__brand" href="/"><svg class="brandbar__emblem" viewBox="0 0 64 64" aria-hidden="true"><circle class="em__shade" cx="35" cy="25" r="14"/><polygon class="em__shade" points="6,26 30,17 28,27"/><polygon class="em__shade" points="13,35 28,27 26,36"/><circle class="em__eye" cx="34" cy="23" r="3.6"/><circle class="em__glint" cx="33" cy="22" r="1.1"/></svg><span class="brandbar__name">ВОРОН&nbsp;&middot;&nbsp;СКЛАД</span></a>
+        <div class="brandbar__right">
+            <span class="brandbar__motto">Приёмка или смерть</span>
+            <span class="themeswitch" id="theme-switch">
+                <span class="themeswitch__label" id="theme-label"><span class="themeswitch__label-night">Нормальная тема</span><span class="themeswitch__label-day">Любитель щурится</span></span>
+                <button class="themeswitch__track" id="theme-toggle" type="button"
+                 role="switch" aria-checked="false" aria-label="Тема оформления"
+                 title="Переключить на «Любитель щурится»">
+                    <span class="themeswitch__knob"></span>
+                </button>
+            </span>
+        </div>
+    </header>
+    {{template "nav"}}
+
+    <div class="topbar">
+        <a class="btn btn-cancel cancel" href="/goods">← Продукция</a>
+        <h1>Перепечатать наклейку</h1>
+    </div>
+
+    <div class="scan-block">
+        <div class="constraint hint">Данные наклейки целиком в самом коде: остатки и МойСклад не читаются и не меняются — только печать. Кусок — 29 цифр, коробка — 33: страница принимает оба. Дубли печатаются дублями (испорченную наклейку можно перепечатать сколько нужно). Код, которого нет в каталоге, отклоняет батч целиком — наклейку без наименования не печатаем. Сканы после печати остаются: «Очистить» — когда закончили.</div>
+        <input id="scan-input" type="text" autocomplete="off" placeholder="Отсканируйте наклейку — кусок или коробку…">
+        <div id="scan-error" class="error" style="display:none;"></div>
+        <div id="ok-banner" class="banner ok" style="display:none;"></div>
+        <div id="scan-list"></div>
+
+        <div class="save-row">
+            <button id="long-btn" class="btn btn-save" type="button" disabled>Длинные: одна на страницу</button>
+            <button id="short-btn" class="btn btn-save" type="button" disabled>Короткие: QR без подписи</button>
+            <button id="box-btn" class="btn btn-save" type="button" disabled>Коробки: 75×120</button>
+            <button id="clear-btn" class="btn btn-cancel" type="button">Очистить</button>
+        </div>
+        <div id="counter" class="counter"></div>
+    </div>
+
+    <script>
+        // Страница «Перепечатать наклейку»: сканы внутренних кодов (29 — кусок,
+        // 33 — коробка) → xlsx с наклейками на выбор: длинные (одна на печатную
+        // страницу, с подписью), короткие (две в ряд, только код и QR) или
+        // наклейки коробок. Только ES5 (старые браузеры склада). Локальная
+        // проверка дублирует серверную (авторитетную).
+        var RP = { scans: [], busy: false };
+
+        function el(id) {
+            return document.getElementById(id);
+        }
+
+        function showError(msg) {
+            var e = el('scan-error');
+            e.innerHTML = msg;
+            e.style.display = 'block';
+        }
+
+        function hideError() {
+            var e = el('scan-error');
+            if (e) {
+                e.style.display = 'none';
+            }
+        }
+
+        function showOk(msg) {
+            var b = el('ok-banner');
+            if (!b) {
+                return;
+            }
+            b.innerHTML = msg;
+            b.style.display = 'block';
+            clearTimeout(RP.okTimer);
+            RP.okTimer = setTimeout(function () { b.style.display = 'none'; }, 10000);
+        }
+
+        // Громкий бип (Web Audio); нет звука — сообщение об ошибке всё равно видно.
+        var beepCtx = null;
+        function beep() {
+            try {
+                var AC = window.AudioContext || window.webkitAudioContext;
+                if (!AC) {
+                    return;
+                }
+                if (!beepCtx) {
+                    beepCtx = new AC();
+                }
+                var osc = beepCtx.createOscillator();
+                var gain = beepCtx.createGain();
+                osc.connect(gain);
+                gain.connect(beepCtx.destination);
+                osc.frequency.value = 880;
+                gain.gain.value = 0.5;
+                osc.start(0);
+                setTimeout(function () { osc.stop(0); }, 180);
+            } catch (e) { /* тишина */ }
+        }
+
+        // Локальная проверка скана. null — принят, иначе текст отказа.
+        function checkScan(raw) {
+            if (raw.length !== 29 && raw.length !== 33) {
+                return 'Не наша наклейка: ожидается 29 цифр (кусок) или 33 (коробка)';
+            }
+            return null;
+        }
+
+        // Вид скана по длине: 29 — кусок, 33 — коробка.
+        function kindOf(raw) {
+            return raw.length === 33 ? 'box' : 'item';
+        }
+
+        function countKind(kind) {
+            var n = 0;
+            for (var i = 0; i < RP.scans.length; i++) {
+                if (kindOf(RP.scans[i]) === kind) {
+                    n++;
+                }
+            }
+            return n;
+        }
+
+        function submitScan() {
+            var input = el('scan-input');
+            var raw = input.value.replace(/^\s+|\s+$/g, '');
+            if (raw === '') {
+                return;
+            }
+            var err = checkScan(raw);
+            if (err) {
+                beep();
+                showError(err);
+                input.value = '';
+                input.focus();
+                return;
+            }
+            hideError();
+            RP.scans.push(raw);
+            input.value = '';
+            input.focus();
+            renderAll();
+        }
+
+        function updateButtons() {
+            var items = countKind('item');
+            var boxes = countKind('box');
+            el('long-btn').disabled = RP.busy || items === 0;
+            el('short-btn').disabled = RP.busy || items === 0;
+            el('box-btn').disabled = RP.busy || boxes === 0;
+            el('long-btn').innerHTML = 'Длинные: одна на страницу' + (items ? ' (' + items + ')' : '');
+            el('short-btn').innerHTML = 'Короткие: QR без подписи' + (items ? ' (' + items + ')' : '');
+            el('box-btn').innerHTML = 'Коробки: 75×120' + (boxes ? ' (' + boxes + ')' : '');
+        }
+
+        function renderAll() {
+            var list = el('scan-list');
+            var html = '';
+            for (var i = 0; i < RP.scans.length; i++) {
+                html += '<div class="scan-row"><span class="code">' + RP.scans[i] + '</span>'
+                    + '<button type="button" class="rm" data-idx="' + i + '">✕</button></div>';
+            }
+            list.innerHTML = html;
+
+            var c = el('counter');
+            if (c) {
+                c.innerHTML = RP.scans.length === 0 ? ''
+                    : 'Куски: ' + countKind('item') + ' · коробки: ' + countKind('box');
+            }
+            updateButtons();
+        }
+
+        function removeScan(idx) {
+            RP.scans.splice(idx, 1);
+            renderAll();
+        }
+
+        function clearAll() {
+            if (RP.busy) {
+                return;
+            }
+            RP.scans = [];
+            hideError();
+            renderAll();
+            el('scan-input').focus();
+        }
+
+        // Имя файла из Content-Disposition (сервер отдаёт *_labels_<ts>.xlsx).
+        function fileNameFromXhr(xhr) {
+            var cd = xhr.getResponseHeader('Content-Disposition') || '';
+            var m = /filename="?([^";]+)"?/.exec(cd);
+            return m ? m[1] : 'labels.xlsx';
+        }
+
+        // Скачивание наклеек: файл формирует сервер. Шлём ВСЕ сканы — сервер
+        // сам отбирает коды под выбранный вид наклейки (куски или коробки),
+        // валидирует батч целиком по каталогу и либо отдаёт файл, либо отказ.
+        function exportLabels(variant, what) {
+            if (RP.busy || RP.scans.length === 0) {
+                return;
+            }
+            RP.busy = true;
+            updateButtons();
+            var xhr = new XMLHttpRequest();
+            xhr.open('POST', '/goods/reprint/save', true);
+            xhr.setRequestHeader('Content-Type', 'application/json');
+            xhr.responseType = 'blob';
+            xhr.onreadystatechange = function () {
+                if (xhr.readyState !== 4) {
+                    return;
+                }
+                RP.busy = false;
+                if (xhr.status !== 200) {
+                    updateButtons();
+                    var msg = 'Не удалось напечатать (HTTP ' + xhr.status + ')';
+                    var errBlob = xhr.response;
+                    if (errBlob) {
+                        var rd = new FileReader();
+                        rd.onloadend = function () {
+                            beep();
+                            showError(rd.result ? rd.result : msg);
+                        };
+                        rd.readAsText(errBlob);
+                    } else {
+                        beep();
+                        showError(msg);
+                    }
+                    return;
+                }
+                var name = fileNameFromXhr(xhr);
+                var url = window.URL.createObjectURL(xhr.response);
+                var a = document.createElement('a');
+                a.href = url;
+                a.download = name;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                window.URL.revokeObjectURL(url);
+
+                hideError();
+                showOk(what + ': файл скачан (' + name + '). Сканы остались — печатайте ещё или очистите.');
+                el('scan-input').focus();
+            };
+            xhr.send(JSON.stringify({ scans: RP.scans, variant: variant }));
+        }
+
+        function init() {
+            var input = el('scan-input');
+            if (input) {
+                input.addEventListener('keydown', function (ev) {
+                    if (ev.keyCode === 13) {
+                        ev.preventDefault();
+                        submitScan();
+                    }
+                });
+                input.focus();
+            }
+            var list = el('scan-list');
+            if (list) {
+                list.addEventListener('click', function (ev) {
+                    var t = ev.target || ev.srcElement;
+                    while (t && t !== list) {
+                        if (t.getAttribute && t.getAttribute('data-idx') !== null) {
+                            removeScan(parseInt(t.getAttribute('data-idx'), 10));
+                            return;
+                        }
+                        t = t.parentNode;
+                    }
+                });
+            }
+            el('long-btn').addEventListener('click', function () { exportLabels('long', 'Длинные наклейки'); });
+            el('short-btn').addEventListener('click', function () { exportLabels('short', 'Короткие наклейки'); });
+            el('box-btn').addEventListener('click', function () { exportLabels('box', 'Наклейки коробок'); });
+            el('clear-btn').addEventListener('click', clearAll);
+            renderAll();
+        }
+
+        init();
+    </script>
+
+</body>
+
+</html>
