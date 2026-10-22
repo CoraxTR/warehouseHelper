@@ -43,6 +43,12 @@ const (
 	fieldReplyMarkup  = "reply_markup"
 	fieldInlineKbd    = "inline_keyboard"
 	fieldCallbackData = "callback_data"
+	// fieldLinkPreview — настройки предпросмотра ссылок. Пост чата скидок
+	// пересыпан ссылками на карточки товаров, и Telegram приклеивает к
+	// сообщению карточку первой ссылки: снизу поста висела чужая позиция
+	// (инцидент 22.10.2026). В посте превью выключено всегда.
+	fieldLinkPreview = "link_preview_options"
+	fieldPreviewOff  = "is_disabled"
 )
 
 // Notifier отправляет сообщения в чаты Telegram. Если токен бота или
@@ -260,10 +266,11 @@ func (n *Notifier) NotifyWarehouseHTMLButton(text, buttonText, callbackData stri
 	})
 }
 
-// NotifyWarehouseReplyRequest — сообщение-запрос фото с force_reply: клиент
-// подставляет ответ на это сообщение, и фото приходит с reply_to_message —
-// только так бот понимает, к какому блоку оно относится (inline-кнопка камеру
-// не открывает). Возвращает message_id. Без токена — no-op (0, nil).
+// NotifyWarehouseReplyRequest — сообщение-запрос фото. force_reply НЕ ставим
+// (решение владельца 22.10.2026): принудительный ответ подставлял цитату ко
+// всему, что печатали в чате, и важное сообщение уходило ответом на запрос фото.
+// Бот по-прежнему понимает фото только ОТВЕТОМ на запрос — это написано в самом
+// тексте запроса (PhotoRequest). Возвращает message_id. Без токена — no-op.
 func (n *Notifier) NotifyWarehouseReplyRequest(text string) (int64, error) {
 	if n.botToken == "" || n.warehouseChatID == 0 {
 		return 0, nil
@@ -273,10 +280,6 @@ func (n *Notifier) NotifyWarehouseReplyRequest(text string) (int64, error) {
 		fieldChatID:    n.warehouseChatID,
 		fieldText:      text,
 		fieldParseMode: parseModeHTML,
-		fieldReplyMarkup: map[string]any{
-			"force_reply":             true,
-			"input_field_placeholder": "Фото",
-		},
 	})
 }
 
@@ -637,29 +640,34 @@ func (n *Notifier) SendShopPhotos(fileIDs []string) error {
 }
 
 // NotifyShopHTML публикует пост в чате скидок и возвращает id сообщения: по нему
-// пост правится до следующей рассылки.
+// пост правится до следующей рассылки. Превью ссылок выключено: в блоках стоят
+// ссылки на карточки, и Telegram подклеивал к посту карточку первой из них
+// (инцидент 22.10.2026 — снизу поста висела чужая позиция).
 func (n *Notifier) NotifyShopHTML(text string) (int64, error) {
 	if n.botToken == "" || n.discountChatID == 0 {
 		return 0, nil
 	}
 
 	return n.postJSONResult(context.Background(), "sendMessage", map[string]any{
-		fieldChatID:    n.discountChatID,
-		fieldText:      text,
-		fieldParseMode: parseModeHTML,
+		fieldChatID:      n.discountChatID,
+		fieldText:        text,
+		fieldParseMode:   parseModeHTML,
+		fieldLinkPreview: map[string]any{fieldPreviewOff: true},
 	})
 }
 
-// EditShopHTML правит пост в чате скидок (то же сообщение, без кнопок).
+// EditShopHTML правит пост в чате скидок (то же сообщение, без кнопок). Превью
+// ссылок выключено и здесь: иначе Telegram достраивает его на правке.
 func (n *Notifier) EditShopHTML(messageID int64, text string) error {
 	if n.botToken == "" || n.discountChatID == 0 || messageID == 0 {
 		return nil
 	}
 	_, err := n.postJSONResult(context.Background(), "editMessageText", map[string]any{
-		fieldChatID:    n.discountChatID,
-		fieldMessageID: messageID,
-		fieldText:      text,
-		fieldParseMode: parseModeHTML,
+		fieldChatID:      n.discountChatID,
+		fieldMessageID:   messageID,
+		fieldText:        text,
+		fieldParseMode:   parseModeHTML,
+		fieldLinkPreview: map[string]any{fieldPreviewOff: true},
 	})
 
 	return err

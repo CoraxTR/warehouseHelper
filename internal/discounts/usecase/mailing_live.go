@@ -433,7 +433,7 @@ func liveTelegramWrites(pairs []PairState, plan dayPlan, old []discounts.DigestI
 }
 
 // requestPhotos — запросы фото по видимым блокам: одно фото на лот, поэтому на
-// блок уходит одно сообщение с force_reply (фото придёт ответом на него).
+// блок уходит одно сообщение-запрос (фото придёт ответом на него).
 // Запрос не повторяется, если он уже есть в чате (id в истории) или фото уже
 // прислали (память процесса).
 func (uc *UseCase) requestPhotos(ctx context.Context, day time.Time, items []discounts.DigestItem, data map[discounts.LotKey]lotData) error {

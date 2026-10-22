@@ -33,7 +33,7 @@ type CallbackHandler func(ctx context.Context, cb CallbackQuery) error
 // или фото. ChatID — чат отправителя: ответ на команду идёт в него же.
 //
 // MessageID/ReplyToMessageID/PhotoFileID заполняются у фото: склад присылает
-// снимок ОТВЕТОМ на сообщение-запрос позиции (force_reply), и по
+// снимок ОТВЕТОМ на сообщение-запрос позиции, и по
 // ReplyToMessageID модуль скидок понимает, к какому блоку рассылки он относится
 // (решение владельца 18.10.2026). PhotoFileID — самый крупный размер из
 // message.photo (file_id живёт в Telegram, скачивать снимок незачем).
@@ -110,7 +110,8 @@ type tgMessage struct {
 	Text string  `json:"text"`
 	// MessageID — id сообщения (нужен ответу на фото).
 	MessageID int64 `json:"message_id"`
-	// ReplyTo — сообщение, ответом на которое пришёл апдейт (force_reply).
+	// ReplyTo — сообщение, ответом на которое пришёл апдейт (так склад отвечает
+	// на запрос фото; force_reply у запроса нет — 22.10.2026).
 	ReplyTo *tgMsg `json:"reply_to_message"`
 	// Photo — размеры снимка от меньшего к большему: берём последний.
 	Photo []tgPhotoSize `json:"photo"`

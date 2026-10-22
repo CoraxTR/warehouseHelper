@@ -117,8 +117,10 @@ type WarehouseNotifier interface {
 	// рассылку»; возвращает id сообщения: по нему письмо правится каждый
 	// пересчёт (решение владельца 18.10.2026).
 	NotifyWarehouseHTMLButton(text, buttonText, callbackData string) (int64, error)
-	// NotifyWarehouseReplyRequest — сообщение-запрос фото с force_reply: фото
-	// приходит ОТВЕТОМ, по reply_to_message находим позицию. Возвращает id.
+	// NotifyWarehouseReplyRequest — сообщение-запрос фото: фото приходит
+	// ОТВЕТОМ, по reply_to_message находим позицию. force_reply не ставится
+	// (22.10.2026) — принудительный ответ уводил чужие сообщения склада.
+	// Возвращает id.
 	NotifyWarehouseReplyRequest(text string) (int64, error)
 	// EditWarehouseHTML — правка письма тем же сообщением. Пустой buttonText —
 	// снять клавиатуру (после пропуска рассылки кнопки нет).
