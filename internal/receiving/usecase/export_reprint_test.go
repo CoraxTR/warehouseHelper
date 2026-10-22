@@ -304,12 +304,5 @@ func reprintWorkdir(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	old, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chdir(filepath.Join(work, "app")); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(old) })
+	t.Chdir(filepath.Join(work, "app"))
 }
