@@ -165,6 +165,13 @@ func TestTemplatesRender(t *testing.T) {
 				"Room": &invRoom, "IsGuest": true,
 			},
 		},
+		{
+			// «Перепечатать наклейку»: страница без данных — статичная форма со
+			// строкой сканирования и тремя кнопками выгрузки.
+			name: "перепечатка наклеек: страница",
+			file: "goods_reprint.html",
+			data: nil,
+		},
 	}
 
 	for _, c := range cases {
