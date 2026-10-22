@@ -62,6 +62,10 @@ type Repository interface {
 	SetDigestShopMessage(ctx context.Context, chatKind string, plannedAt time.Time, messageID int64) error
 	LastShopDigest(ctx context.Context) (*discounts.DigestState, error)
 	UpdateDigestItemShop(ctx context.Context, plannedAt time.Time, key discounts.LotKey, qty, available int64, listed bool) error
+	// UpdateDigestItemShopCard — снимок карточки блока поста (название,
+	// единица, цена, ссылка). Пост живёт до следующей рассылки, а распроданный
+	// лот сток удаляет — карточку взять больше негде (инцидент 22.10.2026).
+	UpdateDigestItemShopCard(ctx context.Context, plannedAt time.Time, key discounts.LotKey, card discounts.ShopCard) error
 	// MarkGeneralRaised — отметить подъём general до telegram по позициям.
 	MarkGeneralRaised(ctx context.Context, pairs []discounts.LotKey, at time.Time) error
 	// DayFlagDone — сделан ли шаг дня (повтор после рестарта/сна пропускается).

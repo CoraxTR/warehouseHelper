@@ -39,6 +39,12 @@
 --   ALTER TABLE discount_telegram_digest_item ADD COLUMN IF NOT EXISTS shop_qty BIGINT NOT NULL DEFAULT 0;
 --   ALTER TABLE discount_telegram_digest_item ADD COLUMN IF NOT EXISTS shop_available BIGINT NOT NULL DEFAULT 0;
 --   ALTER TABLE discount_telegram_digest_item ADD COLUMN IF NOT EXISTS shop_listed BOOLEAN NOT NULL DEFAULT FALSE;
+-- ЖИВАЯ БД: карточка блока поста (решение владельца 22.10.2026) — снимок нужен,
+-- потому что распроданный лот сток удаляет и название с ценой взять негде:
+--   ALTER TABLE discount_telegram_digest_item ADD COLUMN IF NOT EXISTS shop_name TEXT NOT NULL DEFAULT '';
+--   ALTER TABLE discount_telegram_digest_item ADD COLUMN IF NOT EXISTS shop_uom TEXT NOT NULL DEFAULT '';
+--   ALTER TABLE discount_telegram_digest_item ADD COLUMN IF NOT EXISTS shop_sale_price BIGINT;
+--   ALTER TABLE discount_telegram_digest_item ADD COLUMN IF NOT EXISTS shop_site_url TEXT NOT NULL DEFAULT '';
 
 -- Рассылка (слот ТГ): одна строка = один собранный/отправленный дайджест.
 -- 14:00 — план ТГ-слота в чат склада (chat_kind='warehouse'), 09:00 — дайджест
@@ -82,6 +88,14 @@ CREATE TABLE IF NOT EXISTS discount_telegram_digest_item (
     shop_qty          BIGINT NOT NULL DEFAULT 0,   -- остаток по акции в посте (меняется)
     shop_available    BIGINT NOT NULL DEFAULT 0,   -- «доступно по акции» поста (заморожено публикацией)
     shop_listed       BOOLEAN NOT NULL DEFAULT FALSE, -- позиция есть в опубликованном посте
+    -- Карточка блока поста (решение владельца 22.10.2026): снимок названия,
+    -- единицы, цены продажи и адреса позиции на сайте. Нужен потому, что пост
+    -- живёт до следующей рассылки, а распроданный лот сток удаляет — блок
+    -- оставался без названия («1. ❗️ПРОДАНО❗️  | 30%»).
+    shop_name         TEXT NOT NULL DEFAULT '',
+    shop_uom          TEXT NOT NULL DEFAULT '',
+    shop_sale_price   BIGINT,             -- цена продажи, копейки; NULL — МС не отдала
+    shop_site_url     TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (digest_id, product_id, best_before)
 );
 

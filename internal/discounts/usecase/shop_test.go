@@ -316,3 +316,39 @@ func TestOnLotsChangedKicksShopPost(t *testing.T) {
 		}
 	}
 }
+
+// Снимок карточки блока живёт в истории рассылки, а не в памяти процесса: после
+// рестарта (новый UseCase над тем же репозиторием) блок проданного лота
+// сохраняет название, единицу и цену. Ровно ради этого карточка переехала из
+// памяти в таблицу (решение владельца 22.10.2026).
+func TestSyncShopPostKeepsNameAfterRestart(t *testing.T) {
+	h := publishHarness(t, lotInput("p1", "Стейк Филе-Миньон", day(9), 3, shelfLifeInput(26),
+		catalogInput(529000, "шт", "")))
+	ctx := context.Background()
+
+	if err := h.uc.publishShop(ctx, h.now.Add(time.Hour)); err != nil {
+		t.Fatalf("публикация: %v", err)
+	}
+	card := h.repo.digest.Items[0].Shop
+	if card.Name != "Стейк Филе-Миньон" || card.UOM != "шт" || card.SalePrice == nil || *card.SalePrice != 529000 {
+		t.Fatalf("карточка не сохранена в истории рассылки: %+v", card)
+	}
+
+	// Рестарт: память процесса новая (снимка карточек в ней нет), история — та же.
+	restarted := NewUseCase(h.repo, h.turn, h.writer, h.common, h.tasks, h.chat, func() time.Time { return h.now })
+	h.repo.inputs = nil // подбор списал лот до нуля: пара удалена из остатков
+	if err := restarted.syncShopPost(ctx, h.now.Add(time.Hour+time.Minute)); err != nil {
+		t.Fatalf("правка после рестарта: %v", err)
+	}
+
+	if len(h.chat.shopEdits) == 0 {
+		t.Fatal("пост не отредактирован после рестарта")
+	}
+	last := h.chat.shopEdits[len(h.chat.shopEdits)-1].Text
+	if !strings.Contains(last, discounts.ShopSoldMark+" Стейк Филе-Миньон") {
+		t.Errorf("после рестарта блок без названия: %q", last)
+	}
+	if !strings.Contains(last, "5290,00 руб./шт.") {
+		t.Errorf("после рестарта блок без цены: %q", last)
+	}
+}

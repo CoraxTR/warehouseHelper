@@ -199,11 +199,14 @@ func (pg *PGClient) SaveDigest(ctx context.Context, d discounts.DigestRecord, it
             INSERT INTO discount_telegram_digest_item
                 (digest_id, product_id, best_before, percent, coeff, reason,
                  initial_qty, plan_qty, block_qty, stock_qty, message_id,
-                 shop_qty, shop_listed)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+                 shop_qty, shop_listed,
+                 shop_name, shop_uom, shop_sale_price, shop_site_url)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+                    $14, $15, $16, $17)`,
 			digestID, it.ProductID, it.BestBefore, it.Percent, it.Coeff, it.Reason,
 			it.InitialQty, it.PlanQty, it.BlockQty, it.StockQty, it.MessageID,
 			it.ShopQty, it.Listed,
+			it.Shop.Name, it.Shop.UOM, it.Shop.SalePrice, it.Shop.SiteURL,
 		); err != nil {
 			return fmt.Errorf("insert digest item %s %s: %w", it.ProductID, it.BestBefore.Format(time.DateOnly), err)
 		}
@@ -551,7 +554,8 @@ func (pg *PGClient) TodayDigest(ctx context.Context, date time.Time, chatKind st
 
 	rows, err := pg.Pool.Query(ctx, `
         SELECT product_id, best_before, percent, reason, initial_qty, plan_qty,
-               block_qty, stock_qty, message_id, shop_qty, shop_available, shop_listed
+               block_qty, stock_qty, message_id, shop_qty, shop_available, shop_listed,
+               shop_name, shop_uom, shop_sale_price, shop_site_url
         FROM discount_telegram_digest_item
         WHERE digest_id = $1
         ORDER BY best_before, product_id`, digestID)
@@ -562,14 +566,19 @@ func (pg *PGClient) TodayDigest(ctx context.Context, date time.Time, chatKind st
 
 	st.Items = make([]discounts.DigestItem, 0, 16)
 	for rows.Next() {
-		var it discounts.DigestItem
+		var (
+			it        discounts.DigestItem
+			shopPrice *int64 // NULL — цены продажи в МС не было
+		)
 		if err := rows.Scan(
 			&it.ProductID, &it.BestBefore, &it.Percent, &it.Reason,
 			&it.InitialQty, &it.PlanQty, &it.BlockQty, &it.StockQty, &it.MessageID,
 			&it.ShopQty, &it.ShopAvailable, &it.Listed,
+			&it.Shop.Name, &it.Shop.UOM, &shopPrice, &it.Shop.SiteURL,
 		); err != nil {
 			return nil, fmt.Errorf("scan today digest item: %w", err)
 		}
+		it.Shop.SalePrice = shopPrice
 		st.Items = append(st.Items, it)
 	}
 	if err := rows.Err(); err != nil {
@@ -616,11 +625,14 @@ func (pg *PGClient) ReplaceDigestItems(ctx context.Context, chatKind string, pla
             INSERT INTO discount_telegram_digest_item
                 (digest_id, product_id, best_before, percent, coeff, reason,
                  initial_qty, plan_qty, block_qty, stock_qty, message_id,
-                 shop_qty, shop_listed)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+                 shop_qty, shop_listed,
+                 shop_name, shop_uom, shop_sale_price, shop_site_url)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+                    $14, $15, $16, $17)`,
 			digestID, it.ProductID, it.BestBefore, it.Percent, it.Coeff, it.Reason,
 			it.InitialQty, it.PlanQty, it.BlockQty, it.StockQty, it.MessageID,
 			it.ShopQty, it.Listed,
+			it.Shop.Name, it.Shop.UOM, it.Shop.SalePrice, it.Shop.SiteURL,
 		); err != nil {
 			return fmt.Errorf("insert digest item %s %s: %w", it.ProductID, it.BestBefore.Format(time.DateOnly), err)
 		}
@@ -728,7 +740,8 @@ func (pg *PGClient) LastShopDigest(ctx context.Context) (*discounts.DigestState,
 
 	rows, err := pg.Pool.Query(ctx, `
         SELECT product_id, best_before, percent, reason, initial_qty, plan_qty,
-               block_qty, stock_qty, message_id, shop_qty, shop_available, shop_listed
+               block_qty, stock_qty, message_id, shop_qty, shop_available, shop_listed,
+               shop_name, shop_uom, shop_sale_price, shop_site_url
         FROM discount_telegram_digest_item
         WHERE digest_id = $1
         ORDER BY best_before, product_id`, digestID)
@@ -739,14 +752,19 @@ func (pg *PGClient) LastShopDigest(ctx context.Context) (*discounts.DigestState,
 
 	st.Items = make([]discounts.DigestItem, 0, 16)
 	for rows.Next() {
-		var it discounts.DigestItem
+		var (
+			it        discounts.DigestItem
+			shopPrice *int64 // NULL — цены продажи в МС не было
+		)
 		if err := rows.Scan(
 			&it.ProductID, &it.BestBefore, &it.Percent, &it.Reason,
 			&it.InitialQty, &it.PlanQty, &it.BlockQty, &it.StockQty, &it.MessageID,
 			&it.ShopQty, &it.ShopAvailable, &it.Listed,
+			&it.Shop.Name, &it.Shop.UOM, &shopPrice, &it.Shop.SiteURL,
 		); err != nil {
 			return nil, fmt.Errorf("scan last shop digest item: %w", err)
 		}
+		it.Shop.SalePrice = shopPrice
 		st.Items = append(st.Items, it)
 	}
 	if err := rows.Err(); err != nil {
@@ -754,6 +772,27 @@ func (pg *PGClient) LastShopDigest(ctx context.Context) (*discounts.DigestState,
 	}
 
 	return &st, nil
+}
+
+// UpdateDigestItemShopCard сохраняет снимок карточки блока поста: название,
+// единица, цена продажи и адрес позиции. Нужен потому, что распроданный лот
+// сток удаляет и блок остался бы без названия (инцидент 22.10.2026). Пишется
+// только по существующей строке позиции: снимок живёт ровно там, где блок.
+func (pg *PGClient) UpdateDigestItemShopCard(ctx context.Context, plannedAt time.Time, key discounts.LotKey, card discounts.ShopCard) error {
+	if _, err := pg.Pool.Exec(ctx, `
+        UPDATE discount_telegram_digest_item i
+        SET shop_name = $3, shop_uom = $4, shop_sale_price = $5, shop_site_url = $6
+        WHERE i.product_id = $7 AND i.best_before = $8::date
+          AND i.digest_id = (
+              SELECT id FROM discount_telegram_digest
+              WHERE chat_kind = $1 AND planned_at = $2::date
+              ORDER BY id DESC LIMIT 1)`,
+		discounts.ChatWarehouse, plannedAt, card.Name, card.UOM, card.SalePrice, card.SiteURL,
+		key.ProductID, key.BestBefore); err != nil {
+		return fmt.Errorf("update digest item shop card %s %s: %w", key.ProductID, plannedAt.Format(time.DateOnly), err)
+	}
+
+	return nil
 }
 
 // UpdateDigestItemShop сохраняет число и признак показа позиции в посте чата

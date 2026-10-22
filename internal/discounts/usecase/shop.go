@@ -154,7 +154,12 @@ func (uc *UseCase) publishShop(ctx context.Context, now time.Time) error {
 		return err
 	}
 
-	text := shopText(items, uc.withShopCards(items, data))
+	data, err = uc.shopCards(ctx, day, items, data)
+	if err != nil {
+		return err
+	}
+
+	text := shopText(items, data)
 	if text == "" {
 		return nil
 	}
@@ -212,7 +217,12 @@ func (uc *UseCase) closeShopPost(ctx context.Context, day time.Time, data map[di
 		return nil // уже подчищен
 	}
 
-	text := shopText(items, uc.withShopCards(items, data))
+	data, err = uc.shopCards(ctx, prev.PlannedAt, items, data)
+	if err != nil {
+		return err
+	}
+
+	text := shopText(items, data)
 	if text == "" {
 		return nil
 	}
@@ -246,8 +256,13 @@ func (uc *UseCase) syncShopPost(ctx context.Context, now time.Time) error {
 		return err
 	}
 	data := lotDataFromInputs(inputs)
-	// Карточки блоков — из памяти поста: у распроданного лота остатков уже нет.
-	data = uc.withShopCards(st.Items, data)
+	// Карточки блоков: у распроданного лота остатков уже нет — берём снимок из
+	// истории рассылки.
+	data, err = uc.shopCards(ctx, st.PlannedAt, st.Items, data)
+	if err != nil {
+		return err
+	}
+	// истории рассылки.
 
 	// Пары нужны только для проверки избытка: остальные позиции считаются по
 	// остаткам, оборот им не нужен.
@@ -294,46 +309,57 @@ func (uc *UseCase) syncShopPost(ctx context.Context, now time.Time) error {
 	return nil
 }
 
-// shopCard — постоянная часть блока поста: то, что не меняется от продажи.
-type shopCard struct {
-	Name      string
-	UOM       string
-	SalePrice *int64
-	SiteURL   string
-}
-
-// withShopCards — данные блоков поста с добором карточки из памяти поста.
-// Проданный до нуля лот сток УДАЛЯЕТ (`DELETE FROM product_stock` в списании
-// подбора), поэтому в снапшоте остатков у него уже нет ни названия, ни цены —
-// а блок в посте остаётся: читатель должен видеть, ЧТО продано. Карточку блока
-// запоминаем на каждой правке, пока лот жив, и подставляем, когда лота нет
-// (инцидент 22.10.2026: пост печатал «❗️ПРОДАНО❗️  | 30%» — метка на месте,
-// названия нет). Пост всегда один, поэтому карточек в памяти ровно его блоки.
-func (uc *UseCase) withShopCards(items []discounts.DigestItem, data map[discounts.LotKey]lotData) map[discounts.LotKey]lotData {
-	uc.mailMu.Lock()
-	defer uc.mailMu.Unlock()
-
-	cards := make(map[discounts.LotKey]shopCard, len(items))
+// shopCards — данные блоков поста: живые остатки, а у лота, которого в остатках
+// уже нет, — карточка из истории рассылки (`Shop`). Проданный до нуля лот сток
+// УДАЛЯЕТ (`DELETE FROM product_stock` в списании подбора): в снапшоте остатков
+// у него нет ни названия, ни цены, а блок в посте остаётся — читатель должен
+// видеть, ЧТО продано (инцидент 22.10.2026: пост печатал
+// «1. ❗️ПРОДАНО❗️  | 30%», метка на месте, названия нет).
+//
+// Снимок живёт в строке позиции рассылки (shop_name/shop_uom/shop_sale_price/
+// shop_site_url), а не в памяти процесса: пост в чате висит до следующей
+// рассылки, рестарт память стирает, а история — нет. Пока лот жив, снимок
+// обновляется (переименовали товар в МС, сменили цену) — пишем только при
+// изменении, иначе событийная правка дёргала бы БД на каждом проходе.
+func (uc *UseCase) shopCards(ctx context.Context, plannedAt time.Time,
+	items []discounts.DigestItem, data map[discounts.LotKey]lotData) (map[discounts.LotKey]lotData, error) {
 	for _, it := range items {
 		if !it.Listed {
 			continue
 		}
 		key := lotKey(it.ProductID, it.BestBefore)
 		d := data[key]
-		card := shopCard{Name: d.Name, UOM: d.UOM, SalePrice: d.SalePrice, SiteURL: d.SiteURL}
-		if card.Name == "" {
-			card = uc.shopCards[key] // лота нет в остатках: берём снимок
-		}
-		cards[key] = card
-		if card.Name == "" {
+		if d.Name == "" {
+			// Лота в остатках нет: подставляем снимок из истории.
+			if it.Shop.Name == "" {
+				continue
+			}
+			d.Name, d.UOM, d.SalePrice, d.SiteURL = it.Shop.Name, it.Shop.UOM, it.Shop.SalePrice, it.Shop.SiteURL
+			data[key] = d
+
 			continue
 		}
-		d.Name, d.UOM, d.SalePrice, d.SiteURL = card.Name, card.UOM, card.SalePrice, card.SiteURL
-		data[key] = d
+		// Лот жив: остатки — источник истины, снимок подтягиваем к ним.
+		if d.Name == it.Shop.Name && d.UOM == it.Shop.UOM && d.SiteURL == it.Shop.SiteURL &&
+			samePrice(d.SalePrice, it.Shop.SalePrice) {
+			continue
+		}
+		card := discounts.ShopCard{Name: d.Name, UOM: d.UOM, SalePrice: d.SalePrice, SiteURL: d.SiteURL}
+		if err := uc.repo.UpdateDigestItemShopCard(ctx, plannedAt, key, card); err != nil {
+			return nil, fmt.Errorf("снимок карточки блока %s: %w", it.ProductID, err)
+		}
 	}
-	uc.shopCards = cards
 
-	return data
+	return data, nil
+}
+
+// samePrice — цены совпадают (nil — «МС не отдала цену»).
+func samePrice(a, b *int64) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+
+	return *a == *b
 }
 
 // shopText — текст поста: блоки как в письме склада, но распроданные позиции
