@@ -414,3 +414,55 @@ func TestRedoPhotoRefusedAfterPublish(t *testing.T) {
 		t.Errorf("запрос фото ушёл после публикации: %v", h.chat.requests[requests:])
 	}
 }
+
+// Второе фото в ответ на ТОТ ЖЕ запрос не принимается: принятое не перезаписываем
+// (иначе последний снимок молча заменит выбранный), склад получает отказ с
+// подсказкой про кнопку «Переделать фото».
+func TestHandlePhotoRejectsSecondPhotoForSameRequest(t *testing.T) {
+	h := newSlotHarness(recalcNow(1), lotInput("p1", "Колбаса", day(9), 100, shelfLifeInput(26)))
+	ctx := context.Background()
+
+	if err := h.uc.RunSlotPlan(ctx, h.now, 2); err != nil {
+		t.Fatalf("план дня: %v", err)
+	}
+	h.finalPass(t, 2)
+	reqID := h.repo.digest.Items[0].MessageID
+
+	if err := h.uc.HandlePhoto(ctx, -1005, reqID, "file-1"); err != nil {
+		t.Fatalf("первое фото: %v", err)
+	}
+	if err := h.uc.HandlePhoto(ctx, -1005, reqID, "file-2"); err != nil {
+		t.Fatalf("второе фото: %v", err)
+	}
+
+	if got := h.repo.digest.Items[0].PhotoFileID; got != "file-1" {
+		t.Errorf("фото в истории %q, want file-1 (второе не должно перезаписать)", got)
+	}
+	if len(h.chat.texts) == 0 || !strings.Contains(h.chat.texts[len(h.chat.texts)-1], "уже принято") {
+		t.Errorf("отказ на повторное фото не отправлен: %v", h.chat.texts)
+	}
+}
+
+// Принятое фото переживает рестарт: альбом поста собирается по photo_file_id из
+// истории, а не по памяти процесса.
+func TestPublishShopAlbumAfterRestart(t *testing.T) {
+	h := publishHarness(t, lotInput("p1", "Колбаса", day(9), 100, shelfLifeInput(26)))
+	ctx := context.Background()
+
+	if got := h.repo.digest.Items[0].PhotoFileID; got != "file-1" {
+		t.Fatalf("фото не сохранено в истории: %q", got)
+	}
+
+	// «Рестарт»: память процесса новая, история — та же.
+	restarted := NewUseCase(h.repo, h.turn, h.writer, h.common, h.tasks, h.chat, func() time.Time { return h.now })
+	if err := restarted.publishShop(ctx, h.now.Add(time.Hour)); err != nil {
+		t.Fatalf("публикация после рестарта: %v", err)
+	}
+
+	if len(h.chat.shopPhotos) != 1 || len(h.chat.shopPhotos[0]) != 1 || h.chat.shopPhotos[0][0] != "file-1" {
+		t.Errorf("альбом после рестарта: %+v, want [file-1]", h.chat.shopPhotos)
+	}
+	if len(h.chat.requests) != 1 {
+		t.Errorf("фото запрошено повторно: %v", h.chat.requests)
+	}
+}

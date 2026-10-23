@@ -200,13 +200,14 @@ func (pg *PGClient) SaveDigest(ctx context.Context, d discounts.DigestRecord, it
                 (digest_id, product_id, best_before, percent, coeff, reason,
                  initial_qty, plan_qty, block_qty, stock_qty, message_id,
                  shop_qty, shop_listed,
-                 shop_name, shop_uom, shop_sale_price, shop_site_url)
+                 shop_name, shop_uom, shop_sale_price, shop_site_url, photo_file_id)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-                    $14, $15, $16, $17)`,
+                    $14, $15, $16, $17, $18)`,
 			digestID, it.ProductID, it.BestBefore, it.Percent, it.Coeff, it.Reason,
 			it.InitialQty, it.PlanQty, it.BlockQty, it.StockQty, it.MessageID,
 			it.ShopQty, it.Listed,
 			it.Shop.Name, it.Shop.UOM, it.Shop.SalePrice, it.Shop.SiteURL,
+			it.PhotoFileID,
 		); err != nil {
 			return fmt.Errorf("insert digest item %s %s: %w", it.ProductID, it.BestBefore.Format(time.DateOnly), err)
 		}
@@ -555,7 +556,7 @@ func (pg *PGClient) TodayDigest(ctx context.Context, date time.Time, chatKind st
 	rows, err := pg.Pool.Query(ctx, `
         SELECT product_id, best_before, percent, reason, initial_qty, plan_qty,
                block_qty, stock_qty, message_id, shop_qty, shop_available, shop_listed,
-               shop_name, shop_uom, shop_sale_price, shop_site_url
+               shop_name, shop_uom, shop_sale_price, shop_site_url, photo_file_id
         FROM discount_telegram_digest_item
         WHERE digest_id = $1
         ORDER BY best_before, product_id`, digestID)
@@ -574,7 +575,7 @@ func (pg *PGClient) TodayDigest(ctx context.Context, date time.Time, chatKind st
 			&it.ProductID, &it.BestBefore, &it.Percent, &it.Reason,
 			&it.InitialQty, &it.PlanQty, &it.BlockQty, &it.StockQty, &it.MessageID,
 			&it.ShopQty, &it.ShopAvailable, &it.Listed,
-			&it.Shop.Name, &it.Shop.UOM, &shopPrice, &it.Shop.SiteURL,
+			&it.Shop.Name, &it.Shop.UOM, &shopPrice, &it.Shop.SiteURL, &it.PhotoFileID,
 		); err != nil {
 			return nil, fmt.Errorf("scan today digest item: %w", err)
 		}
@@ -626,13 +627,14 @@ func (pg *PGClient) ReplaceDigestItems(ctx context.Context, chatKind string, pla
                 (digest_id, product_id, best_before, percent, coeff, reason,
                  initial_qty, plan_qty, block_qty, stock_qty, message_id,
                  shop_qty, shop_listed,
-                 shop_name, shop_uom, shop_sale_price, shop_site_url)
+                 shop_name, shop_uom, shop_sale_price, shop_site_url, photo_file_id)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-                    $14, $15, $16, $17)`,
+                    $14, $15, $16, $17, $18)`,
 			digestID, it.ProductID, it.BestBefore, it.Percent, it.Coeff, it.Reason,
 			it.InitialQty, it.PlanQty, it.BlockQty, it.StockQty, it.MessageID,
 			it.ShopQty, it.Listed,
 			it.Shop.Name, it.Shop.UOM, it.Shop.SalePrice, it.Shop.SiteURL,
+			it.PhotoFileID,
 		); err != nil {
 			return fmt.Errorf("insert digest item %s %s: %w", it.ProductID, it.BestBefore.Format(time.DateOnly), err)
 		}
@@ -741,7 +743,7 @@ func (pg *PGClient) LastShopDigest(ctx context.Context) (*discounts.DigestState,
 	rows, err := pg.Pool.Query(ctx, `
         SELECT product_id, best_before, percent, reason, initial_qty, plan_qty,
                block_qty, stock_qty, message_id, shop_qty, shop_available, shop_listed,
-               shop_name, shop_uom, shop_sale_price, shop_site_url
+               shop_name, shop_uom, shop_sale_price, shop_site_url, photo_file_id
         FROM discount_telegram_digest_item
         WHERE digest_id = $1
         ORDER BY best_before, product_id`, digestID)
@@ -760,7 +762,7 @@ func (pg *PGClient) LastShopDigest(ctx context.Context) (*discounts.DigestState,
 			&it.ProductID, &it.BestBefore, &it.Percent, &it.Reason,
 			&it.InitialQty, &it.PlanQty, &it.BlockQty, &it.StockQty, &it.MessageID,
 			&it.ShopQty, &it.ShopAvailable, &it.Listed,
-			&it.Shop.Name, &it.Shop.UOM, &shopPrice, &it.Shop.SiteURL,
+			&it.Shop.Name, &it.Shop.UOM, &shopPrice, &it.Shop.SiteURL, &it.PhotoFileID,
 		); err != nil {
 			return nil, fmt.Errorf("scan last shop digest item: %w", err)
 		}
@@ -790,6 +792,26 @@ func (pg *PGClient) UpdateDigestItemShopCard(ctx context.Context, plannedAt time
 		discounts.ChatWarehouse, plannedAt, card.Name, card.UOM, card.SalePrice, card.SiteURL,
 		key.ProductID, key.BestBefore); err != nil {
 		return fmt.Errorf("update digest item shop card %s %s: %w", key.ProductID, plannedAt.Format(time.DateOnly), err)
+	}
+
+	return nil
+}
+
+// SetDigestItemPhoto — запомнить file_id принятого фото блока (” — фото нет:
+// склад просит переделать). Живёт в истории рассылки, а не только в памяти
+// процесса: после рестарта альбом поста собирается по нему, а не теряется
+// (решение владельца 22.10.2026).
+func (pg *PGClient) SetDigestItemPhoto(ctx context.Context, plannedAt time.Time, key discounts.LotKey, fileID string) error {
+	if _, err := pg.Pool.Exec(ctx, `
+        UPDATE discount_telegram_digest_item i
+        SET photo_file_id = $3
+        WHERE i.product_id = $4 AND i.best_before = $5::date
+          AND i.digest_id = (
+              SELECT id FROM discount_telegram_digest
+              WHERE chat_kind = $1 AND planned_at = $2::date
+              ORDER BY id DESC LIMIT 1)`,
+		discounts.ChatWarehouse, plannedAt, fileID, key.ProductID, key.BestBefore); err != nil {
+		return fmt.Errorf("set digest item photo %s %s: %w", key.ProductID, plannedAt.Format(time.DateOnly), err)
 	}
 
 	return nil

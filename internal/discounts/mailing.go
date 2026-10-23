@@ -84,6 +84,14 @@ func PhotoAccepted(name string, bestBefore time.Time) string {
 		html.EscapeString(name), bestBefore.Format("02.01.2006"))
 }
 
+// PhotoAlreadyAccepted — ответ на ПОВТОРНОЕ фото в ответ на тот же запрос:
+// принятое фото не перезаписываем, иначе последний снимок молча заменит
+// выбранный (решение владельца 22.10.2026). Замена — кнопкой «Переделать фото».
+func PhotoAlreadyAccepted(name string, bestBefore time.Time) string {
+	return fmt.Sprintf("Фото для %s до %s уже принято. Заменить — кнопка «%s» под подтверждением.",
+		html.EscapeString(name), bestBefore.Format("02.01.2006"), PhotoRedoButton)
+}
+
 // PhotoRedoButton — кнопка под подтверждением фото: склад просит новое фото
 // вместо принятого (размытое, не тот лот). Нажатие забывает старое фото и
 // заново запрашивает снимок; после публикации поста недоступна (альбом уже в

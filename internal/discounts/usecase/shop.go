@@ -114,6 +114,13 @@ func (uc *UseCase) shopPhotos(ctx context.Context, day time.Time, items []discou
 		if !it.Listed {
 			continue
 		}
+		// file_id берём из истории рассылки: после рестарта память пуста, а
+		// фото уже принято — альбом обязан собраться.
+		if it.PhotoFileID != "" {
+			photos = append(photos, it.PhotoFileID)
+
+			continue
+		}
 		key := lotKey(it.ProductID, it.BestBefore)
 		if id := uc.photo(key); id != "" {
 			photos = append(photos, id)

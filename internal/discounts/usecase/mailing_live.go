@@ -439,7 +439,7 @@ func liveTelegramWrites(pairs []PairState, plan dayPlan, old []discounts.DigestI
 func (uc *UseCase) requestPhotos(ctx context.Context, day time.Time, items []discounts.DigestItem, data map[discounts.LotKey]lotData) error {
 	for _, it := range items {
 		key := lotKey(it.ProductID, it.BestBefore)
-		if it.BlockQty <= 0 || it.MessageID != 0 || uc.photo(key) != "" {
+		if it.BlockQty <= 0 || it.MessageID != 0 || uc.photoReady(it) {
 			continue
 		}
 		name := data[key].Name
@@ -508,7 +508,7 @@ func (uc *UseCase) syncPhotoRequests(ctx context.Context, day time.Time, items [
 		key := lotKey(it.ProductID, it.BestBefore)
 		visible := qty[key] > 0
 		switch {
-		case visible && it.MessageID == 0 && uc.photo(key) == "":
+		case visible && it.MessageID == 0 && !uc.photoReady(it):
 			name := data[key].Name
 			messageID, err := uc.warehouse.NotifyWarehouseReplyRequest(discounts.PhotoRequest(name, it.BestBefore))
 			if err != nil {
@@ -725,9 +725,13 @@ func skipTarget(p PairState, it discounts.DigestItem) (int16, discounts.Owner, b
 }
 
 // HandlePhoto — фото от склада: пришло ОТВЕТОМ на запрос позиции, по
-// reply_to_message находим блок и держим file_id в памяти (фото нужно только до
-// публикации рассылки, в БД его не кладём). Фото без ответа на наш запрос
-// игнорируется: привязать его к позиции нельзя.
+// reply_to_message находим блок. file_id пишется в историю рассылки
+// (photo_file_id) и в память сессии: история переживает рестарт, память — кэш.
+// Фото без ответа на наш запрос игнорируется: привязать его к позиции нельзя
+// (решение владельца 22.10.2026).
+//
+// Повторное фото в ответ на ТОТ ЖЕ запрос не принимается: иначе последний снимок
+// молча перезаписал бы выбранный. Замена — кнопкой «Переделать фото».
 func (uc *UseCase) HandlePhoto(ctx context.Context, _, replyToMessageID int64, fileID string) error {
 	if fileID == "" || replyToMessageID == 0 {
 		return nil
@@ -744,11 +748,19 @@ func (uc *UseCase) HandlePhoto(ctx context.Context, _, replyToMessageID int64, f
 			continue
 		}
 		key := lotKey(it.ProductID, it.BestBefore)
-		uc.setPhoto(key, fileID)
 		name := uc.photoName(key)
 		if name == "" {
 			name = it.ProductID
 		}
+
+		if uc.photoReady(it) {
+			return uc.warehouse.NotifyWarehouse(discounts.PhotoAlreadyAccepted(name, it.BestBefore))
+		}
+
+		if err := uc.repo.SetDigestItemPhoto(ctx, day, key, fileID); err != nil {
+			return fmt.Errorf("фото %s: %w", it.ProductID, err)
+		}
+		uc.setPhoto(key, fileID)
 
 		// Подтверждение с кнопкой «Переделать фото»: фото могло прийти не то
 		// (размытое, не тот лот) — склад просит новое, не дожидаясь публикации
@@ -765,6 +777,12 @@ func (uc *UseCase) HandlePhoto(ctx context.Context, _, replyToMessageID int64, f
 	}
 
 	return nil
+}
+
+// photoReady — фото блока есть: file_id в истории рассылки (переживает рестарт)
+// или в памяти процесса (кэш сессии).
+func (uc *UseCase) photoReady(it discounts.DigestItem) bool {
+	return it.PhotoFileID != "" || uc.photo(lotKey(it.ProductID, it.BestBefore)) != ""
 }
 
 // PhotoRedoCallback — данные кнопки «Переделать фото» под подтверждением
@@ -841,6 +859,9 @@ func (uc *UseCase) RedoPhoto(ctx context.Context, callbackQueryID string, _, mes
 	// Старое фото забываем: иначе проход фото решит, что оно уже есть, и нового
 	// запроса не будет.
 	uc.clearPhoto(key)
+	if err := uc.repo.SetDigestItemPhoto(ctx, day, key, ""); err != nil {
+		return fmt.Errorf("переделка фото %s: %w", key.ProductID, err)
+	}
 	if messageID != 0 {
 		if err := uc.warehouse.DeleteWarehouseReply(messageID); err != nil {
 			slog.Info(fmt.Sprintf("discounts: удаление подтверждения фото: %v", err))
