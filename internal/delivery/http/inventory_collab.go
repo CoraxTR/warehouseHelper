@@ -55,7 +55,7 @@ func (h *Handler) inventoryHost(r *http.Request, sessionID string) bool {
 // комнату не занимает (Claim здесь нельзя — он блокирует проведение и требует
 // готовности гостей). Комнаты нет — предпросмотр собираем по своим сканам:
 // отказывать оператору из-за снесённой комнаты нельзя.
-func (h *Handler) guestInventorySnapshot(sessionID string) ([]json.RawMessage, string) {
+func (h *Handler) guestInventorySnapshot(sessionID string) (rows []json.RawMessage, digest string) {
 	rows, digest, err := h.collabUC.GuestSnapshot(sessionID)
 
 	switch {

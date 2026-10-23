@@ -175,7 +175,7 @@ func (uc *UseCase) GuestScans(id string) ([]json.RawMessage, error) {
 // GuestSnapshot отдаёт строки гостей вместе с отпечатком набора: предпросмотр
 // показывает этот набор, а проведение сверяет отпечаток — если гость после
 // предпросмотра долил сканы, документ не соберётся по невидимым хозяину строкам.
-func (uc *UseCase) GuestSnapshot(id string) ([]json.RawMessage, string, error) {
+func (uc *UseCase) GuestSnapshot(id string) (rows []json.RawMessage, digest string, err error) {
 	return uc.store.GuestSnapshot(id)
 }
 

@@ -83,7 +83,7 @@ var (
 	ErrBusy = errors.New("приёмка уже сохраняется")
 	// ErrRefMismatch — комната открыта для другой работы: строки чужого
 	// поставщика в текущее сохранение не попадут.
-	ErrRefMismatch = errors.New("комната открыта для другого поставщика")
+	ErrRefMismatch  = errors.New("комната открыта для другого поставщика")
 	ErrAlreadySaved = errors.New("приёмка по этой ссылке уже сохранена")
 	// ErrGuestsChanged — набор строк гостей изменился после предпросмотра.
 	ErrGuestsChanged = errors.New("гости прислали новые сканы")

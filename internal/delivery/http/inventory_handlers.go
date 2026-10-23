@@ -125,7 +125,7 @@ type invPreviewResponse struct {
 	SrokiSkip bool `json:"srokiSkip"`
 	// Guests — в итог вошли строки гостей совместной инвентаризации: страница
 	// пишет об этом одной строкой (разделять, чей скан, владелец не просил).
-	Guests bool            `json:"guests"`
+	Guests bool `json:"guests"`
 	// GuestToken — отпечаток строк гостей, вошедших в предпросмотр: страница
 	// возвращает его на проведении, и сервер сверяет набор.
 	GuestToken string          `json:"guestToken"`

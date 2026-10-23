@@ -376,7 +376,7 @@ func (s *Store) ClaimSnapshot(id, ref, digest string) ([]json.RawMessage, error)
 
 // GuestSnapshot — строки гостей вместе с их отпечатком: одна операция под
 // мутексом, поэтому предпросмотр видит ровно тот набор, чей отпечаток отдал.
-func (s *Store) GuestSnapshot(id string) ([]json.RawMessage, string, error) {
+func (s *Store) GuestSnapshot(id string) (rows []json.RawMessage, digest string, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -385,9 +385,11 @@ func (s *Store) GuestSnapshot(id string) ([]json.RawMessage, string, error) {
 		return nil, "", err
 	}
 
-	rows := guestScans(session)
+	rows = guestScans(session)
 
-	return rows, RowsDigest(rows), nil
+	digest = RowsDigest(rows)
+
+	return rows, digest, nil
 }
 
 // claimableLocked — общая проверка перед захватом: комната жива, вид тот, не
