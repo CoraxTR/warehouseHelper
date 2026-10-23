@@ -172,6 +172,26 @@ func (uc *UseCase) GuestScans(id string) ([]json.RawMessage, error) {
 	return uc.store.GuestScans(id)
 }
 
+// GuestSnapshot отдаёт строки гостей вместе с отпечатком набора: предпросмотр
+// показывает этот набор, а проведение сверяет отпечаток — если гость после
+// предпросмотра долил сканы, документ не соберётся по невидимым хозяину строкам.
+func (uc *UseCase) GuestSnapshot(id string) (rows []json.RawMessage, digest string, err error) {
+	return uc.store.GuestSnapshot(id)
+}
+
+// ClaimSnapshot забирает строки гостей на сохранение, только если набор не
+// изменился с предпросмотра (digest). Пустой digest — проверки нет.
+func (uc *UseCase) ClaimSnapshot(id, ref, digest string) ([]json.RawMessage, error) {
+	scans, err := uc.store.ClaimSnapshot(id, ref, digest)
+	if err != nil {
+		return nil, err
+	}
+
+	slog.Info("collab: строки гостей забраны на сохранение", "session", id, "rows", len(scans))
+
+	return scans, nil
+}
+
 // Claim забирает строки гостей на сохранение: гейт «все готовы» и снимок строк —
 // одна операция под мутексом хранилища, поэтому двойной клик по «Сохранить
 // приёмку» не сохраняет работу дважды (повтор получает ErrBusy).

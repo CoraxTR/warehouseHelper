@@ -16,6 +16,8 @@
 package collab
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -81,11 +83,10 @@ var (
 	ErrBusy = errors.New("приёмка уже сохраняется")
 	// ErrRefMismatch — комната открыта для другой работы: строки чужого
 	// поставщика в текущее сохранение не попадут.
-	ErrRefMismatch = errors.New("комната открыта для другого поставщика")
-	// ErrAlreadySaved — приёмка по этой ссылке уже сохранена: повторное
-	// сохранение создало бы вторую приёмку того же поставщика (ответ прошлого
-	// раза мог не дойти до страницы — владелец, 01.10.2026).
+	ErrRefMismatch  = errors.New("комната открыта для другого поставщика")
 	ErrAlreadySaved = errors.New("приёмка по этой ссылке уже сохранена")
+	// ErrGuestsChanged — набор строк гостей изменился после предпросмотра.
+	ErrGuestsChanged = errors.New("гости прислали новые сканы")
 )
 
 // NotReadyError — сохранение не начинается: хост ещё ждёт гостей. Имена уходят
@@ -94,6 +95,19 @@ type NotReadyError struct{ Names []string }
 
 func (e *NotReadyError) Error() string {
 	return "не все гости готовы: " + strings.Join(e.Names, ", ")
+}
+
+// RowsDigest — отпечаток набора строк гостей (sha256, 16 hex). Порядок строк
+// стабилен (гости в порядке подключения, внутри — в порядке отправки), поэтому
+// тот же набор даёт тот же отпечаток, а доливка сканов — другой.
+func RowsDigest(rows []json.RawMessage) string {
+	h := sha256.New()
+	for _, row := range rows {
+		h.Write(row)
+		h.Write([]byte{0}) // разделитель: конкатенация строк не должна совпадать
+	}
+
+	return hex.EncodeToString(h.Sum(nil))[:16]
 }
 
 // Guest — подключённая к комнате машина.
