@@ -9,23 +9,28 @@ import (
 	"warehouseHelper/internal/config"
 )
 
-// captureAPI — сервер Bot API, который запоминает путь и тело последнего
-// запроса: по ним проверяется payload сообщения.
-func captureAPI(t *testing.T) (*httptest.Server, *string, *map[string]any) {
+// capturedRequest — что именно бот отправил в Bot API: путь метода и тело.
+type capturedRequest struct {
+	Path string
+	Body map[string]any
+}
+
+// captureAPI — сервер Bot API, который запоминает последний запрос: по нему
+// проверяется payload сообщения.
+func captureAPI(t *testing.T) (*httptest.Server, *capturedRequest) {
 	t.Helper()
 
-	path := ""
-	body := map[string]any{}
+	req := &capturedRequest{Body: map[string]any{}}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		path = r.URL.Path
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		req.Path = r.URL.Path
+		if err := json.NewDecoder(r.Body).Decode(&req.Body); err != nil {
 			t.Errorf("decode request body: %v", err)
 		}
 		w.WriteHeader(http.StatusOK)
 	}))
 	t.Cleanup(srv.Close)
 
-	return srv, &path, &body
+	return srv, req
 }
 
 // previewDisabled — выключен ли предпросмотр ссылок в теле запроса.
@@ -40,7 +45,10 @@ func previewDisabled(t *testing.T, body map[string]any) bool {
 	if !ok {
 		t.Fatalf("link_preview_options не объект: %T", raw)
 	}
-	disabled, _ := opts["is_disabled"].(bool)
+	disabled, ok := opts["is_disabled"].(bool)
+	if !ok {
+		t.Fatalf("is_disabled не bool: %T", opts["is_disabled"])
+	}
 
 	return disabled
 }
@@ -49,27 +57,27 @@ func previewDisabled(t *testing.T, body map[string]any) bool {
 // карточку первой ссылки блока — снизу поста висит чужая позиция (инцидент
 // 22.10.2026). Правило держится и на правке: превью не должно достраиваться.
 func TestShopPostWithoutLinkPreview(t *testing.T) {
-	srv, path, body := captureAPI(t)
+	srv, req := captureAPI(t)
 	n := testNotifier(&config.TelegramConfig{BotToken: "test-token", DiscountChatID: -1007777777777}, srv.URL)
 
 	if _, err := n.NotifyShopHTML("пост"); err != nil {
 		t.Fatalf("публикация поста: %v", err)
 	}
-	if *path != "/bottest-token/sendMessage" {
-		t.Errorf("path = %q, want sendMessage", *path)
+	if req.Path != "/bottest-token/sendMessage" {
+		t.Errorf("path = %q, want sendMessage", req.Path)
 	}
-	if !previewDisabled(t, *body) {
+	if !previewDisabled(t, req.Body) {
 		t.Error("в публикации поста предпросмотр ссылок не выключен")
 	}
 
-	*body = map[string]any{}
+	req.Body = map[string]any{}
 	if err := n.EditShopHTML(77, "пост после правки"); err != nil {
 		t.Fatalf("правка поста: %v", err)
 	}
-	if *path != "/bottest-token/editMessageText" {
-		t.Errorf("path = %q, want editMessageText", *path)
+	if req.Path != "/bottest-token/editMessageText" {
+		t.Errorf("path = %q, want editMessageText", req.Path)
 	}
-	if !previewDisabled(t, *body) {
+	if !previewDisabled(t, req.Body) {
 		t.Error("в правке поста предпросмотр ссылок не выключен")
 	}
 }
@@ -77,18 +85,19 @@ func TestShopPostWithoutLinkPreview(t *testing.T) {
 // Запрос фото уходит БЕЗ force_reply: принудительный ответ уводил в цитату к
 // запросу важные сообщения склада (решение владельца 22.10.2026). Привязка фото
 // к позиции — по-прежнему reply_to_message, поэтому «ответом на это сообщение»
-// стоит в тексте запроса (см. discounts.PhotoRequest).
+// стоит в тексте запроса (см. discounts.PhotoRequest). Фото без ответа
+// игнорируется — решение владельца.
 func TestPhotoRequestHasNoForcedReply(t *testing.T) {
-	srv, path, body := captureAPI(t)
+	srv, req := captureAPI(t)
 	n := testNotifier(&config.TelegramConfig{BotToken: "test-token", WarehouseChatID: -1001234567890}, srv.URL)
 
 	if _, err := n.NotifyWarehouseReplyRequest("Сделайте фото для Колбаса"); err != nil {
 		t.Fatalf("запрос фото: %v", err)
 	}
-	if *path != "/bottest-token/sendMessage" {
-		t.Errorf("path = %q, want sendMessage", *path)
+	if req.Path != "/bottest-token/sendMessage" {
+		t.Errorf("path = %q, want sendMessage", req.Path)
 	}
-	if markup, ok := (*body)["reply_markup"]; ok {
+	if markup, ok := req.Body["reply_markup"]; ok {
 		t.Errorf("у запроса фото остался reply_markup: %v", markup)
 	}
 }

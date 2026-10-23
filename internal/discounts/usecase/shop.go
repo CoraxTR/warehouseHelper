@@ -104,6 +104,28 @@ func (uc *UseCase) runShop(ctx context.Context, now time.Time, s Schedule) error
 	return uc.publishShop(ctx, now)
 }
 
+// shopPhotos — file_id присланных фото в порядке блоков поста. Фото нет (память
+// потеряна рестартом) — просим заново, пост не ждёт: альбом уйдёт без него,
+// следующая публикация возьмёт присланное.
+func (uc *UseCase) shopPhotos(ctx context.Context, day time.Time, items []discounts.DigestItem, data map[discounts.LotKey]lotData) []string {
+	photos := make([]string, 0, len(items))
+	for i := range items {
+		it := &items[i]
+		if !it.Listed {
+			continue
+		}
+		key := lotKey(it.ProductID, it.BestBefore)
+		if id := uc.photo(key); id != "" {
+			photos = append(photos, id)
+
+			continue
+		}
+		uc.askPhoto(ctx, day, *it, data[key].Name)
+	}
+
+	return photos
+}
+
 // publishShop — альбом фото позиций и пост-копия письма склада. Состав — то,
 // что зафиксировано в 14:45; числа — текущие (с 14:45 до 15:00 письмо склада
 // тоже правилось количествами). Позиции, распроданные к 15:00, в пост не идут:
@@ -127,29 +149,19 @@ func (uc *UseCase) publishShop(ctx context.Context, now time.Time) error {
 
 	items := make([]discounts.DigestItem, len(st.Items))
 	copy(items, st.Items)
-	photos := make([]string, 0, len(items))
 	for i := range items {
 		it := &items[i]
 		key := lotKey(it.ProductID, it.BestBefore)
 		it.ShopQty = max(0, min(it.BlockQty, data[key].Qty))
 		it.Listed = it.ShopQty > 0
 		it.ShopAvailable = it.ShopQty
-		if !it.Listed {
-			continue
-		}
-		if id := uc.photo(key); id != "" {
-			photos = append(photos, id)
-
-			continue
-		}
-		// Фото нет (рестарт потерял память) — просим заново, пост не ждёт.
-		uc.askPhoto(ctx, day, *it, data[key].Name)
 	}
+	photos := uc.shopPhotos(ctx, day, items, data)
 
 	// Прошлую рассылку «подчищаем» перед отправкой новой: все блоки в ноль и с
 	// меткой «ПРОДАНО» — читатель видит, что акция кончилась (18.10.2026).
 	// Подчистка идёт ДО снимка карточек нового поста: у закрытого поста свои
-	// карточки в памяти (см. withShopCards).
+	// карточки в истории (см. shopCards).
 	if err := uc.closeShopPost(ctx, day, data); err != nil {
 		return err
 	}
@@ -262,7 +274,6 @@ func (uc *UseCase) syncShopPost(ctx context.Context, now time.Time) error {
 	if err != nil {
 		return err
 	}
-	// истории рассылки.
 
 	// Пары нужны только для проверки избытка: остальные позиции считаются по
 	// остаткам, оборот им не нужен.
@@ -279,19 +290,10 @@ func (uc *UseCase) syncShopPost(ctx context.Context, now time.Time) error {
 		if dec.skip || (it.ShopQty == dec.qty && it.Listed == dec.listed) {
 			continue
 		}
-		it.ShopQty, it.Listed = dec.qty, dec.listed
-		if it.ShopAvailable == 0 && dec.qty > 0 {
-			it.ShopAvailable = dec.qty
-		}
-		changed = true
-		if err := uc.repo.UpdateDigestItemShop(ctx, st.PlannedAt, key, it.ShopQty, it.ShopAvailable, it.Listed); err != nil {
+		if err := uc.applyShopDecision(ctx, st.PlannedAt, it, dec); err != nil {
 			return err
 		}
-		if dec.restore {
-			if err := uc.restoreShopDiscount(ctx, *it); err != nil {
-				return err
-			}
-		}
+		changed = true
 	}
 	if !changed {
 		return nil
@@ -451,6 +453,25 @@ func (uc *UseCase) askPhoto(ctx context.Context, day time.Time, it discounts.Dig
 		}
 	}
 	uc.setPhotoName(key, name)
+}
+
+// applyShopDecision — записать решение по позиции поста: числа и признак показа
+// в историю рассылки, а вернувшейся сроковой позиции — ещё и скидку на сайт с
+// ТГ-колонкой (читатели её уже видели в посте).
+func (uc *UseCase) applyShopDecision(ctx context.Context, plannedAt time.Time, it *discounts.DigestItem, dec shopDecideResult) error {
+	it.ShopQty, it.Listed = dec.qty, dec.listed
+	if it.ShopAvailable == 0 && dec.qty > 0 {
+		it.ShopAvailable = dec.qty
+	}
+	key := lotKey(it.ProductID, it.BestBefore)
+	if err := uc.repo.UpdateDigestItemShop(ctx, plannedAt, key, it.ShopQty, it.ShopAvailable, it.Listed); err != nil {
+		return err
+	}
+	if !dec.restore {
+		return nil
+	}
+
+	return uc.restoreShopDiscount(ctx, *it)
 }
 
 // shopDecide — что делать с позицией поста по текущему остатку: сколько

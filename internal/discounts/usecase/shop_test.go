@@ -310,7 +310,7 @@ func TestOnLotsChangedKicksShopPost(t *testing.T) {
 		t.Fatal("событие стока не разбудило правку поста")
 	}
 
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		if err := h.uc.OnLotsChanged(context.Background(), "p1", nil); err != nil {
 			t.Fatalf("событие стока: %v", err)
 		}

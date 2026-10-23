@@ -218,7 +218,7 @@ func TestFormatPrice(t *testing.T) {
 // сообщения больше нет (22.10.2026), и без этой фразы фото, отправленное просто
 // в чат, к позиции не привязать.
 func TestPhotoRequestAsksToReply(t *testing.T) {
-	text := PhotoRequest("<Колбаса>", time.Date(2026, 9, 9, 0, 0, 0, 0, time.UTC))
+	text := PhotoRequest("<Колбаса>", time.Date(2026, time.September, 9, 0, 0, 0, 0, time.UTC))
 
 	if !strings.Contains(text, "ОТВЕТОМ") {
 		t.Errorf("в запросе нет просьбы ответить: %q", text)
