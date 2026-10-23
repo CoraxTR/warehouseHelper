@@ -91,6 +91,9 @@ type invPreviewRequest struct {
 	// подбором). Поле необязательное: нет — nil.
 	Hold      []string `json:"hold"`
 	SessionID string   `json:"session_id"`
+	// GuestToken — отпечаток набора строк гостей из предпросмотра: проведение
+	// сверяет его и не собирает документ по строкам, которых хозяин не видел.
+	GuestToken string `json:"guest_token"`
 }
 
 // invPreviewRow — строка предпросмотра: только строки, никаких сырых float и
@@ -123,7 +126,10 @@ type invPreviewResponse struct {
 	// Guests — в итог вошли строки гостей совместной инвентаризации: страница
 	// пишет об этом одной строкой (разделять, чей скан, владелец не просил).
 	Guests bool            `json:"guests"`
-	Rows   []invPreviewRow `json:"rows"`
+	// GuestToken — отпечаток строк гостей, вошедших в предпросмотр: страница
+	// возвращает его на проведении, и сервер сверяет набор.
+	GuestToken string          `json:"guestToken"`
+	Rows       []invPreviewRow `json:"rows"`
 }
 
 // invConductResponse — ответ проведения: созданный документ МС и итог шага
@@ -141,6 +147,9 @@ type invConductResponse struct {
 type invErrorResponse struct {
 	OK    bool   `json:"ok"`
 	Error string `json:"error"`
+	// GuestsChanged — набор строк гостей изменился после предпросмотра: страница
+	// перезапрашивает предпросмотр, чтобы хозяин увидел новые количества.
+	GuestsChanged bool `json:"guestsChanged,omitempty"`
 }
 
 // GoodsInventoryPage — GET /goods/inventory: выбор вида инвентаризации.
@@ -288,6 +297,7 @@ func (h *Handler) GoodsInventoryPreview(w http.ResponseWriter, r *http.Request) 
 	scans := req.Scans
 	hold := req.Hold
 	guests := false
+	guestToken := ""
 
 	if sessionID != "" {
 		// Гость предпросмотр собрать не может (документ делает хозяин), а его
@@ -300,7 +310,7 @@ func (h *Handler) GoodsInventoryPreview(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 
-		guestRows := h.guestInventoryScans(sessionID)
+		guestRows, token := h.guestInventorySnapshot(sessionID)
 
 		merged, mergeErr := iucase.MergeGuestScans(scans, hold, guestRows)
 		if mergeErr != nil {
@@ -314,6 +324,7 @@ func (h *Handler) GoodsInventoryPreview(w http.ResponseWriter, r *http.Request) 
 		scans = merged.Scans
 		hold = merged.Hold
 		guests = len(guestRows) > 0
+		guestToken = token
 	}
 
 	preview, err := h.inventoryUC.Preview(r.Context(), req.Type, scans, hold)
@@ -325,6 +336,7 @@ func (h *Handler) GoodsInventoryPreview(w http.ResponseWriter, r *http.Request) 
 
 	body := invPreviewBody(preview)
 	body.Guests = guests
+	body.GuestToken = guestToken
 
 	invWriteJSON(w, http.StatusOK, body)
 }
@@ -366,7 +378,7 @@ func (h *Handler) GoodsInventoryConduct(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 
-		guestRows, taken, claimErr := h.claimGuestInventoryScans(sessionID, req.Type)
+		guestRows, taken, claimErr := h.claimGuestInventoryScans(sessionID, req.Type, req.GuestToken)
 		if claimErr != nil {
 			invCollabError(w, claimErr)
 

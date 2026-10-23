@@ -55,8 +55,8 @@ func (h *Handler) inventoryHost(r *http.Request, sessionID string) bool {
 // комнату не занимает (Claim здесь нельзя — он блокирует проведение и требует
 // готовности гостей). Комнаты нет — предпросмотр собираем по своим сканам:
 // отказывать оператору из-за снесённой комнаты нельзя.
-func (h *Handler) guestInventoryScans(sessionID string) []json.RawMessage {
-	rows, err := h.collabUC.GuestScans(sessionID)
+func (h *Handler) guestInventorySnapshot(sessionID string) ([]json.RawMessage, string) {
+	rows, digest, err := h.collabUC.GuestSnapshot(sessionID)
 
 	switch {
 	case errors.Is(err, collab.ErrNotFound), errors.Is(err, collab.ErrClosed):
@@ -66,10 +66,10 @@ func (h *Handler) guestInventoryScans(sessionID string) []json.RawMessage {
 		// отказ открыть предпросмотр. Документ всё равно собирает Conduct.
 		slog.Info("inventory: строки гостей для предпросмотра не прочитаны", "session_id", sessionID, "err", err)
 	default:
-		return rows
+		return rows, digest
 	}
 
-	return nil
+	return nil, ""
 }
 
 // claimGuestInventoryScans забирает строки гостей на проведение инвентаризации:
@@ -78,8 +78,8 @@ func (h *Handler) guestInventoryScans(sessionID string) []json.RawMessage {
 // (перезапуск приложения/purge) или она отменена: хост проводит по своим сканам,
 // отказывать оператору из-за этого нельзя. Строки возвращаются в исходном виде —
 // вынимает из них штрих-коды iucase.MergeGuestScans.
-func (h *Handler) claimGuestInventoryScans(sessionID, inventoryType string) (rows []json.RawMessage, taken bool, err error) {
-	rows, err = h.collabUC.Claim(sessionID, inventoryType)
+func (h *Handler) claimGuestInventoryScans(sessionID, inventoryType, digest string) (rows []json.RawMessage, taken bool, err error) {
+	rows, err = h.collabUC.ClaimSnapshot(sessionID, inventoryType, digest)
 
 	switch {
 	case errors.Is(err, collab.ErrNotFound), errors.Is(err, collab.ErrClosed):
@@ -119,6 +119,13 @@ func invCollabError(w http.ResponseWriter, err error) {
 		})
 	case errors.Is(err, collab.ErrKind):
 		invWriteJSON(w, http.StatusBadRequest, invErrorResponse{Error: err.Error()})
+	case errors.Is(err, collab.ErrGuestsChanged):
+		// Гость вернулся и долил сканы после предпросмотра: проводить по строкам,
+		// которых хозяин не видел, нельзя — страница сама перезапросит предпросмотр.
+		invWriteJSON(w, http.StatusConflict, invErrorResponse{
+			Error:         "гости прислали новые сканы после предпросмотра — документ соберётся по ним, проверьте количества",
+			GuestsChanged: true,
+		})
 	default:
 		invWriteJSONError(w, err)
 	}

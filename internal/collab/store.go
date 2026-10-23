@@ -342,9 +342,58 @@ func (s *Store) close(id string, reason ClosedReason) (Session, error) {
 //
 // Ошибку сохранения хост снимает Release (комната снова открыта для повтора).
 func (s *Store) Claim(id, ref string) ([]json.RawMessage, error) {
+	return s.ClaimSnapshot(id, ref, "")
+}
+
+// ClaimSnapshot — Claim с проверкой, что набор строк гостей не изменился с
+// предпросмотра: гость мог вернуться и долить сканы, и документ собрался бы не
+// по тому, что хозяин видел. Отпечаток сверяется под тем же мутексом, что и
+// захват, — окна между проверкой и сохранением нет. Пустой digest — без
+// проверки (старая страница или предпросмотр без комнаты).
+func (s *Store) ClaimSnapshot(id, ref, digest string) ([]json.RawMessage, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	session, err := s.claimableLocked(id, ref)
+	if err != nil {
+		return nil, err
+	}
+
+	rows := guestScans(session)
+
+	// Отпечаток сверяем ДО захвата: при расхождении комната обязана остаться
+	// свободной, иначе после отказа хозяин не смог бы провести вообще ничего.
+	if digest != "" && RowsDigest(rows) != digest {
+		return nil, ErrGuestsChanged
+	}
+
+	now := s.now()
+	session.ClaimedAt = now
+	activeLocked(session, now)
+
+	return rows, nil
+}
+
+// GuestSnapshot — строки гостей вместе с их отпечатком: одна операция под
+// мутексом, поэтому предпросмотр видит ровно тот набор, чей отпечаток отдал.
+func (s *Store) GuestSnapshot(id string) ([]json.RawMessage, string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	session, err := s.openLocked(id)
+	if err != nil {
+		return nil, "", err
+	}
+
+	rows := guestScans(session)
+
+	return rows, RowsDigest(rows), nil
+}
+
+// claimableLocked — общая проверка перед захватом: комната жива, вид тот, не
+// занята, гости готовы. Вызывать под mu; комнату НЕ занимает (это делает
+// ClaimSnapshot после сверки отпечатка).
+func (s *Store) claimableLocked(id, ref string) (*Session, error) {
 	session, ok := s.sessions[id]
 	if !ok {
 		return nil, ErrNotFound
@@ -372,11 +421,7 @@ func (s *Store) Claim(id, ref string) ([]json.RawMessage, error) {
 		return nil, &NotReadyError{Names: names}
 	}
 
-	now := s.now()
-	session.ClaimedAt = now
-	activeLocked(session, now)
-
-	return guestScans(session), nil
+	return session, nil
 }
 
 // Release снимает «занята» после неудачного сохранения: приёмку можно повторить.
