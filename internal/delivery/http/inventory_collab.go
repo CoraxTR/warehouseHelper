@@ -39,6 +39,39 @@ func (h *Handler) openInventoryRoom(r *http.Request, w http.ResponseWriter, inve
 	return room, created, nil
 }
 
+// inventoryHost — пришёл ли запрос с машины, начавшей инвентаризацию. Роль
+// доказывает cookie-ключ комнаты: комнаты на сервере может уже не быть (рестарт
+// приложения, TTL, «Отменить») — ключ живёт дольше и продолжает работать.
+func (h *Handler) inventoryHost(r *http.Request, sessionID string) bool {
+	room, err := h.collabUC.State(sessionID)
+	if err != nil {
+		return hasHostCookie(r, sessionID)
+	}
+
+	return roomHost(r, room)
+}
+
+// guestInventoryScans отдаёт строки гостей для ПРЕДПРОСМОТРА: read-only снимок,
+// комнату не занимает (Claim здесь нельзя — он блокирует проведение и требует
+// готовности гостей). Комнаты нет — предпросмотр собираем по своим сканам:
+// отказывать оператору из-за снесённой комнаты нельзя.
+func (h *Handler) guestInventoryScans(sessionID string) []json.RawMessage {
+	rows, err := h.collabUC.GuestScans(sessionID)
+
+	switch {
+	case errors.Is(err, collab.ErrNotFound), errors.Is(err, collab.ErrClosed):
+		slog.Info("inventory: комнаты нет — предпросмотр по своим сканам", "session_id", sessionID)
+	case err != nil:
+		// Предпросмотр — только справка: неполные строки гостей врут меньше, чем
+		// отказ открыть предпросмотр. Документ всё равно собирает Conduct.
+		slog.Info("inventory: строки гостей для предпросмотра не прочитаны", "session_id", sessionID, "err", err)
+	default:
+		return rows
+	}
+
+	return nil
+}
+
 // claimGuestInventoryScans забирает строки гостей на проведение инвентаризации:
 // одним вызовом проверяет, что комната — этот же вид, не занята и все гости
 // готовы, и отдаёт снимок строк (как есть, объектами). taken=false — комнаты нет
