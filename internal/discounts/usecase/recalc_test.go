@@ -1207,6 +1207,42 @@ func (r *fakeDiscountRepo) LastShopDigest(context.Context) (*discounts.DigestSta
 	return &cp, nil
 }
 
+// UpdateDigestItemShopCard — снимок карточки блока поста: фейк пишет его в
+// позицию «истории» (переживает «рестарт» — новый UseCase над тем же репо).
+func (r *fakeDiscountRepo) UpdateDigestItemShopCard(_ context.Context, plannedAt time.Time, key discounts.LotKey, card discounts.ShopCard) error {
+	for _, st := range []*discounts.DigestState{r.digest, r.prevShop} {
+		if st == nil || !beginningOfDay(st.PlannedAt).Equal(beginningOfDay(plannedAt)) {
+			continue
+		}
+		for i := range st.Items {
+			it := &st.Items[i]
+			if it.ProductID == key.ProductID && beginningOfDay(it.BestBefore).Equal(beginningOfDay(key.BestBefore)) {
+				it.Shop = card
+			}
+		}
+	}
+
+	return nil
+}
+
+// SetDigestItemPhoto — фото блока принято (`""` — склад просит переделать):
+// в фейке это поле позиции, как колонка photo_file_id в истории.
+func (r *fakeDiscountRepo) SetDigestItemPhoto(_ context.Context, plannedAt time.Time, key discounts.LotKey, fileID string) error {
+	for _, st := range []*discounts.DigestState{r.digest, r.prevShop} {
+		if st == nil || !beginningOfDay(st.PlannedAt).Equal(beginningOfDay(plannedAt)) {
+			continue
+		}
+		for i := range st.Items {
+			it := &st.Items[i]
+			if it.ProductID == key.ProductID && beginningOfDay(it.BestBefore).Equal(beginningOfDay(key.BestBefore)) {
+				it.PhotoFileID = fileID
+			}
+		}
+	}
+
+	return nil
+}
+
 func (r *fakeDiscountRepo) UpdateDigestItemShop(_ context.Context, plannedAt time.Time, key discounts.LotKey, qty, available int64, listed bool) error {
 	for _, st := range []*discounts.DigestState{r.digest, r.prevShop} {
 		if st == nil || !beginningOfDay(st.PlannedAt).Equal(beginningOfDay(plannedAt)) {

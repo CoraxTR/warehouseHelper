@@ -82,6 +82,9 @@ type UseCase struct {
 	// shopPost — последний отредактированный текст поста чата скидок: правка
 	// уходит, только когда текст изменился.
 	shopPost string
+	// shopKick — сигнал «пост пора пересмотреть» (канал на один сигнал):
+	// событие стока из записи остатков не должно ждать ни БД, ни Telegram.
+	shopKick chan struct{}
 }
 
 // NewUseCase собирает сценарии модуля. Все зависимости — швы (ports.go);
@@ -110,6 +113,7 @@ func NewUseCase(
 		dirty:      make(map[string][]time.Time),
 		photos:     make(map[discounts.LotKey]string),
 		photoNames: make(map[discounts.LotKey]string),
+		shopKick:   make(chan struct{}, 1),
 	}
 }
 

@@ -213,3 +213,17 @@ func TestFormatPrice(t *testing.T) {
 		}
 	}
 }
+
+// Запрос фото обязан сказать складу, что снимок нужен ОТВЕТОМ: force_reply у
+// сообщения больше нет (22.10.2026), и без этой фразы фото, отправленное просто
+// в чат, к позиции не привязать.
+func TestPhotoRequestAsksToReply(t *testing.T) {
+	text := PhotoRequest("<Колбаса>", time.Date(2026, time.September, 9, 0, 0, 0, 0, time.UTC))
+
+	if !strings.Contains(text, "ОТВЕТОМ") {
+		t.Errorf("в запросе нет просьбы ответить: %q", text)
+	}
+	if strings.Contains(text, "<Колбаса>") || !strings.Contains(text, "&lt;Колбаса&gt;") {
+		t.Errorf("название не экранировано: %q", text)
+	}
+}

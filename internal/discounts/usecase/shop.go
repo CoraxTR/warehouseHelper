@@ -1,9 +1,10 @@
 // Пост в чат скидок (решение владельца 18.10.2026): в 15:00 бот отправляет
 // альбом фото позиций рассылки и копию письма склада, а дальше правит этот пост
 // до публикации следующего: продажа уменьшает остаток по акции, ноль помечает
-// позицию «ПРОДАНО», возврат возвращает её. Избыточная позиция возвращается
-// только если избыток по ней ещё есть; сроковая — сразу со скидкой на сайт и в
-// ТГ-колонку (её скидку читатели уже видели в посте).
+// позицию «ПРОДАНО», возврат возвращает её. Правит по событию стока (подбор,
+// приёмка, замена остатков) и подтверждением раз в 5 минут. Избыточная позиция
+// возвращается только если избыток по ней ещё есть; сроковая — сразу со скидкой
+// на сайт и в ТГ-колонку (её скидку читатели уже видели в посте).
 package usecase
 
 import (
@@ -19,21 +20,117 @@ import (
 // отправки не должен съесть рассылку, но и вечно висеть нельзя.
 const shopPublishWindow = 30 * time.Minute
 
-// Пост в чат скидок (решение владельца 18.10.2026): в 15:00 бот отправляет
-// поста каждую минуту. Правка идёт и в не-ТГ дни: пост живёт до следующей
-// рассылки, читатель должен видеть актуальный остаток.
-func (uc *UseCase) runShop(ctx context.Context, now time.Time, s Schedule) error {
-	if isTelegramDay(now) {
-		planAt := beginningOfDay(now).Add(s.Plan)
-		from, to := planAt.Add(mailingPublishHour), planAt.Add(mailingPublishHour+shopPublishWindow)
-		if !now.Before(from) && now.Before(to) {
-			if err := uc.publishShop(ctx, now); err != nil {
-				return err
+// shopConfirmInterval — подтверждение актуальности поста по таймеру: основной
+// путь правки — событие стока (подбор, приёмка, замена остатков), таймер лишь
+// страхует, если событие потерялось (рестарт, ошибка Telegram).
+// shopKickPause — склейка пачки событий: приёмка и подбор пишут десятки лотов
+// подряд, на каждый лот пост не правим.
+const (
+	shopConfirmInterval = 5 * time.Minute
+	shopKickPause       = 2 * time.Second
+)
+
+// kickShop — событие стока: пост пора пересмотреть. Канал на один сигнал:
+// пачка событий склеивается в одну правку, а запись остатков не ждёт ни БД, ни
+// Telegram (обработчик шва зовут прямо из записи остатков).
+func (uc *UseCase) kickShop() {
+	select {
+	case uc.shopKick <- struct{}{}:
+	default:
+	}
+}
+
+// runShopPost — правка поста чата скидок: по событию стока сразу и раз в 5
+// минут подтверждением, что пост сходится с остатками. Ошибки логируются и
+// цикл не роняют: следующее событие или подтверждение повторит.
+func (uc *UseCase) runShopPost(ctx context.Context) {
+	ticker := time.NewTicker(shopConfirmInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-uc.shopKick:
+			if !uc.waitKickPause(ctx) {
+				return
 			}
+			uc.drainShopKick()
+		case <-ticker.C:
+		}
+
+		if err := uc.syncShopPost(ctx, uc.now()); err != nil {
+			slog.Info(fmt.Sprintf("discounts: правка поста в чате скидок: %v", err))
 		}
 	}
+}
 
-	return uc.syncShopPost(ctx, now)
+// waitKickPause — пауза склейки пачки событий; false — цикл останавливают.
+func (uc *UseCase) waitKickPause(ctx context.Context) bool {
+	timer := time.NewTimer(shopKickPause)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+// drainShopKick — сигналы, накопившиеся за паузу: правка всё равно читает все
+// остатки сразу, повторять её на каждый сигнал незачем.
+func (uc *UseCase) drainShopKick() {
+	select {
+	case <-uc.shopKick:
+	default:
+	}
+}
+
+// runShop — окно публикации поста в чат скидок: с 15:00 бот отправляет пост и
+// повторяет попытку каждую минуту, пока Telegram не примет (30 минут). Саму
+// правку опубликованного поста делает runShopPost — по событию стока и
+// подтверждением раз в 5 минут; минутный тик её не дублирует.
+func (uc *UseCase) runShop(ctx context.Context, now time.Time, s Schedule) error {
+	if !isTelegramDay(now) {
+		return nil
+	}
+	planAt := beginningOfDay(now).Add(s.Plan)
+	from, to := planAt.Add(mailingPublishHour), planAt.Add(mailingPublishHour+shopPublishWindow)
+	if now.Before(from) || !now.Before(to) {
+		return nil
+	}
+
+	return uc.publishShop(ctx, now)
+}
+
+// shopPhotos — file_id присланных фото в порядке блоков поста. Фото нет (память
+// потеряна рестартом) — просим заново, пост не ждёт: альбом уйдёт без него,
+// следующая публикация возьмёт присланное.
+func (uc *UseCase) shopPhotos(ctx context.Context, day time.Time, items []discounts.DigestItem, data map[discounts.LotKey]lotData) []string {
+	photos := make([]string, 0, len(items))
+	for i := range items {
+		it := &items[i]
+		if !it.Listed {
+			continue
+		}
+		// file_id берём из истории рассылки: после рестарта память пуста, а
+		// фото уже принято — альбом обязан собраться.
+		if it.PhotoFileID != "" {
+			photos = append(photos, it.PhotoFileID)
+
+			continue
+		}
+		key := lotKey(it.ProductID, it.BestBefore)
+		if id := uc.photo(key); id != "" {
+			photos = append(photos, id)
+
+			continue
+		}
+		uc.askPhoto(ctx, day, *it, data[key].Name)
+	}
+
+	return photos
 }
 
 // publishShop — альбом фото позиций и пост-копия письма склада. Состав — то,
@@ -59,28 +156,25 @@ func (uc *UseCase) publishShop(ctx context.Context, now time.Time) error {
 
 	items := make([]discounts.DigestItem, len(st.Items))
 	copy(items, st.Items)
-	photos := make([]string, 0, len(items))
 	for i := range items {
 		it := &items[i]
 		key := lotKey(it.ProductID, it.BestBefore)
 		it.ShopQty = max(0, min(it.BlockQty, data[key].Qty))
 		it.Listed = it.ShopQty > 0
 		it.ShopAvailable = it.ShopQty
-		if !it.Listed {
-			continue
-		}
-		if id := uc.photo(key); id != "" {
-			photos = append(photos, id)
-
-			continue
-		}
-		// Фото нет (рестарт потерял память) — просим заново, пост не ждёт.
-		uc.askPhoto(ctx, day, *it, data[key].Name)
 	}
+	photos := uc.shopPhotos(ctx, day, items, data)
 
 	// Прошлую рассылку «подчищаем» перед отправкой новой: все блоки в ноль и с
 	// меткой «ПРОДАНО» — читатель видит, что акция кончилась (18.10.2026).
+	// Подчистка идёт ДО снимка карточек нового поста: у закрытого поста свои
+	// карточки в истории (см. shopCards).
 	if err := uc.closeShopPost(ctx, day, data); err != nil {
+		return err
+	}
+
+	data, err = uc.shopCards(ctx, day, items, data)
+	if err != nil {
 		return err
 	}
 
@@ -142,6 +236,11 @@ func (uc *UseCase) closeShopPost(ctx context.Context, day time.Time, data map[di
 		return nil // уже подчищен
 	}
 
+	data, err = uc.shopCards(ctx, prev.PlannedAt, items, data)
+	if err != nil {
+		return err
+	}
+
 	text := shopText(items, data)
 	if text == "" {
 		return nil
@@ -176,6 +275,12 @@ func (uc *UseCase) syncShopPost(ctx context.Context, now time.Time) error {
 		return err
 	}
 	data := lotDataFromInputs(inputs)
+	// Карточки блоков: у распроданного лота остатков уже нет — берём снимок из
+	// истории рассылки.
+	data, err = uc.shopCards(ctx, st.PlannedAt, st.Items, data)
+	if err != nil {
+		return err
+	}
 
 	// Пары нужны только для проверки избытка: остальные позиции считаются по
 	// остаткам, оборот им не нужен.
@@ -192,19 +297,10 @@ func (uc *UseCase) syncShopPost(ctx context.Context, now time.Time) error {
 		if dec.skip || (it.ShopQty == dec.qty && it.Listed == dec.listed) {
 			continue
 		}
-		it.ShopQty, it.Listed = dec.qty, dec.listed
-		if it.ShopAvailable == 0 && dec.qty > 0 {
-			it.ShopAvailable = dec.qty
-		}
-		changed = true
-		if err := uc.repo.UpdateDigestItemShop(ctx, st.PlannedAt, key, it.ShopQty, it.ShopAvailable, it.Listed); err != nil {
+		if err := uc.applyShopDecision(ctx, st.PlannedAt, it, dec); err != nil {
 			return err
 		}
-		if dec.restore {
-			if err := uc.restoreShopDiscount(ctx, *it); err != nil {
-				return err
-			}
-		}
+		changed = true
 	}
 	if !changed {
 		return nil
@@ -220,6 +316,59 @@ func (uc *UseCase) syncShopPost(ctx context.Context, now time.Time) error {
 	uc.setShopText(text)
 
 	return nil
+}
+
+// shopCards — данные блоков поста: живые остатки, а у лота, которого в остатках
+// уже нет, — карточка из истории рассылки (`Shop`). Проданный до нуля лот сток
+// УДАЛЯЕТ (`DELETE FROM product_stock` в списании подбора): в снапшоте остатков
+// у него нет ни названия, ни цены, а блок в посте остаётся — читатель должен
+// видеть, ЧТО продано (инцидент 22.10.2026: пост печатал
+// «1. ❗️ПРОДАНО❗️  | 30%», метка на месте, названия нет).
+//
+// Снимок живёт в строке позиции рассылки (shop_name/shop_uom/shop_sale_price/
+// shop_site_url), а не в памяти процесса: пост в чате висит до следующей
+// рассылки, рестарт память стирает, а история — нет. Пока лот жив, снимок
+// обновляется (переименовали товар в МС, сменили цену) — пишем только при
+// изменении, иначе событийная правка дёргала бы БД на каждом проходе.
+func (uc *UseCase) shopCards(ctx context.Context, plannedAt time.Time,
+	items []discounts.DigestItem, data map[discounts.LotKey]lotData) (map[discounts.LotKey]lotData, error) {
+	for _, it := range items {
+		if !it.Listed {
+			continue
+		}
+		key := lotKey(it.ProductID, it.BestBefore)
+		d := data[key]
+		if d.Name == "" {
+			// Лота в остатках нет: подставляем снимок из истории.
+			if it.Shop.Name == "" {
+				continue
+			}
+			d.Name, d.UOM, d.SalePrice, d.SiteURL = it.Shop.Name, it.Shop.UOM, it.Shop.SalePrice, it.Shop.SiteURL
+			data[key] = d
+
+			continue
+		}
+		// Лот жив: остатки — источник истины, снимок подтягиваем к ним.
+		if d.Name == it.Shop.Name && d.UOM == it.Shop.UOM && d.SiteURL == it.Shop.SiteURL &&
+			samePrice(d.SalePrice, it.Shop.SalePrice) {
+			continue
+		}
+		card := discounts.ShopCard{Name: d.Name, UOM: d.UOM, SalePrice: d.SalePrice, SiteURL: d.SiteURL}
+		if err := uc.repo.UpdateDigestItemShopCard(ctx, plannedAt, key, card); err != nil {
+			return nil, fmt.Errorf("снимок карточки блока %s: %w", it.ProductID, err)
+		}
+	}
+
+	return data, nil
+}
+
+// samePrice — цены совпадают (nil — «МС не отдала цену»).
+func samePrice(a, b *int64) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+
+	return *a == *b
 }
 
 // shopText — текст поста: блоки как в письме склада, но распроданные позиции
@@ -311,6 +460,25 @@ func (uc *UseCase) askPhoto(ctx context.Context, day time.Time, it discounts.Dig
 		}
 	}
 	uc.setPhotoName(key, name)
+}
+
+// applyShopDecision — записать решение по позиции поста: числа и признак показа
+// в историю рассылки, а вернувшейся сроковой позиции — ещё и скидку на сайт с
+// ТГ-колонкой (читатели её уже видели в посте).
+func (uc *UseCase) applyShopDecision(ctx context.Context, plannedAt time.Time, it *discounts.DigestItem, dec shopDecideResult) error {
+	it.ShopQty, it.Listed = dec.qty, dec.listed
+	if it.ShopAvailable == 0 && dec.qty > 0 {
+		it.ShopAvailable = dec.qty
+	}
+	key := lotKey(it.ProductID, it.BestBefore)
+	if err := uc.repo.UpdateDigestItemShop(ctx, plannedAt, key, it.ShopQty, it.ShopAvailable, it.Listed); err != nil {
+		return err
+	}
+	if !dec.restore {
+		return nil
+	}
+
+	return uc.restoreShopDiscount(ctx, *it)
 }
 
 // shopDecide — что делать с позицией поста по текущему остатку: сколько

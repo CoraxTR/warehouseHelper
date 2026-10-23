@@ -62,6 +62,13 @@ type Repository interface {
 	SetDigestShopMessage(ctx context.Context, chatKind string, plannedAt time.Time, messageID int64) error
 	LastShopDigest(ctx context.Context) (*discounts.DigestState, error)
 	UpdateDigestItemShop(ctx context.Context, plannedAt time.Time, key discounts.LotKey, qty, available int64, listed bool) error
+	// UpdateDigestItemShopCard — снимок карточки блока поста (название,
+	// единица, цена, ссылка). Пост живёт до следующей рассылки, а распроданный
+	// лот сток удаляет — карточку взять больше негде (инцидент 22.10.2026).
+	UpdateDigestItemShopCard(ctx context.Context, plannedAt time.Time, key discounts.LotKey, card discounts.ShopCard) error
+	// SetDigestItemPhoto — file_id принятого фото блока (`""` — фото нет):
+	// живёт в истории, чтобы альбом поста переживал рестарт.
+	SetDigestItemPhoto(ctx context.Context, plannedAt time.Time, key discounts.LotKey, fileID string) error
 	// MarkGeneralRaised — отметить подъём general до telegram по позициям.
 	MarkGeneralRaised(ctx context.Context, pairs []discounts.LotKey, at time.Time) error
 	// DayFlagDone — сделан ли шаг дня (повтор после рестарта/сна пропускается).
@@ -113,8 +120,10 @@ type WarehouseNotifier interface {
 	// рассылку»; возвращает id сообщения: по нему письмо правится каждый
 	// пересчёт (решение владельца 18.10.2026).
 	NotifyWarehouseHTMLButton(text, buttonText, callbackData string) (int64, error)
-	// NotifyWarehouseReplyRequest — сообщение-запрос фото с force_reply: фото
-	// приходит ОТВЕТОМ, по reply_to_message находим позицию. Возвращает id.
+	// NotifyWarehouseReplyRequest — сообщение-запрос фото: фото приходит
+	// ОТВЕТОМ, по reply_to_message находим позицию. force_reply не ставится
+	// (22.10.2026) — принудительный ответ уводил чужие сообщения склада.
+	// Возвращает id.
 	NotifyWarehouseReplyRequest(text string) (int64, error)
 	// EditWarehouseHTML — правка письма тем же сообщением. Пустой buttonText —
 	// снять клавиатуру (после пропуска рассылки кнопки нет).

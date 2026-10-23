@@ -32,11 +32,17 @@ func (s *stubTasks) HandleWho(_ context.Context, callbackQueryID string, chatID,
 	return nil
 }
 
-// stubMailing — кнопка «Пропустить рассылку» в тесте диспетчера.
+// stubMailing — кнопки модуля «Скидки» в тесте диспетчера.
 type stubMailing struct{ calls []string }
 
 func (s *stubMailing) SkipMailing(_ context.Context, callbackQueryID string, chatID, messageID int64) error {
 	s.calls = append(s.calls, fmt.Sprintf("skip:%s:%d:%d", callbackQueryID, chatID, messageID))
+
+	return nil
+}
+
+func (s *stubMailing) RedoPhoto(_ context.Context, callbackQueryID string, chatID, messageID int64, callbackData string) error {
+	s.calls = append(s.calls, fmt.Sprintf("redo:%s:%d:%d:%s", callbackQueryID, chatID, messageID, callbackData))
 
 	return nil
 }
@@ -54,6 +60,7 @@ func TestHandleCallbackRoutes(t *testing.T) {
 		{"отметка задачи", "task_done:7", []string{"done:cb-1:-1005:777:7"}},
 		{"выбор сотрудника", "task_who:7:3", []string{"who:cb-1:-1005:777:7:3"}},
 		{"пропуск рассылки", "ds:skip", []string{"skip:cb-1:-1005:777"}},
+		{"переделать фото", "ds:ph:p1@2026-09-23", []string{"redo:cb-1:-1005:777:ds:ph:p1@2026-09-23"}},
 		{"чужие данные", "some_button:1", nil},
 		{"пустые данные", "", nil},
 		{"битые данные задачи", "task_done:семь", nil},

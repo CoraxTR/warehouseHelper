@@ -27,6 +27,11 @@ type Schedule struct {
 // в минуту. Завершается по отмене ctx; ошибки шагов логируются и не роняют цикл
 // (следующий тик повторит — маркеры дня не дадут продублировать сделанное).
 func (uc *UseCase) Run(ctx context.Context, s Schedule) {
+	// Правка поста чата скидок живёт на событиях стока: своя горутина, иначе
+	// событие ждало бы конца минутного прохода расписания (шаги идут подряд, и
+	// долгий шаг отодвигал правку на минуты).
+	go uc.runShopPost(ctx)
+
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
 
@@ -67,7 +72,9 @@ func (uc *UseCase) runSteps(ctx context.Context, s Schedule) {
 	if err := uc.runDigest(ctx, now, s); err != nil {
 		slog.Info(fmt.Sprintf("discounts: дайджест: %v", err))
 	}
-	// Пост чата скидок живёт и в не-ТГ дни: правка идёт до следующей рассылки.
+	// Пост чата скидок: здесь только окно публикации 15:00–15:30. Правку
+	// опубликованного поста минутный тик не делает — она идёт по событию стока
+	// (runShopPost), иначе отставала бы от продажи на минуты.
 	if err := uc.runShop(ctx, now, s); err != nil {
 		slog.Info(fmt.Sprintf("discounts: пост в чат скидок: %v", err))
 	}
