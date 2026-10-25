@@ -1149,31 +1149,234 @@
             showModal(html);
         }
 
-        // Клик по названию: обновить сроки одной позиции (ограничение — код товара).
+        // Клик по названию: карточка позиции — поставщики (только чтение),
+        // варианты заказа, цены пар и ссылка на сайт (редактируются), плюс
+        // «Обновить сроки» по коду товара.
         function openNameModal(productID) {
             var p = findProduct(productID);
             if (!p) {
                 return;
             }
-            if (!p.internal_code) {
-                // Обновление по товару ограничено его внутренним кодом: без
-                // кода страница вернула бы 400 сырым текстом — говорим прямо.
-                showModal('<div class="modal-title">' + esc(p.name) + '</div>' +
-                    '<div class="modal-line">У товара нет внутреннего кода — обновить сроки по нему нельзя. ' +
-                    'Заведите код в МС и выгрузите каталог.</div>' +
-                    '<div class="modal-actions"><button type="button" onclick="closeModal()">Закрыть</button></div>');
-                return;
-            }
-            UPDATE_CTX = { kind: 'product', id: p.id, name: p.name, code: p.internal_code };
+            // Обновление по товару ограничено его внутренним кодом: без кода
+            // страница вернула бы 400 сырым текстом — говорим прямо, но
+            // карточку всё равно показываем (данные читаются без кода).
+            UPDATE_CTX = p.internal_code ? { kind: 'product', id: p.id, name: p.name, code: p.internal_code } : null;
+
             var html = '<div class="modal-title">' + esc(p.name) + '</div>';
             if (p.internal_code) {
                 html += '<div class="modal-line">Код: ' + esc(p.internal_code) + '</div>';
             }
+            html += '<div id="pi-body"><div class="modal-line">загрузка…</div></div>';
             html += '<div class="modal-actions">';
-            html += '<button type="button" onclick="closeModal()">Отмена</button>';
-            html += '<button type="button" data-update="1">Обновить сроки ' + esc(p.name) + '</button>';
+            html += '<button type="button" onclick="closeModal()">Закрыть</button>';
+            html += '<button type="button" onclick="saveProductInfo()">Сохранить</button>';
+            if (p.internal_code) {
+                html += '<button type="button" data-update="1">Обновить сроки</button>';
+            }
             html += '</div>';
             showModal(html);
+
+            fetch('/ms/dates/product-info?id=' + encodeURIComponent(p.id))
+                .then(function (resp) { return resp.json(); })
+                .then(function (data) { renderProductInfo(data); })
+                .catch(function () {
+                    document.getElementById('pi-body').innerHTML =
+                        '<div class="modal-line">не удалось загрузить данные карточки</div>';
+                });
+        }
+
+        // renderProductInfo — тело мини-окна по данным /ms/dates/product-info.
+        // Дни вводятся списком через запятую (1=Пн … 7=Вс): так форма живёт на
+        // старых браузерах склада без массовых чекбоксов.
+        var PI = null;
+
+        function renderProductInfo(data) {
+            PI = data;
+            var box = document.getElementById('pi-body');
+            if (!box) {
+                return;
+            }
+            if (data.error) {
+                box.innerHTML = '<div class="modal-line">' + esc(data.error) + '</div>';
+                return;
+            }
+
+            var html = '';
+
+            html += '<div class="modal-title" style="font-size:11px;">Поставщики и цены</div>';
+            if (data.suppliers && data.suppliers.length) {
+                html += '<table style="width:100%;"><tr><th style="text-align:left;">Поставщик</th><th style="text-align:left;">Цена, ₽</th></tr>';
+                var i;
+                for (i = 0; i < data.suppliers.length; i++) {
+                    var sup = data.suppliers[i];
+                    var priceText = sup.price_kop > 0 ? (sup.price_kop / 100).toFixed(2) : '';
+                    html += '<tr><td>' + esc(sup.name) + '</td><td>' +
+                        '<input type="text" class="pi-price" data-supplier="' + esc(sup.id) + '" value="' + esc(priceText) + '" inputmode="decimal" style="width:90px;" placeholder="—">' +
+                        '</td></tr>';
+                }
+                html += '</table>';
+            } else {
+                html += '<div class="modal-line">Нет поставщиков с внешним кодом этого товара — заведите код на карточке поставщика.</div>';
+            }
+
+            html += '<div class="modal-title" style="font-size:11px;margin-top:14px;">Варианты заказа</div>';
+            html += '<div id="pi-schedules"></div>';
+            html += '<div class="modal-line"><button type="button" class="secondary" onclick="addScheduleRow(null)">+ вариант</button></div>';
+
+            html += '<div class="modal-title" style="font-size:11px;margin-top:14px;">Ссылка на сайт</div>';
+            html += '<div class="modal-line"><input type="text" id="pi-site-url" value="' + esc(data.site_url || '') + '" style="width:100%;" placeholder="https://…"></div>';
+
+            html += '<div class="modal-line" id="pi-status"></div>';
+
+            box.innerHTML = html;
+
+            if (data.schedules && data.schedules.length) {
+                for (var k = 0; k < data.schedules.length; k++) {
+                    addScheduleRow(data.schedules[k]);
+                }
+            }
+        }
+
+        // addScheduleRow — строка варианта заказа (supplier select + поля).
+        function addScheduleRow(s) {
+            var box = document.getElementById('pi-schedules');
+            if (!box) {
+                return;
+            }
+            var row = document.createElement('div');
+            row.className = 'pi-sched';
+            row.style.cssText = 'border:1px solid #2A2A33;padding:8px;margin-bottom:8px;';
+
+            var opts = '<option value="">— поставщик —</option>';
+            if (PI && PI.suppliers) {
+                for (var i = 0; i < PI.suppliers.length; i++) {
+                    var sup = PI.suppliers[i];
+                    var sel = (s && s.supplier_id === sup.id) ? ' selected' : '';
+                    opts += '<option value="' + esc(sup.id) + '"' + sel + '>' + esc(sup.name) + '</option>';
+                }
+            }
+
+            var sid = (s && s.id) ? String(s.id) : '0';
+            var name = s ? s.name : '';
+            var days = (s && s.order_days) ? s.order_days.join(',') : '';
+            var deliv = (s && s.delivery_days) ? s.delivery_days.join(',') : '';
+            var delay = (s && s.delay_days !== null && s.delay_days !== undefined) ? String(s.delay_days) : '';
+            var cutoff = s ? (s.order_cutoff_time || '') : '';
+
+            row.innerHTML =
+                '<input type="hidden" class="pi-sid" value="' + esc(sid) + '">' +
+                '<div><select class="pi-sup" style="width:100%;">' + opts + '</select></div>' +
+                '<div style="margin-top:6px;"><input type="text" class="pi-name" value="' + esc(name) + '" placeholder="название варианта (общий, спец.)" style="width:100%;"></div>' +
+                '<div style="margin-top:6px;font-size:11px;">Дни заказа <input type="text" class="pi-days" value="' + esc(days) + '" placeholder="1,4" style="width:90px;">' +
+                ' · дни доставки <input type="text" class="pi-deliv" value="' + esc(deliv) + '" placeholder="2,5" style="width:90px;">' +
+                ' · макс. задержка <input type="text" class="pi-delay" value="' + esc(delay) + '" placeholder="0" style="width:50px;">' +
+                ' · дедлайн <input type="text" class="pi-cutoff" value="' + esc(cutoff) + '" placeholder="12:00" style="width:60px;"></div>' +
+                '<div style="margin-top:6px;text-align:right;"><button type="button" class="btn-remove" onclick="this.parentNode.parentNode.parentNode.removeChild(this.parentNode.parentNode)">−</button></div>';
+
+            box.appendChild(row);
+        }
+
+        // numbersOf — "1,4, 7" → [1,4,7]; мусор отбрасываем.
+        function numbersOf(v) {
+            var out = [];
+            var parts = String(v || '').split(',');
+            for (var i = 0; i < parts.length; i++) {
+                var n = parseInt(parts[i], 10);
+                if (!isNaN(n)) {
+                    out.push(n);
+                }
+            }
+            return out;
+        }
+
+        // saveProductInfo — собрать мини-окно в JSON и отправить.
+        function saveProductInfo() {
+            if (!PI || !PI.product_id) {
+                return;
+            }
+            var status = document.getElementById('pi-status');
+
+            var prices = [];
+            var inputs = document.getElementsByTagName('input');
+            for (var i = 0; i < inputs.length; i++) {
+                var el = inputs[i];
+                if (!/pi-price/.test(el.className)) {
+                    continue;
+                }
+                var rub = String(el.value || '').replace(/\s/g, '').replace(',', '.');
+                var kop = rub === '' ? 0 : Math.round(parseFloat(rub) * 100);
+                if (isNaN(kop)) {
+                    if (status) { status.innerHTML = 'цена: не число — «' + esc(el.value) + '»'; }
+                    return;
+                }
+                prices.push({ id: el.getAttribute('data-supplier'), price_kop: kop });
+            }
+
+            var schedules = [];
+            var rows = document.getElementsByTagName('div');
+            for (var j = 0; j < rows.length; j++) {
+                var row = rows[j];
+                if (!/pi-sched/.test(row.className)) {
+                    continue;
+                }
+                var supSel = firstByClass(row, 'pi-sup');
+                var nameIn = firstByClass(row, 'pi-name');
+                if (!supSel || !supSel.value || !nameIn || String(nameIn.value).replace(/^\s+|\s+$/g, '') === '') {
+                    continue; // пустую строку пропускаем
+                }
+                var delayIn = firstByClass(row, 'pi-delay');
+                var delayVal = delayIn && delayIn.value !== '' ? parseInt(delayIn.value, 10) : null;
+                schedules.push({
+                    id: parseInt(firstByClass(row, 'pi-sid').value, 10) || 0,
+                    supplier_id: supSel.value,
+                    name: nameIn.value,
+                    order_days: numbersOf(firstByClass(row, 'pi-days').value),
+                    delivery_days: numbersOf(firstByClass(row, 'pi-deliv').value),
+                    delay_days: isNaN(delayVal) ? null : delayVal,
+                    order_cutoff_time: firstByClass(row, 'pi-cutoff').value
+                });
+            }
+
+            var siteIn = document.getElementById('pi-site-url');
+            var payload = {
+                product_id: PI.product_id,
+                site_url: siteIn ? siteIn.value : '',
+                prices: prices,
+                schedules: schedules,
+                save_orders: true
+            };
+
+            if (status) {
+                status.innerHTML = 'сохраняю…';
+            }
+            fetch('/ms/dates/product-info/save', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            }).then(function (resp) { return resp.json(); }).then(function (res) {
+                if (!status) {
+                    return;
+                }
+                if (res.ok) {
+                    status.innerHTML = 'сохранено: цен ' + res.prices_saved;
+                    return;
+                }
+                var bad = res.problems ? res.problems.join('; ') : 'не сохранилось';
+                status.innerHTML = 'ошибки: ' + esc(bad);
+            }).catch(function () {
+                if (status) { status.innerHTML = 'сохранение не удалось (сеть)'; }
+            });
+        }
+
+        // firstByClass — первый потомок с классом (ES5: без querySelector).
+        function firstByClass(root, cls) {
+            var all = root.getElementsByTagName('*');
+            for (var i = 0; i < all.length; i++) {
+                if (new RegExp('(^|\\s)' + cls + '(\\s|$)').test(all[i].className)) {
+                    return all[i];
+                }
+            }
+            return null;
         }
 
         // Клик по группе: обновить сроки группы (ограничение — 3 цифры кода группы).

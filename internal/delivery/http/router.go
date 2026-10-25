@@ -152,6 +152,8 @@ func NewRouter(h *Handler) *http.ServeMux {
 	mux.HandleFunc("GET /ms/dates/short", h.StockShortPage)         // страница «Шорт-лист»
 	mux.HandleFunc("GET /ms/dates/ws", h.StockDatesWS)              // вебсокет: снапшот и дельты
 	mux.HandleFunc("POST /ms/dates/discount", h.StockDiscount)      // запись ручной скидки
+	mux.HandleFunc("GET /ms/dates/product-info", h.StockProductInfo)      // JSON: карточка позиции для мини-окна
+	mux.HandleFunc("POST /ms/dates/product-info/save", h.StockProductInfoSave) // JSON: сохранить цены/варианты/ссылку
 	mux.HandleFunc("GET /ms/dates/update", h.StockUpdatePage)       // страница «Обновить сроки»
 	mux.HandleFunc("GET /ms/discounts", h.DiscountsPage)            // страница «Скидки» (окно и допродажа)
 	mux.HandleFunc("GET /ms/discounts/plan", h.DiscountsPlan)       // предпросмотр плана 14:00 (JSON, для блока страницы)
