@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="ru">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Календарь продаж</title>
+    <link rel="stylesheet" href="/static/raven-guard.css">
+    <script src="/static/theme.js"></script>
+    <style>
+        .cal-wrap { overflow-x: auto; margin-top: 16px; }
+        table.cal { border-collapse: collapse; font-size: 12px; }
+        table.cal th, table.cal td { border: 1px solid #2A2A33; padding: 4px 6px; text-align: center; vertical-align: middle; }
+        table.cal th.cal-name, table.cal td.cal-name { text-align: left; position: sticky; left: 0; background: #14141A; z-index: 1; min-width: 260px; }
+        table.cal th.cal-num, table.cal td.cal-num { min-width: 74px; }
+        table.cal td.cal-num { cursor: default; }
+        table.cal td.cal-win { border: 2px solid #C0392B; }
+        table.cal .cal-kg { display: block; color: #9BA0A8; font-size: 11px; }
+        table.cal .cal-qty { display: block; font-weight: 600; }
+        table.cal .cal-coeff { display: block; font-size: 10px; color: #7A8089; }
+        table.cal tr.cal-group th { background: #1B1B22; text-align: left; text-transform: uppercase; letter-spacing: 0.06em; font-size: 11px; }
+        .cal-tabs { margin: 12px 0; }
+        .cal-tabs a { margin-right: 8px; }
+        .cal-tabs a.active { font-weight: 700; text-decoration: underline; }
+    </style>
+</head>
+
+<body>
+    <header class="brandbar">
+        <a class="brandbar__brand" href="/"><svg class="brandbar__emblem" viewBox="0 0 64 64" aria-hidden="true"><circle class="em__shade" cx="35" cy="25" r="14"/><polygon class="em__shade" points="6,26 30,17 28,27"/><polygon class="em__shade" points="13,35 28,27 26,36"/><circle class="em__eye" cx="34" cy="23" r="3.6"/><circle class="em__glint" cx="33" cy="22" r="1.1"/></svg><span class="brandbar__name">ВОРОН&nbsp;&middot;&nbsp;СКЛАД</span></a>
+        <div class="brandbar__right">
+            <span class="brandbar__motto">Приёмка или смерть</span>
+            <span class="themeswitch" id="theme-switch">
+                <span class="themeswitch__label" id="theme-label"><span class="themeswitch__label-night">Нормальная тема</span><span class="themeswitch__label-day">Любитель щурится</span></span>
+                <button class="themeswitch__track" id="theme-toggle" type="button"
+                 role="switch" aria-checked="false" aria-label="Тема оформления"
+                 title="Переключить на «Любитель щурится»">
+                    <span class="themeswitch__knob"></span>
+                </button>
+            </span>
+        </div>
+    </header>
+    {{template "nav"}}
+    <h1>Календарь продаж</h1>
+    <p><a href="/goods">← Продукция</a></p>
+
+    {{if .Error}}
+    <div class="error-banner">{{.Error}}</div>
+    {{end}}
+
+    <div class="cal-tabs">
+        <a href="{{.WeekTabURL}}" {{if eq .Tab "week"}}class="active"{{end}}>Недели</a>
+        <a href="{{.MonthTabURL}}" {{if eq .Tab "month"}}class="active"{{end}}>Месяцы</a>
+        {{if eq .Tab "month"}}
+        <span style="margin-left:16px;">
+            {{if .PrevMonthURL}}<a href="{{.PrevMonthURL}}">← {{.MonthParam}}</a>{{end}}
+            <span style="margin:0 10px;">{{.MonthParam}}</span>
+            {{if not .NextDisabled}}<a href="{{.NextMonthURL}}">вперёд →</a>{{end}}
+        </span>
+        {{end}}
+    </div>
+
+    {{if .Empty}}
+    <p class="readonly-hint">Товаров нет: на недельной вкладке показываются только позиции с недельным учётом.</p>
+    {{else}}
+    <div class="cal-wrap">
+        <table class="cal">
+            <tr>
+                <th class="cal-name">Товар</th>
+                {{range .PeriodTitles}}<th class="cal-num">{{.}}</th>{{end}}
+                <th class="cal-num">{{.AvgHeader}}</th>
+                <th class="cal-num">коэф.</th>
+            </tr>
+            {{range .Groups}}
+            <tr class="cal-group"><th colspan="{{len $.PeriodTitles}}">{{if .Name}}{{.Name}}{{else}}Без группы{{end}}</th></tr>
+            {{range .Rows}}
+            <tr>
+                <td class="cal-name">{{if .InternalCode}}<span class="code">{{.InternalCode}}</span> {{end}}{{.Name}}</td>
+                {{range .Cells}}
+                <td class="cal-num{{if .InWindow}} cal-win{{end}}" title="{{.Title}}">
+                    {{if .KgText}}<span class="cal-kg">{{.KgText}}</span>{{end}}
+                    <span class="cal-qty">{{if .QtyText}}{{.QtyText}}{{else}}—{{end}}</span>
+                    <span class="cal-coeff">{{if .Coeff}}коэф. {{.Coeff}}{{end}}</span>
+                </td>
+                {{end}}
+                <td class="cal-num"><span class="cal-qty">{{if .AvgText}}{{.AvgText}}{{else}}—{{end}}</span></td>
+                <td class="cal-num"><span class="cal-coeff">{{if .CoeffText}}{{.CoeffText}}{{else}}0{{end}}</span></td>
+            </tr>
+            {{end}}
+            {{end}}
+        </table>
+    </div>
+    <p class="readonly-hint">Ячейка: сверху кг (весовые), снизу штуки за период. Красная обводка — период участвует в расчёте среднего. Наведите на ячейку: коэффициент коррекции этого периода.</p>
+    {{end}}
+</body>
+
+</html>

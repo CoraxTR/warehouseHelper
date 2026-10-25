@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"log/slog"
 	"warehouseHelper/internal/averagesales"
@@ -189,6 +190,14 @@ type GoodsUseCase struct {
 	// productSuppliers — поставщики, у которых есть внешний код товара
 	// (владелец product_supplier_barcodes — приёмка).
 	productSuppliers ProductSuppliers
+	// salesCalendar/periodCoeffs — данные страницы «Календарь продаж»
+	// (обороты — averagesales, коэффициенты — ordercoeff); подключаются
+	// SetCalendarStore, nil в тестах — страница недоступна.
+	salesCalendar SalesCalendarReader
+	periodCoeffs  PeriodCoeffReader
+
+	// now — источник времени (тесты подменяют: календарь привязан к неделе/месяцу).
+	now func() time.Time
 
 	// catalogListener — шов «каталог изменился»: модуль «Сроки» перечитывает
 	// свой кэш после выгрузки/правки товаров (новые позиции видны без
@@ -215,7 +224,15 @@ type CatalogChangeListener interface {
 // NewGoodsUseCase создаёт юзкейс с источником папок, клиентом товаров
 // и хранилищем каталога.
 func NewGoodsUseCase(f ProductFolderClient, products ProductClient, repo ProductsRepository, wiki ProductPageSynchronizer) *GoodsUseCase {
-	return &GoodsUseCase{folders: f, products: products, repo: repo, wiki: wiki}
+	return &GoodsUseCase{folders: f, products: products, repo: repo, wiki: wiki, now: time.Now}
+}
+
+// SetCalendarStore подключает данные страницы «Календарь продаж»: обороты
+// (averagesales) и коэффициенты периодов (ordercoeff) — чужие модули, поэтому
+// шов ставится в di.go после создания юзкейсов.
+func (uc *GoodsUseCase) SetCalendarStore(sales SalesCalendarReader, coeffs PeriodCoeffReader) {
+	uc.salesCalendar = sales
+	uc.periodCoeffs = coeffs
 }
 
 // SetTurnoverBackfiller подключает асинхронный бэкфилл оборотов (di.go после

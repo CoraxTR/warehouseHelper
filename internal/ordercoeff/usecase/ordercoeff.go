@@ -32,6 +32,9 @@ type Repository interface {
 	// Coefficients — coeff строк календаря для заданных интервалов
 	// (нет строки — нет значения в map).
 	Coefficients(ctx context.Context, productID string, periodType ordercoeff.PeriodType, intervals []time.Time) (map[time.Time]int16, error)
+	// CoefficientsBatch — то же для СПИСКА товаров: map[productID]map[период]coeff
+	// (календарь продаж читает коэффициенты пачками, не по товару).
+	CoefficientsBatch(ctx context.Context, productIDs []string, periodType ordercoeff.PeriodType, intervals []time.Time) (map[string]map[time.Time]int16, error)
 }
 
 // UseCase — сценарии модуля.
@@ -100,6 +103,15 @@ func (uc *UseCase) Coefficients(ctx context.Context, productID string, periodTyp
 	done := metrics.Track(trackPkg, "Coefficients")
 	defer done()
 	return uc.repo.Coefficients(ctx, productID, periodType, intervals)
+}
+
+// CoefficientsBatch — коэффициенты по списку товаров: странице «Календарь»
+// нужны все ячейки сразу (иначе — запрос на товар).
+func (uc *UseCase) CoefficientsBatch(ctx context.Context, productIDs []string, periodType ordercoeff.PeriodType, intervals []time.Time) (map[string]map[time.Time]int16, error) {
+	done := metrics.Track(trackPkg, "CoefficientsBatch")
+	defer done()
+
+	return uc.repo.CoefficientsBatch(ctx, productIDs, periodType, intervals)
 }
 
 // apply — общий путь события: период товара из каталога + запись в хранилище.

@@ -94,3 +94,57 @@ func calendarForProduct(rows []averagesales.TurnoverRow, plan windowPlan, now ti
 		Periods: periods,
 	}, nil
 }
+
+// MonthlyTurnover — продажи товаров по месяцам за периоды не раньше since
+// (календарь: произвольный исторический диапазон, листание по месяцам).
+// Среднее и окно здесь не считаются — это данные для отрисовки.
+func (uc *UseCase) MonthlyTurnover(ctx context.Context, productIDs []string, since time.Time) ([]averagesales.TurnoverRow, error) {
+	done := metrics.Track(trackPkg, "MonthlyTurnover")
+	defer done()
+
+	ids := uniqueIDs(productIDs)
+	if len(ids) == 0 {
+		return nil, nil
+	}
+
+	rows, err := uc.repo.MonthlyTurnoverWindowByProducts(ctx, ids, since)
+	if err != nil {
+		return nil, fmt.Errorf("месячные обороты %d товаров: %w", len(ids), err)
+	}
+
+	return rows, nil
+}
+
+// WeeklyTurnover — то же для недельного ряда: берутся только товары с
+// недельным учётом (у остальных недельной истории не бывает).
+func (uc *UseCase) WeeklyTurnover(ctx context.Context, productIDs []string, since time.Time) ([]averagesales.TurnoverRow, error) {
+	done := metrics.Track(trackPkg, "WeeklyTurnover")
+	defer done()
+
+	ids := uniqueIDs(productIDs)
+	if len(ids) == 0 {
+		return nil, nil
+	}
+
+	prods, err := uc.turnoverProducts(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+
+	weekly := make([]string, 0, len(prods))
+	for _, p := range prods {
+		if p.TrackWeekly {
+			weekly = append(weekly, p.ID)
+		}
+	}
+	if len(weekly) == 0 {
+		return nil, nil
+	}
+
+	rows, err := uc.repo.WeeklyTurnoverWindowByProducts(ctx, weekly, since)
+	if err != nil {
+		return nil, fmt.Errorf("недельные обороты %d товаров: %w", len(weekly), err)
+	}
+
+	return rows, nil
+}

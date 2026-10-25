@@ -305,6 +305,8 @@ func (d *DIContainer) GoodsUC() *gucase.GoodsUseCase {
 	if d.goodsUC == nil {
 		d.goodsUC = gucase.NewGoodsUseCase(d.MSClient(), d.MSClient(), d.OrdersRepository(), d.WikiUC())
 		d.goodsUC.SetOrderScheduleStore(d.OrdersRepository(), d.SuppliersUC(), d.ReceiveBarcodes())
+		// Календарь продаж: обороты (средние) и коэффициенты периодов — чужие модули.
+		d.goodsUC.SetCalendarStore(d.AverageSalesUC(), d.OrderCoeffUC())
 	}
 
 	return d.goodsUC

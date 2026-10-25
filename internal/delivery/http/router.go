@@ -38,7 +38,8 @@ func NewRouter(h *Handler) *http.ServeMux {
 	mux.HandleFunc("POST /goods/resync", h.GoodsResync)           // ресинк позиции из МС
 	// «Варианты заказа» карточки позиции: расписание заказа на паре (товар, поставщик),
 	// несколько режимов у одной пары (общий со склада / под заказ с производства).
-	mux.HandleFunc("GET /goods/schedules", h.GoodsSchedulesPage)           // варианты заказа товара
+	mux.HandleFunc("GET /goods/schedules", h.GoodsSchedulesPage)
+	mux.HandleFunc("GET /goods/calendar", h.GoodsCalendar)                 // календарь продаж (недели/месяцы)           // варианты заказа товара
 	mux.HandleFunc("POST /goods/schedules/save", h.GoodsSchedulesSave)     // сохранить набор вариантов
 	mux.HandleFunc("GET /goods/tree", h.GoodsTreePage)                     // дерево папок для добавления
 	mux.HandleFunc("POST /goods/tree", h.GoodsExport)                      // выгрузка отмеченных товаров в каталог
