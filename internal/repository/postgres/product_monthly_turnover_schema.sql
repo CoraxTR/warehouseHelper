@@ -11,5 +11,6 @@ CREATE TABLE product_monthly_turnover (
     product_id  TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
     month_start DATE NOT NULL,                         -- первое число месяца
     qty         NUMERIC(12, 3) NOT NULL,               -- продажи за месяц, штуки
+    qty_kg      NUMERIC(12, 3),                        -- продажи за месяц, кг (весовые; NULL — штучный)
     PRIMARY KEY (product_id, month_start)
 );

@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"warehouseHelper/internal/domain"
@@ -12,10 +13,12 @@ import (
 type fakeRepo struct {
 	suppliers map[string]domain.Supplier
 	deleted   []string
+	prices    map[string]int64 // ключ "supplierID/productID" → копейки
+	priceErr  error
 }
 
 func newFakeRepo() *fakeRepo {
-	return &fakeRepo{suppliers: make(map[string]domain.Supplier)}
+	return &fakeRepo{suppliers: make(map[string]domain.Supplier), prices: make(map[string]int64)}
 }
 
 func (f *fakeRepo) ListSuppliers(_ context.Context) ([]domain.Supplier, error) {
@@ -46,6 +49,52 @@ func (f *fakeRepo) DeleteSupplier(_ context.Context, id string) error {
 	}
 	delete(f.suppliers, id)
 	f.deleted = append(f.deleted, id)
+	return nil
+}
+
+func priceKey(supplierID, productID string) string { return supplierID + "/" + productID }
+
+func (f *fakeRepo) ListSupplierPrices(_ context.Context, supplierID string) ([]domain.SupplierProductPrice, error) {
+	if f.priceErr != nil {
+		return nil, f.priceErr
+	}
+	out := make([]domain.SupplierProductPrice, 0, len(f.prices))
+	for key, price := range f.prices {
+		parts := strings.SplitN(key, "/", 2)
+		if parts[0] != supplierID {
+			continue
+		}
+		out = append(out, domain.SupplierProductPrice{SupplierID: parts[0], ProductID: parts[1], Price: price})
+	}
+	return out, nil
+}
+
+func (f *fakeRepo) ListProductPrices(_ context.Context, productID string) ([]domain.SupplierProductPrice, error) {
+	if f.priceErr != nil {
+		return nil, f.priceErr
+	}
+	out := make([]domain.SupplierProductPrice, 0, len(f.prices))
+	for key, price := range f.prices {
+		parts := strings.SplitN(key, "/", 2)
+		if parts[1] != productID {
+			continue
+		}
+		name := f.suppliers[parts[0]].Name
+		out = append(out, domain.SupplierProductPrice{SupplierID: parts[0], SupplierName: name, ProductID: parts[1], Price: price})
+	}
+	return out, nil
+}
+
+func (f *fakeRepo) UpsertSupplierPrice(_ context.Context, supplierID, productID string, price int64) error {
+	if f.priceErr != nil {
+		return f.priceErr
+	}
+	f.prices[priceKey(supplierID, productID)] = price
+	return nil
+}
+
+func (f *fakeRepo) DeleteSupplierPrice(_ context.Context, supplierID, productID string) error {
+	delete(f.prices, priceKey(supplierID, productID))
 	return nil
 }
 

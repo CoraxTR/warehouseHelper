@@ -155,6 +155,34 @@
             </form>
         </div>
     </div>
+
+    <div class="barcodes-widget" id="prices">
+        <button type="button" class="barcodes-toggle" onclick="togglePrices()">
+            Цены товаров поставщика ({{len .PriceRows}})
+        </button>
+        <div id="prices-section" style="display:{{if .ExpandPrices}}block{{else}}none{{end}};">
+            {{if .PriceRows}}
+            <form method="POST" action="/ms/suppliers/prices/save">
+                <input type="hidden" name="supplier_id" value="{{.Supplier.ID}}">
+                <table class="barcodes-table">
+                    <tr><th>Товар</th><th>Цена, ₽ за единицу</th></tr>
+                    {{range .PriceRows}}
+                    <tr>
+                        <td>{{.ProductName}}<input type="hidden" name="product_id" value="{{.ProductID}}"></td>
+                        <td><input type="text" name="price" value="{{.PriceText}}" inputmode="decimal" style="width:110px;" placeholder="—"></td>
+                    </tr>
+                    {{end}}
+                </table>
+                <div class="barcode-actions">
+                    <button type="submit">Сохранить цены</button>
+                </div>
+                <p class="readonly-hint">Пустое поле — цена не задана (строка снимается). Список товаров — из внешних кодов поставщика: цена заводится там, где поставщик реально поставляет.</p>
+            </form>
+            {{else}}
+            <p class="readonly-hint">Товаров нет: сначала заведите внешние коды поставщика — по ним строится список цен.</p>
+            {{end}}
+        </div>
+    </div>
     {{end}}
 
     <p style="text-align:center;"><a href="/ms/suppliers">← К списку поставщиков</a></p>
@@ -168,6 +196,15 @@
         // не работает — валидация своя, здесь и на сервере.
         function toggleBarcodes() {
             var section = document.getElementById('barcodes-section');
+            section.style.display = section.style.display === 'none' ? 'block' : 'none';
+        }
+
+        // Виджет «Цены товаров» — тот же тоггл, отдельный блок.
+        function togglePrices() {
+            var section = document.getElementById('prices-section');
+            if (!section) {
+                return;
+            }
             section.style.display = section.style.display === 'none' ? 'block' : 'none';
         }
 

@@ -38,6 +38,11 @@ type SupplierFormData struct {
 
 	Barcodes []receiving.BarcodeRef // виджет «Внешние коды» (приёмка)
 
+	// Prices — цены товаров поставщика (виджет «Цены товаров»): пары
+	// (товар, цена). Строка модели несёт рубли строкой — шаблон глупый.
+	PriceRows    []SupplierPriceRow
+	ExpandPrices bool
+
 	// ExpandBarcodes — раскрыть виджет кодов сразу при загрузке (?barcodes=1):
 	// после батчевого добавления оператор возвращается ВНУТРЬ виджета, а не
 	// наверх страницы. Кнопка-тоггл при этом продолжает работать.
@@ -106,8 +111,134 @@ func (h *Handler) SupplierEdit(w http.ResponseWriter, r *http.Request) {
 	d.Barcodes = h.loadSupplierBarcodes(r, s.ID)
 	d.Message = r.URL.Query().Get("msg")
 	d.ExpandBarcodes = r.URL.Query().Get("barcodes") == "1"
+	d.PriceRows = h.loadSupplierPrices(r, s.ID, d.Barcodes)
+	d.ExpandPrices = r.URL.Query().Get("prices") == "1"
 
 	h.renderSupplierForm(w, d)
+}
+
+// SupplierPriceRow — строка виджета «Цены товаров» (рубли строкой, чтобы
+// шаблон не форматировал копейки).
+type SupplierPriceRow struct {
+	ProductID   string
+	ProductName string
+	PriceText   string
+}
+
+// loadSupplierPrices собирает строки виджета «Цены товаров»: товары поставщика
+// (по внешним кодам — то, что он у нас реально поставляет) плюс уже заведённые
+// цены, которых в кодах нет. Ошибка чтения цен не ломает форму.
+func (h *Handler) loadSupplierPrices(r *http.Request, supplierID string, barcodes []receiving.BarcodeRef) []SupplierPriceRow {
+	prices, err := h.msUC.SupplierPrices(r.Context(), supplierID)
+	if err != nil {
+		slog.Info("list supplier prices", "supplier_id", supplierID, "err", err)
+	}
+
+	priceByProduct := make(map[string]int64, len(prices))
+	nameByProduct := make(map[string]string, len(prices))
+	for _, p := range prices {
+		priceByProduct[p.ProductID] = p.Price
+		nameByProduct[p.ProductID] = p.ProductName
+	}
+
+	order := make([]string, 0, len(barcodes)+len(prices))
+	seen := make(map[string]struct{}, len(barcodes)+len(prices))
+	for _, b := range barcodes {
+		if _, ok := seen[b.ProductID]; ok {
+			continue
+		}
+		seen[b.ProductID] = struct{}{}
+		order = append(order, b.ProductID)
+		if b.ProductName != "" {
+			nameByProduct[b.ProductID] = b.ProductName
+		}
+	}
+	for _, p := range prices {
+		if _, ok := seen[p.ProductID]; ok {
+			continue
+		}
+		seen[p.ProductID] = struct{}{}
+		order = append(order, p.ProductID)
+	}
+
+	rows := make([]SupplierPriceRow, 0, len(order))
+	for _, productID := range order {
+		name := nameByProduct[productID]
+		if name == "" {
+			name = productID
+		}
+
+		var priceText string
+		if price, ok := priceByProduct[productID]; ok && price > 0 {
+			priceText = kopecksToRubles(price)
+		}
+		rows = append(rows, SupplierPriceRow{
+			ProductID:   productID,
+			ProductName: name,
+			PriceText:   priceText,
+		})
+	}
+
+	return rows
+}
+
+// SupplierPricesSave — POST /ms/suppliers/prices/save: батч цен поставщика.
+// Пустое поле = цена не задана (строка удаляется), иначе пишется сумма.
+func (h *Handler) SupplierPricesSave(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "не удалось разобрать форму", http.StatusBadRequest)
+		return
+	}
+
+	supplierID := strings.TrimSpace(r.FormValue("supplier_id"))
+	productIDs := r.Form["product_id"]
+	prices := r.Form["price"]
+	if supplierID == "" {
+		http.Redirect(w, r, "/ms/suppliers", http.StatusSeeOther)
+		return
+	}
+
+	saved, cleared := 0, 0
+	for i, productID := range productIDs {
+		productID = strings.TrimSpace(productID)
+		if productID == "" {
+			continue
+		}
+
+		var raw string
+		if i < len(prices) {
+			raw = prices[i]
+		}
+
+		kop, err := parseRublesToKopecks(raw)
+		if err != nil {
+			slog.Info("supplier price parse", "supplier_id", supplierID, "product_id", productID, "err", err)
+			http.Redirect(w, r, "/ms/suppliers/edit?id="+supplierID+"&prices=1&err="+url.QueryEscape("цена: "+err.Error()), http.StatusSeeOther)
+			return
+		}
+
+		var amount int64
+		if kop != nil {
+			amount = *kop
+		}
+		if err := h.msUC.SetSupplierPrice(r.Context(), supplierID, productID, amount); err != nil {
+			slog.Info("set supplier price", "supplier_id", supplierID, "product_id", productID, "err", err)
+			http.Redirect(w, r, "/ms/suppliers/edit?id="+supplierID+"&prices=1&err="+url.QueryEscape("не удалось сохранить цену"), http.StatusSeeOther)
+			return
+		}
+
+		if amount > 0 {
+			saved++
+		} else {
+			cleared++
+		}
+	}
+
+	msg := fmt.Sprintf("цены сохранены: %d", saved)
+	if cleared > 0 {
+		msg = fmt.Sprintf("цены сохранены: %d, снято: %d", saved, cleared)
+	}
+	http.Redirect(w, r, "/ms/suppliers/edit?id="+supplierID+"&prices=1&msg="+url.QueryEscape(msg), http.StatusSeeOther)
 }
 
 // loadSupplierBarcodes читает связки «внешний код → товар» для виджета;

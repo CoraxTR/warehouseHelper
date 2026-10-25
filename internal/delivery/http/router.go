@@ -75,15 +75,16 @@ func NewRouter(h *Handler) *http.ServeMux {
 	mux.Handle("/qrcodes/photos/", http.StripPrefix("/qrcodes/photos/", qrPhotosHandler(h.qrUC.PhotosDir())))
 
 	// Модуль «МойСклад»: хаб и справочник поставщиков.
-	mux.HandleFunc("/ms", h.MsPage)                              // GET — хаб
-	mux.HandleFunc("/ms/suppliers", h.SuppliersList)             // GET — список поставщиков
-	mux.HandleFunc("/ms/suppliers/new", h.SupplierNew)           // GET — форма создания
-	mux.HandleFunc("/ms/suppliers/edit", h.SupplierEdit)         // GET — форма редактирования
-	mux.HandleFunc("/ms/suppliers/save", h.SupplierSave)         // POST — создание/обновление
-	mux.HandleFunc("/ms/suppliers/delete", h.SupplierDelete)     // POST — удаление
-	mux.HandleFunc("GET /ms/orders", h.MSOrdersPage)             // раздел «Заказы»
-	mux.HandleFunc("GET /ms/orders/pick", h.MSOrdersPickForm)    // подбор: форма/результат (?name=)
-	mux.HandleFunc("POST /ms/orders/pick", h.MSOrdersPickSearch) // подбор: запуск поиска (PRG → GET ?name=)
+	mux.HandleFunc("/ms", h.MsPage)                                   // GET — хаб
+	mux.HandleFunc("/ms/suppliers", h.SuppliersList)                  // GET — список поставщиков
+	mux.HandleFunc("/ms/suppliers/new", h.SupplierNew)                // GET — форма создания
+	mux.HandleFunc("/ms/suppliers/edit", h.SupplierEdit)              // GET — форма редактирования
+	mux.HandleFunc("/ms/suppliers/save", h.SupplierSave)              // POST — создание/обновление
+	mux.HandleFunc("/ms/suppliers/delete", h.SupplierDelete)          // POST — удаление
+	mux.HandleFunc("/ms/suppliers/prices/save", h.SupplierPricesSave) // POST — батч цен товаров
+	mux.HandleFunc("GET /ms/orders", h.MSOrdersPage)                  // раздел «Заказы»
+	mux.HandleFunc("GET /ms/orders/pick", h.MSOrdersPickForm)         // подбор: форма/результат (?name=)
+	mux.HandleFunc("POST /ms/orders/pick", h.MSOrdersPickSearch)      // подбор: запуск поиска (PRG → GET ?name=)
 	// Печать бланков за день: список заказов по плановой дате доставки и
 	// слитый PDF по выделенным (литерал /ms/orders/forms специфичнее {id}).
 	mux.HandleFunc("GET /ms/orders/forms", h.MSOrdersFormsForm)         // форма/список (?date=)

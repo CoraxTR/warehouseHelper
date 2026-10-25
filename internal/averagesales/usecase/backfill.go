@@ -255,11 +255,11 @@ func (uc *UseCase) fetchPeriodRows(ctx context.Context, start time.Time, interva
 				continue
 			}
 		}
-		qty, ok := uc.calcQty(r, p)
+		qty, kg, ok := uc.calcSales(r, p)
 		if !ok {
 			continue
 		}
-		out = append(out, averagesales.TurnoverRow{ProductID: id, PeriodStart: start, Qty: qty})
+		out = append(out, averagesales.TurnoverRow{ProductID: id, PeriodStart: start, Qty: qty, Kg: kg})
 		if count != nil {
 			*count++
 		}
@@ -471,11 +471,11 @@ func (uc *UseCase) fetchGroupRows(ctx context.Context, start time.Time, interval
 		if !ok {
 			continue
 		}
-		qty, ok := uc.calcQty(r, p)
+		qty, kg, ok := uc.calcSales(r, p)
 		if !ok {
 			continue
 		}
-		out = append(out, averagesales.TurnoverRow{ProductID: id, PeriodStart: start, Qty: qty})
+		out = append(out, averagesales.TurnoverRow{ProductID: id, PeriodStart: start, Qty: qty, Kg: kg})
 		counts[id]++
 	}
 	return out, nil

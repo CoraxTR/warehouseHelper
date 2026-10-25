@@ -25,3 +25,15 @@ type Supplier struct {
 
 	MinOrderAmount *int64 // минимальная сумма заказа, копейки; nil — не задана
 }
+
+// SupplierProductPrice — цена товара у поставщика (копейки), одна строка на
+// пару (товар, поставщик). Строка существует только когда цена известна.
+// Названия заполняет usecase (товар — каталог, поставщик — свой справочник):
+// хранилище отдаёт только id и сумму.
+type SupplierProductPrice struct {
+	SupplierID   string
+	SupplierName string
+	ProductID    string
+	ProductName  string
+	Price        int64 // копейки за единицу товара
+}

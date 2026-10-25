@@ -379,6 +379,10 @@ func (d *DIContainer) QRUC() *qucase.QRUseCase {
 func (d *DIContainer) SuppliersUC() *msu.MSSuppliersUseCase {
 	if d.msUC == nil {
 		d.msUC = msu.NewMSSuppliersUseCase(d.OrdersRepository(), d.MSClient(), d.WikiUC(), d.ReceiveBarcodes())
+		// Каталог нужен ценам товаров (название товара в списке цен). Обратная
+		// зависимость каталога от поставщиков (справочник для вариантов заказа)
+		// тоже ставится сеттером, поэтому порядок создания здесь не важен.
+		d.msUC.SetCatalog(d.GoodsUC())
 	}
 
 	return d.msUC

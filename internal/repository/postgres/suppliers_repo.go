@@ -107,3 +107,92 @@ func scanSupplier(row rowScanner) (*domain.Supplier, error) {
 	}
 	return &s, nil
 }
+
+// ListSupplierPrices — цены товаров поставщика (только пары с известной ценой,
+// порядок — по id товара). Названия заполняет usecase: products — каталог.
+func (pg *PGClient) ListSupplierPrices(ctx context.Context, supplierID string) ([]domain.SupplierProductPrice, error) {
+	rows, err := pg.Pool.Query(ctx, `
+        SELECT supplier_id, product_id, current_price
+        FROM product_supplier_prices
+        WHERE supplier_id = $1
+        ORDER BY product_id`, supplierID)
+	if err != nil {
+		return nil, fmt.Errorf("list supplier prices %s: %w", supplierID, err)
+	}
+	defer rows.Close()
+
+	out := make([]domain.SupplierProductPrice, 0, 16)
+	for rows.Next() {
+		var p domain.SupplierProductPrice
+		if err := rows.Scan(&p.SupplierID, &p.ProductID, &p.Price); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return out, nil
+}
+
+// ListProductPrices — цены товара по всем поставщикам (мини-окно «Сроков»).
+func (pg *PGClient) ListProductPrices(ctx context.Context, productID string) ([]domain.SupplierProductPrice, error) {
+	rows, err := pg.Pool.Query(ctx, `
+        SELECT p.supplier_id, s.name, p.product_id, p.current_price
+        FROM product_supplier_prices p
+        JOIN suppliers s ON s.id = p.supplier_id
+        WHERE p.product_id = $1
+        ORDER BY s.name`, productID)
+	if err != nil {
+		return nil, fmt.Errorf("list product prices %s: %w", productID, err)
+	}
+	defer rows.Close()
+
+	out := make([]domain.SupplierProductPrice, 0, 8)
+	for rows.Next() {
+		var p domain.SupplierProductPrice
+		if err := rows.Scan(&p.SupplierID, &p.SupplierName, &p.ProductID, &p.Price); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return out, nil
+}
+
+// UpsertSupplierPrice — записать цену пары (товар, поставщик), копейки.
+func (pg *PGClient) UpsertSupplierPrice(ctx context.Context, supplierID, productID string, price int64) error {
+	_, err := pg.Pool.Exec(ctx, `
+        INSERT INTO product_supplier_prices (supplier_id, product_id, current_price)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (supplier_id, product_id) DO UPDATE
+        SET current_price = EXCLUDED.current_price`,
+		supplierID, productID, price,
+	)
+	if err != nil {
+		return fmt.Errorf("upsert supplier price %s/%s: %w", supplierID, productID, err)
+	}
+
+	return nil
+}
+
+// DeleteSupplierPrice — убрать цену пары: строка живёт, только когда цена
+// известна, поэтому «нет цены» = нет строки.
+func (pg *PGClient) DeleteSupplierPrice(ctx context.Context, supplierID, productID string) error {
+	_, err := pg.Pool.Exec(ctx, `
+        DELETE FROM product_supplier_prices
+        WHERE supplier_id = $1 AND product_id = $2`,
+		supplierID, productID,
+	)
+	if err != nil {
+		return fmt.Errorf("delete supplier price %s/%s: %w", supplierID, productID, err)
+	}
+
+	return nil
+}

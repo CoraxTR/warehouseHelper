@@ -25,6 +25,11 @@ type MSSuppliersRepository interface {
 	GetSupplier(ctx context.Context, id string) (*domain.Supplier, error)
 	SaveSupplier(ctx context.Context, s *domain.Supplier) error
 	DeleteSupplier(ctx context.Context, id string) error
+	// Цены товаров у поставщиков (product_supplier_prices — таблица модуля).
+	ListSupplierPrices(ctx context.Context, supplierID string) ([]domain.SupplierProductPrice, error)
+	ListProductPrices(ctx context.Context, productID string) ([]domain.SupplierProductPrice, error)
+	UpsertSupplierPrice(ctx context.Context, supplierID, productID string, price int64) error
+	DeleteSupplierPrice(ctx context.Context, supplierID, productID string) error
 }
 
 // CounterpartyClient — контракт получения имени контрагента из МойСклад,
@@ -54,6 +59,7 @@ type MSSuppliersUseCase struct {
 	ms       CounterpartyClient
 	wiki     WikiSupplierSynchronizer
 	barcodes BarcodeLister
+	catalog  CatalogReader
 }
 
 // NewMSSuppliersUseCase создаёт сценарий с переданным хранилищем, MS-клиентом,
