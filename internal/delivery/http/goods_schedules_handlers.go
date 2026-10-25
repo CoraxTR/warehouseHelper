@@ -127,7 +127,7 @@ func (h *Handler) GoodsSchedulesPage(w http.ResponseWriter, r *http.Request) {
 
 	product, err := h.goodsUC.GetProduct(r.Context(), productID)
 	if err != nil {
-		slog.Info(fmt.Sprintf("goods schedules: get product %s: %v", productID, err))
+		slog.Info("goods schedules: get product", "id", productID, "err", err)
 		http.Error(w, "не удалось загрузить товар", http.StatusInternalServerError)
 
 		return
@@ -140,7 +140,7 @@ func (h *Handler) GoodsSchedulesPage(w http.ResponseWriter, r *http.Request) {
 
 	list, suppliers, err := h.goodsUC.ListOrderSchedules(r.Context(), productID)
 	if err != nil {
-		slog.Info(fmt.Sprintf("goods schedules: list %s: %v", productID, err))
+		slog.Info("goods schedules: list", "id", productID, "err", err)
 		h.renderGoodsSchedules(w, &GoodsSchedulesData{Product: product, Error: "не удалось загрузить варианты заказа"})
 
 		return
@@ -189,7 +189,7 @@ func (h *Handler) GoodsSchedulesSave(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		_, suppliers, lerr := h.goodsUC.ListOrderSchedules(r.Context(), productID)
 		if lerr != nil {
-			slog.Info(fmt.Sprintf("goods schedules: list after error %s: %v", productID, lerr))
+			slog.Info("goods schedules: list after error", "id", productID, "err", lerr)
 		}
 		h.renderGoodsSchedules(w, &GoodsSchedulesData{
 			Product:   product,
