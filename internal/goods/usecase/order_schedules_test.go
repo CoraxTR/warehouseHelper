@@ -34,10 +34,14 @@ func (s *stubOrderSchedules) SaveProductOrderSchedules(_ context.Context, produc
 	return s.saveErr
 }
 
-// stubSupplierDirectory — справочник поставщиков (модуль mssuppliers) для формы.
+// stubSupplierDirectory — справочник поставщиков (модуль mssuppliers) для формы
+// и заодно поставщики с внешним кодом товара (модуль приёмки): оба шва формы
+// читают один и тот же справочник.
 type stubSupplierDirectory struct {
-	list []domain.Supplier
-	err  error
+	list     []domain.Supplier
+	err      error
+	codes    []string // id поставщиков с кодом товара
+	codesErr error
 }
 
 func (s *stubSupplierDirectory) List(_ context.Context) ([]domain.Supplier, error) {
@@ -47,41 +51,34 @@ func (s *stubSupplierDirectory) List(_ context.Context) ([]domain.Supplier, erro
 	return s.list, nil
 }
 
-// stubProductSuppliers — поставщики с внешним кодом товара (модуль приёмки).
-type stubProductSuppliers struct {
-	ids []string
-	err error
-}
-
-func (s *stubProductSuppliers) SuppliersByProduct(_ context.Context, _ string) ([]string, error) {
-	if s.err != nil {
-		return nil, s.err
+func (s *stubSupplierDirectory) SuppliersByProduct(_ context.Context, _ string) ([]string, error) {
+	if s.codesErr != nil {
+		return nil, s.codesErr
 	}
-	return s.ids, nil
+	return s.codes, nil
 }
 
-func newSchedulesUC(t *testing.T, repo *stubProductsRepo, sched *stubOrderSchedules, sup *stubSupplierDirectory, ps *stubProductSuppliers) *GoodsUseCase {
+func newSchedulesUC(t *testing.T, repo *stubProductsRepo, sched *stubOrderSchedules, sup *stubSupplierDirectory) *GoodsUseCase {
 	t.Helper()
 	uc := NewGoodsUseCase(nil, nil, repo, nil)
-	uc.SetOrderScheduleStore(sched, sup, ps)
+	uc.SetOrderScheduleStore(sched, sup, sup)
 	return uc
 }
 
-func schedulesFixture() (*stubProductsRepo, *stubOrderSchedules, *stubSupplierDirectory, *stubProductSuppliers) {
+func schedulesFixture() (*stubProductsRepo, *stubOrderSchedules, *stubSupplierDirectory) {
 	repo := &stubProductsRepo{get: &domain.Product{ID: "p1", Name: "Стейк"}}
 	sched := &stubOrderSchedules{}
 	sup := &stubSupplierDirectory{list: []domain.Supplier{
 		{ID: "sup-1", Name: "Мираторг"},
 		{ID: "sup-2", Name: "Агро"},
 		{ID: "sup-3", Name: "Без кодов"},
-	}}
-	ps := &stubProductSuppliers{ids: []string{"sup-1", "sup-2"}}
-	return repo, sched, sup, ps
+	}, codes: []string{"sup-1", "sup-2"}}
+	return repo, sched, sup
 }
 
 func TestSaveOrderSchedules_Normalizes(t *testing.T) {
-	repo, sched, sup, ps := schedulesFixture()
-	uc := newSchedulesUC(t, repo, sched, sup, ps)
+	repo, sched, sup := schedulesFixture()
+	uc := newSchedulesUC(t, repo, sched, sup)
 
 	delay := int16(2)
 	list := []domain.OrderSchedule{{
@@ -127,8 +124,8 @@ func TestSaveOrderSchedules_Normalizes(t *testing.T) {
 }
 
 func TestSaveOrderSchedules_EmptyListClears(t *testing.T) {
-	repo, sched, sup, ps := schedulesFixture()
-	uc := newSchedulesUC(t, repo, sched, sup, ps)
+	repo, sched, sup := schedulesFixture()
+	uc := newSchedulesUC(t, repo, sched, sup)
 
 	if err := uc.SaveOrderSchedules(context.Background(), "p1", nil); err != nil {
 		t.Fatalf("SaveOrderSchedules: %v", err)
@@ -189,8 +186,8 @@ func TestSaveOrderSchedules_Validation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			repo, sched, sup, ps := schedulesFixture()
-			uc := newSchedulesUC(t, repo, sched, sup, ps)
+			repo, sched, sup := schedulesFixture()
+			uc := newSchedulesUC(t, repo, sched, sup)
 
 			err := uc.SaveOrderSchedules(context.Background(), "p1", []domain.OrderSchedule{tt.item})
 			if err == nil {
@@ -207,8 +204,8 @@ func TestSaveOrderSchedules_Validation(t *testing.T) {
 }
 
 func TestSaveOrderSchedules_DuplicateVariant(t *testing.T) {
-	repo, sched, sup, ps := schedulesFixture()
-	uc := newSchedulesUC(t, repo, sched, sup, ps)
+	repo, sched, sup := schedulesFixture()
+	uc := newSchedulesUC(t, repo, sched, sup)
 
 	list := []domain.OrderSchedule{
 		{SupplierID: "sup-1", Name: "Общий", OrderDays: []int16{1}},
@@ -229,9 +226,11 @@ func TestSaveOrderSchedules_DuplicateVariant(t *testing.T) {
 func TestSaveOrderSchedules_ProductNotFound(t *testing.T) {
 	repo := &stubProductsRepo{} // GetProduct → (nil, nil)
 	sched := &stubOrderSchedules{}
-	sup := &stubSupplierDirectory{list: []domain.Supplier{{ID: "sup-1", Name: "Мираторг"}}}
-	ps := &stubProductSuppliers{ids: []string{"sup-1"}}
-	uc := newSchedulesUC(t, repo, sched, sup, ps)
+	sup := &stubSupplierDirectory{
+		list:  []domain.Supplier{{ID: "sup-1", Name: "Мираторг"}},
+		codes: []string{"sup-1"},
+	}
+	uc := newSchedulesUC(t, repo, sched, sup)
 
 	err := uc.SaveOrderSchedules(context.Background(), "p-x", []domain.OrderSchedule{
 		{SupplierID: "sup-1", Name: "Общий", OrderDays: []int16{1}},
@@ -242,8 +241,9 @@ func TestSaveOrderSchedules_ProductNotFound(t *testing.T) {
 }
 
 func TestSaveOrderSchedules_SupplierCodesError(t *testing.T) {
-	repo, sched, sup, _ := schedulesFixture()
-	uc := newSchedulesUC(t, repo, sched, sup, &stubProductSuppliers{err: errors.New("склад недоступен")})
+	repo, sched, sup := schedulesFixture()
+	sup.codesErr = errors.New("склад недоступен")
+	uc := newSchedulesUC(t, repo, sched, sup)
 
 	err := uc.SaveOrderSchedules(context.Background(), "p1", []domain.OrderSchedule{
 		{SupplierID: "sup-1", Name: "Общий", OrderDays: []int16{1}},
@@ -270,12 +270,12 @@ func TestSaveOrderSchedules_NotWired(t *testing.T) {
 }
 
 func TestListOrderSchedules_FiltersSuppliersByProductCodes(t *testing.T) {
-	repo, sched, sup, ps := schedulesFixture()
+	repo, sched, sup := schedulesFixture()
 	sched.list = []domain.OrderSchedule{
 		{ID: 1, ProductID: "p1", SupplierID: "sup-1", SupplierName: "Мираторг", Name: "Общий", OrderDays: []int16{1, 4}},
 	}
-	ps.ids = []string{"sup-1"} // у товара есть коды только Мираторга
-	uc := newSchedulesUC(t, repo, sched, sup, ps)
+	sup.codes = []string{"sup-1"} // у товара есть коды только Мираторга
+	uc := newSchedulesUC(t, repo, sched, sup)
 
 	list, suppliers, err := uc.ListOrderSchedules(context.Background(), "p1")
 	if err != nil {
