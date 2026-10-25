@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -124,7 +124,7 @@ func (h *Handler) productInfoSuppliers(r *http.Request, productID string) []Prod
 		out = append(out, ProductInfoSupplier{ID: id, Name: name, PriceKop: prices[id]})
 	}
 
-	sort.SliceStable(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	slices.SortStableFunc(out, func(a, b ProductInfoSupplier) int { return strings.Compare(a.Name, b.Name) })
 
 	return out
 }

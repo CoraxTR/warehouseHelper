@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"warehouseHelper/internal/averagesales"
+	"warehouseHelper/internal/domain"
 	"warehouseHelper/internal/metrics"
 	"warehouseHelper/internal/ordercoeff"
 )
@@ -104,23 +105,14 @@ func (uc *GoodsUseCase) CalendarPage(ctx context.Context, tab, month string) (*C
 		return nil, fmt.Errorf("товары каталога: %w", err)
 	}
 
-	now := uc.now()
-
 	page := &CalendarPage{
-		Tab:        tab,
-		WeekTabURL: "/goods/calendar?tab=" + TabWeek,
-		AvgHeader:  "средние, шт/нед",
-	}
-	page.MonthTabURL = "/goods/calendar?tab=" + TabMonth
-
-	visible := make([]productInfo, 0, len(products))
-	for _, p := range products {
-		if tab == TabWeek && !p.TrackWeekly {
-			continue
-		}
-		visible = append(visible, productInfo{ID: p.ID, Name: p.Name, Code: p.InternalCode, Group: p.GroupName})
+		Tab:         tab,
+		WeekTabURL:  "/goods/calendar?tab=" + TabWeek,
+		MonthTabURL: "/goods/calendar?tab=" + TabMonth,
+		AvgHeader:   avgHeader(tab),
 	}
 
+	visible := productsForTab(products, tab)
 	if len(visible) == 0 {
 		page.Empty = true
 		return page, nil
@@ -131,113 +123,126 @@ func (uc *GoodsUseCase) CalendarPage(ctx context.Context, tab, month string) (*C
 		ids[i] = v.ID
 	}
 
-	var periods []time.Time
-	var rowsByID map[string][]averagesales.PeriodSales
-	var window map[string]averagesales.SalesCalendar
-	var avg map[string]float64
-
-	if tab == TabWeek {
-		periods = weekPeriods(now, calendarWeeks)
-		window, err = uc.salesCalendar.Calendar(ctx, ids)
-		if err != nil {
-			return nil, fmt.Errorf("продажи окна: %w", err)
-		}
-		rowsByID = make(map[string][]averagesales.PeriodSales, len(window))
-		avg = make(map[string]float64, len(window))
-		for id, cal := range window {
-			rowsByID[id] = cal.Periods
-			avg[id] = cal.Avg
-		}
-	} else {
-		start, err := monthStart(month, now)
-		if err != nil {
-			return nil, err
-		}
-
-		// Столбцы — окно, ЗАКАНЧИВАЮЩЕЕСЯ выбранным месяцем: листание назад
-		// показывает историю, вперёд — обратно к действующему окну.
-		rangeStart := start.AddDate(0, -(calendarMonths - 1), 0)
-		periods = monthPeriods(rangeStart, calendarMonths)
-		page.MonthParam = start.Format("2006-01")
-		page.PrevMonthURL = "/goods/calendar?tab=" + TabMonth + "&month=" + start.AddDate(0, -1, 0).Format("2006-01")
-		next := start.AddDate(0, 1, 0)
-		page.NextMonthURL = "/goods/calendar?tab=" + TabMonth + "&month=" + next.Format("2006-01")
-		page.NextDisabled = !next.Before(currentMonthStart(now))
-		page.AvgHeader = "средние, шт/мес"
-
-		// Действующий диапазон: средние и обводку окна отдаёт владелец оборотов
-		// (Calendar уже считает окно сам). Историю листания он не считает —
-		// показываем только продажи, без обводки и средних.
-		if start.Equal(currentMonthStart(now)) {
-			window, err = uc.salesCalendar.Calendar(ctx, ids)
-			if err != nil {
-				return nil, fmt.Errorf("продажи окна: %w", err)
-			}
-			rowsByID = make(map[string][]averagesales.PeriodSales, len(window))
-			avg = make(map[string]float64, len(window))
-			for id, cal := range window {
-				rowsByID[id] = cal.Periods
-				avg[id] = cal.Avg
-			}
-		} else {
-			turnover, err := uc.salesCalendar.MonthlyTurnover(ctx, ids, periods[0])
-			if err != nil {
-				return nil, fmt.Errorf("продажи по месяцам: %w", err)
-			}
-			rowsByID = periodSalesByProduct(turnover)
-		}
+	data, err := uc.calendarData(ctx, tab, month, ids, page)
+	if err != nil {
+		return nil, err
 	}
 
-	for _, p := range periods {
+	for _, p := range data.periods {
 		page.PeriodTitles = append(page.PeriodTitles, periodTitle(p, tab))
 	}
 
-	coeffType := ordercoeff.PeriodWeek
-	if tab == TabMonth {
-		coeffType = ordercoeff.PeriodMonth
-	}
-	coeffs, err := uc.periodCoeffs.CoefficientsBatch(ctx, ids, coeffType, periods)
+	coeffs, err := uc.periodCoeffs.CoefficientsBatch(ctx, ids, coeffPeriodType(tab), data.periods)
 	if err != nil {
 		return nil, fmt.Errorf("коэффициенты периодов: %w", err)
 	}
 
-	currentStart := periods[len(periods)-1]
+	page.Groups = buildCalendarGroups(visible, data, tab, coeffs)
+
+	return page, nil
+}
+
+// calendarData — столбцы и продажи по товарам для выбранной вкладки.
+type calendarData struct {
+	periods  []time.Time
+	rowsByID map[string][]averagesales.PeriodSales
+	avg      map[string]float64
+}
+
+// calendarData собирает данные вкладки: недели — окно владельца оборотов
+// (со средними и пометкой окна), месяцы — окно, заканчивающееся выбранным
+// месяцем; для действующего месяца средние и пометки тоже приходят от
+// владельца, для истории — только продажи.
+func (uc *GoodsUseCase) calendarData(ctx context.Context, tab, month string, ids []string, page *CalendarPage) (*calendarData, error) {
+	if tab == TabWeek {
+		return uc.weekData(ctx, ids)
+	}
+
+	return uc.monthData(ctx, month, ids, page)
+}
+
+// weekData — недельная вкладка: столбцы считаются от текущей недели, продажи —
+// из окна averagesales (там же пометка участия в среднем).
+func (uc *GoodsUseCase) weekData(ctx context.Context, ids []string) (*calendarData, error) {
+	window, err := uc.salesCalendar.Calendar(ctx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("продажи окна: %w", err)
+	}
+
+	data := &calendarData{
+		periods:  weekPeriods(uc.now(), calendarWeeks),
+		rowsByID: make(map[string][]averagesales.PeriodSales, len(window)),
+		avg:      make(map[string]float64, len(window)),
+	}
+	for id, cal := range window {
+		data.rowsByID[id] = cal.Periods
+		data.avg[id] = cal.Avg
+	}
+
+	return data, nil
+}
+
+// monthData — месячная вкладка: окно заканчивается выбранным месяцем.
+func (uc *GoodsUseCase) monthData(ctx context.Context, month string, ids []string, page *CalendarPage) (*calendarData, error) {
+	now := uc.now()
+	start, err := monthStart(month, now)
+	if err != nil {
+		return nil, err
+	}
+
+	// Листание: назад — история, вперёд — обратно к действующему окну.
+	rangeStart := start.AddDate(0, -(calendarMonths - 1), 0)
+	page.MonthParam = start.Format("2006-01")
+	page.PrevMonthURL = monthURL(start.AddDate(0, -1, 0))
+	next := start.AddDate(0, 1, 0)
+	page.NextMonthURL = monthURL(next)
+	page.NextDisabled = !next.Before(currentMonthStart(now))
+
+	data := &calendarData{periods: monthPeriods(rangeStart, calendarMonths)}
+
+	if start.Equal(currentMonthStart(now)) {
+		return uc.currentMonthData(ctx, ids, data)
+	}
+
+	turnover, err := uc.salesCalendar.MonthlyTurnover(ctx, ids, data.periods[0])
+	if err != nil {
+		return nil, fmt.Errorf("продажи по месяцам: %w", err)
+	}
+	data.rowsByID = periodSalesByProduct(turnover)
+
+	return data, nil
+}
+
+// currentMonthData — действующий диапазон: средние и обводку окна отдаёт
+// владелец оборотов (Calendar считает окно сам).
+func (uc *GoodsUseCase) currentMonthData(ctx context.Context, ids []string, data *calendarData) (*calendarData, error) {
+	window, err := uc.salesCalendar.Calendar(ctx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("продажи окна: %w", err)
+	}
+
+	data.rowsByID = make(map[string][]averagesales.PeriodSales, len(window))
+	data.avg = make(map[string]float64, len(window))
+	for id, cal := range window {
+		data.rowsByID[id] = cal.Periods
+		data.avg[id] = cal.Avg
+	}
+
+	return data, nil
+}
+
+// buildCalendarGroups — строки и группы страницы.
+func buildCalendarGroups(visible []productInfo, data *calendarData, tab string, coeffs map[string]map[time.Time]int16) []CalendarGroup {
 	groups := make([]CalendarGroup, 0, 8)
 	groupIndex := make(map[string]int, 8)
+	currentStart := data.periods[len(data.periods)-1]
 
 	for _, v := range visible {
-		byPeriod := make(map[time.Time]averagesales.PeriodSales, len(rowsByID[v.ID]))
-		for _, ps := range rowsByID[v.ID] {
-			byPeriod[ps.PeriodStart] = ps
+		var avg *float64
+		if a, ok := data.avg[v.ID]; ok {
+			avg = &a
 		}
-
-		row := CalendarRow{
-			ProductID:    v.ID,
-			Name:         v.Name,
-			InternalCode: v.Code,
-			Cells:        make([]CalendarCell, 0, len(periods)),
-		}
-		for _, p := range periods {
-			ps, ok := byPeriod[p]
-			cell := CalendarCell{PeriodStart: p}
-			if ok {
-				cell.QtyText = formatQty(ps.Qty)
-				cell.KgText = formatKg(ps.Kg)
-				cell.InWindow = ps.InWindow
-			}
-			if c, ok := coeffs[v.ID][p]; ok && c != 0 {
-				cell.Coeff = formatCoeff(c)
-			}
-			cell.Title = cellTitle(p, tab, cell)
-			row.Cells = append(row.Cells, cell)
-		}
-
-		if a, ok := avg[v.ID]; ok {
-			row.AvgText = formatQty(a)
-		}
-		if c, ok := coeffs[v.ID][currentStart]; ok && c != 0 {
-			row.CoeffText = formatCoeff(c)
-		}
+		row := buildCalendarRow(v, data.rowsByID[v.ID], avg, coeffs[v.ID], data.periods, tab, currentStart)
 
 		idx, ok := groupIndex[v.Group]
 		if !ok {
@@ -248,9 +253,81 @@ func (uc *GoodsUseCase) CalendarPage(ctx context.Context, tab, month string) (*C
 		groups[idx].Rows = append(groups[idx].Rows, row)
 	}
 
-	page.Groups = groups
+	return groups
+}
 
-	return page, nil
+// buildCalendarRow — одна строка: ячейки по столбцам, среднее, коэффициент.
+func buildCalendarRow(v productInfo, sales []averagesales.PeriodSales, avg *float64, coeffs map[time.Time]int16, periods []time.Time, tab string, currentStart time.Time) CalendarRow {
+	row := CalendarRow{
+		ProductID:    v.ID,
+		Name:         v.Name,
+		InternalCode: v.Code,
+		Cells:        make([]CalendarCell, 0, len(periods)),
+	}
+
+	byPeriod := make(map[time.Time]averagesales.PeriodSales, len(sales))
+	for _, ps := range sales {
+		byPeriod[ps.PeriodStart] = ps
+	}
+
+	for _, p := range periods {
+		cell := CalendarCell{PeriodStart: p}
+		if ps, ok := byPeriod[p]; ok {
+			cell.QtyText = formatQty(ps.Qty)
+			cell.KgText = formatKg(ps.Kg)
+			cell.InWindow = ps.InWindow
+		}
+		if c, ok := coeffs[p]; ok && c != 0 {
+			cell.Coeff = formatCoeff(c)
+		}
+		cell.Title = cellTitle(p, tab, cell)
+		row.Cells = append(row.Cells, cell)
+	}
+
+	if avg != nil {
+		row.AvgText = formatQty(*avg)
+	}
+	if c, ok := coeffs[currentStart]; ok && c != 0 {
+		row.CoeffText = formatCoeff(c)
+	}
+
+	return row
+}
+
+// productsForTab — товары вкладки: недельная — только с недельным учётом.
+func productsForTab(products []domain.Product, tab string) []productInfo {
+	out := make([]productInfo, 0, len(products))
+	for _, p := range products {
+		if tab == TabWeek && !p.TrackWeekly {
+			continue
+		}
+		out = append(out, productInfo{ID: p.ID, Name: p.Name, Code: p.InternalCode, Group: p.GroupName})
+	}
+
+	return out
+}
+
+// avgHeader — подпись колонки средних по вкладке.
+func avgHeader(tab string) string {
+	if tab == TabMonth {
+		return "средние, шт/мес"
+	}
+
+	return "средние, шт/нед"
+}
+
+// coeffPeriodType — гранулярность коэффициентов по вкладке.
+func coeffPeriodType(tab string) ordercoeff.PeriodType {
+	if tab == TabMonth {
+		return ordercoeff.PeriodMonth
+	}
+
+	return ordercoeff.PeriodWeek
+}
+
+// monthURL — адрес месячной вкладки для месяца.
+func monthURL(m time.Time) string {
+	return "/goods/calendar?tab=" + TabMonth + "&month=" + m.Format("2006-01")
 }
 
 // productInfo — срез каталога для сборки строк календаря.
@@ -289,7 +366,7 @@ func weekPeriods(now time.Time, n int) []time.Time {
 // monthPeriods — столбцы месяцев: n месяцев от start (по возрастанию).
 func monthPeriods(start time.Time, n int) []time.Time {
 	out := make([]time.Time, 0, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		out = append(out, start.AddDate(0, i, 0))
 	}
 

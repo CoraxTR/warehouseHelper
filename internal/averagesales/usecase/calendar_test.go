@@ -30,12 +30,13 @@ func TestCalendar_MonthlyWindowMarksUsedPeriods(t *testing.T) {
 	}
 
 	kg := 12.5
+	weight := 2.0
 	repo := &stubRepo{monthly: append([]averagesales.TurnoverRow{{
 		ProductID: "p1", PeriodStart: current, Qty: 3, Kg: &kg,
 	}}, rows...)}
 
 	prods := &stubProducts{byID: map[string]averagesales.TurnoverProduct{
-		"p1": {ID: "p1", UOM: "кг", AverageWeight: floatPtr(2), TrackWeekly: false},
+		"p1": {ID: "p1", UOM: "кг", AverageWeight: &weight, TrackWeekly: false},
 	}}
 
 	got, err := newCalendarUC(repo, prods).Calendar(context.Background(), []string{"p1"})
@@ -78,7 +79,8 @@ func TestCalendar_CurrentEntersWindowWhenHot(t *testing.T) {
 	now := refreshNow
 	current := currentPeriodStart(intervalWeek, now)
 
-	rows := []averagesales.TurnoverRow{{ProductID: "p1", PeriodStart: current, Qty: 100}}
+	rows := make([]averagesales.TurnoverRow, 0, 6)
+	rows = append(rows, averagesales.TurnoverRow{ProductID: "p1", PeriodStart: current, Qty: 100})
 	for i := 1; i <= 5; i++ {
 		start := current.AddDate(0, 0, -7*i)
 		rows = append(rows, averagesales.TurnoverRow{ProductID: "p1", PeriodStart: start, Qty: float64(i)})
@@ -136,5 +138,3 @@ func TestCalendar_EmptyIDs(t *testing.T) {
 		t.Fatalf("пустой список должен дать пустую карту, got %+v", got)
 	}
 }
-
-func floatPtr(v float64) *float64 { return &v }

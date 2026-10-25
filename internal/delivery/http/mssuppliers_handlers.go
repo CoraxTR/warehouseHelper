@@ -213,7 +213,7 @@ func (h *Handler) SupplierPricesSave(w http.ResponseWriter, r *http.Request) {
 		kop, err := parseRublesToKopecks(raw)
 		if err != nil {
 			slog.Info("supplier price parse", "supplier_id", supplierID, "product_id", productID, "err", err)
-			http.Redirect(w, r, "/ms/suppliers/edit?id="+supplierID+"&prices=1&err="+url.QueryEscape("цена: "+err.Error()), http.StatusSeeOther)
+			http.Redirect(w, r, supplierEditPricesURL(supplierID, "err", "цена: "+err.Error()), http.StatusSeeOther)
 			return
 		}
 
@@ -223,7 +223,7 @@ func (h *Handler) SupplierPricesSave(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := h.msUC.SetSupplierPrice(r.Context(), supplierID, productID, amount); err != nil {
 			slog.Info("set supplier price", "supplier_id", supplierID, "product_id", productID, "err", err)
-			http.Redirect(w, r, "/ms/suppliers/edit?id="+supplierID+"&prices=1&err="+url.QueryEscape("не удалось сохранить цену"), http.StatusSeeOther)
+			http.Redirect(w, r, supplierEditPricesURL(supplierID, "err", "не удалось сохранить цену"), http.StatusSeeOther)
 			return
 		}
 
@@ -238,7 +238,13 @@ func (h *Handler) SupplierPricesSave(w http.ResponseWriter, r *http.Request) {
 	if cleared > 0 {
 		msg = fmt.Sprintf("цены сохранены: %d, снято: %d", saved, cleared)
 	}
-	http.Redirect(w, r, "/ms/suppliers/edit?id="+supplierID+"&prices=1&msg="+url.QueryEscape(msg), http.StatusSeeOther)
+	http.Redirect(w, r, supplierEditPricesURL(supplierID, "msg", msg), http.StatusSeeOther)
+}
+
+// supplierEditPricesURL — адрес формы поставщика, возврат внутрь виджета цен.
+// id и сообщение экранируются: значения приходят из формы (gosec G710).
+func supplierEditPricesURL(supplierID, key, value string) string {
+	return "/ms/suppliers/edit?id=" + url.QueryEscape(supplierID) + "&prices=1&" + key + "=" + url.QueryEscape(value)
 }
 
 // loadSupplierBarcodes читает связки «внешний код → товар» для виджета;

@@ -33,16 +33,16 @@ func (s *stubSales) FetchProfitTurnover(_ context.Context, from, to time.Time, i
 
 // stubRepo — заглушка хранилища оборотов.
 type stubRepo struct {
-	monthly  []averagesales.TurnoverRow // фикстуры месячного окна (Last* и батч-чтение)
-	weekly   []averagesales.TurnoverRow
-	upsM     []averagesales.TurnoverRow
-	upsW     []averagesales.TurnoverRow
-	hasM     bool
-	hasW     bool
+	monthly   []averagesales.TurnoverRow // фикстуры месячного окна (Last* и батч-чтение)
+	weekly    []averagesales.TurnoverRow
+	upsM      []averagesales.TurnoverRow
+	upsW      []averagesales.TurnoverRow
+	hasM      bool
+	hasW      bool
 	missingM  []string // дыры в месячном окне (селекция дозаливки)
 	missingKg []string // строки окна без кг (дозаполнение qty_kg)
-	missingW []string // дыры в недельном окне
-	err      error
+	missingW  []string // дыры в недельном окне
+	err       error
 
 	lastCalls  int        // чтения окна «по товару» — батч-путь их не делает
 	windowMIDs [][]string // id-пачки батч-чтений месячного окна
