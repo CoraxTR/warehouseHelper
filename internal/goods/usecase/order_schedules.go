@@ -17,32 +17,47 @@ import (
 // позиции, читает автозаказ через методы этого юзкейса.
 type OrderSchedulesRepository interface {
 	ListProductOrderSchedules(ctx context.Context, productID string) ([]domain.OrderSchedule, error)
-	ReplaceProductOrderSchedules(ctx context.Context, productID string, list []domain.OrderSchedule) error
+	// SaveProductOrderSchedules сохраняет набор вариантов: строки с id
+	// обновляются, без id — вставляются, отсутствующие в списке — удаляются.
+	SaveProductOrderSchedules(ctx context.Context, productID string, list []domain.OrderSchedule) error
 }
 
-// SupplierDirectory — справочник поставщиков: нужен только список для выбора
-// в форме. Таблица suppliers принадлежит модулю mssuppliers — читаем его
-// методом List (реализация *msu.MSSuppliersUseCase в di.go), чужие таблицы
-// каталог не трогает.
+// ProductSuppliers — поставщики, у которых есть внешний код товара
+// (product_supplier_barcodes). Владелец таблицы — приёмка, поэтому каталог
+// спрашивает её методом (реализация *rucase.BarcodeEditor в di.go), а свои
+// таблицы не читает.
+type ProductSuppliers interface {
+	SuppliersByProduct(ctx context.Context, productID string) ([]string, error)
+}
+
+// SupplierDirectory — справочник поставщиков: названия для выпадающего списка
+// формы. Таблица suppliers принадлежит модулю mssuppliers — читаем его методом
+// List (реализация *msu.MSSuppliersUseCase в di.go).
 type SupplierDirectory interface {
 	List(ctx context.Context) ([]domain.Supplier, error)
 }
 
-// SetOrderScheduleStore подключает хранилище вариантов заказа и справочник
-// поставщиков (di.go после создания юзкейса; nil — страница не работает,
-// остальной каталог живёт).
-func (uc *GoodsUseCase) SetOrderScheduleStore(schedules OrderSchedulesRepository, suppliers SupplierDirectory) {
+// SetOrderScheduleStore подключает хранилище вариантов заказа, справочник
+// поставщиков и список поставщиков товара (di.go после создания юзкейса;
+// nil — страница не работает, остальной каталог живёт).
+func (uc *GoodsUseCase) SetOrderScheduleStore(
+	schedules OrderSchedulesRepository,
+	suppliers SupplierDirectory,
+	productSuppliers ProductSuppliers,
+) {
 	uc.schedules = schedules
 	uc.suppliers = suppliers
+	uc.productSuppliers = productSuppliers
 }
 
-// ListOrderSchedules возвращает варианты заказа товара и справочник
-// поставщиков для выпадающего списка формы карточки позиции.
+// ListOrderSchedules возвращает варианты заказа товара и поставщиков для
+// выпадающего списка: только те, у кого есть внешний код этого товара —
+// заказывать у поставщика без кода товара нельзя.
 func (uc *GoodsUseCase) ListOrderSchedules(ctx context.Context, productID string) ([]domain.OrderSchedule, []domain.Supplier, error) {
 	done := metrics.Track(trackPkg, "ListOrderSchedules")
 	defer done()
 
-	if uc.schedules == nil || uc.suppliers == nil {
+	if uc.schedules == nil || uc.suppliers == nil || uc.productSuppliers == nil {
 		return nil, nil, errors.New("варианты заказа не подключены")
 	}
 
@@ -50,22 +65,49 @@ func (uc *GoodsUseCase) ListOrderSchedules(ctx context.Context, productID string
 	if err != nil {
 		return nil, nil, err
 	}
-	suppliers, err := uc.suppliers.List(ctx)
+	suppliers, _, err := uc.productSupplierOptions(ctx, productID)
 	if err != nil {
-		return nil, nil, fmt.Errorf("справочник поставщиков: %w", err)
+		return nil, nil, err
 	}
 
 	return list, suppliers, nil
 }
 
-// SaveOrderSchedules нормализует и заменяет ВЕСЬ набор вариантов заказа товара:
-// страница сохраняет список целиком, удалённая в форме строка исчезает из БД.
-// Пустой список — товар без вариантов заказа.
+// productSupplierOptions возвращает поставщиков товара (по внешним кодам)
+// в виде справочных записей и множество их id.
+func (uc *GoodsUseCase) productSupplierOptions(ctx context.Context, productID string) ([]domain.Supplier, map[string]struct{}, error) {
+	ids, err := uc.productSuppliers.SuppliersByProduct(ctx, productID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("поставщики товара %s: %w", productID, err)
+	}
+	known := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		known[id] = struct{}{}
+	}
+
+	all, err := uc.suppliers.List(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("справочник поставщиков: %w", err)
+	}
+	out := make([]domain.Supplier, 0, len(ids))
+	for _, s := range all {
+		if _, ok := known[s.ID]; ok {
+			out = append(out, s)
+		}
+	}
+
+	return out, known, nil
+}
+
+// SaveOrderSchedules нормализует и сохраняет набор вариантов заказа товара:
+// вариант с id обновляется (id сохраняется — на него будет ссылаться автозаказ),
+// без id — вставляется, отсутствующие в форме — удаляются. Пустой список —
+// товар без вариантов заказа.
 func (uc *GoodsUseCase) SaveOrderSchedules(ctx context.Context, productID string, list []domain.OrderSchedule) error {
 	done := metrics.Track(trackPkg, "SaveOrderSchedules")
 	defer done()
 
-	if uc.schedules == nil || uc.suppliers == nil {
+	if uc.schedules == nil || uc.suppliers == nil || uc.productSuppliers == nil {
 		return errors.New("варианты заказа не подключены")
 	}
 	productID = strings.TrimSpace(productID)
@@ -81,32 +123,27 @@ func (uc *GoodsUseCase) SaveOrderSchedules(ctx context.Context, productID string
 		return fmt.Errorf("товар %s: %w", productID, domain.ErrProductNotFound)
 	}
 
-	suppliers, err := uc.suppliers.List(ctx)
+	_, known, err := uc.productSupplierOptions(ctx, productID)
 	if err != nil {
-		return fmt.Errorf("справочник поставщиков: %w", err)
-	}
-	known := make(map[string]struct{}, len(suppliers))
-	for _, s := range suppliers {
-		known[s.ID] = struct{}{}
+		return err
 	}
 
 	if list, err = normalizeOrderSchedules(productID, list, known); err != nil {
 		return err
 	}
 
-	return uc.schedules.ReplaceProductOrderSchedules(ctx, productID, list)
+	return uc.schedules.SaveProductOrderSchedules(ctx, productID, list)
 }
 
-// normalizeOrderSchedules проверяет варианты заказа: поставщик из справочника,
-// непустое название без дублей в паре, хотя бы один день заказа, дни недели
-// 1..7 без дублей, неотрицательная задержка.
+// normalizeOrderSchedules проверяет варианты заказа: поставщик — из числа
+// поставщиков товара, непустое название без дублей в паре, хотя бы один день
+// заказа, дни недели 1..7 без дублей, неотрицательная задержка.
 func normalizeOrderSchedules(productID string, list []domain.OrderSchedule, known map[string]struct{}) ([]domain.OrderSchedule, error) {
 	out := make([]domain.OrderSchedule, 0, len(list))
 	seen := make(map[string]struct{}, len(list))
 
 	for i := range list {
 		item := list[i]
-		item.ID = 0
 		item.ProductID = productID
 		item.SupplierName = ""
 		item.SupplierID = strings.TrimSpace(item.SupplierID)
@@ -116,7 +153,7 @@ func normalizeOrderSchedules(productID string, list []domain.OrderSchedule, know
 			return nil, fmt.Errorf("вариант %d: не выбран поставщик", i+1)
 		}
 		if _, ok := known[item.SupplierID]; !ok {
-			return nil, fmt.Errorf("вариант %d: поставщик %q не из справочника", i+1, item.SupplierID)
+			return nil, fmt.Errorf("вариант %d: у товара нет внешнего кода этого поставщика", i+1)
 		}
 		if item.Name == "" {
 			return nil, fmt.Errorf("вариант %d: не заполнено название (например «Общий»)", i+1)

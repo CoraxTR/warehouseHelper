@@ -304,7 +304,7 @@ func (d *DIContainer) WikiUC() *wucase.WikiUseCase {
 func (d *DIContainer) GoodsUC() *gucase.GoodsUseCase {
 	if d.goodsUC == nil {
 		d.goodsUC = gucase.NewGoodsUseCase(d.MSClient(), d.MSClient(), d.OrdersRepository(), d.WikiUC())
-		d.goodsUC.SetOrderScheduleStore(d.OrdersRepository(), d.SuppliersUC())
+		d.goodsUC.SetOrderScheduleStore(d.OrdersRepository(), d.SuppliersUC(), d.ReceiveBarcodes())
 	}
 
 	return d.goodsUC

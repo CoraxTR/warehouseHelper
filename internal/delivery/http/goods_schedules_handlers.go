@@ -104,6 +104,7 @@ var goodsSchedulesTmpl = template.Must(template.ParseFiles(
 // ScheduleRow — строка формы «Варианты заказа» (значения подготовлены для показа).
 type ScheduleRow struct {
 	UID            int64  // идентификатор строки в форме (имена полей *_<uid>)
+	ScheduleID     int64  // id варианта в БД; 0 — новый (вставка)
 	SupplierID     string // выбранный поставщик
 	Name           string // название варианта
 	OrderDays      []DayCheckbox
@@ -208,6 +209,7 @@ func (h *Handler) GoodsSchedulesSave(w http.ResponseWriter, r *http.Request) {
 func scheduleRowFromDomain(uid int64, item domain.OrderSchedule) ScheduleRow {
 	row := ScheduleRow{
 		UID:          uid,
+		ScheduleID:   item.ID,
 		SupplierID:   item.SupplierID,
 		Name:         item.Name,
 		OrderDays:    buildDayCheckboxes(item.OrderDays),
@@ -257,6 +259,12 @@ func parseScheduleForm(r *http.Request) ([]domain.OrderSchedule, []ScheduleRow, 
 
 		supplierID := strings.TrimSpace(r.FormValue(fmt.Sprintf("supplier_%d", uid)))
 		name := strings.TrimSpace(r.FormValue(fmt.Sprintf("name_%d", uid)))
+		var scheduleID int64
+		if raw := strings.TrimSpace(r.FormValue(fmt.Sprintf("sid_%d", uid))); raw != "" {
+			if parsed, perr := strconv.ParseInt(raw, 10, 64); perr == nil && parsed > 0 {
+				scheduleID = parsed
+			}
+		}
 
 		// Полностью пустая строка — не вариант, а «добавь ещё» без заполнения.
 		if supplierID == "" && name == "" && len(orderDays) == 0 && len(deliveryDays) == 0 && delay == nil && cutoff == nil {
@@ -264,6 +272,7 @@ func parseScheduleForm(r *http.Request) ([]domain.OrderSchedule, []ScheduleRow, 
 		}
 
 		list = append(list, domain.OrderSchedule{
+			ID:              scheduleID,
 			ProductID:       r.FormValue("id"),
 			SupplierID:      supplierID,
 			Name:            name,
@@ -275,6 +284,7 @@ func parseScheduleForm(r *http.Request) ([]domain.OrderSchedule, []ScheduleRow, 
 
 		row := ScheduleRow{
 			UID:            uid,
+			ScheduleID:     scheduleID,
 			SupplierID:     supplierID,
 			Name:           name,
 			OrderDays:      buildDayCheckboxes(orderDays),

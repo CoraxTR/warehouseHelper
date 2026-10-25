@@ -11,6 +11,10 @@ var ErrInternalCodeTaken = errors.New("внутренний код уже исп
 // ErrProductNotFound — товар не найден в каталоге.
 var ErrProductNotFound = errors.New("товар не найден в каталоге")
 
+// ErrOrderScheduleNotFound — вариант заказа не найден (удалён конкурентно
+// или принадлежит другому товару).
+var ErrOrderScheduleNotFound = errors.New("вариант заказа не найден")
+
 // Product — товар из справочника МойСклад (таблица products).
 // Каталог — владелец записи; приёмка читает и передаёт average_weight.
 type Product struct {

@@ -42,36 +42,66 @@ func (pg *PGClient) ListProductOrderSchedules(ctx context.Context, productID str
 	return list, nil
 }
 
-// ReplaceProductOrderSchedules заменяет ВСЕ варианты заказа товара переданным
-// набором в одной транзакции: страница карточки сохраняет список целиком
-// (удалённая в форме строка исчезает из БД). Пустой список — товар без
-// вариантов заказа.
-func (pg *PGClient) ReplaceProductOrderSchedules(ctx context.Context, productID string, list []domain.OrderSchedule) error {
+// SaveProductOrderSchedules сохраняет набор вариантов заказа товара в одной
+// транзакции: строка с id обновляется (id сохраняется — на вариант будет
+// ссылаться автозаказ), без id — вставляется, отсутствующие в наборе —
+// удаляются. Пустой набор — товар без вариантов заказа.
+func (pg *PGClient) SaveProductOrderSchedules(ctx context.Context, productID string, list []domain.OrderSchedule) error {
 	tx, err := pg.Pool.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("replace order schedules begin: %w", err)
+		return fmt.Errorf("save order schedules begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	if _, err := tx.Exec(ctx, `DELETE FROM product_order_schedules WHERE product_id = $1`, productID); err != nil {
-		return fmt.Errorf("replace order schedules delete %s: %w", productID, err)
-	}
-
+	keep := make([]int64, 0, len(list))
 	for _, item := range list {
-		if _, err := tx.Exec(ctx, `
+		orderDays, deliveryDays := nonNilDays(item.OrderDays), nonNilDays(item.DeliveryDays)
+
+		if item.ID > 0 {
+			tag, err := tx.Exec(ctx, `
+				UPDATE product_order_schedules SET
+					supplier_id = $1, name = $2, order_days = $3, delivery_days = $4,
+					delay_days = $5, order_cutoff_time = $6
+				WHERE id = $7 AND product_id = $8`,
+				item.SupplierID, item.Name, orderDays, deliveryDays,
+				item.DelayDays, item.OrderCutoffTime, item.ID, productID,
+			)
+			if err != nil {
+				return fmt.Errorf("update order schedule %d of %s: %w", item.ID, productID, err)
+			}
+			if tag.RowsAffected() == 0 {
+				return domain.ErrOrderScheduleNotFound
+			}
+			keep = append(keep, item.ID)
+
+			continue
+		}
+
+		var id int64
+		if err := tx.QueryRow(ctx, `
 			INSERT INTO product_order_schedules (
 				product_id, supplier_id, name, order_days, delivery_days, delay_days, order_cutoff_time
-			) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-			productID, item.SupplierID, item.Name,
-			nonNilDays(item.OrderDays), nonNilDays(item.DeliveryDays),
+			) VALUES ($1, $2, $3, $4, $5, $6, $7)
+			RETURNING id`,
+			productID, item.SupplierID, item.Name, orderDays, deliveryDays,
 			item.DelayDays, item.OrderCutoffTime,
-		); err != nil {
-			return fmt.Errorf("replace order schedules insert %s/%s: %w", productID, item.SupplierID, err)
+		).Scan(&id); err != nil {
+			return fmt.Errorf("insert order schedule %s/%s: %w", productID, item.SupplierID, err)
 		}
+		keep = append(keep, id)
+	}
+
+	// Удаляем варианты, которых нет в сохранённом наборе (пустой keep — все).
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM product_order_schedules
+		WHERE product_id = $1 AND id <> ALL($2::bigint[])`,
+		productID, keep,
+	); err != nil {
+		return fmt.Errorf("delete dropped order schedules of %s: %w", productID, err)
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("replace order schedules commit: %w", err)
+		return fmt.Errorf("save order schedules commit: %w", err)
 	}
 
 	return nil

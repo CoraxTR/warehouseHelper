@@ -50,6 +50,7 @@
             {{range $row := .Rows}}
             <div class="schedule-row" style="border:1px solid #2A2A33;padding:12px 14px;margin-bottom:14px;">
                 <input type="hidden" name="uid" value="{{$row.UID}}">
+                <input type="hidden" name="sid_{{$row.UID}}" value="{{$row.ScheduleID}}">
 
                 <div class="field">
                     <label>Поставщик</label>
@@ -101,6 +102,7 @@
     <div id="row-template" style="display:none;">
         <div class="schedule-row" style="border:1px solid #2A2A33;padding:12px 14px;margin-bottom:14px;">
             <input type="hidden" name="uid" value="__UID__">
+            <input type="hidden" name="sid___UID__" value="0">
 
             <div class="field">
                 <label>Поставщик</label>

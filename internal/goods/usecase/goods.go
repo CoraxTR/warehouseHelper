@@ -186,6 +186,9 @@ type GoodsUseCase struct {
 	// (nil в тестах — страница вариантов недоступна).
 	schedules OrderSchedulesRepository
 	suppliers SupplierDirectory
+	// productSuppliers — поставщики, у которых есть внешний код товара
+	// (владелец product_supplier_barcodes — приёмка).
+	productSuppliers ProductSuppliers
 
 	// catalogListener — шов «каталог изменился»: модуль «Сроки» перечитывает
 	// свой кэш после выгрузки/правки товаров (новые позиции видны без
