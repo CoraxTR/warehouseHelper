@@ -2,8 +2,9 @@ package usecase
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 
 	"warehouseHelper/internal/domain"
@@ -58,8 +59,8 @@ func (uc *MSSuppliersUseCase) SupplierPrices(ctx context.Context, supplierID str
 		}
 	}
 
-	sort.SliceStable(prices, func(i, j int) bool {
-		return prices[i].ProductName < prices[j].ProductName
+	slices.SortStableFunc(prices, func(a, b domain.SupplierProductPrice) int {
+		return strings.Compare(a.ProductName, b.ProductName)
 	})
 
 	return prices, nil
@@ -89,7 +90,7 @@ func (uc *MSSuppliersUseCase) SetSupplierPrice(ctx context.Context, supplierID, 
 	supplierID = strings.TrimSpace(supplierID)
 	productID = strings.TrimSpace(productID)
 	if supplierID == "" || productID == "" {
-		return fmt.Errorf("цена пары: не выбраны поставщик и товар")
+		return errors.New("цена пары: не выбраны поставщик и товар")
 	}
 	if price > maxPriceKop {
 		return fmt.Errorf("цена %d копеек вне разумного диапазона", price)

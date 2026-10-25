@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -25,11 +26,11 @@ func (uc *GoodsUseCase) SetSiteURL(ctx context.Context, productID, siteURL strin
 	siteURL = strings.TrimSpace(siteURL)
 	if siteURL != "" {
 		if len(siteURL) > 2048 {
-			return fmt.Errorf("ссылка длиннее 2048 символов")
+			return errors.New("ссылка длиннее 2048 символов")
 		}
 		parsed, err := url.Parse(siteURL)
 		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
-			return fmt.Errorf("ссылка должна начинаться с http:// или https://")
+			return errors.New("ссылка должна начинаться с http:// или https://")
 		}
 	}
 

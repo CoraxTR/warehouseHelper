@@ -247,7 +247,7 @@ func parseCutoff(v string) *time.Time {
 		if mErr != nil || hour < 0 || hour > 23 {
 			return nil
 		}
-		parsed = time.Date(0, 1, 1, hour, 0, 0, 0, time.UTC)
+		parsed = time.Date(0, time.January, 1, hour, 0, 0, 0, time.UTC)
 	}
 
 	return &parsed

@@ -184,6 +184,8 @@ func (h *Handler) loadSupplierPrices(r *http.Request, supplierID string, barcode
 
 // SupplierPricesSave — POST /ms/suppliers/prices/save: батч цен поставщика.
 // Пустое поле = цена не задана (строка удаляется), иначе пишется сумма.
+// Форма после сохранения рендерится заново (без редиректа: адрес возврата
+// собирался бы из данных формы — gosec G710, open redirect).
 func (h *Handler) SupplierPricesSave(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "не удалось разобрать форму", http.StatusBadRequest)
@@ -198,6 +200,18 @@ func (h *Handler) SupplierPricesSave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	msg, saveErr := h.saveSupplierPrices(r, supplierID, productIDs, prices)
+	if saveErr != nil {
+		slog.Info("supplier prices save", "supplier_id", supplierID, "err", saveErr)
+		h.renderSupplierPrices(w, r, supplierID, "", saveErr.Error())
+		return
+	}
+
+	h.renderSupplierPrices(w, r, supplierID, msg, "")
+}
+
+// saveSupplierPrices записывает цены формы: 0 = цена не задана (строка снимается).
+func (h *Handler) saveSupplierPrices(r *http.Request, supplierID string, productIDs, prices []string) (string, error) {
 	saved, cleared := 0, 0
 	for i, productID := range productIDs {
 		productID = strings.TrimSpace(productID)
@@ -212,9 +226,7 @@ func (h *Handler) SupplierPricesSave(w http.ResponseWriter, r *http.Request) {
 
 		kop, err := parseRublesToKopecks(raw)
 		if err != nil {
-			slog.Info("supplier price parse", "supplier_id", supplierID, "product_id", productID, "err", err)
-			http.Redirect(w, r, supplierEditPricesURL(supplierID, "err", "цена: "+err.Error()), http.StatusSeeOther)
-			return
+			return "", fmt.Errorf("цена: %w", err)
 		}
 
 		var amount int64
@@ -222,9 +234,7 @@ func (h *Handler) SupplierPricesSave(w http.ResponseWriter, r *http.Request) {
 			amount = *kop
 		}
 		if err := h.msUC.SetSupplierPrice(r.Context(), supplierID, productID, amount); err != nil {
-			slog.Info("set supplier price", "supplier_id", supplierID, "product_id", productID, "err", err)
-			http.Redirect(w, r, supplierEditPricesURL(supplierID, "err", "не удалось сохранить цену"), http.StatusSeeOther)
-			return
+			return "", err
 		}
 
 		if amount > 0 {
@@ -234,17 +244,29 @@ func (h *Handler) SupplierPricesSave(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	msg := fmt.Sprintf("цены сохранены: %d", saved)
 	if cleared > 0 {
-		msg = fmt.Sprintf("цены сохранены: %d, снято: %d", saved, cleared)
+		return fmt.Sprintf("цены сохранены: %d, снято: %d", saved, cleared), nil
 	}
-	http.Redirect(w, r, supplierEditPricesURL(supplierID, "msg", msg), http.StatusSeeOther)
+
+	return fmt.Sprintf("цены сохранены: %d", saved), nil
 }
 
-// supplierEditPricesURL — адрес формы поставщика, возврат внутрь виджета цен.
-// id и сообщение экранируются: значения приходят из формы (gosec G710).
-func supplierEditPricesURL(supplierID, key, value string) string {
-	return "/ms/suppliers/edit?id=" + url.QueryEscape(supplierID) + "&prices=1&" + key + "=" + url.QueryEscape(value)
+// renderSupplierPrices — форма поставщика с сообщением/ошибкой виджета цен.
+func (h *Handler) renderSupplierPrices(w http.ResponseWriter, r *http.Request, supplierID, msg, errMsg string) {
+	s, err := h.msUC.Get(r.Context(), supplierID)
+	if err != nil || s == nil {
+		slog.Info("get supplier for prices", "id", supplierID, "err", err)
+		h.renderSupplierForm(w, buildSupplierFormData(nil, true, "", "не удалось загрузить поставщика"))
+		return
+	}
+
+	d := buildSupplierFormData(s, true, "", errMsg)
+	d.Barcodes = h.loadSupplierBarcodes(r, s.ID)
+	d.PriceRows = h.loadSupplierPrices(r, s.ID, d.Barcodes)
+	d.ExpandPrices = true
+	d.Message = msg
+
+	h.renderSupplierForm(w, d)
 }
 
 // loadSupplierBarcodes читает связки «внешний код → товар» для виджета;

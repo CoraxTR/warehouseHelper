@@ -185,10 +185,7 @@ func (uc *GoodsUseCase) weekData(ctx context.Context, ids []string) (*calendarDa
 // monthData — месячная вкладка: окно заканчивается выбранным месяцем.
 func (uc *GoodsUseCase) monthData(ctx context.Context, month string, ids []string, page *CalendarPage) (*calendarData, error) {
 	now := uc.now()
-	start, err := monthStart(month, now)
-	if err != nil {
-		return nil, err
-	}
+	start := monthStart(month, now)
 
 	// Листание: назад — история, вперёд — обратно к действующему окну.
 	rangeStart := start.AddDate(0, -(calendarMonths - 1), 0)
@@ -373,24 +370,21 @@ func monthPeriods(start time.Time, n int) []time.Time {
 	return out
 }
 
-// monthStart — первый месяц диапазона: выбранный месяц или текущий.
-func monthStart(month string, now time.Time) (time.Time, error) {
+// monthStart — месяц, которым заканчивается окно: выбранный или текущий.
+// Кривой/будущий параметр не ломает страницу — показываем текущий диапазон.
+func monthStart(month string, now time.Time) time.Time {
 	cur := currentMonthStart(now)
-	if strings.TrimSpace(month) == "" {
-		return cur, nil
+	month = strings.TrimSpace(month)
+	if month == "" {
+		return cur
 	}
 
-	parsed, err := time.Parse("2006-01", strings.TrimSpace(month))
-	if err != nil {
-		// Кривой параметр не ломает страницу — показываем текущий диапазон.
-		return cur, nil //nolint:nilerr // параметр адреса, не данные
+	parsed, err := time.Parse("2006-01", month)
+	if err != nil || parsed.After(cur) {
+		return cur
 	}
 
-	if parsed.After(cur) {
-		return cur, nil
-	}
-
-	return parsed, nil
+	return parsed
 }
 
 // currentWeekStart — понедельник недели, в которую попадает момент.
