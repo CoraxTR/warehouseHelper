@@ -51,28 +51,6 @@
         </div>
         <button type="button" id="add-contact" class="btn">Добавить контакт</button>
 
-        <label class="field">Дни заказа</label>
-        <div class="days">
-            <label><input type="checkbox" name="order_days" value="1" {{range .Page.OrderDays}}{{if eq . 1}}checked{{end}}{{end}}> Пн</label>
-            <label><input type="checkbox" name="order_days" value="2" {{range .Page.OrderDays}}{{if eq . 2}}checked{{end}}{{end}}> Вт</label>
-            <label><input type="checkbox" name="order_days" value="3" {{range .Page.OrderDays}}{{if eq . 3}}checked{{end}}{{end}}> Ср</label>
-            <label><input type="checkbox" name="order_days" value="4" {{range .Page.OrderDays}}{{if eq . 4}}checked{{end}}{{end}}> Чт</label>
-            <label><input type="checkbox" name="order_days" value="5" {{range .Page.OrderDays}}{{if eq . 5}}checked{{end}}{{end}}> Пт</label>
-            <label><input type="checkbox" name="order_days" value="6" {{range .Page.OrderDays}}{{if eq . 6}}checked{{end}}{{end}}> Сб</label>
-            <label><input type="checkbox" name="order_days" value="7" {{range .Page.OrderDays}}{{if eq . 7}}checked{{end}}{{end}}> Вс</label>
-        </div>
-
-        <label class="field">Дни доставки</label>
-        <div class="days">
-            <label><input type="checkbox" name="delivery_days" value="1" {{range .Page.DeliveryDays}}{{if eq . 1}}checked{{end}}{{end}}> Пн</label>
-            <label><input type="checkbox" name="delivery_days" value="2" {{range .Page.DeliveryDays}}{{if eq . 2}}checked{{end}}{{end}}> Вт</label>
-            <label><input type="checkbox" name="delivery_days" value="3" {{range .Page.DeliveryDays}}{{if eq . 3}}checked{{end}}{{end}}> Ср</label>
-            <label><input type="checkbox" name="delivery_days" value="4" {{range .Page.DeliveryDays}}{{if eq . 4}}checked{{end}}{{end}}> Чт</label>
-            <label><input type="checkbox" name="delivery_days" value="5" {{range .Page.DeliveryDays}}{{if eq . 5}}checked{{end}}{{end}}> Пт</label>
-            <label><input type="checkbox" name="delivery_days" value="6" {{range .Page.DeliveryDays}}{{if eq . 6}}checked{{end}}{{end}}> Сб</label>
-            <label><input type="checkbox" name="delivery_days" value="7" {{range .Page.DeliveryDays}}{{if eq . 7}}checked{{end}}{{end}}> Вс</label>
-        </div>
-
         <label class="field" for="content">Дополнительная информация</label>
         <textarea id="content" name="content" rows="10">{{.Page.Content}}</textarea>
 

@@ -38,8 +38,6 @@ type stubWikiRepo struct {
 	lastUpdatedPageID     int64
 	lastUpdatedSupplierID string
 	lastUpdatedTitle      string
-	lastUpdatedOrderDays  []int
-	lastUpdatedDelivDays  []int
 
 	saveCalled        bool
 	resolveCalled     bool
@@ -131,12 +129,10 @@ func (s *stubWikiRepo) CreateSupplierPage(_ context.Context, page *domain.WikiPa
 	return s.createPageErr
 }
 
-func (s *stubWikiRepo) UpdateSupplierPage(_ context.Context, pageID int64, supplierID, title string, orderDays, deliveryDays []int) error {
+func (s *stubWikiRepo) UpdateSupplierPage(_ context.Context, pageID int64, supplierID, title string) error {
 	s.lastUpdatedPageID = pageID
 	s.lastUpdatedSupplierID = supplierID
 	s.lastUpdatedTitle = title
-	s.lastUpdatedOrderDays = orderDays
-	s.lastUpdatedDelivDays = deliveryDays
 
 	return s.updatePageErr
 }
@@ -211,15 +207,7 @@ func TestWikiUseCaseSavePageValidation(t *testing.T) {
 			},
 			wantError: "заполните телефон, email или сайт в контакте 1",
 		},
-		{
-			name: "неверный день недели",
-			page: &domain.WikiPage{
-				Type:      domain.PageTypeSupplier,
-				Title:     "Поставщик",
-				OrderDays: []int{1, 8},
-			},
-			wantError: "неверный день недели: 8",
-		},
+
 		{
 			name: "слишком длинный средний вес",
 			page: &domain.WikiPage{
@@ -294,8 +282,6 @@ func TestWikiUseCaseSavePageNormalization(t *testing.T) {
 		Type:          domain.PageTypeProduct,
 		Title:         "  Товар  ",
 		Contacts:      []domain.Contact{{Name: " Иван ", Phone: " +7 900 "}},
-		OrderDays:     []int{7, 1, 1, 3, 7},
-		DeliveryDays:  []int{2, 2, 5},
 		AverageWeight: " 12 кг ",
 		Suppliers:     []string{"X", "x", " y "},
 		Products:      []string{"П", "п", " q "},
@@ -315,12 +301,6 @@ func TestWikiUseCaseSavePageNormalization(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got.Contacts, []domain.Contact{{Name: "Иван", Phone: "+7 900"}}) {
 		t.Errorf("Contacts = %+v, want обрезанные поля", got.Contacts)
-	}
-	if !reflect.DeepEqual(got.OrderDays, []int{1, 3, 7}) {
-		t.Errorf("OrderDays = %v, want [1 3 7]", got.OrderDays)
-	}
-	if !reflect.DeepEqual(got.DeliveryDays, []int{2, 5}) {
-		t.Errorf("DeliveryDays = %v, want [2 5]", got.DeliveryDays)
 	}
 	if got.AverageWeight != "12 кг" {
 		t.Errorf("AverageWeight = %q, want %q", got.AverageWeight, "12 кг")
@@ -460,15 +440,12 @@ func TestSyncSupplierPage_UpdateExisting(t *testing.T) {
 	repo := &stubWikiRepo{linkedPage: &domain.WikiPage{ID: 42, Title: "Старое имя"}}
 	uc := NewWikiUseCase(repo)
 
-	err := uc.SyncSupplierPage(context.Background(), testSupplierUUID, "Мираторг", []int{1, 3}, []int{2, 5})
+	err := uc.SyncSupplierPage(context.Background(), testSupplierUUID, "Мираторг")
 	if err != nil {
 		t.Fatalf("SyncSupplierPage: %v", err)
 	}
 	if repo.lastUpdatedPageID != 42 || repo.lastUpdatedSupplierID != testSupplierUUID || repo.lastUpdatedTitle != "Мираторг" {
 		t.Fatalf("UpdateSupplierPage вызван с неверными аргументами: %+v", repo)
-	}
-	if !reflect.DeepEqual(repo.lastUpdatedOrderDays, []int{1, 3}) || !reflect.DeepEqual(repo.lastUpdatedDelivDays, []int{2, 5}) {
-		t.Fatalf("дни переданы неверно: order=%v delivery=%v", repo.lastUpdatedOrderDays, repo.lastUpdatedDelivDays)
 	}
 	if repo.createdPage != nil {
 		t.Fatal("страница не должна создаваться при существующей привязке")
@@ -479,7 +456,7 @@ func TestSyncSupplierPage_ClaimUnlinked(t *testing.T) {
 	repo := &stubWikiRepo{unlinkedPage: &domain.WikiPage{ID: 7, Title: "Мираторг", SupplierID: ""}}
 	uc := NewWikiUseCase(repo)
 
-	err := uc.SyncSupplierPage(context.Background(), testSupplierUUID, "Мираторг", []int{1, 3}, nil)
+	err := uc.SyncSupplierPage(context.Background(), testSupplierUUID, "Мираторг")
 	if err != nil {
 		t.Fatalf("SyncSupplierPage: %v", err)
 	}
@@ -495,7 +472,7 @@ func TestSyncSupplierPage_CreateNew(t *testing.T) {
 	repo := &stubWikiRepo{}
 	uc := NewWikiUseCase(repo)
 
-	err := uc.SyncSupplierPage(context.Background(), testSupplierUUID, "Новый поставщик", []int{1}, []int{3, 4})
+	err := uc.SyncSupplierPage(context.Background(), testSupplierUUID, "Новый поставщик")
 	if err != nil {
 		t.Fatalf("SyncSupplierPage: %v", err)
 	}
@@ -506,9 +483,6 @@ func TestSyncSupplierPage_CreateNew(t *testing.T) {
 		repo.createdPage.SupplierID != testSupplierUUID {
 		t.Fatalf("создана неверная страница: %+v", repo.createdPage)
 	}
-	if !reflect.DeepEqual(repo.createdPage.OrderDays, []int{1}) || !reflect.DeepEqual(repo.createdPage.DeliveryDays, []int{3, 4}) {
-		t.Fatalf("дни созданной страницы неверны: %+v", repo.createdPage)
-	}
 }
 
 func TestSyncSupplierPage_RecreateAfterManualDelete(t *testing.T) {
@@ -516,7 +490,7 @@ func TestSyncSupplierPage_RecreateAfterManualDelete(t *testing.T) {
 	repo := &stubWikiRepo{}
 	uc := NewWikiUseCase(repo)
 
-	if err := uc.SyncSupplierPage(context.Background(), testSupplierUUID, "Мираторг", nil, nil); err != nil {
+	if err := uc.SyncSupplierPage(context.Background(), testSupplierUUID, "Мираторг"); err != nil {
 		t.Fatalf("SyncSupplierPage: %v", err)
 	}
 	if repo.createdPage == nil {
@@ -528,7 +502,7 @@ func TestSyncSupplierPage_TitleTakenOnCreate(t *testing.T) {
 	repo := &stubWikiRepo{createPageErr: domain.ErrTitleTaken}
 	uc := NewWikiUseCase(repo)
 
-	err := uc.SyncSupplierPage(context.Background(), testSupplierUUID, "Мираторг", nil, nil)
+	err := uc.SyncSupplierPage(context.Background(), testSupplierUUID, "Мираторг")
 	if !errors.Is(err, domain.ErrTitleTaken) {
 		t.Fatalf("ожидался ErrTitleTaken, получил %v", err)
 	}
@@ -537,10 +511,10 @@ func TestSyncSupplierPage_TitleTakenOnCreate(t *testing.T) {
 func TestSyncSupplierPage_Validation(t *testing.T) {
 	uc := NewWikiUseCase(&stubWikiRepo{})
 
-	if err := uc.SyncSupplierPage(context.Background(), "", "Мираторг", nil, nil); err == nil {
+	if err := uc.SyncSupplierPage(context.Background(), "", "Мираторг"); err == nil {
 		t.Fatal("пустой id поставщика должен давать ошибку")
 	}
-	if err := uc.SyncSupplierPage(context.Background(), testSupplierUUID, "  ", nil, nil); err == nil {
+	if err := uc.SyncSupplierPage(context.Background(), testSupplierUUID, "  "); err == nil {
 		t.Fatal("пустое имя должно давать ошибку")
 	}
 }

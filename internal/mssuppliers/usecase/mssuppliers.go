@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
-	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -38,7 +37,7 @@ type CounterpartyClient interface {
 // реализуется *wucase.WikiUseCase (вики — отдельный модуль, его таблицы
 // mssuppliers не трогает).
 type WikiSupplierSynchronizer interface {
-	SyncSupplierPage(ctx context.Context, supplierID, name string, orderDays, deliveryDays []int) error
+	SyncSupplierPage(ctx context.Context, supplierID, name string) error
 }
 
 // BarcodeLister — контракт чтения связок «внешний код → товар» поставщика,
@@ -160,21 +159,11 @@ var ErrWikiSync = errors.New("поставщик сохранён, но не у�
 // кросс-транзакций): поставщик уже в БД, ошибка оборачивается в
 // ErrWikiSync для показа пользователю.
 func (uc *MSSuppliersUseCase) syncWiki(ctx context.Context, s *domain.Supplier) error {
-	if err := uc.wiki.SyncSupplierPage(ctx, s.ID, s.Name, int16ToInt(s.OrderDays), int16ToInt(s.DeliveryDays)); err != nil {
+	if err := uc.wiki.SyncSupplierPage(ctx, s.ID, s.Name); err != nil {
 		return fmt.Errorf("%w: %w", ErrWikiSync, err)
 	}
 
 	return nil
-}
-
-// int16ToInt конвертирует дни (SMALLINT[] из БД) в []int — конвенцию вики.
-func int16ToInt(src []int16) []int {
-	res := make([]int, len(src))
-	for i, v := range src {
-		res[i] = int(v)
-	}
-
-	return res
 }
 
 // fetchName получает имя контрагента из МС и кладёт в s.Name.
@@ -222,7 +211,8 @@ func ExtractCounterpartyID(raw string) (string, error) {
 }
 
 // validate нормализует и проверяет поля поставщика. Мутирует переданный s:
-// правила штрихкодов — без пустых строк, дни — без дублей и по возрастанию.
+// правила штрихкодов — без пустых строк. Расписаний заказа/доставки здесь нет:
+// они живут вариантами на паре (товар, поставщик), см. domain.OrderSchedule.
 func (uc *MSSuppliersUseCase) validate(s *domain.Supplier) error {
 	if s == nil {
 		return errors.New("поставщик не передан")
@@ -241,25 +231,6 @@ func (uc *MSSuppliersUseCase) validate(s *domain.Supplier) error {
 		return err
 	}
 
-	if s.OrderDays, err = normalizeDays("дни заказа", s.OrderDays); err != nil {
-		return err
-	}
-	if s.DeliveryDays, err = normalizeDays("дни доставки", s.DeliveryDays); err != nil {
-		return err
-	}
-	if s.SpecialOrderDays, err = normalizeDays("спец. дни заказа", s.SpecialOrderDays); err != nil {
-		return err
-	}
-	if s.SpecialDeliveryDays, err = normalizeDays("спец. дни доставки", s.SpecialDeliveryDays); err != nil {
-		return err
-	}
-
-	if s.DelayDays != nil && *s.DelayDays < 0 {
-		return errors.New("макс. дней между заказом и доставкой не может быть отрицательным")
-	}
-	if s.SpecialDelayDays != nil && *s.SpecialDelayDays < 0 {
-		return errors.New("спец. макс. дней не может быть отрицательным")
-	}
 	if s.MinOrderAmount != nil && *s.MinOrderAmount < 0 {
 		return errors.New("минимальная сумма заказа не может быть отрицательной")
 	}
@@ -296,23 +267,5 @@ func normalizeRules(label string, rules []string, parse func(string) error) ([]s
 		}
 		out = append(out, r)
 	}
-	return out, nil
-}
-
-// normalizeDays проверяет диапазон 1..7, убирает дубли и сортирует по возрастанию.
-func normalizeDays(label string, days []int16) ([]int16, error) {
-	seen := make(map[int16]struct{}, len(days))
-	out := make([]int16, 0, len(days))
-	for _, d := range days {
-		if d < 1 || d > 7 {
-			return nil, fmt.Errorf("%s: день %d вне диапазона 1..7 (1=Пн ... 7=Вс)", label, d)
-		}
-		if _, ok := seen[d]; ok {
-			continue
-		}
-		seen[d] = struct{}{}
-		out = append(out, d)
-	}
-	slices.Sort(out)
 	return out, nil
 }

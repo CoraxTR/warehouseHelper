@@ -11,7 +11,6 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"time"
 
 	"log/slog"
 	"warehouseHelper/internal/domain"
@@ -25,13 +24,6 @@ type SuppliersListData struct {
 	Error     string
 }
 
-// DayCheckbox — чекбокс дня недели в форме поставщика.
-type DayCheckbox struct {
-	Day     int16 // 1..7
-	Label   string
-	Checked bool
-}
-
 // SupplierFormData — данные формы создания/редактирования поставщика.
 // Текстовые поля подготовлены для показа (не копейки/массивы, а строки),
 // чтобы шаблон оставался глупым.
@@ -40,16 +32,9 @@ type SupplierFormData struct {
 	IsEdit   bool
 	RawID    string // создание: исходная ссылка пользователя (uuid извлекается при сохранении)
 
-	DecodeRulesText      string
-	BoxDecodeRulesText   string
-	OrderDays            []DayCheckbox
-	DeliveryDays         []DayCheckbox
-	SpecialOrderDays     []DayCheckbox
-	SpecialDeliveryDays  []DayCheckbox
-	DelayDaysText        string
-	SpecialDelayDaysText string
-	MinOrderAmountText   string
-	OrderCutoffTimeText  string // "HH:MM" или пусто
+	DecodeRulesText    string
+	BoxDecodeRulesText string
+	MinOrderAmountText string
 
 	Barcodes []receiving.BarcodeRef // виджет «Внешние коды» (приёмка)
 
@@ -175,35 +160,7 @@ func (h *Handler) SupplierSave(w http.ResponseWriter, r *http.Request) {
 	s.DecodeRules = strings.Split(r.FormValue("decode_rules"), "\n")
 	s.BoxDecodeRules = strings.Split(r.FormValue("box_decode_rules"), "\n")
 
-	if s.OrderDays, err = parseDays(r.Form["order_days"]); err != nil {
-		h.renderSupplierForm(w, buildSupplierFormData(s, isEdit, rawID, err.Error()))
-		return
-	}
-	if s.DeliveryDays, err = parseDays(r.Form["delivery_days"]); err != nil {
-		h.renderSupplierForm(w, buildSupplierFormData(s, isEdit, rawID, err.Error()))
-		return
-	}
-	if s.SpecialOrderDays, err = parseDays(r.Form["special_order_days"]); err != nil {
-		h.renderSupplierForm(w, buildSupplierFormData(s, isEdit, rawID, err.Error()))
-		return
-	}
-	if s.SpecialDeliveryDays, err = parseDays(r.Form["special_delivery_days"]); err != nil {
-		h.renderSupplierForm(w, buildSupplierFormData(s, isEdit, rawID, err.Error()))
-		return
-	}
-	if s.DelayDays, err = parseNullableInt16(r.FormValue("delay_days")); err != nil {
-		h.renderSupplierForm(w, buildSupplierFormData(s, isEdit, rawID, "макс. дней между заказом и доставкой: "+err.Error()))
-		return
-	}
-	if s.SpecialDelayDays, err = parseNullableInt16(r.FormValue("special_delay_days")); err != nil {
-		h.renderSupplierForm(w, buildSupplierFormData(s, isEdit, rawID, "спец. макс. дней: "+err.Error()))
-		return
-	}
 	if s.MinOrderAmount, err = parseRublesToKopecks(r.FormValue("min_order_amount")); err != nil {
-		h.renderSupplierForm(w, buildSupplierFormData(s, isEdit, rawID, err.Error()))
-		return
-	}
-	if s.OrderCutoffTime, err = parseCutoffTime(r.FormValue("order_cutoff_time")); err != nil {
 		h.renderSupplierForm(w, buildSupplierFormData(s, isEdit, rawID, err.Error()))
 		return
 	}
@@ -270,73 +227,11 @@ func buildSupplierFormData(s *domain.Supplier, isEdit bool, rawID, errMsg string
 
 	d.DecodeRulesText = strings.Join(s.DecodeRules, "\n")
 	d.BoxDecodeRulesText = strings.Join(s.BoxDecodeRules, "\n")
-	d.OrderDays = buildDayCheckboxes(s.OrderDays)
-	d.DeliveryDays = buildDayCheckboxes(s.DeliveryDays)
-	d.SpecialOrderDays = buildDayCheckboxes(s.SpecialOrderDays)
-	d.SpecialDeliveryDays = buildDayCheckboxes(s.SpecialDeliveryDays)
-	if s.DelayDays != nil {
-		d.DelayDaysText = strconv.FormatInt(int64(*s.DelayDays), 10)
-	}
-	if s.SpecialDelayDays != nil {
-		d.SpecialDelayDaysText = strconv.FormatInt(int64(*s.SpecialDelayDays), 10)
-	}
 	if s.MinOrderAmount != nil {
 		d.MinOrderAmountText = kopecksToRubles(*s.MinOrderAmount)
 	}
-	if s.OrderCutoffTime != nil {
-		d.OrderCutoffTimeText = s.OrderCutoffTime.Format("15:04")
-	}
 
 	return d
-}
-
-// dayLabels — подписи дней недели, 1=Пн ... 7=Вс.
-var dayLabels = map[int16]string{1: "Пн", 2: "Вт", 3: "Ср", 4: "Чт", 5: "Пт", 6: "Сб", 7: "Вс"}
-
-func buildDayCheckboxes(days []int16) []DayCheckbox {
-	selected := make(map[int16]bool, len(days))
-	for _, d := range days {
-		selected[d] = true
-	}
-
-	out := make([]DayCheckbox, 0, 7)
-	for d := int16(1); d <= 7; d++ {
-		out = append(out, DayCheckbox{
-			Day:     d,
-			Label:   dayLabels[d],
-			Checked: selected[d],
-		})
-	}
-	return out
-}
-
-// parseDays разбирает чекбоксы дней недели (значения "1".."7") в []int16.
-// Диапазон и дубли проверяет usecase (normalizeDays).
-func parseDays(vals []string) ([]int16, error) {
-	days := make([]int16, 0, len(vals))
-	for _, v := range vals {
-		d, err := strconv.ParseInt(v, 10, 16)
-		if err != nil {
-			return nil, fmt.Errorf("день %q — не число", v)
-		}
-		days = append(days, int16(d))
-	}
-	return days, nil
-}
-
-// parseNullableInt16 разбирает число или nil для пустой строки (задержки).
-func parseNullableInt16(v string) (*int16, error) {
-	v = strings.TrimSpace(v)
-	if v == "" {
-		//nolint:nilnil // контракт: пустая строка = отсутствующее значение
-		return nil, nil
-	}
-	n, err := strconv.ParseInt(v, 10, 16)
-	if err != nil {
-		return nil, fmt.Errorf("%q — не число", v)
-	}
-	d := int16(n)
-	return &d, nil
 }
 
 // parseRublesToKopecks переводит сумму в рублях (форма) в копейки (БД).
@@ -366,21 +261,4 @@ func kopecksToRubles(k int64) string {
 		return strconv.FormatInt(rub, 10)
 	}
 	return fmt.Sprintf("%d.%02d", rub, kop)
-}
-
-// parseCutoffTime разбирает время дедлайна заказа из формы ("HH:MM").
-// Пустая строка — nil (не задано).
-func parseCutoffTime(v string) (*time.Time, error) {
-	v = strings.TrimSpace(v)
-	if v == "" {
-		//nolint:nilnil // контракт: пустая строка = отсутствующее значение
-		return nil, nil
-	}
-	t, err := time.Parse("15:04", v)
-	if err != nil {
-		return nil, fmt.Errorf("время дедлайна заказа %q — ожидается формат ЧЧ:ММ, например 14:00", v)
-	}
-	// Нормализуем к фиксированной дате — в БД хранится только время (TIME).
-	norm := time.Date(2000, time.January, 1, t.Hour(), t.Minute(), 0, 0, time.UTC)
-	return &norm, nil
 }

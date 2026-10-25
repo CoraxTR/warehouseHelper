@@ -31,7 +31,6 @@ func TestEnsureSupplierPage_CreateNew(t *testing.T) {
 func TestEnsureSupplierPage_ExistingPageUntouched(t *testing.T) {
 	linked := &domain.WikiPage{
 		ID: 42, Title: "Мираторг",
-		OrderDays: []int{1, 3}, DeliveryDays: []int{2, 5},
 	}
 	repo := &stubWikiRepo{linkedPage: linked}
 	uc := NewWikiUseCase(repo)
@@ -45,15 +44,11 @@ func TestEnsureSupplierPage_ExistingPageUntouched(t *testing.T) {
 	if repo.lastUpdatedPageID != 0 {
 		t.Fatalf("существующая страница не должна обновляться: %+v", repo)
 	}
-	if len(linked.OrderDays) != 2 || len(linked.DeliveryDays) != 2 {
-		t.Fatalf("график доставки изменён: %+v", linked)
-	}
 }
 
-func TestEnsureSupplierPage_ClaimUnlinkedKeepsDays(t *testing.T) {
+func TestEnsureSupplierPage_ClaimUnlinked(t *testing.T) {
 	unlinked := &domain.WikiPage{
 		ID: 7, Title: "Мираторг",
-		OrderDays: []int{1, 2}, DeliveryDays: []int{5, 6},
 	}
 	repo := &stubWikiRepo{unlinkedPage: unlinked}
 	uc := NewWikiUseCase(repo)
@@ -67,10 +62,9 @@ func TestEnsureSupplierPage_ClaimUnlinkedKeepsDays(t *testing.T) {
 	if repo.lastUpdatedPageID != 7 || repo.lastUpdatedSupplierID != "sup-2" {
 		t.Fatalf("claim: ожидался Update страницы 7 с привязкой sup-2, получил %+v", repo)
 	}
-	// Claim не перезаписывает график доставки: передаются текущие дни страницы.
-	if len(repo.lastUpdatedOrderDays) != 2 || len(repo.lastUpdatedDelivDays) != 2 {
-		t.Fatalf("график доставки затёрт при claim: order=%v deliv=%v",
-			repo.lastUpdatedOrderDays, repo.lastUpdatedDelivDays)
+	// Заголовок страницы не переписывается данными справочника.
+	if repo.lastUpdatedTitle != "Мираторг" {
+		t.Fatalf("claim: заголовок = %q, want %q", repo.lastUpdatedTitle, "Мираторг")
 	}
 }
 

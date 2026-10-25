@@ -181,6 +181,12 @@ type GoodsUseCase struct {
 	wiki     ProductPageSynchronizer
 	turnover TurnoverBackfiller // опционально (nil в тестах)
 
+	// schedules/suppliers — варианты заказа товара (product_order_schedules) и
+	// справочник поставщиков для формы; подключаются SetOrderScheduleStore
+	// (nil в тестах — страница вариантов недоступна).
+	schedules OrderSchedulesRepository
+	suppliers SupplierDirectory
+
 	// catalogListener — шов «каталог изменился»: модуль «Сроки» перечитывает
 	// свой кэш после выгрузки/правки товаров (новые позиции видны без
 	// рестарта). Опционально (nil в тестах).

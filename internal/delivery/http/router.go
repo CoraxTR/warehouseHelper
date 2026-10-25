@@ -23,19 +23,23 @@ func NewRouter(h *Handler) *http.ServeMux {
 	mux.HandleFunc("/download", h.DownloadFile)
 	mux.HandleFunc("/update-from-ms", h.UpdateFromMS) // POST
 	mux.HandleFunc("/print-form", h.PrintForm)
-	mux.HandleFunc("/print-multiple-forms", h.PrintMultipleForms)          // POST
-	mux.HandleFunc("/orders/delete", h.DeleteOrder)                        // DELETE
-	mux.HandleFunc("/print-barcodes", h.PrintBarcodes)                     // POST
-	mux.HandleFunc("/wiki", h.WikiIndex)                                   // GET
-	mux.HandleFunc("/wiki/page", h.WikiPage)                               // GET
-	mux.HandleFunc("/wiki/edit", h.WikiEdit)                               // GET — форма, POST — сохранение
-	mux.HandleFunc("/wiki/delete", h.WikiDelete)                           // POST
-	mux.HandleFunc("/wiki/photo", h.WikiPhoto)                             // GET
-	mux.HandleFunc("GET /goods", h.GoodsPage)                              // хаб «Продукция» (поиск + добавление)
-	mux.HandleFunc("POST /goods/search", h.GoodsSearch)                    // поиск позиции в каталоге
-	mux.HandleFunc("GET /goods/edit", h.GoodsEditPage)                     // редактирование позиции
-	mux.HandleFunc("POST /goods/edit", h.GoodsEditSave)                    // сохранение ручных правок
-	mux.HandleFunc("POST /goods/resync", h.GoodsResync)                    // ресинк позиции из МС
+	mux.HandleFunc("/print-multiple-forms", h.PrintMultipleForms) // POST
+	mux.HandleFunc("/orders/delete", h.DeleteOrder)               // DELETE
+	mux.HandleFunc("/print-barcodes", h.PrintBarcodes)            // POST
+	mux.HandleFunc("/wiki", h.WikiIndex)                          // GET
+	mux.HandleFunc("/wiki/page", h.WikiPage)                      // GET
+	mux.HandleFunc("/wiki/edit", h.WikiEdit)                      // GET — форма, POST — сохранение
+	mux.HandleFunc("/wiki/delete", h.WikiDelete)                  // POST
+	mux.HandleFunc("/wiki/photo", h.WikiPhoto)                    // GET
+	mux.HandleFunc("GET /goods", h.GoodsPage)                     // хаб «Продукция» (поиск + добавление)
+	mux.HandleFunc("POST /goods/search", h.GoodsSearch)           // поиск позиции в каталоге
+	mux.HandleFunc("GET /goods/edit", h.GoodsEditPage)            // редактирование позиции
+	mux.HandleFunc("POST /goods/edit", h.GoodsEditSave)           // сохранение ручных правок
+	mux.HandleFunc("POST /goods/resync", h.GoodsResync)           // ресинк позиции из МС
+	// «Варианты заказа» карточки позиции: расписание заказа на паре (товар, поставщик),
+	// несколько режимов у одной пары (общий со склада / под заказ с производства).
+	mux.HandleFunc("GET /goods/schedules", h.GoodsSchedulesPage)           // варианты заказа товара
+	mux.HandleFunc("POST /goods/schedules/save", h.GoodsSchedulesSave)     // сохранить набор вариантов
 	mux.HandleFunc("GET /goods/tree", h.GoodsTreePage)                     // дерево папок для добавления
 	mux.HandleFunc("POST /goods/tree", h.GoodsExport)                      // выгрузка отмеченных товаров в каталог
 	mux.HandleFunc("GET /goods/search/json", h.GoodsSearchJSON)            // поиск товаров для виджета поставщика (JSON)
