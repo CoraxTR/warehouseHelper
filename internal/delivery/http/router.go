@@ -148,17 +148,17 @@ func NewRouter(h *Handler) *http.ServeMux {
 	mux.HandleFunc("POST /ms/collab/close", h.CollabClose)       // хост закрыл комнату без сохранения
 
 	// Модуль «Сроки» (остатки по срокам годности).
-	mux.HandleFunc("GET /ms/dates", h.StockDatesPage)               // страница «Сроки»
-	mux.HandleFunc("GET /ms/dates/short", h.StockShortPage)         // страница «Шорт-лист»
-	mux.HandleFunc("GET /ms/dates/ws", h.StockDatesWS)              // вебсокет: снапшот и дельты
-	mux.HandleFunc("POST /ms/dates/discount", h.StockDiscount)      // запись ручной скидки
-	mux.HandleFunc("GET /ms/dates/product-info", h.StockProductInfo)      // JSON: карточка позиции для мини-окна
+	mux.HandleFunc("GET /ms/dates", h.StockDatesPage)                          // страница «Сроки»
+	mux.HandleFunc("GET /ms/dates/short", h.StockShortPage)                    // страница «Шорт-лист»
+	mux.HandleFunc("GET /ms/dates/ws", h.StockDatesWS)                         // вебсокет: снапшот и дельты
+	mux.HandleFunc("POST /ms/dates/discount", h.StockDiscount)                 // запись ручной скидки
+	mux.HandleFunc("GET /ms/dates/product-info", h.StockProductInfo)           // JSON: карточка позиции для мини-окна
 	mux.HandleFunc("POST /ms/dates/product-info/save", h.StockProductInfoSave) // JSON: сохранить цены/варианты/ссылку
-	mux.HandleFunc("GET /ms/dates/update", h.StockUpdatePage)       // страница «Обновить сроки»
-	mux.HandleFunc("GET /ms/discounts", h.DiscountsPage)            // страница «Скидки» (окно и допродажа)
-	mux.HandleFunc("GET /ms/discounts/plan", h.DiscountsPlan)       // предпросмотр плана 14:00 (JSON, для блока страницы)
-	mux.HandleFunc("GET /ms/discounts/active", h.DiscountsActive)   // активные пары окна (JSON, для страницы «Сроки»)
-	mux.HandleFunc("POST /ms/dates/update/save", h.StockUpdateSave) // применить батч сканов
+	mux.HandleFunc("GET /ms/dates/update", h.StockUpdatePage)                  // страница «Обновить сроки»
+	mux.HandleFunc("GET /ms/discounts", h.DiscountsPage)                       // страница «Скидки» (окно и допродажа)
+	mux.HandleFunc("GET /ms/discounts/plan", h.DiscountsPlan)                  // предпросмотр плана 14:00 (JSON, для блока страницы)
+	mux.HandleFunc("GET /ms/discounts/active", h.DiscountsActive)              // активные пары окна (JSON, для страницы «Сроки»)
+	mux.HandleFunc("POST /ms/dates/update/save", h.StockUpdateSave)            // применить батч сканов
 
 	return mux
 }

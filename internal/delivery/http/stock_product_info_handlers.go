@@ -22,9 +22,9 @@ import (
 
 // ProductInfoSupplier — поставщик товара в мини-окне.
 type ProductInfoSupplier struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	PriceKop int64 `json:"price_kop"` // 0 — цена не задана
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	PriceKop int64  `json:"price_kop"` // 0 — цена не задана
 }
 
 // ProductInfoSchedule — вариант заказа пары (товар, поставщик).
