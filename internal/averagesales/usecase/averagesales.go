@@ -43,6 +43,9 @@ type Repository interface {
 	HasMonthlyTurnover(ctx context.Context, productID string) (bool, error)
 	// HasWeeklyTurnover — есть ли у товара хоть одна строка недельного оборота.
 	HasWeeklyTurnover(ctx context.Context, productID string) (bool, error)
+	// ProductsMissingKg — id товаров со строками окна без кг (колонка qty_kg
+	// появилась позже самих строк): дозаполнение перезапросом окна из МС.
+	ProductsMissingKg(ctx context.Context, since time.Time) ([]string, error)
 }
 
 // SalesClient — отчёт прибыльности МС (реализует *client.MSAPIClient;

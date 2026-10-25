@@ -39,7 +39,8 @@ type stubRepo struct {
 	upsW     []averagesales.TurnoverRow
 	hasM     bool
 	hasW     bool
-	missingM []string // дыры в месячном окне (селекция дозаливки)
+	missingM  []string // дыры в месячном окне (селекция дозаливки)
+	missingKg []string // строки окна без кг (дозаполнение qty_kg)
 	missingW []string // дыры в недельном окне
 	err      error
 
@@ -117,6 +118,12 @@ func (r *stubRepo) HasMonthlyTurnover(_ context.Context, _ string) (bool, error)
 
 func (r *stubRepo) HasWeeklyTurnover(_ context.Context, _ string) (bool, error) {
 	return r.hasW, nil
+}
+
+// ProductsMissingKg — товары со строками окна без кг (дозаполнение после
+// появления колонки qty_kg).
+func (r *stubRepo) ProductsMissingKg(_ context.Context, _ time.Time) ([]string, error) {
+	return r.missingKg, nil
 }
 
 func (r *stubRepo) ProductsMissingMonthlyTurnover(_ context.Context, _ []string) ([]string, error) {

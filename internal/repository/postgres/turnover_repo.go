@@ -242,3 +242,34 @@ func (pg *PGClient) hasTurnover(ctx context.Context, table, productID string) (b
 	}
 	return exists, nil
 }
+
+// ProductsMissingKg — id товаров, у которых в окне (период не раньше since)
+// есть строки БЕЗ кг: так выглядят периоды, записанные до появления колонки
+// qty_kg. Дозаполняется перезапросом окна из МС (BackfillMissing).
+func (pg *PGClient) ProductsMissingKg(ctx context.Context, since time.Time) ([]string, error) {
+	rows, err := pg.Pool.Query(ctx, `
+        SELECT DISTINCT product_id FROM product_monthly_turnover
+        WHERE month_start >= $1::date AND qty_kg IS NULL
+        UNION
+        SELECT DISTINCT product_id FROM product_weekly_turnover
+        WHERE week_start >= $1::date AND qty_kg IS NULL`, since.Format(time.DateOnly))
+	if err != nil {
+		return nil, fmt.Errorf("products missing kg: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]string, 0, 64)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return out, nil
+}
