@@ -20,6 +20,9 @@ type OrderSchedulesRepository interface {
 	// SaveProductOrderSchedules сохраняет набор вариантов: строки с id
 	// обновляются, без id — вставляются, отсутствующие в списке — удаляются.
 	SaveProductOrderSchedules(ctx context.Context, productID string, list []domain.OrderSchedule) error
+	// ListOrderSchedulesByProducts — варианты заказа списка товаров пачками
+	// (срок поставки считается сразу по всему списку, не по товару).
+	ListOrderSchedulesByProducts(ctx context.Context, productIDs []string) ([]domain.OrderSchedule, error)
 }
 
 // ProductSuppliers — поставщики, у которых есть внешний код товара

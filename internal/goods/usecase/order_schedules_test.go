@@ -18,6 +18,8 @@ type stubOrderSchedules struct {
 	listErr      error
 	saveErr      error
 	saveCalls    int
+	// byProducts — варианты для пакетного чтения (срок поставки товара).
+	byProducts []domain.OrderSchedule
 }
 
 func (s *stubOrderSchedules) ListProductOrderSchedules(_ context.Context, _ string) ([]domain.OrderSchedule, error) {
@@ -25,6 +27,10 @@ func (s *stubOrderSchedules) ListProductOrderSchedules(_ context.Context, _ stri
 		return nil, s.listErr
 	}
 	return s.list, nil
+}
+
+func (s *stubOrderSchedules) ListOrderSchedulesByProducts(_ context.Context, _ []string) ([]domain.OrderSchedule, error) {
+	return s.byProducts, nil
 }
 
 func (s *stubOrderSchedules) SaveProductOrderSchedules(_ context.Context, productID string, list []domain.OrderSchedule) error {
