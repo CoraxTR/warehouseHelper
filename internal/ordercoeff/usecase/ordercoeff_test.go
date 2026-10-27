@@ -184,3 +184,7 @@ func TestCoefficientsPassThrough(t *testing.T) {
 		t.Errorf("вызовов Coefficients = %d, want 1", repo.coeffCalls)
 	}
 }
+
+func (r *stubRepo) PeriodsBatch(_ context.Context, _ []string, _ ordercoeff.PeriodType, _ []time.Time) (map[string]map[time.Time]ordercoeff.PeriodCoeff, error) {
+	return nil, nil
+}

@@ -49,11 +49,11 @@ func (s *stubSales) WeeklyTurnover(context.Context, []string, time.Time) ([]aver
 
 // stubCoeffs — коэффициенты периодов (ordercoeff).
 type stubCoeffs struct {
-	values map[string]map[time.Time]int16
+	values map[string]map[time.Time]ordercoeff.PeriodCoeff
 	err    error
 }
 
-func (s *stubCoeffs) CoefficientsBatch(context.Context, []string, ordercoeff.PeriodType, []time.Time) (map[string]map[time.Time]int16, error) {
+func (s *stubCoeffs) PeriodsBatch(context.Context, []string, ordercoeff.PeriodType, []time.Time) (map[string]map[time.Time]ordercoeff.PeriodCoeff, error) {
 	if s.err != nil {
 		return nil, s.err
 	}
@@ -92,8 +92,8 @@ func TestCalendarPage_Week(t *testing.T) {
 			},
 		},
 	}}
-	coeffs := &stubCoeffs{values: map[string]map[time.Time]int16{
-		"p1": {week: -2},
+	coeffs := &stubCoeffs{values: map[string]map[time.Time]ordercoeff.PeriodCoeff{
+		"p1": {week: {ProductID: "p1", PeriodStart: week, Coeff: -2, Discount: 2}},
 	}}
 
 	uc := newCalendarUC(calendarProducts(), sales, coeffs)
