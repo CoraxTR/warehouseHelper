@@ -50,6 +50,15 @@
     <div class="cal-tabs">
         <a href="{{.WeekTabURL}}" {{if eq .Tab "week"}}class="active"{{end}}>Недели</a>
         <a href="{{.MonthTabURL}}" {{if eq .Tab "month"}}class="active"{{end}}>Месяцы</a>
+        <form method="get" action="/goods/calendar" class="cal-range">
+            <input type="hidden" name="tab" value="{{.Tab}}">
+            с <input type="text" name="from" value="{{.FromParam}}" size="10"
+                placeholder="{{if eq .Tab "week"}}2026-09-14{{else}}2026-09{{end}}">
+            по <input type="text" name="to" value="{{.ToParam}}" size="10"
+                placeholder="{{if eq .Tab "week"}}2026-10-26{{else}}2026-10{{end}}">
+            <button type="submit">Показать</button>
+            <a href="/goods/calendar?tab={{.Tab}}">окно</a>
+        </form>
         {{if eq .Tab "month"}}
         <span style="margin-left:16px;">
             {{if .PrevMonthURL}}<a href="{{.PrevMonthURL}}">← {{.MonthParam}}</a>{{end}}

@@ -80,6 +80,8 @@ type CalendarPage struct {
 	PeriodTitles []string
 	Groups       []CalendarGroup
 	MonthParam   string // выбранный месяц (YYYY-MM), только для месячной вкладки
+	FromParam    string // «с» из формы диапазона (YYYY-MM или YYYY-MM-DD)
+	ToParam      string // «по» из формы диапазона
 	PrevMonthURL string
 	NextMonthURL string
 	NextDisabled bool
@@ -90,7 +92,7 @@ type CalendarPage struct {
 
 // CalendarPage собирает страницу календаря. tab — week|month (пусто = week),
 // month — YYYY-MM для месячной вкладки (пусто = текущий месяц).
-func (uc *GoodsUseCase) CalendarPage(ctx context.Context, tab, month string) (*CalendarPage, error) {
+func (uc *GoodsUseCase) CalendarPage(ctx context.Context, tab, month, from, to string) (*CalendarPage, error) {
 	done := metrics.Track(trackPkg, "CalendarPage")
 	defer done()
 
@@ -125,9 +127,17 @@ func (uc *GoodsUseCase) CalendarPage(ctx context.Context, tab, month string) (*C
 		ids[i] = v.ID
 	}
 
+	page.FromParam, page.ToParam = from, to
+
 	data, err := uc.calendarData(ctx, tab, month, ids, page)
 	if err != nil {
 		return nil, err
+	}
+
+	data, err = uc.extendRange(ctx, tab, from, to, ids, data)
+	if err != nil {
+		page.Error = err.Error()
+		return page, nil
 	}
 
 	for _, p := range data.periods {

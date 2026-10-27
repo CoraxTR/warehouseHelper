@@ -98,7 +98,7 @@ func TestCalendarPage_Week(t *testing.T) {
 
 	uc := newCalendarUC(calendarProducts(), sales, coeffs)
 
-	page, err := uc.CalendarPage(context.Background(), TabWeek, "")
+	page, err := uc.CalendarPage(context.Background(), TabWeek, "", "", "")
 	if err != nil {
 		t.Fatalf("CalendarPage: %v", err)
 	}
@@ -160,7 +160,7 @@ func TestCalendarPage_MonthCurrent(t *testing.T) {
 	}
 	uc := newCalendarUC(calendarProducts(), sales, &stubCoeffs{})
 
-	page, err := uc.CalendarPage(context.Background(), TabMonth, "")
+	page, err := uc.CalendarPage(context.Background(), TabMonth, "", "", "")
 	if err != nil {
 		t.Fatalf("CalendarPage: %v", err)
 	}
@@ -213,7 +213,7 @@ func TestCalendarPage_MonthHistory(t *testing.T) {
 	}}
 	uc := newCalendarUC(calendarProducts(), sales, &stubCoeffs{})
 
-	page, err := uc.CalendarPage(context.Background(), TabMonth, "2026-07")
+	page, err := uc.CalendarPage(context.Background(), TabMonth, "2026-07", "", "")
 	if err != nil {
 		t.Fatalf("CalendarPage: %v", err)
 	}
@@ -255,7 +255,7 @@ func TestCalendarPage_MonthHistory(t *testing.T) {
 func TestCalendarPage_NotWired(t *testing.T) {
 	uc := NewGoodsUseCase(nil, nil, calendarProducts(), nil)
 
-	if _, err := uc.CalendarPage(context.Background(), TabWeek, ""); err == nil {
+	if _, err := uc.CalendarPage(context.Background(), TabWeek, "", "", ""); err == nil {
 		t.Fatal("CalendarPage без данных продаж = nil, want ошибку")
 	}
 }
@@ -266,7 +266,7 @@ func TestCalendarPage_EmptyWeekTab(t *testing.T) {
 	}}
 	uc := newCalendarUC(repo, &stubSales{}, &stubCoeffs{})
 
-	page, err := uc.CalendarPage(context.Background(), TabWeek, "")
+	page, err := uc.CalendarPage(context.Background(), TabWeek, "", "", "")
 	if err != nil {
 		t.Fatalf("CalendarPage: %v", err)
 	}
@@ -279,7 +279,7 @@ func TestCalendarPage_DataError(t *testing.T) {
 	broken := errors.New("нет связи")
 	uc := newCalendarUC(calendarProducts(), &stubSales{err: broken}, &stubCoeffs{})
 
-	if _, err := uc.CalendarPage(context.Background(), TabWeek, ""); err == nil {
+	if _, err := uc.CalendarPage(context.Background(), TabWeek, "", "", ""); err == nil {
 		t.Fatal("ошибка данных проглочена")
 	}
 }
