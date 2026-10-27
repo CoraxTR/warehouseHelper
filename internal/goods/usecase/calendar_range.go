@@ -2,8 +2,9 @@ package usecase
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"sort"
+	"slices"
 	"time"
 
 	"warehouseHelper/internal/averagesales"
@@ -19,11 +20,11 @@ type calendarRange struct {
 // parseRange читает «с»/«по» из формы. Пустые значения — диапазона нет.
 func parseRange(tab, from, to string, now time.Time) (*calendarRange, error) {
 	if from == "" && to == "" {
-		return nil, nil
+		return nil, errNoRange
 	}
 	layout := "2006-01"
 	if tab == TabWeek {
-		layout = "2006-01-02"
+		layout = time.DateOnly
 	}
 	parse := func(v string) (time.Time, error) {
 		if v == "" {
@@ -45,9 +46,9 @@ func parseRange(tab, from, to string, now time.Time) (*calendarRange, error) {
 	if end.IsZero() {
 		end = now
 	}
-	start, end = normalizePeriod(tab, start, now), normalizePeriod(tab, end, now)
+	start, end = normalizePeriod(tab, start), normalizePeriod(tab, end)
 	if end.Before(start) {
-		return nil, fmt.Errorf("конец диапазона раньше начала")
+		return nil, errors.New("конец диапазона раньше начала")
 	}
 	return &calendarRange{from: start, to: end}, nil
 }
@@ -62,7 +63,7 @@ func calendarFloor(tab string, now time.Time) time.Time {
 }
 
 // normalizePeriod приводит дату к началу недели (пн) или месяца.
-func normalizePeriod(tab string, t time.Time, now time.Time) time.Time {
+func normalizePeriod(tab string, t time.Time) time.Time {
 	if tab != TabWeek {
 		return time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, t.Location())
 	}
@@ -99,7 +100,7 @@ func mergePeriods(base, extra []time.Time) []time.Time {
 			out = append(out, p)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Before(out[j]) })
+	slices.SortFunc(out, func(a, b time.Time) int { return a.Compare(b) })
 	return out
 }
 
@@ -107,7 +108,10 @@ func mergePeriods(base, extra []time.Time) []time.Time {
 // периоды, история берётся чтением оборотов (в МС не ходим).
 func (uc *GoodsUseCase) extendRange(ctx context.Context, tab, from, to string, ids []string, data *calendarData) (*calendarData, error) {
 	r, err := parseRange(tab, from, to, uc.now())
-	if err != nil || r == nil {
+	if errors.Is(err, errNoRange) {
+		return data, nil
+	}
+	if err != nil {
 		return data, err
 	}
 	extra := periodsBetween(tab, r.from, r.to)
@@ -150,6 +154,9 @@ func (uc *GoodsUseCase) mergeTurnover(ctx context.Context, tab string, ids []str
 	}
 	return nil
 }
+
+// errNoRange — «с»/«по» не заполнены: показываем действующее окно.
+var errNoRange = errors.New("диапазон не задан")
 
 // calendarMaxCells — предел столбцов на страницу (защита от «2014..сегодня» разом).
 const calendarMaxCells = 200

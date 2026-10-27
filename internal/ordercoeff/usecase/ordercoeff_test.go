@@ -186,5 +186,5 @@ func TestCoefficientsPassThrough(t *testing.T) {
 }
 
 func (r *stubRepo) PeriodsBatch(_ context.Context, _ []string, _ ordercoeff.PeriodType, _ []time.Time) (map[string]map[time.Time]ordercoeff.PeriodCoeff, error) {
-	return nil, nil
+	return map[string]map[time.Time]ordercoeff.PeriodCoeff{}, nil
 }

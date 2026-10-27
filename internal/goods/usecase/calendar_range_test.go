@@ -14,10 +14,10 @@ func TestParseRange_Month(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseRange: %v", err)
 	}
-	if got := r.from.Format("2006-01-02"); got != "2025-01-01" {
+	if got := r.from.Format(time.DateOnly); got != "2025-01-01" {
 		t.Errorf("from = %s", got)
 	}
-	if got := r.to.Format("2006-01-02"); got != "2026-03-01" {
+	if got := r.to.Format(time.DateOnly); got != "2026-03-01" {
 		t.Errorf("to = %s", got)
 	}
 }
@@ -29,10 +29,10 @@ func TestParseRange_WeekSnapsToMonday(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseRange: %v", err)
 	}
-	if got := r.from.Format("2006-01-02"); got != "2026-09-14" {
+	if got := r.from.Format(time.DateOnly); got != "2026-09-14" {
 		t.Errorf("from = %s, want 2026-09-14 (понедельник)", got)
 	}
-	if got := r.to.Format("2006-01-02"); got != "2026-09-28" {
+	if got := r.to.Format(time.DateOnly); got != "2026-09-28" {
 		t.Errorf("to = %s, want 2026-09-28 (понедельник)", got)
 	}
 }
@@ -45,7 +45,7 @@ func TestParseRange_EmptyFromUsesFloor(t *testing.T) {
 		t.Fatalf("parseRange: %v", err)
 	}
 	if r.from.Year() != 2014 {
-		t.Errorf("from = %s, want 2014", r.from.Format("2006-01-02"))
+		t.Errorf("from = %s, want 2014", r.from.Format(time.DateOnly))
 	}
 }
 
