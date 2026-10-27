@@ -465,6 +465,13 @@ td.cell-pair:hover { outline: 1px solid #6E6E7A; outline-offset: -1px; }
 td.cell-empty { background: #121216; color: #66645C; }
 td.cell-discount { text-align: center; white-space: nowrap; }
 
+/* Ручной запрет (скидка 0 %): лот-источник и все более дальние сроки товара */
+td.cell-pair.ban-lot { box-shadow: inset 0 0 0 2px #C0506B; }
+td.col-name .ban-badge { margin-left: 6px; padding: 1px 6px; border-radius: 8px; background: #4A2430; color: #EBBCCB; border: 1px solid #C0506B; font-size: 11px; }
+td.col-name .ban-clear { margin-left: 4px; padding: 1px 6px; font-size: 11px; }
+.ban-panel { margin: 8px 12px; padding: 8px 12px; border: 1px solid #C0506B; border-radius: 6px; background: #2A1720; color: #EBBCCB; font-size: 13px; }
+.ban-panel__item { display: inline-block; margin-right: 10px; cursor: pointer; text-decoration: underline; }
+
 /* Поиск позиции по названию — только «Сроки» (на шорт-листе поиска нет) */
 .dates-search { position: relative; max-width: 560px; margin: 0 0 12px; }
 .dates-search input[type="text"] { width: 100%; font-size: 15px; }
@@ -1168,6 +1175,9 @@ html.day td.cell-pair.only-surplus { background: #F9C6D8; color: #8E2F4E; }
 html.day td.cell-pair.expires-today { background: #E7F1FB; color: #0969DA; }
 html.day td.cell-pair:hover { outline: 1px solid #8C959F; }
 html.day td.cell-empty { background: #F3F5F7; color: #6E7781; }
+html.day td.cell-pair.ban-lot { box-shadow: inset 0 0 0 2px #C0396B; }
+html.day td.col-name .ban-badge { background: #FBE3EA; color: #8E2F4E; border-color: #C0396B; }
+html.day .ban-panel { background: #FBE3EA; color: #8E2F4E; border-color: #C0396B; }
 html.day .dates-search .hits { background: #FFFFFF; border: 1px solid #C6CDD5; box-shadow: 0 10px 30px rgba(27, 31, 36, 0.16); }
 html.day .dates-search .hit + .hit { border-top: 1px solid #E4E9EE; }
 html.day .dates-search .hit.sel { background: #DDE3E9; box-shadow: inset 3px 0 0 #9A6700; }

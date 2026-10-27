@@ -42,6 +42,8 @@
     </div>
     {{end}}
 
+    <div id="ban-panel" class="ban-panel hidden"></div>
+
     <table id="stock-table">
         <thead>
             <tr id="head-row"></tr>
@@ -86,6 +88,7 @@
             STOCK.shortList = (document.body.getAttribute('data-short') === '1');
             STOCK.defaultCollapsed = !STOCK.shortList;
             document.getElementById('stock-body').addEventListener('click', onBodyClick);
+            document.getElementById('ban-panel').addEventListener('click', onBanPanelClick);
             initSearch(); // на шорт-листе поля поиска нет — функция молча выходит
             var overlay = document.getElementById('modal-overlay');
             overlay.addEventListener('click', function (ev) {
@@ -346,6 +349,7 @@
             }
             document.getElementById('stock-body').innerHTML = html;
             renderDataCount();
+            renderBanPanel(items);
             applyPendingFocus(); // строка, найденная поиском: фокус
             blinkReapply();     // мигание продолжается после пересборки tbody
         }
@@ -398,16 +402,18 @@
 
         function productRow(p, n) {
             var lots = visibleLots(p);
+            var ban = banSource(lots);
             var html = '<tr data-row-product="' + esc(p.id) + '">';
             html += '<td class="col-toggle"></td>';
             // tabindex="-1" — строка может получить фокус (поиск), в обход Tab.
-            html += '<td class="col-name" tabindex="-1" data-role="name" data-product="' + esc(p.id) + '">' + esc(p.name) + '</td>';
+            html += '<td class="col-name" tabindex="-1" data-role="name" data-product="' + esc(p.id) + '">' + esc(p.name) + banBadge(p.id, ban) + '</td>';
             for (var k = 0; k < n; k++) {
                 if (k < lots.length) {
                     var lot = lots[k];
                     var tone = onlySurplus(lot) ? ' only-surplus' : (hasDiscount(lot) ? ' has-discount' : '');
                     var blue = expiresToday(lot.best_before) ? ' expires-today' : '';
-                    html += '<td class="cell-pair' + tone + blue + '" data-lot="1" data-product="' + esc(p.id) + '" data-bb="' + lot.best_before + '" data-field="qty">' + lot.qty + '</td>';
+                    var banned = (ban && String(lot.best_before) >= String(ban.best_before)) ? ' ban-lot' : '';
+                    html += '<td class="cell-pair' + tone + blue + banned + '" data-lot="1" data-product="' + esc(p.id) + '" data-bb="' + lot.best_before + '" data-field="qty">' + lot.qty + '</td>';
                     html += '<td class="cell-pair' + tone + blue + '" data-lot="1" data-product="' + esc(p.id) + '" data-bb="' + lot.best_before + '" data-field="date">' + fmtDate(lot.best_before) + '</td>';
                 } else {
                     html += '<td class="cell-empty"></td><td class="cell-empty"></td>';
@@ -417,6 +423,37 @@
             html += '<td class="cell-discount">' + fmtDiscount(rightDiscount(p, lots, 'telegram')) + '</td>';
             html += '</tr>';
             return html;
+        }
+
+        // Ручной запрет: 0 в ручной скидке (сайт или ТГ) значит «скидки нет» для
+        // этого срока И всех более дальних сроков товара. Каскад считает сервер,
+        // здесь только показываем источник и даём снять.
+        function isManualZero(lot) {
+            return lot.discount_general_manual === 0 || lot.discount_telegram_manual === 0;
+        }
+
+        // banSource — лот-источник: самый близкий срок с ручным нулём.
+        function banSource(lots) {
+            var src = null;
+            for (var i = 0; i < lots.length; i++) {
+                if (!isManualZero(lots[i])) {
+                    continue;
+                }
+                if (!src || String(lots[i].best_before) < String(src.best_before)) {
+                    src = lots[i];
+                }
+            }
+            return src;
+        }
+
+        // banChannels — какие каналы запрещены у лота.
+        function banChannels(lot) {
+            var g = lot.discount_general_manual === 0;
+            var t = lot.discount_telegram_manual === 0;
+            if (g && t) {
+                return 'сайт и ТГ';
+            }
+            return g ? 'сайт' : 'ТГ';
         }
 
         // Срок годности заканчивается сегодня (локальная дата склада) — подсветить «на заморозку».
@@ -1002,12 +1039,28 @@
                 esc(name.slice(idx + q.length));
         }
 
+        // banBadge — плашка «запрет» и кнопка снятия в ячейке наименования.
+        function banBadge(productID, ban) {
+            if (!ban) {
+                return '';
+            }
+            var title = 'ручная скидка 0 % (' + banChannels(ban) + ') с ' + fmtDate(ban.best_before) +
+                ': блокирует этот срок и все более дальние сроки товара';
+            return '<span class="ban-badge" title="' + esc(title) + '">запрет</span>' +
+                '<button type="button" class="ban-clear" data-ban="1" data-product="' + esc(productID) +
+                '" data-bb="' + ban.best_before + '" title="снять ручной запрет">снять</button>';
+        }
+
         // --- клики по ячейкам ---
 
         function onBodyClick(ev) {
             var el = ev.target || ev.srcElement;
             while (el && el !== this && el.nodeType === 1) {
                 if (el.getAttribute) {
+                    if (el.getAttribute('data-ban') === '1') {
+                        clearBan(el.getAttribute('data-product'), el.getAttribute('data-bb'));
+                        return;
+                    }
                     var role = el.getAttribute('data-role');
                     if (role === 'name') {
                         openNameModal(el.getAttribute('data-product'));
@@ -1050,6 +1103,75 @@
             MODAL.productID = null;
             MODAL.bb = null;
             UPDATE_CTX = null;
+        }
+
+        // clearBan — снять ручной ноль; остальные ручные значения лота не трогаем.
+        function clearBan(productID, bb) {
+            var p = findProduct(productID);
+            if (!p) {
+                return;
+            }
+            var lot = findLot(p, bb);
+            if (!lot) {
+                return;
+            }
+            var body = JSON.stringify({
+                product_id: productID,
+                best_before: String(bb).slice(0, 10),
+                discount_general_manual: (lot.discount_general_manual === 0) ? null : lot.discount_general_manual,
+                discount_telegram_manual: (lot.discount_telegram_manual === 0) ? null : lot.discount_telegram_manual
+            });
+            var xhr = new XMLHttpRequest();
+            xhr.open('POST', '/ms/dates/discount', true);
+            xhr.setRequestHeader('Content-Type', 'application/json');
+            xhr.onreadystatechange = function () {
+                if (xhr.readyState !== 4) {
+                    return;
+                }
+                if (xhr.status === 204) {
+                    loadActiveLots();
+                } else {
+                    alert('Не удалось снять запрет (HTTP ' + xhr.status + ')');
+                }
+            };
+            xhr.send(body);
+        }
+
+        // renderBanPanel — сводка «на ком стоит запрет»: клик по имени открывает карточку.
+        function onBanPanelClick(ev) {
+            var el = ev.target || ev.srcElement;
+            if (!el || !el.getAttribute) {
+                return;
+            }
+            var id = el.getAttribute('data-ban-focus');
+            if (id) {
+                openNameModal(id);
+            }
+        }
+
+        function renderBanPanel(items) {
+            var el = document.getElementById('ban-panel');
+            if (!el) {
+                return;
+            }
+            var names = '';
+            var count = 0;
+            for (var i = 0; i < items.length; i++) {
+                var ban = banSource(visibleLots(items[i]));
+                if (!ban) {
+                    continue;
+                }
+                count++;
+                names += '<span class="ban-panel__item" data-ban-focus="' + esc(items[i].id) + '" title="' +
+                    esc(banChannels(ban) + ', с ' + fmtDate(ban.best_before)) + '">' + esc(items[i].name) + '</span>';
+            }
+            if (!count) {
+                el.className = 'ban-panel hidden';
+                el.innerHTML = '';
+                return;
+            }
+            el.className = 'ban-panel';
+            el.innerHTML = 'Запрет (скидка 0 %): ' + count + ' — ' + names;
         }
 
         // Клик по количеству: факт (текущая скидка) / Ставим (ручная).
