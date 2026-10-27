@@ -38,14 +38,15 @@ func (pg *PGClient) upsertTurnover(ctx context.Context, table, periodColumn stri
 	}()
 
 	stmt := fmt.Sprintf(`
-        INSERT INTO %s (product_id, %s, qty)
-        VALUES ($1, $2, $3)
-        ON CONFLICT (product_id, %s) DO UPDATE SET qty = EXCLUDED.qty`,
+        INSERT INTO %s (product_id, %s, qty, qty_kg)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (product_id, %s) DO UPDATE
+        SET qty = EXCLUDED.qty, qty_kg = EXCLUDED.qty_kg`,
 		table, periodColumn, periodColumn,
 	)
 
 	for _, r := range rows {
-		if _, err := tx.Exec(ctx, stmt, r.ProductID, r.PeriodStart, r.Qty); err != nil {
+		if _, err := tx.Exec(ctx, stmt, r.ProductID, r.PeriodStart, r.Qty, r.Kg); err != nil {
 			return fmt.Errorf("upsert %s: %w", table, err)
 		}
 	}
@@ -71,7 +72,7 @@ func (pg *PGClient) LastWeeklyTurnover(ctx context.Context, productID string, n 
 // lastTurnover — общее чтение окна оборотов товара.
 func (pg *PGClient) lastTurnover(ctx context.Context, table, periodColumn, productID string, n int) ([]averagesales.TurnoverRow, error) {
 	rows, err := pg.Pool.Query(ctx, fmt.Sprintf(`
-        SELECT product_id, %s, qty
+        SELECT product_id, %s, qty, qty_kg
         FROM %s
         WHERE product_id = $1
         ORDER BY %s DESC
@@ -86,7 +87,7 @@ func (pg *PGClient) lastTurnover(ctx context.Context, table, periodColumn, produ
 	out := make([]averagesales.TurnoverRow, 0, n)
 	for rows.Next() {
 		var r averagesales.TurnoverRow
-		if err := rows.Scan(&r.ProductID, &r.PeriodStart, &r.Qty); err != nil {
+		if err := rows.Scan(&r.ProductID, &r.PeriodStart, &r.Qty, &r.Kg); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
@@ -119,7 +120,7 @@ func (pg *PGClient) turnoverWindow(ctx context.Context, table, periodColumn stri
 // turnoverWindowBatch — один запрос окна по пачке товаров.
 func (pg *PGClient) turnoverWindowBatch(ctx context.Context, table, periodColumn string, productIDs []string, since time.Time) ([]averagesales.TurnoverRow, error) {
 	rows, err := pg.Pool.Query(ctx, fmt.Sprintf(`
-        SELECT product_id, %s, qty
+        SELECT product_id, %s, qty, qty_kg
         FROM %s
         WHERE product_id = ANY($1::text[]) AND %s >= $2::date
         ORDER BY product_id, %s DESC`, periodColumn, table, periodColumn, periodColumn),
@@ -133,7 +134,7 @@ func (pg *PGClient) turnoverWindowBatch(ctx context.Context, table, periodColumn
 	out := make([]averagesales.TurnoverRow, 0, len(productIDs))
 	for rows.Next() {
 		var r averagesales.TurnoverRow
-		if err := rows.Scan(&r.ProductID, &r.PeriodStart, &r.Qty); err != nil {
+		if err := rows.Scan(&r.ProductID, &r.PeriodStart, &r.Qty, &r.Kg); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
@@ -240,4 +241,35 @@ func (pg *PGClient) hasTurnover(ctx context.Context, table, productID string) (b
 		return false, err
 	}
 	return exists, nil
+}
+
+// ProductsMissingKg — id товаров, у которых в окне (период не раньше since)
+// есть строки БЕЗ кг: так выглядят периоды, записанные до появления колонки
+// qty_kg. Дозаполняется перезапросом окна из МС (BackfillMissing).
+func (pg *PGClient) ProductsMissingKg(ctx context.Context, since time.Time) ([]string, error) {
+	rows, err := pg.Pool.Query(ctx, `
+        SELECT DISTINCT product_id FROM product_monthly_turnover
+        WHERE month_start >= $1::date AND qty_kg IS NULL
+        UNION
+        SELECT DISTINCT product_id FROM product_weekly_turnover
+        WHERE week_start >= $1::date AND qty_kg IS NULL`, since.Format(time.DateOnly))
+	if err != nil {
+		return nil, fmt.Errorf("products missing kg: %w", err)
+	}
+	defer rows.Close()
+
+	out := make([]string, 0, 64)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return out, nil
 }

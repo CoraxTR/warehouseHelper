@@ -146,3 +146,54 @@ func (pg *PGClient) Coefficients(ctx context.Context, productID string, periodTy
 
 	return out, nil
 }
+
+// coeffReadBatch — размер пачки id при пакетном чтении коэффициентов
+// (календарь продаж: один запрос на пачку товаров вместо запроса на товар).
+const coeffReadBatch = 500
+
+// CoefficientsBatch — коэффициенты по списку товаров и интервалам:
+// map[productID]map[periodStart]coeff. Нет строки — нет значения.
+func (pg *PGClient) CoefficientsBatch(ctx context.Context, productIDs []string, periodType ordercoeff.PeriodType, intervals []time.Time) (map[string]map[time.Time]int16, error) {
+	out := make(map[string]map[time.Time]int16, len(productIDs))
+	if len(intervals) == 0 || len(productIDs) == 0 {
+		return out, nil
+	}
+
+	starts := make([]string, len(intervals))
+	for i, s := range intervals {
+		starts[i] = s.Format(time.DateOnly)
+	}
+
+	for _, batch := range idBatches(productIDs, coeffReadBatch) {
+		rows, err := pg.Pool.Query(ctx, `
+            SELECT product_id, period_start, coeff
+            FROM product_period_coeff
+            WHERE product_id = ANY($1::text[]) AND period_type = $2 AND period_start = ANY($3::date[])`,
+			batch, periodType, starts,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("coefficients batch: %w", err)
+		}
+
+		for rows.Next() {
+			var productID string
+			var start time.Time
+			var coeff int16
+			if err := rows.Scan(&productID, &start, &coeff); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			if out[productID] == nil {
+				out[productID] = make(map[time.Time]int16, len(intervals))
+			}
+			out[productID][start] = coeff
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		rows.Close()
+	}
+
+	return out, nil
+}

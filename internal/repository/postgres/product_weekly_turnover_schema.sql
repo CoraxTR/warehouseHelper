@@ -12,5 +12,6 @@ CREATE TABLE product_weekly_turnover (
     product_id TEXT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
     week_start DATE NOT NULL,                          -- понедельник недели
     qty        NUMERIC(12, 3) NOT NULL,                -- продажи за неделю, штуки
+    qty_kg     NUMERIC(12, 3),                         -- продажи за неделю, кг (весовые; NULL — штучный)
     PRIMARY KEY (product_id, week_start)
 );

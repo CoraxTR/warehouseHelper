@@ -11,7 +11,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 
 	"log/slog"
@@ -297,8 +296,6 @@ func (h *Handler) wikiSave(w http.ResponseWriter, r *http.Request) {
 			}
 			page.Contacts = append(page.Contacts, contact)
 		}
-		page.OrderDays = formDays(r.Form["order_days"])
-		page.DeliveryDays = formDays(r.Form["delivery_days"])
 		page.Products = r.Form["products"]
 	} else {
 		page.AverageWeight = r.FormValue("average_weight")
@@ -353,21 +350,6 @@ func (h *Handler) wikiSave(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.Redirect(w, r, "/wiki/page?title="+url.QueryEscape(page.Title), http.StatusSeeOther)
-}
-
-// formDays преобразует значения полей формы (мультивыбор дней недели) в []int.
-// Нечисловые значения пропускаются — валидацию диапазона делает usecase.
-func formDays(values []string) []int {
-	days := make([]int, 0, len(values))
-	for _, v := range values {
-		d, err := strconv.Atoi(strings.TrimSpace(v))
-		if err != nil {
-			continue
-		}
-		days = append(days, d)
-	}
-
-	return days
 }
 
 // WikiDelete — POST: удаление страницы по заголовку из формы.

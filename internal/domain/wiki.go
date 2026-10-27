@@ -41,8 +41,6 @@ type WikiPage struct {
 	Content       string    // содержимое страницы
 	Tags          []string  // теги
 	Contacts      []Contact // контакты
-	OrderDays     []int     // дни приёма заказов (1..7, ISO)
-	DeliveryDays  []int     // дни доставки (1..7, ISO)
 	AverageWeight string    // средний вес заказа
 	Suppliers     []string  // поставщики (для страницы товара)
 	Products      []string  // продукты (для страницы поставщика)

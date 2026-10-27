@@ -19,10 +19,17 @@ type stubBarcodeRepo struct {
 	saved   []string // supplierID:externalCode:productID
 	deleted []string
 	err     error
+	// productSuppliers — поставщики с кодом товара (обратный поиск).
+	productSuppliers []string
+	productErr       error
 }
 
 func (s *stubBarcodeRepo) LoadSupplierBarcodes(context.Context, string) ([]receiving.BarcodeRef, error) {
 	return s.list, s.err
+}
+
+func (s *stubBarcodeRepo) LoadProductSupplierIDs(context.Context, string) ([]string, error) {
+	return s.productSuppliers, s.productErr
 }
 
 func (s *stubBarcodeRepo) GetSupplierBarcode(_ context.Context, _, _ string) (*receiving.BarcodeRef, error) {
@@ -120,6 +127,23 @@ func newEditor(repo *stubBarcodeRepo, suppliers *stubSupplierReader, catalog *st
 	}
 
 	return NewBarcodeEditor(repo, suppliers, catalog, wiki)
+}
+
+func TestBarcodeEditor_SuppliersByProduct(t *testing.T) {
+	repo := &stubBarcodeRepo{productSuppliers: []string{"sup-1", "sup-2"}}
+	uc := newEditor(repo, nil, nil, nil)
+
+	got, err := uc.SuppliersByProduct(context.Background(), testProductID)
+	if err != nil {
+		t.Fatalf("SuppliersByProduct: %v", err)
+	}
+	if len(got) != 2 || got[0] != "sup-1" || got[1] != "sup-2" {
+		t.Fatalf("SuppliersByProduct = %v, want [sup-1 sup-2]", got)
+	}
+
+	if _, err := uc.SuppliersByProduct(context.Background(), "  "); err == nil {
+		t.Fatal("SuppliersByProduct без товара = nil, want ошибку")
+	}
 }
 
 // --- тесты Add ---

@@ -346,3 +346,32 @@ func TestBackfill_StopWaitsForGoroutines(t *testing.T) {
 
 	uc.Stop() // повторный вызов безопасен (идемпотентность для di.Close)
 }
+
+// TestBackfillMissing_FillsKg — строки окна, записанные до появления колонки
+// qty_kg, дозаполняются перезапросом окна из МС: кг пишется рядом со штуками.
+func TestBackfillMissing_FillsKg(t *testing.T) {
+	weight := 0.5
+	sales := &stubSales{rowsFn: rowsEverywhere}
+	repo := &stubRepo{missingKg: []string{"p1"}}
+	products := &stubProducts{byID: map[string]averagesales.TurnoverProduct{
+		"p1": {ID: "p1", UOM: "кг", AverageWeight: &weight},
+	}}
+	uc := NewUseCase(repo, sales, products)
+	uc.now = func() time.Time { return fixedNow }
+
+	if err := uc.backfillMissing(context.Background()); err != nil {
+		t.Fatalf("backfillMissing() error: %v", err)
+	}
+
+	if len(repo.upsM) == 0 {
+		t.Fatal("окно товара со строками без кг не перезапрошено")
+	}
+	for _, r := range repo.upsM {
+		if r.Kg == nil {
+			t.Fatalf("кг не записан для периода %s", r.PeriodStart.Format(time.DateOnly))
+		}
+		if r.ProductID != "p1" {
+			t.Fatalf("в апсёрт попал чужой товар %q", r.ProductID)
+		}
+	}
+}

@@ -11,7 +11,6 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"time"
 
 	"log/slog"
 	"warehouseHelper/internal/domain"
@@ -25,13 +24,6 @@ type SuppliersListData struct {
 	Error     string
 }
 
-// DayCheckbox — чекбокс дня недели в форме поставщика.
-type DayCheckbox struct {
-	Day     int16 // 1..7
-	Label   string
-	Checked bool
-}
-
 // SupplierFormData — данные формы создания/редактирования поставщика.
 // Текстовые поля подготовлены для показа (не копейки/массивы, а строки),
 // чтобы шаблон оставался глупым.
@@ -40,18 +32,16 @@ type SupplierFormData struct {
 	IsEdit   bool
 	RawID    string // создание: исходная ссылка пользователя (uuid извлекается при сохранении)
 
-	DecodeRulesText      string
-	BoxDecodeRulesText   string
-	OrderDays            []DayCheckbox
-	DeliveryDays         []DayCheckbox
-	SpecialOrderDays     []DayCheckbox
-	SpecialDeliveryDays  []DayCheckbox
-	DelayDaysText        string
-	SpecialDelayDaysText string
-	MinOrderAmountText   string
-	OrderCutoffTimeText  string // "HH:MM" или пусто
+	DecodeRulesText    string
+	BoxDecodeRulesText string
+	MinOrderAmountText string
 
 	Barcodes []receiving.BarcodeRef // виджет «Внешние коды» (приёмка)
+
+	// Prices — цены товаров поставщика (виджет «Цены товаров»): пары
+	// (товар, цена). Строка модели несёт рубли строкой — шаблон глупый.
+	PriceRows    []SupplierPriceRow
+	ExpandPrices bool
 
 	// ExpandBarcodes — раскрыть виджет кодов сразу при загрузке (?barcodes=1):
 	// после батчевого добавления оператор возвращается ВНУТРЬ виджета, а не
@@ -121,6 +111,160 @@ func (h *Handler) SupplierEdit(w http.ResponseWriter, r *http.Request) {
 	d.Barcodes = h.loadSupplierBarcodes(r, s.ID)
 	d.Message = r.URL.Query().Get("msg")
 	d.ExpandBarcodes = r.URL.Query().Get("barcodes") == "1"
+	d.PriceRows = h.loadSupplierPrices(r, s.ID, d.Barcodes)
+	d.ExpandPrices = r.URL.Query().Get("prices") == "1"
+
+	h.renderSupplierForm(w, d)
+}
+
+// SupplierPriceRow — строка виджета «Цены товаров» (рубли строкой, чтобы
+// шаблон не форматировал копейки).
+type SupplierPriceRow struct {
+	ProductID   string
+	ProductName string
+	PriceText   string
+}
+
+// loadSupplierPrices собирает строки виджета «Цены товаров»: товары поставщика
+// (по внешним кодам — то, что он у нас реально поставляет) плюс уже заведённые
+// цены, которых в кодах нет. Ошибка чтения цен не ломает форму.
+func (h *Handler) loadSupplierPrices(r *http.Request, supplierID string, barcodes []receiving.BarcodeRef) []SupplierPriceRow {
+	prices, err := h.msUC.SupplierPrices(r.Context(), supplierID)
+	if err != nil {
+		slog.Info("list supplier prices", "supplier_id", supplierID, "err", err)
+	}
+
+	priceByProduct := make(map[string]int64, len(prices))
+	nameByProduct := make(map[string]string, len(prices))
+	for _, p := range prices {
+		priceByProduct[p.ProductID] = p.Price
+		nameByProduct[p.ProductID] = p.ProductName
+	}
+
+	order := make([]string, 0, len(barcodes)+len(prices))
+	seen := make(map[string]struct{}, len(barcodes)+len(prices))
+	for _, b := range barcodes {
+		if _, ok := seen[b.ProductID]; ok {
+			continue
+		}
+		seen[b.ProductID] = struct{}{}
+		order = append(order, b.ProductID)
+		if b.ProductName != "" {
+			nameByProduct[b.ProductID] = b.ProductName
+		}
+	}
+	for _, p := range prices {
+		if _, ok := seen[p.ProductID]; ok {
+			continue
+		}
+		seen[p.ProductID] = struct{}{}
+		order = append(order, p.ProductID)
+	}
+
+	rows := make([]SupplierPriceRow, 0, len(order))
+	for _, productID := range order {
+		name := nameByProduct[productID]
+		if name == "" {
+			name = productID
+		}
+
+		var priceText string
+		if price, ok := priceByProduct[productID]; ok && price > 0 {
+			priceText = kopecksToRubles(price)
+		}
+		rows = append(rows, SupplierPriceRow{
+			ProductID:   productID,
+			ProductName: name,
+			PriceText:   priceText,
+		})
+	}
+
+	return rows
+}
+
+// SupplierPricesSave — POST /ms/suppliers/prices/save: батч цен поставщика.
+// Пустое поле = цена не задана (строка удаляется), иначе пишется сумма.
+// Форма после сохранения рендерится заново (без редиректа: адрес возврата
+// собирался бы из данных формы — gosec G710, open redirect).
+func (h *Handler) SupplierPricesSave(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "не удалось разобрать форму", http.StatusBadRequest)
+		return
+	}
+
+	supplierID := strings.TrimSpace(r.FormValue("supplier_id"))
+	productIDs := r.Form["product_id"]
+	prices := r.Form["price"]
+	if supplierID == "" {
+		http.Redirect(w, r, "/ms/suppliers", http.StatusSeeOther)
+		return
+	}
+
+	msg, saveErr := h.saveSupplierPrices(r, supplierID, productIDs, prices)
+	if saveErr != nil {
+		slog.Info("supplier prices save", "supplier_id", supplierID, "err", saveErr)
+		h.renderSupplierPrices(w, r, supplierID, "", saveErr.Error())
+		return
+	}
+
+	h.renderSupplierPrices(w, r, supplierID, msg, "")
+}
+
+// saveSupplierPrices записывает цены формы: 0 = цена не задана (строка снимается).
+func (h *Handler) saveSupplierPrices(r *http.Request, supplierID string, productIDs, prices []string) (string, error) {
+	saved, cleared := 0, 0
+	for i, productID := range productIDs {
+		productID = strings.TrimSpace(productID)
+		if productID == "" {
+			continue
+		}
+
+		var raw string
+		if i < len(prices) {
+			raw = prices[i]
+		}
+
+		kop, err := parseRublesToKopecks(raw)
+		if err != nil {
+			return "", fmt.Errorf("цена: %w", err)
+		}
+
+		var amount int64
+		if kop != nil {
+			amount = *kop
+		}
+		if err := h.msUC.SetSupplierPrice(r.Context(), supplierID, productID, amount); err != nil {
+			return "", err
+		}
+
+		if amount > 0 {
+			saved++
+		} else {
+			cleared++
+		}
+	}
+
+	if cleared > 0 {
+		return fmt.Sprintf("цены сохранены: %d, снято: %d", saved, cleared), nil
+	}
+
+	return fmt.Sprintf("цены сохранены: %d", saved), nil
+}
+
+// renderSupplierPrices — форма поставщика с сообщением/ошибкой виджета цен.
+func (h *Handler) renderSupplierPrices(w http.ResponseWriter, r *http.Request, supplierID, msg, errMsg string) {
+	s, err := h.msUC.Get(r.Context(), supplierID)
+	if err != nil || s == nil {
+		slog.Info("get supplier for prices", "id", supplierID, "err", err)
+		h.renderSupplierForm(w, buildSupplierFormData(nil, true, "", "не удалось загрузить поставщика"))
+		return
+	}
+
+	d := buildSupplierFormData(s, true, "", errMsg)
+	d.Barcodes = h.loadSupplierBarcodes(r, s.ID)
+	d.PriceRows = h.loadSupplierPrices(r, s.ID, d.Barcodes)
+	d.ExpandPrices = true
+	d.Message = msg
 
 	h.renderSupplierForm(w, d)
 }
@@ -175,35 +319,7 @@ func (h *Handler) SupplierSave(w http.ResponseWriter, r *http.Request) {
 	s.DecodeRules = strings.Split(r.FormValue("decode_rules"), "\n")
 	s.BoxDecodeRules = strings.Split(r.FormValue("box_decode_rules"), "\n")
 
-	if s.OrderDays, err = parseDays(r.Form["order_days"]); err != nil {
-		h.renderSupplierForm(w, buildSupplierFormData(s, isEdit, rawID, err.Error()))
-		return
-	}
-	if s.DeliveryDays, err = parseDays(r.Form["delivery_days"]); err != nil {
-		h.renderSupplierForm(w, buildSupplierFormData(s, isEdit, rawID, err.Error()))
-		return
-	}
-	if s.SpecialOrderDays, err = parseDays(r.Form["special_order_days"]); err != nil {
-		h.renderSupplierForm(w, buildSupplierFormData(s, isEdit, rawID, err.Error()))
-		return
-	}
-	if s.SpecialDeliveryDays, err = parseDays(r.Form["special_delivery_days"]); err != nil {
-		h.renderSupplierForm(w, buildSupplierFormData(s, isEdit, rawID, err.Error()))
-		return
-	}
-	if s.DelayDays, err = parseNullableInt16(r.FormValue("delay_days")); err != nil {
-		h.renderSupplierForm(w, buildSupplierFormData(s, isEdit, rawID, "макс. дней между заказом и доставкой: "+err.Error()))
-		return
-	}
-	if s.SpecialDelayDays, err = parseNullableInt16(r.FormValue("special_delay_days")); err != nil {
-		h.renderSupplierForm(w, buildSupplierFormData(s, isEdit, rawID, "спец. макс. дней: "+err.Error()))
-		return
-	}
 	if s.MinOrderAmount, err = parseRublesToKopecks(r.FormValue("min_order_amount")); err != nil {
-		h.renderSupplierForm(w, buildSupplierFormData(s, isEdit, rawID, err.Error()))
-		return
-	}
-	if s.OrderCutoffTime, err = parseCutoffTime(r.FormValue("order_cutoff_time")); err != nil {
 		h.renderSupplierForm(w, buildSupplierFormData(s, isEdit, rawID, err.Error()))
 		return
 	}
@@ -270,73 +386,11 @@ func buildSupplierFormData(s *domain.Supplier, isEdit bool, rawID, errMsg string
 
 	d.DecodeRulesText = strings.Join(s.DecodeRules, "\n")
 	d.BoxDecodeRulesText = strings.Join(s.BoxDecodeRules, "\n")
-	d.OrderDays = buildDayCheckboxes(s.OrderDays)
-	d.DeliveryDays = buildDayCheckboxes(s.DeliveryDays)
-	d.SpecialOrderDays = buildDayCheckboxes(s.SpecialOrderDays)
-	d.SpecialDeliveryDays = buildDayCheckboxes(s.SpecialDeliveryDays)
-	if s.DelayDays != nil {
-		d.DelayDaysText = strconv.FormatInt(int64(*s.DelayDays), 10)
-	}
-	if s.SpecialDelayDays != nil {
-		d.SpecialDelayDaysText = strconv.FormatInt(int64(*s.SpecialDelayDays), 10)
-	}
 	if s.MinOrderAmount != nil {
 		d.MinOrderAmountText = kopecksToRubles(*s.MinOrderAmount)
 	}
-	if s.OrderCutoffTime != nil {
-		d.OrderCutoffTimeText = s.OrderCutoffTime.Format("15:04")
-	}
 
 	return d
-}
-
-// dayLabels — подписи дней недели, 1=Пн ... 7=Вс.
-var dayLabels = map[int16]string{1: "Пн", 2: "Вт", 3: "Ср", 4: "Чт", 5: "Пт", 6: "Сб", 7: "Вс"}
-
-func buildDayCheckboxes(days []int16) []DayCheckbox {
-	selected := make(map[int16]bool, len(days))
-	for _, d := range days {
-		selected[d] = true
-	}
-
-	out := make([]DayCheckbox, 0, 7)
-	for d := int16(1); d <= 7; d++ {
-		out = append(out, DayCheckbox{
-			Day:     d,
-			Label:   dayLabels[d],
-			Checked: selected[d],
-		})
-	}
-	return out
-}
-
-// parseDays разбирает чекбоксы дней недели (значения "1".."7") в []int16.
-// Диапазон и дубли проверяет usecase (normalizeDays).
-func parseDays(vals []string) ([]int16, error) {
-	days := make([]int16, 0, len(vals))
-	for _, v := range vals {
-		d, err := strconv.ParseInt(v, 10, 16)
-		if err != nil {
-			return nil, fmt.Errorf("день %q — не число", v)
-		}
-		days = append(days, int16(d))
-	}
-	return days, nil
-}
-
-// parseNullableInt16 разбирает число или nil для пустой строки (задержки).
-func parseNullableInt16(v string) (*int16, error) {
-	v = strings.TrimSpace(v)
-	if v == "" {
-		//nolint:nilnil // контракт: пустая строка = отсутствующее значение
-		return nil, nil
-	}
-	n, err := strconv.ParseInt(v, 10, 16)
-	if err != nil {
-		return nil, fmt.Errorf("%q — не число", v)
-	}
-	d := int16(n)
-	return &d, nil
 }
 
 // parseRublesToKopecks переводит сумму в рублях (форма) в копейки (БД).
@@ -366,21 +420,4 @@ func kopecksToRubles(k int64) string {
 		return strconv.FormatInt(rub, 10)
 	}
 	return fmt.Sprintf("%d.%02d", rub, kop)
-}
-
-// parseCutoffTime разбирает время дедлайна заказа из формы ("HH:MM").
-// Пустая строка — nil (не задано).
-func parseCutoffTime(v string) (*time.Time, error) {
-	v = strings.TrimSpace(v)
-	if v == "" {
-		//nolint:nilnil // контракт: пустая строка = отсутствующее значение
-		return nil, nil
-	}
-	t, err := time.Parse("15:04", v)
-	if err != nil {
-		return nil, fmt.Errorf("время дедлайна заказа %q — ожидается формат ЧЧ:ММ, например 14:00", v)
-	}
-	// Нормализуем к фиксированной дате — в БД хранится только время (TIME).
-	norm := time.Date(2000, time.January, 1, t.Hour(), t.Minute(), 0, 0, time.UTC)
-	return &norm, nil
 }

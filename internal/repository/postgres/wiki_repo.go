@@ -16,7 +16,7 @@ import (
 // wikiPageColumns — список колонок таблицы wiki_pages, общий для выборок страницы.
 // Порядок должен совпадать с порядком Scan в scanWikiPage.
 const wikiPageColumns = `
-    id, page_type, title, content, contacts, order_days, delivery_days,
+    id, page_type, title, content, contacts,
     average_weight, suppliers, products, supplier_id, product_id, (photo IS NOT NULL)`
 
 // GetPage возвращает вики-страницу по заголовку (без учёта регистра),
@@ -77,7 +77,6 @@ func scanWikiPage(row pgx.Row) (*domain.WikiPage, error) {
 		pageType, title, content string
 		averageWeight            string
 		contactsJSON             []byte
-		orderDays, deliveryDays  []int16
 		suppliers                []string
 		products                 []string
 		supplierID               *string
@@ -87,7 +86,7 @@ func scanWikiPage(row pgx.Row) (*domain.WikiPage, error) {
 
 	err := row.Scan(
 		&id, &pageType, &title, &content, &contactsJSON,
-		&orderDays, &deliveryDays, &averageWeight, &suppliers, &products, &supplierID, &productID, &hasPhoto,
+		&averageWeight, &suppliers, &products, &supplierID, &productID, &hasPhoto,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -102,8 +101,6 @@ func scanWikiPage(row pgx.Row) (*domain.WikiPage, error) {
 		Type:          domain.PageType(pageType),
 		Title:         title,
 		Content:       content,
-		OrderDays:     int16ToInt(orderDays),
-		DeliveryDays:  int16ToInt(deliveryDays),
 		AverageWeight: averageWeight,
 		Suppliers:     suppliers,
 		Products:      products,
@@ -123,27 +120,6 @@ func scanWikiPage(row pgx.Row) (*domain.WikiPage, error) {
 	}
 
 	return page, nil
-}
-
-// int16ToInt конвертирует SMALLINT[] (pgx) в []int.
-func int16ToInt(src []int16) []int {
-	res := make([]int, len(src))
-	for i, v := range src {
-		res[i] = int(v)
-	}
-
-	return res
-}
-
-// intsToInt16 конвертирует []int в SMALLINT[] (pgx).
-func intsToInt16(src []int) []int16 {
-	res := make([]int16, len(src))
-	for i, v := range src {
-		//nolint:gosec // G115: значения валидируются до записи (дни недели 1..7), переполнение невозможно
-		res[i] = int16(v)
-	}
-
-	return res
 }
 
 // lowerStrings возвращает элементы списка в нижнем регистре
@@ -535,9 +511,6 @@ func (pg *PGClient) SavePage(ctx context.Context, page *domain.WikiPage, current
 		contactsJSON = []byte("[]")
 	}
 
-	orderDays := intsToInt16(page.OrderDays)
-	deliveryDays := intsToInt16(page.DeliveryDays)
-
 	suppliers := page.Suppliers
 	if suppliers == nil {
 		suppliers = []string{}
@@ -552,12 +525,12 @@ func (pg *PGClient) SavePage(ctx context.Context, page *domain.WikiPage, current
 		// Создание новой страницы. ON CONFLICT DO NOTHING без целевого
 		// индекса: единственный уникальный индекс — lower(title), поэтому
 		// 0 затронутых строк означает занятый заголовок.
-		if err := insertPage(ctx, tx, page, contactsJSON, orderDays, deliveryDays, suppliers, products); err != nil {
+		if err := insertPage(ctx, tx, page, contactsJSON, suppliers, products); err != nil {
 			return err
 		}
 	} else {
 		// Обновление или переименование существующей страницы.
-		if err := updatePage(ctx, tx, page, currentTitle, contactsJSON, orderDays, deliveryDays, suppliers, products); err != nil {
+		if err := updatePage(ctx, tx, page, currentTitle, contactsJSON, suppliers, products); err != nil {
 			return err
 		}
 	}
@@ -594,16 +567,16 @@ func (pg *PGClient) SavePage(ctx context.Context, page *domain.WikiPage, current
 }
 
 // insertPage создаёт новую страницу; занятый заголовок → domain.ErrTitleTaken.
-func insertPage(ctx context.Context, tx pgx.Tx, page *domain.WikiPage, contactsJSON []byte, orderDays, deliveryDays []int16, suppliers, products []string) error {
+func insertPage(ctx context.Context, tx pgx.Tx, page *domain.WikiPage, contactsJSON []byte, suppliers, products []string) error {
 	tag, err := tx.Exec(ctx, `
         INSERT INTO wiki_pages (
-            page_type, title, content, contacts, order_days, delivery_days,
+            page_type, title, content, contacts,
             average_weight, suppliers, products
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
         ON CONFLICT DO NOTHING
     `,
 		string(page.Type), page.Title, page.Content, contactsJSON,
-		orderDays, deliveryDays, page.AverageWeight, suppliers, products,
+		page.AverageWeight, suppliers, products,
 	)
 	if err != nil {
 		return err
@@ -618,16 +591,15 @@ func insertPage(ctx context.Context, tx pgx.Tx, page *domain.WikiPage, contactsJ
 
 // updatePage обновляет страницу; занятый заголовок → domain.ErrTitleTaken,
 // страница удалена конкурентно → domain.ErrPageNotFound.
-func updatePage(ctx context.Context, tx pgx.Tx, page *domain.WikiPage, currentTitle string, contactsJSON []byte, orderDays, deliveryDays []int16, suppliers, products []string) error {
+func updatePage(ctx context.Context, tx pgx.Tx, page *domain.WikiPage, currentTitle string, contactsJSON []byte, suppliers, products []string) error {
 	tag, err := tx.Exec(ctx, `
         UPDATE wiki_pages SET
             page_type = $1, title = $2, content = $3, contacts = $4,
-            order_days = $5, delivery_days = $6, average_weight = $7,
-            suppliers = $8, products = $9
-        WHERE lower(title) = lower($10)
+            average_weight = $5, suppliers = $6, products = $7
+        WHERE lower(title) = lower($8)
     `,
 		string(page.Type), page.Title, page.Content, contactsJSON,
-		orderDays, deliveryDays, page.AverageWeight, suppliers, products, currentTitle,
+		page.AverageWeight, suppliers, products, currentTitle,
 	)
 	if err != nil {
 		var pgErr *pgconn.PgError
@@ -809,10 +781,10 @@ func (pg *PGClient) GetUnlinkedSupplierPageByTitle(ctx context.Context, title st
 // Занятый заголовок (или уже существующая привязка) → domain.ErrTitleTaken.
 func (pg *PGClient) CreateSupplierPage(ctx context.Context, page *domain.WikiPage) error {
 	tag, err := pg.Pool.Exec(ctx, `
-        INSERT INTO wiki_pages (page_type, title, order_days, delivery_days, supplier_id)
-        VALUES ('supplier', $1, $2, $3, $4)
+        INSERT INTO wiki_pages (page_type, title, supplier_id)
+        VALUES ('supplier', $1, $2)
         ON CONFLICT DO NOTHING
-    `, page.Title, intsToInt16(page.OrderDays), intsToInt16(page.DeliveryDays), page.SupplierID)
+    `, page.Title, page.SupplierID)
 	if err != nil {
 		return err
 	}
@@ -824,15 +796,15 @@ func (pg *PGClient) CreateSupplierPage(ctx context.Context, page *domain.WikiPag
 }
 
 // UpdateSupplierPage обновляет данные страницы поставщика из справочника:
-// заголовок (= name), дни заказа/доставки и привязку supplier_id (для
-// непривязанной вручную созданной страницы — claim). Занятый заголовок →
-// domain.ErrTitleTaken; страница удалена конкурентно → domain.ErrPageNotFound.
-func (pg *PGClient) UpdateSupplierPage(ctx context.Context, pageID int64, supplierID, title string, orderDays, deliveryDays []int) error {
+// заголовок (= name) и привязку supplier_id (для непривязанной вручную
+// созданной страницы — claim). Занятый заголовок → domain.ErrTitleTaken;
+// страница удалена конкурентно → domain.ErrPageNotFound.
+func (pg *PGClient) UpdateSupplierPage(ctx context.Context, pageID int64, supplierID, title string) error {
 	tag, err := pg.Pool.Exec(ctx, `
         UPDATE wiki_pages SET
-            title = $1, order_days = $2, delivery_days = $3, supplier_id = $4
-        WHERE id = $5
-    `, title, intsToInt16(orderDays), intsToInt16(deliveryDays), supplierID, pageID)
+            title = $1, supplier_id = $2
+        WHERE id = $3
+    `, title, supplierID, pageID)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {

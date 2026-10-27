@@ -12,8 +12,6 @@ CREATE TABLE wiki_pages (
     content        TEXT NOT NULL DEFAULT '',          -- «Дополнительная информация» (markdown)
     -- поля поставщика:
     contacts       JSONB NOT NULL DEFAULT '[]',       -- [{"name","phone","email","site"}]
-    order_days     SMALLINT[] NOT NULL DEFAULT '{}',  -- 1..7, ISO: 1=Пн ... 7=Вс
-    delivery_days  SMALLINT[] NOT NULL DEFAULT '{}',
     products       TEXT[] NOT NULL DEFAULT '{}',      -- названия страниц продуктов
     -- поля продукта:
     average_weight TEXT NOT NULL DEFAULT '',
@@ -21,9 +19,9 @@ CREATE TABLE wiki_pages (
     photo          BYTEA,
     photo_type     TEXT NOT NULL DEFAULT '',
     photo_name     TEXT NOT NULL DEFAULT '',
-    -- привязка к операционным таблицам (страница поставщика); данные (title, order_days,
-    -- delivery_days) синхронизируются при сохранении поставщика в справочнике «МойСклад»,
-    -- пользовательский контент страницы (текст, контакты, теги, фото) не трогается:
+    -- привязка к операционным таблицам (страница поставщика); title синхронизируется
+    -- при сохранении поставщика в справочнике «МойСклад», пользовательский контент
+    -- страницы (текст, контакты, теги, фото) не трогается:
     supplier_id    TEXT REFERENCES suppliers(id) ON DELETE SET NULL,  -- страница создана от поставщика; NULL — без привязки
     product_id     TEXT REFERENCES products(id) ON DELETE SET NULL    -- страница создана от товара; NULL — без привязки
 );

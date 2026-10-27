@@ -23,19 +23,24 @@ func NewRouter(h *Handler) *http.ServeMux {
 	mux.HandleFunc("/download", h.DownloadFile)
 	mux.HandleFunc("/update-from-ms", h.UpdateFromMS) // POST
 	mux.HandleFunc("/print-form", h.PrintForm)
-	mux.HandleFunc("/print-multiple-forms", h.PrintMultipleForms)          // POST
-	mux.HandleFunc("/orders/delete", h.DeleteOrder)                        // DELETE
-	mux.HandleFunc("/print-barcodes", h.PrintBarcodes)                     // POST
-	mux.HandleFunc("/wiki", h.WikiIndex)                                   // GET
-	mux.HandleFunc("/wiki/page", h.WikiPage)                               // GET
-	mux.HandleFunc("/wiki/edit", h.WikiEdit)                               // GET — форма, POST — сохранение
-	mux.HandleFunc("/wiki/delete", h.WikiDelete)                           // POST
-	mux.HandleFunc("/wiki/photo", h.WikiPhoto)                             // GET
-	mux.HandleFunc("GET /goods", h.GoodsPage)                              // хаб «Продукция» (поиск + добавление)
-	mux.HandleFunc("POST /goods/search", h.GoodsSearch)                    // поиск позиции в каталоге
-	mux.HandleFunc("GET /goods/edit", h.GoodsEditPage)                     // редактирование позиции
-	mux.HandleFunc("POST /goods/edit", h.GoodsEditSave)                    // сохранение ручных правок
-	mux.HandleFunc("POST /goods/resync", h.GoodsResync)                    // ресинк позиции из МС
+	mux.HandleFunc("/print-multiple-forms", h.PrintMultipleForms) // POST
+	mux.HandleFunc("/orders/delete", h.DeleteOrder)               // DELETE
+	mux.HandleFunc("/print-barcodes", h.PrintBarcodes)            // POST
+	mux.HandleFunc("/wiki", h.WikiIndex)                          // GET
+	mux.HandleFunc("/wiki/page", h.WikiPage)                      // GET
+	mux.HandleFunc("/wiki/edit", h.WikiEdit)                      // GET — форма, POST — сохранение
+	mux.HandleFunc("/wiki/delete", h.WikiDelete)                  // POST
+	mux.HandleFunc("/wiki/photo", h.WikiPhoto)                    // GET
+	mux.HandleFunc("GET /goods", h.GoodsPage)                     // хаб «Продукция» (поиск + добавление)
+	mux.HandleFunc("POST /goods/search", h.GoodsSearch)           // поиск позиции в каталоге
+	mux.HandleFunc("GET /goods/edit", h.GoodsEditPage)            // редактирование позиции
+	mux.HandleFunc("POST /goods/edit", h.GoodsEditSave)           // сохранение ручных правок
+	mux.HandleFunc("POST /goods/resync", h.GoodsResync)           // ресинк позиции из МС
+	// «Варианты заказа» карточки позиции: расписание заказа на паре (товар, поставщик),
+	// несколько режимов у одной пары (общий со склада / под заказ с производства).
+	mux.HandleFunc("GET /goods/schedules", h.GoodsSchedulesPage)
+	mux.HandleFunc("GET /goods/calendar", h.GoodsCalendar)                 // календарь продаж (недели/месяцы)           // варианты заказа товара
+	mux.HandleFunc("POST /goods/schedules/save", h.GoodsSchedulesSave)     // сохранить набор вариантов
 	mux.HandleFunc("GET /goods/tree", h.GoodsTreePage)                     // дерево папок для добавления
 	mux.HandleFunc("POST /goods/tree", h.GoodsExport)                      // выгрузка отмеченных товаров в каталог
 	mux.HandleFunc("GET /goods/search/json", h.GoodsSearchJSON)            // поиск товаров для виджета поставщика (JSON)
@@ -71,15 +76,16 @@ func NewRouter(h *Handler) *http.ServeMux {
 	mux.Handle("/qrcodes/photos/", http.StripPrefix("/qrcodes/photos/", qrPhotosHandler(h.qrUC.PhotosDir())))
 
 	// Модуль «МойСклад»: хаб и справочник поставщиков.
-	mux.HandleFunc("/ms", h.MsPage)                              // GET — хаб
-	mux.HandleFunc("/ms/suppliers", h.SuppliersList)             // GET — список поставщиков
-	mux.HandleFunc("/ms/suppliers/new", h.SupplierNew)           // GET — форма создания
-	mux.HandleFunc("/ms/suppliers/edit", h.SupplierEdit)         // GET — форма редактирования
-	mux.HandleFunc("/ms/suppliers/save", h.SupplierSave)         // POST — создание/обновление
-	mux.HandleFunc("/ms/suppliers/delete", h.SupplierDelete)     // POST — удаление
-	mux.HandleFunc("GET /ms/orders", h.MSOrdersPage)             // раздел «Заказы»
-	mux.HandleFunc("GET /ms/orders/pick", h.MSOrdersPickForm)    // подбор: форма/результат (?name=)
-	mux.HandleFunc("POST /ms/orders/pick", h.MSOrdersPickSearch) // подбор: запуск поиска (PRG → GET ?name=)
+	mux.HandleFunc("/ms", h.MsPage)                                   // GET — хаб
+	mux.HandleFunc("/ms/suppliers", h.SuppliersList)                  // GET — список поставщиков
+	mux.HandleFunc("/ms/suppliers/new", h.SupplierNew)                // GET — форма создания
+	mux.HandleFunc("/ms/suppliers/edit", h.SupplierEdit)              // GET — форма редактирования
+	mux.HandleFunc("/ms/suppliers/save", h.SupplierSave)              // POST — создание/обновление
+	mux.HandleFunc("/ms/suppliers/delete", h.SupplierDelete)          // POST — удаление
+	mux.HandleFunc("/ms/suppliers/prices/save", h.SupplierPricesSave) // POST — батч цен товаров
+	mux.HandleFunc("GET /ms/orders", h.MSOrdersPage)                  // раздел «Заказы»
+	mux.HandleFunc("GET /ms/orders/pick", h.MSOrdersPickForm)         // подбор: форма/результат (?name=)
+	mux.HandleFunc("POST /ms/orders/pick", h.MSOrdersPickSearch)      // подбор: запуск поиска (PRG → GET ?name=)
 	// Печать бланков за день: список заказов по плановой дате доставки и
 	// слитый PDF по выделенным (литерал /ms/orders/forms специфичнее {id}).
 	mux.HandleFunc("GET /ms/orders/forms", h.MSOrdersFormsForm)         // форма/список (?date=)
@@ -143,15 +149,17 @@ func NewRouter(h *Handler) *http.ServeMux {
 	mux.HandleFunc("POST /ms/collab/close", h.CollabClose)       // хост закрыл комнату без сохранения
 
 	// Модуль «Сроки» (остатки по срокам годности).
-	mux.HandleFunc("GET /ms/dates", h.StockDatesPage)               // страница «Сроки»
-	mux.HandleFunc("GET /ms/dates/short", h.StockShortPage)         // страница «Шорт-лист»
-	mux.HandleFunc("GET /ms/dates/ws", h.StockDatesWS)              // вебсокет: снапшот и дельты
-	mux.HandleFunc("POST /ms/dates/discount", h.StockDiscount)      // запись ручной скидки
-	mux.HandleFunc("GET /ms/dates/update", h.StockUpdatePage)       // страница «Обновить сроки»
-	mux.HandleFunc("GET /ms/discounts", h.DiscountsPage)            // страница «Скидки» (окно и допродажа)
-	mux.HandleFunc("GET /ms/discounts/plan", h.DiscountsPlan)       // предпросмотр плана 14:00 (JSON, для блока страницы)
-	mux.HandleFunc("GET /ms/discounts/active", h.DiscountsActive)   // активные пары окна (JSON, для страницы «Сроки»)
-	mux.HandleFunc("POST /ms/dates/update/save", h.StockUpdateSave) // применить батч сканов
+	mux.HandleFunc("GET /ms/dates", h.StockDatesPage)                          // страница «Сроки»
+	mux.HandleFunc("GET /ms/dates/short", h.StockShortPage)                    // страница «Шорт-лист»
+	mux.HandleFunc("GET /ms/dates/ws", h.StockDatesWS)                         // вебсокет: снапшот и дельты
+	mux.HandleFunc("POST /ms/dates/discount", h.StockDiscount)                 // запись ручной скидки
+	mux.HandleFunc("GET /ms/dates/product-info", h.StockProductInfo)           // JSON: карточка позиции для мини-окна
+	mux.HandleFunc("POST /ms/dates/product-info/save", h.StockProductInfoSave) // JSON: сохранить цены/варианты/ссылку
+	mux.HandleFunc("GET /ms/dates/update", h.StockUpdatePage)                  // страница «Обновить сроки»
+	mux.HandleFunc("GET /ms/discounts", h.DiscountsPage)                       // страница «Скидки» (окно и допродажа)
+	mux.HandleFunc("GET /ms/discounts/plan", h.DiscountsPlan)                  // предпросмотр плана 14:00 (JSON, для блока страницы)
+	mux.HandleFunc("GET /ms/discounts/active", h.DiscountsActive)              // активные пары окна (JSON, для страницы «Сроки»)
+	mux.HandleFunc("POST /ms/dates/update/save", h.StockUpdateSave)            // применить батч сканов
 
 	return mux
 }

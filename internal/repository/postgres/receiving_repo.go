@@ -132,7 +132,38 @@ func (pg *PGClient) CountSupplierProductCodes(ctx context.Context, supplierID, p
 	return n, nil
 }
 
+// LoadProductSupplierIDs возвращает id поставщиков, у которых есть внешний код
+// этого товара (обратный поиск по product_supplier_barcodes): из него каталог
+// берёт список поставщиков в вариантах заказа товара.
+func (pg *PGClient) LoadProductSupplierIDs(ctx context.Context, productID string) ([]string, error) {
+	rows, err := pg.Pool.Query(ctx, `
+        SELECT DISTINCT supplier_id
+        FROM product_supplier_barcodes
+        WHERE product_id = $1
+        ORDER BY supplier_id
+    `, productID)
+	if err != nil {
+		return nil, fmt.Errorf("load product suppliers %s: %w", productID, err)
+	}
+	defer rows.Close()
+
+	out := make([]string, 0)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return out, nil
+}
+
 // weightedUOM — весовой ли товар по единице измерения (тип учёта из uom).
+// Именно по единице, а не по полю: в МС тип учёта задаётся UOM.
 func weightedUOM(uom string) bool {
 	switch strings.ToLower(strings.TrimSpace(uom)) {
 	case "кг", "г", "т":

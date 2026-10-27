@@ -30,7 +30,11 @@
             <button type="submit" class="resync-btn">Обновить до МС</button>
         </form>
     </div>
-    <p><a href="/goods">← Назад в Продукцию</a></p>
+    <p>
+        <a href="/goods">← Назад в Продукцию</a>
+        &nbsp;·&nbsp;
+        <a href="/goods/schedules?id={{.Product.ID}}">Варианты заказа →</a>
+    </p>
 
     {{if .OK}}
     <div class="banner ok">{{.OK}}</div>

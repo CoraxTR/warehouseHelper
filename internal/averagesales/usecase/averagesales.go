@@ -43,6 +43,9 @@ type Repository interface {
 	HasMonthlyTurnover(ctx context.Context, productID string) (bool, error)
 	// HasWeeklyTurnover — есть ли у товара хоть одна строка недельного оборота.
 	HasWeeklyTurnover(ctx context.Context, productID string) (bool, error)
+	// ProductsMissingKg — id товаров со строками окна без кг (колонка qty_kg
+	// появилась позже самих строк): дозаполнение перезапросом окна из МС.
+	ProductsMissingKg(ctx context.Context, since time.Time) ([]string, error)
 }
 
 // SalesClient — отчёт прибыльности МС (реализует *client.MSAPIClient;
@@ -118,11 +121,11 @@ func (uc *UseCase) AverageSales(ctx context.Context, productID string) (*float64
 			return nil, fmt.Errorf("перезапросить продажи %s за %s: %w", productID, d.Format(time.DateOnly), err)
 		}
 		for _, r := range res {
-			qty, ok := uc.calcQty(r, *prod)
+			qty, kg, ok := uc.calcSales(r, *prod)
 			if !ok {
 				continue
 			}
-			upsert = append(upsert, averagesales.TurnoverRow{ProductID: productID, PeriodStart: d, Qty: qty})
+			upsert = append(upsert, averagesales.TurnoverRow{ProductID: productID, PeriodStart: d, Qty: qty, Kg: kg})
 		}
 	}
 	if len(upsert) > 0 {
@@ -197,17 +200,18 @@ func (uc *UseCase) upsertByInterval(ctx context.Context, interval string, rows [
 	return uc.repo.UpsertMonthlyTurnover(ctx, rows)
 }
 
-// calcQty переводит продажи из отчёта в штуки: весовые (uom кг/г/т) делятся на
-// средний вес штуки (нет веса — интервал пропускаем), штучные — как есть.
-func (uc *UseCase) calcQty(r client.ProfitRow, p averagesales.TurnoverProduct) (float64, bool) {
+// calcSales переводит продажи из отчёта в штуки и кг: весовые (uom кг/г/т)
+// делятся на средний вес штуки (нет веса — интервал пропускаем), кг пишется
+// как есть (sell−ret в единицах товара); штучные — qty как есть, kg = nil.
+func (uc *UseCase) calcSales(r client.ProfitRow, p averagesales.TurnoverProduct) (qty float64, kg *float64, ok bool) {
 	net := r.SellQuantity - r.ReturnQuantity
 	if !isWeightedUOM(p.UOM) {
-		return net, true
+		return net, nil, true
 	}
 	if p.AverageWeight == nil || *p.AverageWeight <= 0 {
-		return 0, false
+		return 0, nil, false
 	}
-	return net / *p.AverageWeight, true
+	return net / *p.AverageWeight, &net, true
 }
 
 // isWeightedUOM — весовой ли товар (единица измерения кг/г/т; как в каталоге).
