@@ -327,18 +327,11 @@ func (uc *UseCase) backfillMissing(ctx context.Context) error {
 		}
 	}
 
-	// Кг продаж в уже записанных периодах: строки, сохранённые до появления
-	// колонки qty_kg, кг не имеют. Перезапрашиваем окно таких товаров из МС —
-	// тем же путём, что и обновление окна (группами и пачками).
-	kgIDs, err := uc.repo.ProductsMissingKg(ctx, windowSince(intervalMonth, monthlyWindow, now))
-	if err != nil {
-		return err
-	}
-	if len(kgIDs) > 0 {
-		if _, err := uc.refreshTurnover(ctx, kgIDs, scopeWindow); err != nil {
-			return err
-		}
-	}
+	// Кг здесь НЕ дозаполняем: после появления qty_kg строки были NULL у всех
+	// товаров, и перезапрос окна всем каталогом давал залп запросов к МС при
+	// каждом старте (прод-инцидент 27.10.2026: очередь воркерпула вставала,
+	// все запросы падали с deadline exceeded). Кг заполняет штатное обновление
+	// окна (09:00, discount_day_flags.turnover_window_done).
 
 	return nil
 }
