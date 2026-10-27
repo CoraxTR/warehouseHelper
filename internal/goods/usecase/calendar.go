@@ -64,6 +64,7 @@ type CalendarRow struct {
 	Cells        []CalendarCell
 	AvgText      string // действующее среднее, шт/период
 	CoeffText    string // коэффициент текущего периода
+	Weekly       bool   // недельный учёт: месячного ряда и среднего нет
 }
 
 // CalendarGroup — группа товаров (разделение как на «Сроках»).
@@ -271,6 +272,7 @@ func buildCalendarRow(v productInfo, sales []averagesales.PeriodSales, avg *floa
 		ProductID:    v.ID,
 		Name:         v.Name,
 		InternalCode: v.Code,
+		Weekly:       v.Weekly,
 		Cells:        make([]CalendarCell, 0, len(periods)),
 	}
 
@@ -356,7 +358,7 @@ func productsForTab(products []domain.Product, tab string) []productInfo {
 		if tab == TabWeek && !p.TrackWeekly {
 			continue
 		}
-		out = append(out, productInfo{ID: p.ID, Name: p.Name, Code: p.InternalCode, Group: p.GroupName})
+		out = append(out, productInfo{ID: p.ID, Name: p.Name, Code: p.InternalCode, Group: p.GroupName, Weekly: p.TrackWeekly})
 	}
 
 	return out
@@ -387,10 +389,11 @@ func monthURL(m time.Time) string {
 
 // productInfo — срез каталога для сборки строк календаря.
 type productInfo struct {
-	ID    string
-	Name  string
-	Code  string
-	Group string
+	ID     string
+	Name   string
+	Code   string
+	Group  string
+	Weekly bool // недельный учёт (track_weekly): месячного расчёта по нему нет
 }
 
 // periodSalesByProduct раскладывает строки оборотов по товарам.

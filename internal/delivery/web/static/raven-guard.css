@@ -1346,3 +1346,7 @@ html.day td.cal-disc { background: #FFF4C2; color: #6B4E00; }
 html.day td.cal-out { background: #FBDCE5; color: #8E2F4E; }
 html.day td.cal-both { background: #FFF4C2; color: #B42318; }
 html.day .cal-delta { color: #9A6700; }
+
+/* Недельный учёт: месячного ряда нет — позиция помечается в названии */
+.cal-weekly { color: #C8A24A; font-style: italic; }
+html.day .cal-weekly { color: #8A6D1F; }

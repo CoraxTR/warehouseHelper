@@ -165,6 +165,19 @@ func TestCalendarPage_MonthCurrent(t *testing.T) {
 		t.Fatalf("CalendarPage: %v", err)
 	}
 
+	// Недельный товар на месячной вкладке помечается: месячного ряда и среднего нет.
+	weeklyMarked := false
+	for _, g := range page.Groups {
+		for _, r := range g.Rows {
+			if r.ProductID == "p1" && r.Weekly {
+				weeklyMarked = true
+			}
+		}
+	}
+	if !weeklyMarked {
+		t.Fatal("товар с недельным учётом не помечен на месячной вкладке")
+	}
+
 	if len(page.PeriodTitles) != calendarMonths {
 		t.Fatalf("столбцов = %d, want %d", len(page.PeriodTitles), calendarMonths)
 	}

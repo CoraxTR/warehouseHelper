@@ -86,7 +86,7 @@
             <tr class="cal-group" data-cal-group="{{$gi}}" onclick="calToggle('{{$gi}}')"><th colspan="{{len $.PeriodTitles}}"><span id="cal-mark-{{$gi}}"></span> {{if $g.Name}}{{$g.Name}}{{else}}Без группы{{end}}</th></tr>
             {{range $g.Rows}}
             <tr data-cal-row="{{$gi}}">
-                <td class="cal-name">{{if .InternalCode}}<span class="code">{{.InternalCode}}</span> {{end}}{{.Name}}</td>
+                <td class="cal-name{{if .Weekly}} cal-weekly{{end}}"{{if and .Weekly (eq $.Tab "month")}} title="недельный учёт: месячного ряда и среднего по позиции нет"{{end}}>{{if .InternalCode}}<span class="code">{{.InternalCode}}</span> {{end}}{{.Name}}</td>
                 {{range .Cells}}
                 <td class="cal-num{{if .InWindow}} cal-win{{end}}{{if .Class}} {{.Class}}{{end}}" title="{{.Title}}">
                     {{if .KgText}}<span class="cal-kg">{{.KgText}}</span>{{end}}
