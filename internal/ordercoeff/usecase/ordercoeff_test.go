@@ -42,6 +42,20 @@ func (r *stubRepo) Coefficients(_ context.Context, _ string, _ ordercoeff.Period
 	return r.coeffs, nil
 }
 
+// CoefficientsBatch — пакетное чтение (календарь продаж): те же фикстуры,
+// разложенные по товарам.
+func (r *stubRepo) CoefficientsBatch(_ context.Context, productIDs []string, _ ordercoeff.PeriodType, _ []time.Time) (map[string]map[time.Time]int16, error) {
+	r.coeffCalls++
+	if r.err != nil {
+		return nil, r.err
+	}
+	out := make(map[string]map[time.Time]int16, len(productIDs))
+	for _, id := range productIDs {
+		out[id] = r.coeffs
+	}
+	return out, nil
+}
+
 // stubProducts — заглушка каталога: недельность и ошибка.
 type stubProducts struct {
 	weekly bool
@@ -169,4 +183,8 @@ func TestCoefficientsPassThrough(t *testing.T) {
 	if repo.coeffCalls != 1 {
 		t.Errorf("вызовов Coefficients = %d, want 1", repo.coeffCalls)
 	}
+}
+
+func (r *stubRepo) PeriodsBatch(_ context.Context, _ []string, _ ordercoeff.PeriodType, _ []time.Time) (map[string]map[time.Time]ordercoeff.PeriodCoeff, error) {
+	return map[string]map[time.Time]ordercoeff.PeriodCoeff{}, nil
 }

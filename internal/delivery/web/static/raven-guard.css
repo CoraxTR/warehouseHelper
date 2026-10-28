@@ -465,6 +465,13 @@ td.cell-pair:hover { outline: 1px solid #6E6E7A; outline-offset: -1px; }
 td.cell-empty { background: #121216; color: #66645C; }
 td.cell-discount { text-align: center; white-space: nowrap; }
 
+/* Ручной запрет (скидка 0 %): лот-источник и все более дальние сроки товара */
+td.cell-pair.ban-lot { box-shadow: inset 0 0 0 2px #C0506B; }
+td.col-name .ban-badge { margin-left: 6px; padding: 1px 6px; border-radius: 8px; background: #4A2430; color: #EBBCCB; border: 1px solid #C0506B; font-size: 11px; }
+td.col-name .ban-clear { margin-left: 4px; padding: 1px 6px; font-size: 11px; }
+.ban-panel { margin: 8px 12px; padding: 8px 12px; border: 1px solid #C0506B; border-radius: 6px; background: #2A1720; color: #EBBCCB; font-size: 13px; }
+.ban-panel__item { display: inline-block; margin-right: 10px; cursor: pointer; text-decoration: underline; }
+
 /* Поиск позиции по названию — только «Сроки» (на шорт-листе поиска нет) */
 .dates-search { position: relative; max-width: 560px; margin: 0 0 12px; }
 .dates-search input[type="text"] { width: 100%; font-size: 15px; }
@@ -1168,6 +1175,9 @@ html.day td.cell-pair.only-surplus { background: #F9C6D8; color: #8E2F4E; }
 html.day td.cell-pair.expires-today { background: #E7F1FB; color: #0969DA; }
 html.day td.cell-pair:hover { outline: 1px solid #8C959F; }
 html.day td.cell-empty { background: #F3F5F7; color: #6E7781; }
+html.day td.cell-pair.ban-lot { box-shadow: inset 0 0 0 2px #C0396B; }
+html.day td.col-name .ban-badge { background: #FBE3EA; color: #8E2F4E; border-color: #C0396B; }
+html.day .ban-panel { background: #FBE3EA; color: #8E2F4E; border-color: #C0396B; }
 html.day .dates-search .hits { background: #FFFFFF; border: 1px solid #C6CDD5; box-shadow: 0 10px 30px rgba(27, 31, 36, 0.16); }
 html.day .dates-search .hit + .hit { border-top: 1px solid #E4E9EE; }
 html.day .dates-search .hit.sel { background: #DDE3E9; box-shadow: inset 3px 0 0 #9A6700; }
@@ -1301,3 +1311,42 @@ html.day .toast { background: #FFFFFF; color: #000000; border: 1px solid #D0D7DE
 html.day .toast--ok { background: #E7F6EC; border-color: #A8D5B5; color: #1A7F37; }
 html.day .toast--warn { background: #FFF6D8; border-color: #BF9E5A; color: #9A6700; }
 /* ===== DAY-THEME-END ===== */
+
+/* Календарь продаж (/goods/calendar) */
+.cal-tabs { margin: 10px 0; }
+.cal-tabs a { margin-right: 12px; }
+.cal-tabs a.active { font-weight: bold; text-decoration: underline; }
+.cal-wrap { overflow: auto; max-height: 72vh; border: 1px solid #2A2A32; }
+table.cal { border-collapse: separate; border-spacing: 0; font-size: 12px; }
+table.cal th, table.cal td { border-right: 1px solid #2A2A32; border-bottom: 1px solid #2A2A32; padding: 3px 5px; white-space: nowrap; }
+table.cal thead th { position: sticky; top: 0; z-index: 3; background: #1B1B21; }
+table.cal th.cal-name, table.cal td.cal-name { position: sticky; left: 0; z-index: 2; background: #16161B; text-align: left; min-width: 220px; }
+table.cal thead th.cal-name { z-index: 4; }
+table.cal td.cal-num { text-align: center; min-width: 64px; }
+table.cal tr.cal-group th { position: sticky; left: 0; background: #23232C; text-align: left; cursor: pointer; z-index: 1; }
+.cal-kg { display: block; font-size: 10px; color: #9AA0A6; }
+.cal-qty { display: block; }
+.cal-coeff { display: block; font-size: 10px; color: #8C8C96; }
+.cal-delta { color: #D08A3E; }
+td.cal-win { box-shadow: inset 0 0 0 1px #C0396B; }
+td.cal-disc { background: #4A3A10; color: #F0D68C; }
+td.cal-out { background: #4A2430; color: #EBBCCB; }
+td.cal-both { background: #4A3A10; color: #E85C5C; }
+.cal-legend span { display: inline-block; margin-right: 10px; padding: 1px 6px; border-radius: 4px; font-size: 11px; }
+.cal-legend .cal-disc { background: #4A3A10; color: #F0D68C; }
+.cal-legend .cal-out { background: #4A2430; color: #EBBCCB; }
+.cal-legend .cal-both { background: #4A3A10; color: #E85C5C; }
+html.day .cal-wrap { border-color: #C6CDD5; }
+html.day table.cal th, html.day table.cal td { border-color: #D8DEE4; }
+html.day table.cal thead th { background: #EEF1F4; }
+html.day table.cal th.cal-name, html.day table.cal td.cal-name { background: #F6F8FA; }
+html.day table.cal tr.cal-group th { background: #E4E9EE; }
+html.day .cal-kg, html.day .cal-coeff { color: #57606A; }
+html.day td.cal-disc { background: #FFF4C2; color: #6B4E00; }
+html.day td.cal-out { background: #FBDCE5; color: #8E2F4E; }
+html.day td.cal-both { background: #FFF4C2; color: #B42318; }
+html.day .cal-delta { color: #9A6700; }
+
+/* Недельный учёт: месячного ряда нет — позиция помечается в названии */
+.cal-weekly { color: #C8A24A; font-style: italic; }
+html.day .cal-weekly { color: #8A6D1F; }

@@ -32,6 +32,24 @@ var ErrNoData = errors.New("нет данных о продажах")
 // периода с полным самоограничивающее: замена срабатывает только на реально
 // горячем темпе. Свойства из дизайна (sales-turnover-design.md).
 func windowAvg(finished []averagesales.TurnoverRow, current *averagesales.TurnoverRow, n int) (*float64, error) {
+	window, err := averageWindow(finished, current, n)
+	if err != nil {
+		return nil, err
+	}
+
+	sum := 0.0
+	for _, r := range window {
+		sum += r.Qty
+	}
+
+	avg := sum / float64(len(window))
+	return &avg, nil
+}
+
+// windowRows — периоды, реально участвующие в среднем (то самое окно из
+// windowAvg). Нужен странице «Календарь»: ячейки этих периодов подсвечиваются
+// как участвующие в расчёте. ErrNoData — данных нет вообще.
+func averageWindow(finished []averagesales.TurnoverRow, current *averagesales.TurnoverRow, n int) ([]averagesales.TurnoverRow, error) {
 	k := len(finished)
 	if k == 0 && current == nil {
 		return nil, ErrNoData
@@ -47,11 +65,5 @@ func windowAvg(finished []averagesales.TurnoverRow, current *averagesales.Turnov
 		window = append(window, finished[:min(k, n)]...)
 	}
 
-	sum := 0.0
-	for _, r := range window {
-		sum += r.Qty
-	}
-
-	avg := sum / float64(len(window))
-	return &avg, nil
+	return window, nil
 }

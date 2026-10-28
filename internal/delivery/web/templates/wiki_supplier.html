@@ -50,24 +50,6 @@
     </div>
 
     <div class="section">
-        <h2>Заказ</h2>
-        <table class="mini-calendar">
-            <tr>
-                <td class="{{range .Page.OrderDays}}{{if eq . 1}}day-on{{end}}{{end}}">Пн</td>
-                <td class="{{range .Page.OrderDays}}{{if eq . 2}}day-on{{end}}{{end}}">Вт</td>
-                <td class="{{range .Page.OrderDays}}{{if eq . 3}}day-on{{end}}{{end}}">Ср</td>
-                <td class="{{range .Page.OrderDays}}{{if eq . 4}}day-on{{end}}{{end}}">Чт</td>
-                <td class="{{range .Page.OrderDays}}{{if eq . 5}}day-on{{end}}{{end}}">Пт</td>
-                <td class="{{range .Page.OrderDays}}{{if eq . 6}}day-on{{end}}{{end}}">Сб</td>
-                <td class="{{range .Page.OrderDays}}{{if eq . 7}}day-on{{end}}{{end}}">Вс</td>
-            </tr>
-        </table>
-        {{if not .Page.OrderDays}}
-        <p class="muted">Дни не выбраны</p>
-        {{end}}
-    </div>
-
-    <div class="section">
         <h2>Доставка</h2>
         <table class="mini-calendar">
             <tr>

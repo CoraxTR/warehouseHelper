@@ -298,10 +298,15 @@ func (d *DIContainer) WikiUC() *wucase.WikiUseCase {
 
 // GoodsUC — сценарии «Продукция»: дерево папок/товаров из МС и выгрузка
 // каталога; MSClient реализует gucase.ProductFolderClient и gucase.ProductClient,
-// PGClient — gucase.ProductsRepository.
+// PGClient — gucase.ProductsRepository и gucase.OrderSchedulesRepository,
+// SuppliersUC — gucase.SupplierDirectory (справочник поставщиков для формы
+// «Варианты заказа»; чужие таблицы каталог читает методом модуля-владельца).
 func (d *DIContainer) GoodsUC() *gucase.GoodsUseCase {
 	if d.goodsUC == nil {
 		d.goodsUC = gucase.NewGoodsUseCase(d.MSClient(), d.MSClient(), d.OrdersRepository(), d.WikiUC())
+		d.goodsUC.SetOrderScheduleStore(d.OrdersRepository(), d.SuppliersUC(), d.ReceiveBarcodes())
+		// Календарь продаж: обороты (средние) и коэффициенты периодов — чужие модули.
+		d.goodsUC.SetCalendarStore(d.AverageSalesUC(), d.OrderCoeffUC())
 	}
 
 	return d.goodsUC
@@ -376,6 +381,10 @@ func (d *DIContainer) QRUC() *qucase.QRUseCase {
 func (d *DIContainer) SuppliersUC() *msu.MSSuppliersUseCase {
 	if d.msUC == nil {
 		d.msUC = msu.NewMSSuppliersUseCase(d.OrdersRepository(), d.MSClient(), d.WikiUC(), d.ReceiveBarcodes())
+		// Каталог нужен ценам товаров (название товара в списке цен). Обратная
+		// зависимость каталога от поставщиков (справочник для вариантов заказа)
+		// тоже ставится сеттером, поэтому порядок создания здесь не важен.
+		d.msUC.SetCatalog(d.GoodsUC())
 	}
 
 	return d.msUC

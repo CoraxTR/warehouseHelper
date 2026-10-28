@@ -57,6 +57,13 @@ type PeriodCoeff struct {
 	Unavailable int16
 }
 
+// Delta — вклад событий ЭТОГО периода в коэффициент, без переноса с прошлого:
+// закончился +1, скидка −1, заморозка −2, недоступность 0 (держит цепочку).
+// Нужен календарю: показать, насколько период сдвинул коэффициент.
+func (p PeriodCoeff) Delta() int16 {
+	return p.SoldOut - p.Discount - 2*p.Frozen
+}
+
 // transfer возвращает строку текущего периода (создаёт при первом событии)
 // и предыдущий период с обнулённым Coeff, если произошёл перенос.
 func transfer(cur, prev *PeriodCoeff) (newCur, newPrev *PeriodCoeff) {

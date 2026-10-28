@@ -25,6 +25,9 @@ type BarcodeRepository interface {
 	DeleteSupplierBarcode(ctx context.Context, supplierID, externalCode string) error
 	// CountSupplierProductCodes — сколько кодов этого товара осталось у поставщика.
 	CountSupplierProductCodes(ctx context.Context, supplierID, productID string) (int, error)
+	// LoadProductSupplierIDs — поставщики, у которых есть код этого товара
+	// (список поставщиков в вариантах заказа каталога).
+	LoadProductSupplierIDs(ctx context.Context, productID string) ([]string, error)
 }
 
 // SupplierReader — чтение поставщика (имя для тега), реализуется
@@ -75,6 +78,20 @@ func (uc *BarcodeEditor) List(ctx context.Context, supplierID string) ([]receivi
 	}
 
 	return uc.repo.LoadSupplierBarcodes(ctx, supplierID)
+}
+
+// SuppliersByProduct возвращает id поставщиков, у которых есть внешний код
+// товара: список поставщиков для формы «Варианты заказа» каталога (заказывать
+// у поставщика без кода товара нельзя).
+func (uc *BarcodeEditor) SuppliersByProduct(ctx context.Context, productID string) ([]string, error) {
+	done := metrics.Track(trackPkg, "SuppliersByProduct")
+	defer done()
+	productID = strings.TrimSpace(productID)
+	if productID == "" {
+		return nil, errors.New("товар не выбран")
+	}
+
+	return uc.repo.LoadProductSupplierIDs(ctx, productID)
 }
 
 // Add добавляет связку «внешний код → товар»: UPSERT + теги вики.

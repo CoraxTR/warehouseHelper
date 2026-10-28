@@ -3,8 +3,8 @@ package usecase
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
-	"time"
 
 	"warehouseHelper/internal/domain"
 )
@@ -13,10 +13,12 @@ import (
 type fakeRepo struct {
 	suppliers map[string]domain.Supplier
 	deleted   []string
+	prices    map[string]int64 // ключ "supplierID/productID" → копейки
+	priceErr  error
 }
 
 func newFakeRepo() *fakeRepo {
-	return &fakeRepo{suppliers: make(map[string]domain.Supplier)}
+	return &fakeRepo{suppliers: make(map[string]domain.Supplier), prices: make(map[string]int64)}
 }
 
 func (f *fakeRepo) ListSuppliers(_ context.Context) ([]domain.Supplier, error) {
@@ -50,6 +52,52 @@ func (f *fakeRepo) DeleteSupplier(_ context.Context, id string) error {
 	return nil
 }
 
+func priceKey(supplierID, productID string) string { return supplierID + "/" + productID }
+
+func (f *fakeRepo) ListSupplierPrices(_ context.Context, supplierID string) ([]domain.SupplierProductPrice, error) {
+	if f.priceErr != nil {
+		return nil, f.priceErr
+	}
+	out := make([]domain.SupplierProductPrice, 0, len(f.prices))
+	for key, price := range f.prices {
+		parts := strings.SplitN(key, "/", 2)
+		if parts[0] != supplierID {
+			continue
+		}
+		out = append(out, domain.SupplierProductPrice{SupplierID: parts[0], ProductID: parts[1], Price: price})
+	}
+	return out, nil
+}
+
+func (f *fakeRepo) ListProductPrices(_ context.Context, productID string) ([]domain.SupplierProductPrice, error) {
+	if f.priceErr != nil {
+		return nil, f.priceErr
+	}
+	out := make([]domain.SupplierProductPrice, 0, len(f.prices))
+	for key, price := range f.prices {
+		parts := strings.SplitN(key, "/", 2)
+		if parts[1] != productID {
+			continue
+		}
+		name := f.suppliers[parts[0]].Name
+		out = append(out, domain.SupplierProductPrice{SupplierID: parts[0], SupplierName: name, ProductID: parts[1], Price: price})
+	}
+	return out, nil
+}
+
+func (f *fakeRepo) UpsertSupplierPrice(_ context.Context, supplierID, productID string, price int64) error {
+	if f.priceErr != nil {
+		return f.priceErr
+	}
+	f.prices[priceKey(supplierID, productID)] = price
+	return nil
+}
+
+func (f *fakeRepo) DeleteSupplierPrice(_ context.Context, supplierID, productID string) error {
+	delete(f.prices, priceKey(supplierID, productID))
+	return nil
+}
+
 // fakeMS — фейк клиента МойСклад.
 type fakeMS struct {
 	names map[string]string
@@ -68,21 +116,18 @@ func (f *fakeMS) FetchCounterpartyName(_ context.Context, id string) (string, er
 }
 
 // fakeWiki — фейк синка вики: запоминает вызовы, умеет падать.
+// Расписаний заказа у поставщика больше нет: синк трогает только title и привязку.
 type fakeWiki struct {
-	syncErr   error
-	calls     int
-	lastID    string
-	lastName  string
-	lastOrder []int
-	lastDeliv []int
+	syncErr  error
+	calls    int
+	lastID   string
+	lastName string
 }
 
-func (f *fakeWiki) SyncSupplierPage(_ context.Context, supplierID, name string, orderDays, deliveryDays []int) error {
+func (f *fakeWiki) SyncSupplierPage(_ context.Context, supplierID, name string) error {
 	f.calls++
 	f.lastID = supplierID
 	f.lastName = name
-	f.lastOrder = orderDays
-	f.lastDeliv = deliveryDays
 
 	return f.syncErr
 }
@@ -104,11 +149,8 @@ func newUC(repo *fakeRepo, ms *fakeMS, wiki *fakeWiki) *MSSuppliersUseCase {
 
 func validSupplier() *domain.Supplier {
 	return &domain.Supplier{
-		ID:               testUUID,
-		DecodeRules:      []string{"28-1-6-7-6-13-8-21-8"},
-		OrderDays:        []int16{3, 1, 3}, // дубль убирается
-		DeliveryDays:     []int16{5},
-		SpecialOrderDays: []int16{},
+		ID:          testUUID,
+		DecodeRules: []string{"28-1-6-7-6-13-8-21-8"},
 	}
 }
 
@@ -163,29 +205,6 @@ func TestCreate_HappyPath(t *testing.T) {
 	if got.Name != testSupplierName {
 		t.Fatalf("Name = %q, want %q (из МС)", got.Name, testSupplierName)
 	}
-	if len(got.OrderDays) != 2 || got.OrderDays[0] != 1 || got.OrderDays[1] != 3 {
-		t.Fatalf("OrderDays = %v, want [1 3] (дубли убраны, сортировка)", got.OrderDays)
-	}
-}
-
-func TestCreate_CutoffTimeRoundTrip(t *testing.T) {
-	repo := newFakeRepo()
-	uc := newUC(repo, nil, nil)
-
-	cutoff := time.Date(2000, time.January, 1, 14, 0, 0, 0, time.UTC)
-	s := validSupplier()
-	s.OrderCutoffTime = &cutoff
-	if err := uc.Create(context.Background(), s); err != nil {
-		t.Fatalf("Create error: %v", err)
-	}
-
-	got, err := uc.Get(context.Background(), testUUID)
-	if err != nil {
-		t.Fatalf("Get error: %v", err)
-	}
-	if got.OrderCutoffTime == nil || got.OrderCutoffTime.Hour() != 14 || got.OrderCutoffTime.Minute() != 0 {
-		t.Fatalf("OrderCutoffTime = %v, want 14:00", got.OrderCutoffTime)
-	}
 }
 
 func TestCreate_DuplicateID(t *testing.T) {
@@ -231,10 +250,7 @@ func TestCreate_ValidationErrors(t *testing.T) {
 	}{
 		{name: "пустой id", mut: func(s *domain.Supplier) { s.ID = "" }},
 		{name: "id не uuid", mut: func(s *domain.Supplier) { s.ID = "not-a-uuid" }},
-		{name: "день вне диапазона", mut: func(s *domain.Supplier) { s.OrderDays = []int16{0} }},
-		{name: "день 8", mut: func(s *domain.Supplier) { s.DeliveryDays = []int16{8} }},
 		{name: "кривое правило штрихкода", mut: func(s *domain.Supplier) { s.DecodeRules = []string{"28-1-6-abc"} }},
-		{name: "отрицательная задержка", mut: func(s *domain.Supplier) { d := int16(-1); s.DelayDays = &d }},
 		{name: "отрицательная сумма", mut: func(s *domain.Supplier) { m := int64(-100); s.MinOrderAmount = &m }},
 	}
 
@@ -323,21 +339,6 @@ func TestDelete(t *testing.T) {
 	}
 }
 
-func TestNormalizeDays(t *testing.T) {
-	got, err := normalizeDays("тест", []int16{5, 1, 5, 3})
-	if err != nil {
-		t.Fatalf("normalizeDays error: %v", err)
-	}
-	want := []int16{1, 3, 5}
-	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
-		t.Fatalf("normalizeDays = %v, want %v", got, want)
-	}
-
-	if _, err := normalizeDays("тест", []int16{7, 0}); err == nil {
-		t.Fatal("normalizeDays([7 0]) = nil, want error")
-	}
-}
-
 func TestCreate_SyncsWiki(t *testing.T) {
 	repo := newFakeRepo()
 	wiki := &fakeWiki{}
@@ -351,12 +352,6 @@ func TestCreate_SyncsWiki(t *testing.T) {
 	}
 	if wiki.lastID != testUUID || wiki.lastName != testSupplierName {
 		t.Fatalf("синк: id=%q name=%q, want id=%q name=%q (имя из МС)", wiki.lastID, wiki.lastName, testUUID, testSupplierName)
-	}
-	if len(wiki.lastOrder) != 2 || wiki.lastOrder[0] != 1 || wiki.lastOrder[1] != 3 {
-		t.Fatalf("orderDays синка = %v, want [1 3] (нормализованные)", wiki.lastOrder)
-	}
-	if len(wiki.lastDeliv) != 1 || wiki.lastDeliv[0] != 5 {
-		t.Fatalf("deliveryDays синка = %v, want [5]", wiki.lastDeliv)
 	}
 }
 

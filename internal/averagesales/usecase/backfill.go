@@ -255,11 +255,11 @@ func (uc *UseCase) fetchPeriodRows(ctx context.Context, start time.Time, interva
 				continue
 			}
 		}
-		qty, ok := uc.calcQty(r, p)
+		qty, kg, ok := uc.calcSales(r, p)
 		if !ok {
 			continue
 		}
-		out = append(out, averagesales.TurnoverRow{ProductID: id, PeriodStart: start, Qty: qty})
+		out = append(out, averagesales.TurnoverRow{ProductID: id, PeriodStart: start, Qty: qty, Kg: kg})
 		if count != nil {
 			*count++
 		}
@@ -308,24 +308,39 @@ func (uc *UseCase) backfillMissing(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if len(wids) == 0 {
-		return nil
+	if len(wids) > 0 {
+		wprods, err := uc.products.TurnoverProductsByIDs(ctx, wids)
+		if err != nil {
+			return err
+		}
+		weeklyActive := make(map[string]averagesales.TurnoverProduct, len(wprods))
+		for _, p := range wprods {
+			if p.TrackWeekly {
+				weeklyActive[p.ID] = p
+			}
+		}
+		if len(weeklyActive) > 0 {
+			weeklyGroups, weeklySingles := splitByFolder(weeklyActive)
+			if err := uc.fillWeeklyMissing(ctx, weeklyActive, weeklyGroups, weeklySingles); err != nil {
+				return err
+			}
+		}
 	}
-	wprods, err := uc.products.TurnoverProductsByIDs(ctx, wids)
+
+	// Кг продаж в уже записанных периодах: строки, сохранённые до появления
+	// колонки qty_kg, кг не имеют. Перезапрашиваем окно таких товаров из МС —
+	// тем же путём, что и обновление окна (группами и пачками).
+	kgIDs, err := uc.repo.ProductsMissingKg(ctx, windowSince(intervalMonth, monthlyWindow, now))
 	if err != nil {
 		return err
 	}
-	weeklyActive := make(map[string]averagesales.TurnoverProduct, len(wprods))
-	for _, p := range wprods {
-		if p.TrackWeekly {
-			weeklyActive[p.ID] = p
+	if len(kgIDs) > 0 {
+		if _, err := uc.refreshTurnover(ctx, kgIDs, scopeWindow); err != nil {
+			return err
 		}
 	}
-	if len(weeklyActive) == 0 {
-		return nil
-	}
-	weeklyGroups, weeklySingles := splitByFolder(weeklyActive)
-	return uc.fillWeeklyMissing(ctx, weeklyActive, weeklyGroups, weeklySingles)
+
+	return nil
 }
 
 // splitByFolder — товары дозаливки на группы (по folder_id) и безгрупповые.
@@ -471,11 +486,11 @@ func (uc *UseCase) fetchGroupRows(ctx context.Context, start time.Time, interval
 		if !ok {
 			continue
 		}
-		qty, ok := uc.calcQty(r, p)
+		qty, kg, ok := uc.calcSales(r, p)
 		if !ok {
 			continue
 		}
-		out = append(out, averagesales.TurnoverRow{ProductID: id, PeriodStart: start, Qty: qty})
+		out = append(out, averagesales.TurnoverRow{ProductID: id, PeriodStart: start, Qty: qty, Kg: kg})
 		counts[id]++
 	}
 	return out, nil

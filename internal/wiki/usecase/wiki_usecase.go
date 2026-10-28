@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -33,7 +32,7 @@ type WikiRepository interface {
 	GetPageBySupplierID(ctx context.Context, supplierID string) (*domain.WikiPage, error)
 	GetUnlinkedSupplierPageByTitle(ctx context.Context, title string) (*domain.WikiPage, error)
 	CreateSupplierPage(ctx context.Context, page *domain.WikiPage) error
-	UpdateSupplierPage(ctx context.Context, pageID int64, supplierID, title string, orderDays, deliveryDays []int) error
+	UpdateSupplierPage(ctx context.Context, pageID int64, supplierID, title string) error
 	// Синк страниц товаров из каталога и теги (модуль приёмки).
 	GetPageByProductID(ctx context.Context, productID string) (*domain.WikiPage, error)
 	GetUnlinkedProductPageByTitle(ctx context.Context, title string) (*domain.WikiPage, error)
@@ -122,12 +121,13 @@ func (uc *WikiUseCase) ListPageTitlesByType(ctx context.Context, typ domain.Page
 
 // SyncSupplierPage создаёт или обновляет страницу поставщика из данных
 // справочника поставщиков (модуль mssuppliers). Обновляются только привязка
-// supplier_id, заголовок (= name) и дни заказа/доставки; пользовательский
-// контент страницы (текст, контакты, теги, фото, ссылки) не трогается.
+// supplier_id и заголовок (= name); пользовательский контент страницы (текст,
+// контакты, теги, фото, ссылки) не трогается. Расписаний заказа у поставщика
+// больше нет — они живут вариантами на паре (товар, поставщик).
 // Синк идемпотентен: удалённую вручную страницу пересоздаёт, вручную
 // созданную страницу с тем же названием — привязывает к поставщику.
 // Занятый заголовок (страница другого типа) → domain.ErrTitleTaken.
-func (uc *WikiUseCase) SyncSupplierPage(ctx context.Context, supplierID, name string, orderDays, deliveryDays []int) error {
+func (uc *WikiUseCase) SyncSupplierPage(ctx context.Context, supplierID, name string) error {
 	done := metrics.Track(trackPkg, "SyncSupplierPage")
 	defer done()
 	supplierID = strings.TrimSpace(supplierID)
@@ -144,7 +144,7 @@ func (uc *WikiUseCase) SyncSupplierPage(ctx context.Context, supplierID, name st
 		return fmt.Errorf("получить страницу вики поставщика %s: %w", supplierID, err)
 	}
 	if page != nil {
-		if err := uc.repo.UpdateSupplierPage(ctx, page.ID, supplierID, name, orderDays, deliveryDays); err != nil {
+		if err := uc.repo.UpdateSupplierPage(ctx, page.ID, supplierID, name); err != nil {
 			return fmt.Errorf("обновить страницу вики поставщика %s: %w", supplierID, err)
 		}
 
@@ -157,7 +157,7 @@ func (uc *WikiUseCase) SyncSupplierPage(ctx context.Context, supplierID, name st
 		return fmt.Errorf("найти непривязанную страницу %q: %w", name, err)
 	}
 	if unlinked != nil {
-		if err := uc.repo.UpdateSupplierPage(ctx, unlinked.ID, supplierID, name, orderDays, deliveryDays); err != nil {
+		if err := uc.repo.UpdateSupplierPage(ctx, unlinked.ID, supplierID, name); err != nil {
 			return fmt.Errorf("привязать страницу вики %q к поставщику %s: %w", name, supplierID, err)
 		}
 
@@ -165,11 +165,9 @@ func (uc *WikiUseCase) SyncSupplierPage(ctx context.Context, supplierID, name st
 	}
 
 	if err := uc.repo.CreateSupplierPage(ctx, &domain.WikiPage{
-		Type:         domain.PageTypeSupplier,
-		Title:        name,
-		OrderDays:    orderDays,
-		DeliveryDays: deliveryDays,
-		SupplierID:   supplierID,
+		Type:       domain.PageTypeSupplier,
+		Title:      name,
+		SupplierID: supplierID,
 	}); err != nil {
 		return fmt.Errorf("создать страницу вики поставщика %s: %w", supplierID, err)
 	}
@@ -180,9 +178,9 @@ func (uc *WikiUseCase) SyncSupplierPage(ctx context.Context, supplierID, name st
 // EnsureSupplierPage гарантирует страницу вики поставщика: если привязки
 // supplier_id нет — занимает вручную созданную страницу с тем же названием
 // или создаёт новую (title=name, привязка supplier_id). В отличие от
-// SyncSupplierPage данные существующей страницы НЕ перезаписываются
-// (график доставки order_days/delivery_days сохраняется). Вызывается модулем
-// приёмки при добавлении кода поставщика — до постановки тега товару.
+// SyncSupplierPage данные существующей страницы НЕ перезаписываются.
+// Вызывается модулем приёмки при добавлении кода поставщика — до постановки
+// тега товару.
 func (uc *WikiUseCase) EnsureSupplierPage(ctx context.Context, supplierID, name string) error {
 	done := metrics.Track(trackPkg, "EnsureSupplierPage")
 	defer done()
@@ -203,14 +201,13 @@ func (uc *WikiUseCase) EnsureSupplierPage(ctx context.Context, supplierID, name 
 		return nil // привязка есть: страница и её данные не трогаются
 	}
 
-	// Привязки нет: занимаем вручную созданную страницу с тем же названием,
-	// передавая её собственные дни — график доставки не затирается.
+	// Привязки нет: занимаем вручную созданную страницу с тем же названием.
 	unlinked, err := uc.repo.GetUnlinkedSupplierPageByTitle(ctx, name)
 	if err != nil {
 		return fmt.Errorf("найти непривязанную страницу %q: %w", name, err)
 	}
 	if unlinked != nil {
-		if err := uc.repo.UpdateSupplierPage(ctx, unlinked.ID, supplierID, name, unlinked.OrderDays, unlinked.DeliveryDays); err != nil {
+		if err := uc.repo.UpdateSupplierPage(ctx, unlinked.ID, supplierID, name); err != nil {
 			return fmt.Errorf("привязать страницу вики %q к поставщику %s: %w", name, supplierID, err)
 		}
 
@@ -427,13 +424,6 @@ func normalizeAndValidatePage(page *domain.WikiPage) error {
 	}
 
 	var err error
-	if page.OrderDays, err = normalizeDays(page.OrderDays); err != nil {
-		return err
-	}
-	if page.DeliveryDays, err = normalizeDays(page.DeliveryDays); err != nil {
-		return err
-	}
-
 	page.AverageWeight = strings.TrimSpace(page.AverageWeight)
 	if utf8.RuneCountInString(page.AverageWeight) > 100 {
 		return errors.New("средний вес слишком длинный (максимум 100 символов)")
@@ -494,28 +484,6 @@ func validatePhoto(photo *domain.PhotoUpload) error {
 		return errors.New("фото должно быть изображением")
 	}
 	return nil
-}
-
-// normalizeDays валидирует дни недели (1..7), убирает дубли
-// и сортирует по возрастанию.
-func normalizeDays(days []int) ([]int, error) {
-	if len(days) == 0 {
-		return nil, nil
-	}
-	seen := make(map[int]struct{}, len(days))
-	out := make([]int, 0, len(days))
-	for _, d := range days {
-		if d < 1 || d > 7 {
-			return nil, fmt.Errorf("неверный день недели: %d", d)
-		}
-		if _, ok := seen[d]; ok {
-			continue
-		}
-		seen[d] = struct{}{}
-		out = append(out, d)
-	}
-	slices.Sort(out)
-	return out, nil
 }
 
 // normalizeStrings обрезает строки по пробелам, выкидывает пустые,

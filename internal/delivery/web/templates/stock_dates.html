@@ -42,6 +42,8 @@
     </div>
     {{end}}
 
+    <div id="ban-panel" class="ban-panel hidden"></div>
+
     <table id="stock-table">
         <thead>
             <tr id="head-row"></tr>
@@ -86,6 +88,7 @@
             STOCK.shortList = (document.body.getAttribute('data-short') === '1');
             STOCK.defaultCollapsed = !STOCK.shortList;
             document.getElementById('stock-body').addEventListener('click', onBodyClick);
+            document.getElementById('ban-panel').addEventListener('click', onBanPanelClick);
             initSearch(); // на шорт-листе поля поиска нет — функция молча выходит
             var overlay = document.getElementById('modal-overlay');
             overlay.addEventListener('click', function (ev) {
@@ -346,6 +349,7 @@
             }
             document.getElementById('stock-body').innerHTML = html;
             renderDataCount();
+            renderBanPanel(items);
             applyPendingFocus(); // строка, найденная поиском: фокус
             blinkReapply();     // мигание продолжается после пересборки tbody
         }
@@ -398,16 +402,18 @@
 
         function productRow(p, n) {
             var lots = visibleLots(p);
+            var ban = banSource(lots);
             var html = '<tr data-row-product="' + esc(p.id) + '">';
             html += '<td class="col-toggle"></td>';
             // tabindex="-1" — строка может получить фокус (поиск), в обход Tab.
-            html += '<td class="col-name" tabindex="-1" data-role="name" data-product="' + esc(p.id) + '">' + esc(p.name) + '</td>';
+            html += '<td class="col-name" tabindex="-1" data-role="name" data-product="' + esc(p.id) + '">' + esc(p.name) + banBadge(p.id, ban) + '</td>';
             for (var k = 0; k < n; k++) {
                 if (k < lots.length) {
                     var lot = lots[k];
                     var tone = onlySurplus(lot) ? ' only-surplus' : (hasDiscount(lot) ? ' has-discount' : '');
                     var blue = expiresToday(lot.best_before) ? ' expires-today' : '';
-                    html += '<td class="cell-pair' + tone + blue + '" data-lot="1" data-product="' + esc(p.id) + '" data-bb="' + lot.best_before + '" data-field="qty">' + lot.qty + '</td>';
+                    var banned = (ban && String(lot.best_before) >= String(ban.best_before)) ? ' ban-lot' : '';
+                    html += '<td class="cell-pair' + tone + blue + banned + '" data-lot="1" data-product="' + esc(p.id) + '" data-bb="' + lot.best_before + '" data-field="qty">' + lot.qty + '</td>';
                     html += '<td class="cell-pair' + tone + blue + '" data-lot="1" data-product="' + esc(p.id) + '" data-bb="' + lot.best_before + '" data-field="date">' + fmtDate(lot.best_before) + '</td>';
                 } else {
                     html += '<td class="cell-empty"></td><td class="cell-empty"></td>';
@@ -417,6 +423,37 @@
             html += '<td class="cell-discount">' + fmtDiscount(rightDiscount(p, lots, 'telegram')) + '</td>';
             html += '</tr>';
             return html;
+        }
+
+        // Ручной запрет: 0 в ручной скидке (сайт или ТГ) значит «скидки нет» для
+        // этого срока И всех более дальних сроков товара. Каскад считает сервер,
+        // здесь только показываем источник и даём снять.
+        function isManualZero(lot) {
+            return lot.discount_general_manual === 0 || lot.discount_telegram_manual === 0;
+        }
+
+        // banSource — лот-источник: самый близкий срок с ручным нулём.
+        function banSource(lots) {
+            var src = null;
+            for (var i = 0; i < lots.length; i++) {
+                if (!isManualZero(lots[i])) {
+                    continue;
+                }
+                if (!src || String(lots[i].best_before) < String(src.best_before)) {
+                    src = lots[i];
+                }
+            }
+            return src;
+        }
+
+        // banChannels — какие каналы запрещены у лота.
+        function banChannels(lot) {
+            var g = lot.discount_general_manual === 0;
+            var t = lot.discount_telegram_manual === 0;
+            if (g && t) {
+                return 'сайт и ТГ';
+            }
+            return g ? 'сайт' : 'ТГ';
         }
 
         // Срок годности заканчивается сегодня (локальная дата склада) — подсветить «на заморозку».
@@ -1002,12 +1039,28 @@
                 esc(name.slice(idx + q.length));
         }
 
+        // banBadge — плашка «запрет» и кнопка снятия в ячейке наименования.
+        function banBadge(productID, ban) {
+            if (!ban) {
+                return '';
+            }
+            var title = 'ручная скидка 0 % (' + banChannels(ban) + ') с ' + fmtDate(ban.best_before) +
+                ': блокирует этот срок и все более дальние сроки товара';
+            return '<span class="ban-badge" title="' + esc(title) + '">запрет</span>' +
+                '<button type="button" class="ban-clear" data-ban="1" data-product="' + esc(productID) +
+                '" data-bb="' + ban.best_before + '" title="снять ручной запрет">снять</button>';
+        }
+
         // --- клики по ячейкам ---
 
         function onBodyClick(ev) {
             var el = ev.target || ev.srcElement;
             while (el && el !== this && el.nodeType === 1) {
                 if (el.getAttribute) {
+                    if (el.getAttribute('data-ban') === '1') {
+                        clearBan(el.getAttribute('data-product'), el.getAttribute('data-bb'));
+                        return;
+                    }
                     var role = el.getAttribute('data-role');
                     if (role === 'name') {
                         openNameModal(el.getAttribute('data-product'));
@@ -1050,6 +1103,75 @@
             MODAL.productID = null;
             MODAL.bb = null;
             UPDATE_CTX = null;
+        }
+
+        // clearBan — снять ручной ноль; остальные ручные значения лота не трогаем.
+        function clearBan(productID, bb) {
+            var p = findProduct(productID);
+            if (!p) {
+                return;
+            }
+            var lot = findLot(p, bb);
+            if (!lot) {
+                return;
+            }
+            var body = JSON.stringify({
+                product_id: productID,
+                best_before: String(bb).slice(0, 10),
+                discount_general_manual: (lot.discount_general_manual === 0) ? null : lot.discount_general_manual,
+                discount_telegram_manual: (lot.discount_telegram_manual === 0) ? null : lot.discount_telegram_manual
+            });
+            var xhr = new XMLHttpRequest();
+            xhr.open('POST', '/ms/dates/discount', true);
+            xhr.setRequestHeader('Content-Type', 'application/json');
+            xhr.onreadystatechange = function () {
+                if (xhr.readyState !== 4) {
+                    return;
+                }
+                if (xhr.status === 204) {
+                    loadActiveLots();
+                } else {
+                    alert('Не удалось снять запрет (HTTP ' + xhr.status + ')');
+                }
+            };
+            xhr.send(body);
+        }
+
+        // renderBanPanel — сводка «на ком стоит запрет»: клик по имени открывает карточку.
+        function onBanPanelClick(ev) {
+            var el = ev.target || ev.srcElement;
+            if (!el || !el.getAttribute) {
+                return;
+            }
+            var id = el.getAttribute('data-ban-focus');
+            if (id) {
+                openNameModal(id);
+            }
+        }
+
+        function renderBanPanel(items) {
+            var el = document.getElementById('ban-panel');
+            if (!el) {
+                return;
+            }
+            var names = '';
+            var count = 0;
+            for (var i = 0; i < items.length; i++) {
+                var ban = banSource(visibleLots(items[i]));
+                if (!ban) {
+                    continue;
+                }
+                count++;
+                names += '<span class="ban-panel__item" data-ban-focus="' + esc(items[i].id) + '" title="' +
+                    esc(banChannels(ban) + ', с ' + fmtDate(ban.best_before)) + '">' + esc(items[i].name) + '</span>';
+            }
+            if (!count) {
+                el.className = 'ban-panel hidden';
+                el.innerHTML = '';
+                return;
+            }
+            el.className = 'ban-panel';
+            el.innerHTML = 'Запрет (скидка 0 %): ' + count + ' — ' + names;
         }
 
         // Клик по количеству: факт (текущая скидка) / Ставим (ручная).
@@ -1149,31 +1271,257 @@
             showModal(html);
         }
 
-        // Клик по названию: обновить сроки одной позиции (ограничение — код товара).
+        // Клик по названию: карточка позиции — поставщики (только чтение),
+        // варианты заказа, цены пар и ссылка на сайт (редактируются), плюс
+        // «Обновить сроки» по коду товара.
         function openNameModal(productID) {
             var p = findProduct(productID);
             if (!p) {
                 return;
             }
-            if (!p.internal_code) {
-                // Обновление по товару ограничено его внутренним кодом: без
-                // кода страница вернула бы 400 сырым текстом — говорим прямо.
-                showModal('<div class="modal-title">' + esc(p.name) + '</div>' +
-                    '<div class="modal-line">У товара нет внутреннего кода — обновить сроки по нему нельзя. ' +
-                    'Заведите код в МС и выгрузите каталог.</div>' +
-                    '<div class="modal-actions"><button type="button" onclick="closeModal()">Закрыть</button></div>');
-                return;
-            }
-            UPDATE_CTX = { kind: 'product', id: p.id, name: p.name, code: p.internal_code };
+            // Обновление по товару ограничено его внутренним кодом: без кода
+            // страница вернула бы 400 сырым текстом — говорим прямо, но
+            // карточку всё равно показываем (данные читаются без кода).
+            UPDATE_CTX = p.internal_code ? { kind: 'product', id: p.id, name: p.name, code: p.internal_code } : null;
+
             var html = '<div class="modal-title">' + esc(p.name) + '</div>';
             if (p.internal_code) {
                 html += '<div class="modal-line">Код: ' + esc(p.internal_code) + '</div>';
             }
+            html += '<div id="pi-body"><div class="modal-line">загрузка…</div></div>';
             html += '<div class="modal-actions">';
-            html += '<button type="button" onclick="closeModal()">Отмена</button>';
-            html += '<button type="button" data-update="1">Обновить сроки ' + esc(p.name) + '</button>';
+            html += '<button type="button" onclick="closeModal()">Закрыть</button>';
+            html += '<button type="button" onclick="saveProductInfo()">Сохранить</button>';
+            if (p.internal_code) {
+                html += '<button type="button" data-update="1">Обновить сроки</button>';
+            }
             html += '</div>';
             showModal(html);
+
+            fetch('/ms/dates/product-info?id=' + encodeURIComponent(p.id))
+                .then(function (resp) { return resp.json(); })
+                .then(function (data) { renderProductInfo(data); })
+                .catch(function () {
+                    document.getElementById('pi-body').innerHTML =
+                        '<div class="modal-line">не удалось загрузить данные карточки</div>';
+                });
+        }
+
+        // renderProductInfo — тело мини-окна по данным /ms/dates/product-info.
+        // Дни вводятся списком через запятую (1=Пн … 7=Вс): так форма живёт на
+        // старых браузерах склада без массовых чекбоксов.
+        var PI = null;
+
+        function renderProductInfo(data) {
+            PI = data;
+            var box = document.getElementById('pi-body');
+            if (!box) {
+                return;
+            }
+            if (data.error) {
+                box.innerHTML = '<div class="modal-line">' + esc(data.error) + '</div>';
+                return;
+            }
+
+            var html = '';
+
+            html += '<div class="modal-title" style="font-size:11px;">Поставщики и цены</div>';
+            if (data.suppliers && data.suppliers.length) {
+                html += '<table style="width:100%;"><tr><th style="text-align:left;">Поставщик</th><th style="text-align:left;">Цена, ₽</th></tr>';
+                var i;
+                for (i = 0; i < data.suppliers.length; i++) {
+                    var sup = data.suppliers[i];
+                    var priceText = sup.price_kop > 0 ? (sup.price_kop / 100).toFixed(2) : '';
+                    html += '<tr><td>' + esc(sup.name) + '</td><td>' +
+                        '<input type="text" class="pi-price" data-supplier="' + esc(sup.id) + '" value="' + esc(priceText) + '" inputmode="decimal" style="width:90px;" placeholder="—">' +
+                        '</td></tr>';
+                }
+                html += '</table>';
+            } else {
+                html += '<div class="modal-line">Нет поставщиков с внешним кодом этого товара — заведите код на карточке поставщика.</div>';
+            }
+
+            html += '<div class="modal-title" style="font-size:11px;margin-top:14px;">Варианты заказа</div>';
+            html += '<div id="pi-schedules"></div>';
+            html += '<div class="modal-line"><button type="button" class="secondary" onclick="addScheduleRow(null)">+ вариант</button></div>';
+
+            html += '<div class="modal-title" style="font-size:11px;margin-top:14px;">Ссылка на сайт</div>';
+            html += '<div class="modal-line"><input type="text" id="pi-site-url" value="' + esc(data.site_url || '') + '" style="width:100%;" placeholder="https://…"></div>';
+
+            html += '<div class="modal-line" id="pi-status"></div>';
+
+            box.innerHTML = html;
+
+            if (data.schedules && data.schedules.length) {
+                for (var k = 0; k < data.schedules.length; k++) {
+                    addScheduleRow(data.schedules[k]);
+                }
+            }
+        }
+
+        // addScheduleRow — строка варианта заказа (supplier select + поля).
+        function addScheduleRow(s) {
+            var box = document.getElementById('pi-schedules');
+            if (!box) {
+                return;
+            }
+            var row = document.createElement('div');
+            row.className = 'pi-sched';
+            row.style.cssText = 'border:1px solid #2A2A33;padding:8px;margin-bottom:8px;';
+
+            var opts = '<option value="">— поставщик —</option>';
+            if (PI && PI.suppliers) {
+                for (var i = 0; i < PI.suppliers.length; i++) {
+                    var sup = PI.suppliers[i];
+                    var sel = (s && s.supplier_id === sup.id) ? ' selected' : '';
+                    opts += '<option value="' + esc(sup.id) + '"' + sel + '>' + esc(sup.name) + '</option>';
+                }
+            }
+
+            var sid = (s && s.id) ? String(s.id) : '0';
+            var name = s ? s.name : '';
+            var days = (s && s.order_days) ? s.order_days : [];
+            var deliv = (s && s.delivery_days) ? s.delivery_days : [];
+            var delay = (s && s.delay_days !== null && s.delay_days !== undefined) ? String(s.delay_days) : '';
+            var cutoff = s ? (s.order_cutoff_time || '') : '';
+
+            row.innerHTML =
+                '<input type="hidden" class="pi-sid" value="' + esc(sid) + '">' +
+                '<div><select class="pi-sup" style="width:100%;">' + opts + '</select></div>' +
+                '<div style="margin-top:6px;"><input type="text" class="pi-name" value="' + esc(name) + '" placeholder="название варианта (общий, спец.)" style="width:100%;"></div>' +
+                '<div style="margin-top:6px;font-size:11px;">Дни заказа: ' + daysBoxes('order', days) + '</div>' +
+                '<div style="margin-top:4px;font-size:11px;">Дни доставки: ' + daysBoxes('deliv', deliv) + '</div>' +
+                '<div style="margin-top:6px;font-size:11px;">дней доставки (0 = на след. день) <input type="text" class="pi-delay" value="' + esc(delay) + '" placeholder="0" style="width:50px;">' +
+                ' · дедлайн <input type="text" class="pi-cutoff" value="' + esc(cutoff) + '" placeholder="12:00" style="width:60px;"></div>' +
+                '<div style="margin-top:6px;text-align:right;"><button type="button" class="btn-remove" onclick="this.parentNode.parentNode.parentNode.removeChild(this.parentNode.parentNode)">−</button></div>';
+
+            box.appendChild(row);
+        }
+
+        // daysBoxes — чекбоксы дней недели (1=Пн..7=Вс) для строки варианта:
+        // как в карточке товара, без ввода «1,4» руками.
+        function daysBoxes(kind, list) {
+            var names = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
+            var html = '';
+            for (var i = 0; i < 7; i++) {
+                var d = i + 1;
+                var checked = '';
+                for (var j = 0; j < list.length; j++) {
+                    if (parseInt(list[j], 10) === d) {
+                        checked = ' checked';
+                        break;
+                    }
+                }
+                html += '<label style="margin-right:6px;white-space:nowrap;"><input type="checkbox" class="pi-day pi-day-' +
+                    kind + '" data-day="' + d + '"' + checked + '> ' + names[i] + '</label>';
+            }
+            return html;
+        }
+
+        // checkedDays — отмеченные дни строки (по возрастанию).
+        function checkedDays(row, kind) {
+            var out = [];
+            var inputs = row.getElementsByTagName('input');
+            for (var i = 0; i < inputs.length; i++) {
+                var el = inputs[i];
+                if (String(el.className).indexOf('pi-day-' + kind) < 0) {
+                    continue;
+                }
+                if (el.checked) {
+                    out.push(parseInt(el.getAttribute('data-day'), 10));
+                }
+            }
+            return out;
+        }
+
+        // saveProductInfo — собрать мини-окно в JSON и отправить.
+        function saveProductInfo() {
+            if (!PI || !PI.product_id) {
+                return;
+            }
+            var status = document.getElementById('pi-status');
+
+            var prices = [];
+            var inputs = document.getElementsByTagName('input');
+            for (var i = 0; i < inputs.length; i++) {
+                var el = inputs[i];
+                if (!/pi-price/.test(el.className)) {
+                    continue;
+                }
+                var rub = String(el.value || '').replace(/\s/g, '').replace(',', '.');
+                var kop = rub === '' ? 0 : Math.round(parseFloat(rub) * 100);
+                if (isNaN(kop)) {
+                    if (status) { status.innerHTML = 'цена: не число — «' + esc(el.value) + '»'; }
+                    return;
+                }
+                prices.push({ id: el.getAttribute('data-supplier'), price_kop: kop });
+            }
+
+            var schedules = [];
+            var rows = document.getElementsByTagName('div');
+            for (var j = 0; j < rows.length; j++) {
+                var row = rows[j];
+                if (!/pi-sched/.test(row.className)) {
+                    continue;
+                }
+                var supSel = firstByClass(row, 'pi-sup');
+                var nameIn = firstByClass(row, 'pi-name');
+                if (!supSel || !supSel.value || !nameIn || String(nameIn.value).replace(/^\s+|\s+$/g, '') === '') {
+                    continue; // пустую строку пропускаем
+                }
+                var delayIn = firstByClass(row, 'pi-delay');
+                var delayVal = delayIn && delayIn.value !== '' ? parseInt(delayIn.value, 10) : null;
+                schedules.push({
+                    id: parseInt(firstByClass(row, 'pi-sid').value, 10) || 0,
+                    supplier_id: supSel.value,
+                    name: nameIn.value,
+                    order_days: checkedDays(row, 'order'),
+                    delivery_days: checkedDays(row, 'deliv'),
+                    delay_days: isNaN(delayVal) ? null : delayVal,
+                    order_cutoff_time: firstByClass(row, 'pi-cutoff').value
+                });
+            }
+
+            var siteIn = document.getElementById('pi-site-url');
+            var payload = {
+                product_id: PI.product_id,
+                site_url: siteIn ? siteIn.value : '',
+                prices: prices,
+                schedules: schedules,
+                save_orders: true
+            };
+
+            if (status) {
+                status.innerHTML = 'сохраняю…';
+            }
+            fetch('/ms/dates/product-info/save', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            }).then(function (resp) { return resp.json(); }).then(function (res) {
+                if (!status) {
+                    return;
+                }
+                if (res.ok) {
+                    status.innerHTML = 'сохранено: цен ' + res.prices_saved;
+                    return;
+                }
+                var bad = res.problems ? res.problems.join('; ') : 'не сохранилось';
+                status.innerHTML = 'ошибки: ' + esc(bad);
+            }).catch(function () {
+                if (status) { status.innerHTML = 'сохранение не удалось (сеть)'; }
+            });
+        }
+
+        // firstByClass — первый потомок с классом (ES5: без querySelector).
+        function firstByClass(root, cls) {
+            var all = root.getElementsByTagName('*');
+            for (var i = 0; i < all.length; i++) {
+                if (new RegExp('(^|\\s)' + cls + '(\\s|$)').test(all[i].className)) {
+                    return all[i];
+                }
+            }
+            return null;
         }
 
         // Клик по группе: обновить сроки группы (ограничение — 3 цифры кода группы).
