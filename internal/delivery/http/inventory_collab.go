@@ -39,14 +39,47 @@ func (h *Handler) openInventoryRoom(r *http.Request, w http.ResponseWriter, inve
 	return room, created, nil
 }
 
+// inventoryHost — пришёл ли запрос с машины, начавшей инвентаризацию. Роль
+// доказывает cookie-ключ комнаты: комнаты на сервере может уже не быть (рестарт
+// приложения, TTL, «Отменить») — ключ живёт дольше и продолжает работать.
+func (h *Handler) inventoryHost(r *http.Request, sessionID string) bool {
+	room, err := h.collabUC.State(sessionID)
+	if err != nil {
+		return hasHostCookie(r, sessionID)
+	}
+
+	return roomHost(r, room)
+}
+
+// guestInventoryScans отдаёт строки гостей для ПРЕДПРОСМОТРА: read-only снимок,
+// комнату не занимает (Claim здесь нельзя — он блокирует проведение и требует
+// готовности гостей). Комнаты нет — предпросмотр собираем по своим сканам:
+// отказывать оператору из-за снесённой комнаты нельзя.
+func (h *Handler) guestInventorySnapshot(sessionID string) (rows []json.RawMessage, digest string) {
+	rows, digest, err := h.collabUC.GuestSnapshot(sessionID)
+
+	switch {
+	case errors.Is(err, collab.ErrNotFound), errors.Is(err, collab.ErrClosed):
+		slog.Info("inventory: комнаты нет — предпросмотр по своим сканам", "session_id", sessionID)
+	case err != nil:
+		// Предпросмотр — только справка: неполные строки гостей врут меньше, чем
+		// отказ открыть предпросмотр. Документ всё равно собирает Conduct.
+		slog.Info("inventory: строки гостей для предпросмотра не прочитаны", "session_id", sessionID, "err", err)
+	default:
+		return rows, digest
+	}
+
+	return nil, ""
+}
+
 // claimGuestInventoryScans забирает строки гостей на проведение инвентаризации:
 // одним вызовом проверяет, что комната — этот же вид, не занята и все гости
 // готовы, и отдаёт снимок строк (как есть, объектами). taken=false — комнаты нет
 // (перезапуск приложения/purge) или она отменена: хост проводит по своим сканам,
 // отказывать оператору из-за этого нельзя. Строки возвращаются в исходном виде —
 // вынимает из них штрих-коды iucase.MergeGuestScans.
-func (h *Handler) claimGuestInventoryScans(sessionID, inventoryType string) (rows []json.RawMessage, taken bool, err error) {
-	rows, err = h.collabUC.Claim(sessionID, inventoryType)
+func (h *Handler) claimGuestInventoryScans(sessionID, inventoryType, digest string) (rows []json.RawMessage, taken bool, err error) {
+	rows, err = h.collabUC.ClaimSnapshot(sessionID, inventoryType, digest)
 
 	switch {
 	case errors.Is(err, collab.ErrNotFound), errors.Is(err, collab.ErrClosed):
@@ -86,6 +119,13 @@ func invCollabError(w http.ResponseWriter, err error) {
 		})
 	case errors.Is(err, collab.ErrKind):
 		invWriteJSON(w, http.StatusBadRequest, invErrorResponse{Error: err.Error()})
+	case errors.Is(err, collab.ErrGuestsChanged):
+		// Гость вернулся и долил сканы после предпросмотра: проводить по строкам,
+		// которых хозяин не видел, нельзя — страница сама перезапросит предпросмотр.
+		invWriteJSON(w, http.StatusConflict, invErrorResponse{
+			Error:         "гости прислали новые сканы после предпросмотра — документ соберётся по ним, проверьте количества",
+			GuestsChanged: true,
+		})
 	default:
 		invWriteJSONError(w, err)
 	}

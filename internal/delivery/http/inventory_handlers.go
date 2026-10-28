@@ -91,6 +91,9 @@ type invPreviewRequest struct {
 	// подбором). Поле необязательное: нет — nil.
 	Hold      []string `json:"hold"`
 	SessionID string   `json:"session_id"`
+	// GuestToken — отпечаток набора строк гостей из предпросмотра: проведение
+	// сверяет его и не собирает документ по строкам, которых хозяин не видел.
+	GuestToken string `json:"guest_token"`
 }
 
 // invPreviewRow — строка предпросмотра: только строки, никаких сырых float и
@@ -119,8 +122,14 @@ type invPreviewResponse struct {
 	// SrokiSkip — шаг сроков не побежит: в общей строке нет ни одного скана
 	// (страховка не обнуляет вид). Страница вместо построчных меток обнуления
 	// пишет оператору, что сроки не будут меняться.
-	SrokiSkip bool            `json:"srokiSkip"`
-	Rows      []invPreviewRow `json:"rows"`
+	SrokiSkip bool `json:"srokiSkip"`
+	// Guests — в итог вошли строки гостей совместной инвентаризации: страница
+	// пишет об этом одной строкой (разделять, чей скан, владелец не просил).
+	Guests bool `json:"guests"`
+	// GuestToken — отпечаток строк гостей, вошедших в предпросмотр: страница
+	// возвращает его на проведении, и сервер сверяет набор.
+	GuestToken string          `json:"guestToken"`
+	Rows       []invPreviewRow `json:"rows"`
 }
 
 // invConductResponse — ответ проведения: созданный документ МС и итог шага
@@ -138,6 +147,9 @@ type invConductResponse struct {
 type invErrorResponse struct {
 	OK    bool   `json:"ok"`
 	Error string `json:"error"`
+	// GuestsChanged — набор строк гостей изменился после предпросмотра: страница
+	// перезапрашивает предпросмотр, чтобы хозяин увидел новые количества.
+	GuestsChanged bool `json:"guestsChanged,omitempty"`
 }
 
 // GoodsInventoryPage — GET /goods/inventory: выбор вида инвентаризации.
@@ -265,23 +277,68 @@ func (h *Handler) renderInventoryScan(w http.ResponseWriter, data goodsInventory
 }
 
 // GoodsInventoryPreview — POST /goods/inventory/preview: предпросмотр документа
-// по сканам. body: {"type":"…","scans":["…"],"hold":["…"]}. 200 — все позиции
-// группы с фактическим количеством (итог = общая строка + отложка); 400 — вид не
-// задан / скан невалиден / не из группы.
+// по сканам. body: {"type":"…","scans":["…"],"hold":["…"],"session_id":"…"}.
+// 200 — все позиции группы с фактическим количеством (итог = общая строка +
+// отложка); 400 — вид не задан / скан невалиден / не из группы; 403 — строки
+// гостей запросила не машина-хозяин.
+//
+// Совместная инвентаризация: session_id непустой — к своим сканам доклеиваются
+// строки гостей (общая строка и отложка отдельно), чтобы итог в предпросмотре
+// совпадал с будущим документом. Строки берутся снимком БЕЗ Claim: комната не
+// занимается, проведение не блокируется, повторный предпросмотр видит свежие
+// строки.
 func (h *Handler) GoodsInventoryPreview(w http.ResponseWriter, r *http.Request) {
 	req, ok := invDecodeRequest(w, r)
 	if !ok {
 		return
 	}
 
-	preview, err := h.inventoryUC.Preview(r.Context(), req.Type, req.Scans, req.Hold)
+	sessionID := strings.TrimSpace(req.SessionID)
+	scans := req.Scans
+	hold := req.Hold
+	guests := false
+	guestToken := ""
+
+	if sessionID != "" {
+		// Гость предпросмотр собрать не может (документ делает хозяин), а его
+		// session_id не должен открывать чужие строки: роль — по cookie-ключу.
+		if !h.inventoryHost(r, sessionID) {
+			invWriteJSON(w, http.StatusForbidden, invErrorResponse{
+				Error: "предпросмотр собирает только машина, начавшая инвентаризацию",
+			})
+
+			return
+		}
+
+		guestRows, token := h.guestInventorySnapshot(sessionID)
+
+		merged, mergeErr := iucase.MergeGuestScans(scans, hold, guestRows)
+		if mergeErr != nil {
+			invWriteJSON(w, http.StatusBadRequest, invErrorResponse{
+				Error: "строка гостя не разобрана: " + mergeErr.Error(),
+			})
+
+			return
+		}
+
+		scans = merged.Scans
+		hold = merged.Hold
+		guests = len(guestRows) > 0
+		guestToken = token
+	}
+
+	preview, err := h.inventoryUC.Preview(r.Context(), req.Type, scans, hold)
 	if err != nil {
 		invWriteJSONError(w, err)
 
 		return
 	}
 
-	invWriteJSON(w, http.StatusOK, invPreviewBody(preview))
+	body := invPreviewBody(preview)
+	body.Guests = guests
+	body.GuestToken = guestToken
+
+	invWriteJSON(w, http.StatusOK, body)
 }
 
 // GoodsInventoryConduct — POST /goods/inventory/conduct: создать документ
@@ -312,19 +369,8 @@ func (h *Handler) GoodsInventoryConduct(w http.ResponseWriter, r *http.Request) 
 	if sessionID != "" {
 		// Провести может только машина, начавшая инвентаризацию: у гостя в
 		// cookie ключа хозяина нет, и он получит отказ (страница гостя кнопку
-		// проведения и не показывает). Комнаты на сервере может уже не быть
-		// (рестарт приложения, TTL, «Отменить») — роль и тогда доказывает
-		// cookie-ключ: без этой проверки гость со своим session_id создал бы
-		// документ по неполным сканам. Ключ живёт 12 ч против TTL комнаты 6 ч,
-		// поэтому «хозяин проводит после сноса комнаты» не ломается.
-		room, stateErr := h.collabUC.State(sessionID)
-
-		host := stateErr == nil && roomHost(r, room)
-		if stateErr != nil {
-			host = hasHostCookie(r, sessionID)
-		}
-
-		if !host {
+		// проведения и не показывает).
+		if !h.inventoryHost(r, sessionID) {
 			invWriteJSON(w, http.StatusForbidden, invErrorResponse{
 				Error: "провести инвентаризацию может только машина, начавшая её",
 			})
@@ -332,7 +378,7 @@ func (h *Handler) GoodsInventoryConduct(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 
-		guestRows, taken, claimErr := h.claimGuestInventoryScans(sessionID, req.Type)
+		guestRows, taken, claimErr := h.claimGuestInventoryScans(sessionID, req.Type, req.GuestToken)
 		if claimErr != nil {
 			invCollabError(w, claimErr)
 
