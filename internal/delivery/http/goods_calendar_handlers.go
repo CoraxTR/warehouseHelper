@@ -19,7 +19,7 @@ func (h *Handler) GoodsCalendar(w http.ResponseWriter, r *http.Request) {
 	tab := r.URL.Query().Get("tab")
 	month := r.URL.Query().Get("month")
 
-	page, err := h.goodsUC.CalendarPage(r.Context(), tab, month)
+	page, err := h.goodsUC.CalendarPage(r.Context(), tab, month, r.URL.Query().Get("from"), r.URL.Query().Get("to"))
 	if err != nil {
 		slog.Info("goods calendar", "tab", tab, "month", month, "err", err)
 		http.Error(w, "не удалось собрать календарь продаж", http.StatusInternalServerError)

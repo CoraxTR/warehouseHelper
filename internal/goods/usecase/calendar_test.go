@@ -49,11 +49,11 @@ func (s *stubSales) WeeklyTurnover(context.Context, []string, time.Time) ([]aver
 
 // stubCoeffs — коэффициенты периодов (ordercoeff).
 type stubCoeffs struct {
-	values map[string]map[time.Time]int16
+	values map[string]map[time.Time]ordercoeff.PeriodCoeff
 	err    error
 }
 
-func (s *stubCoeffs) CoefficientsBatch(context.Context, []string, ordercoeff.PeriodType, []time.Time) (map[string]map[time.Time]int16, error) {
+func (s *stubCoeffs) PeriodsBatch(context.Context, []string, ordercoeff.PeriodType, []time.Time) (map[string]map[time.Time]ordercoeff.PeriodCoeff, error) {
 	if s.err != nil {
 		return nil, s.err
 	}
@@ -92,13 +92,13 @@ func TestCalendarPage_Week(t *testing.T) {
 			},
 		},
 	}}
-	coeffs := &stubCoeffs{values: map[string]map[time.Time]int16{
-		"p1": {week: -2},
+	coeffs := &stubCoeffs{values: map[string]map[time.Time]ordercoeff.PeriodCoeff{
+		"p1": {week: {ProductID: "p1", PeriodStart: week, Coeff: -2, Discount: 2}},
 	}}
 
 	uc := newCalendarUC(calendarProducts(), sales, coeffs)
 
-	page, err := uc.CalendarPage(context.Background(), TabWeek, "")
+	page, err := uc.CalendarPage(context.Background(), TabWeek, "", "", "")
 	if err != nil {
 		t.Fatalf("CalendarPage: %v", err)
 	}
@@ -160,9 +160,22 @@ func TestCalendarPage_MonthCurrent(t *testing.T) {
 	}
 	uc := newCalendarUC(calendarProducts(), sales, &stubCoeffs{})
 
-	page, err := uc.CalendarPage(context.Background(), TabMonth, "")
+	page, err := uc.CalendarPage(context.Background(), TabMonth, "", "", "")
 	if err != nil {
 		t.Fatalf("CalendarPage: %v", err)
+	}
+
+	// Недельный товар на месячной вкладке помечается: месячного ряда и среднего нет.
+	weeklyMarked := false
+	for _, g := range page.Groups {
+		for _, r := range g.Rows {
+			if r.ProductID == "p1" && r.Weekly {
+				weeklyMarked = true
+			}
+		}
+	}
+	if !weeklyMarked {
+		t.Fatal("товар с недельным учётом не помечен на месячной вкладке")
 	}
 
 	if len(page.PeriodTitles) != calendarMonths {
@@ -213,7 +226,7 @@ func TestCalendarPage_MonthHistory(t *testing.T) {
 	}}
 	uc := newCalendarUC(calendarProducts(), sales, &stubCoeffs{})
 
-	page, err := uc.CalendarPage(context.Background(), TabMonth, "2026-07")
+	page, err := uc.CalendarPage(context.Background(), TabMonth, "2026-07", "", "")
 	if err != nil {
 		t.Fatalf("CalendarPage: %v", err)
 	}
@@ -255,7 +268,7 @@ func TestCalendarPage_MonthHistory(t *testing.T) {
 func TestCalendarPage_NotWired(t *testing.T) {
 	uc := NewGoodsUseCase(nil, nil, calendarProducts(), nil)
 
-	if _, err := uc.CalendarPage(context.Background(), TabWeek, ""); err == nil {
+	if _, err := uc.CalendarPage(context.Background(), TabWeek, "", "", ""); err == nil {
 		t.Fatal("CalendarPage без данных продаж = nil, want ошибку")
 	}
 }
@@ -266,7 +279,7 @@ func TestCalendarPage_EmptyWeekTab(t *testing.T) {
 	}}
 	uc := newCalendarUC(repo, &stubSales{}, &stubCoeffs{})
 
-	page, err := uc.CalendarPage(context.Background(), TabWeek, "")
+	page, err := uc.CalendarPage(context.Background(), TabWeek, "", "", "")
 	if err != nil {
 		t.Fatalf("CalendarPage: %v", err)
 	}
@@ -279,7 +292,7 @@ func TestCalendarPage_DataError(t *testing.T) {
 	broken := errors.New("нет связи")
 	uc := newCalendarUC(calendarProducts(), &stubSales{err: broken}, &stubCoeffs{})
 
-	if _, err := uc.CalendarPage(context.Background(), TabWeek, ""); err == nil {
+	if _, err := uc.CalendarPage(context.Background(), TabWeek, "", "", ""); err == nil {
 		t.Fatal("ошибка данных проглочена")
 	}
 }

@@ -50,6 +50,15 @@
     <div class="cal-tabs">
         <a href="{{.WeekTabURL}}" {{if eq .Tab "week"}}class="active"{{end}}>Недели</a>
         <a href="{{.MonthTabURL}}" {{if eq .Tab "month"}}class="active"{{end}}>Месяцы</a>
+        <form method="get" action="/goods/calendar" class="cal-range">
+            <input type="hidden" name="tab" value="{{.Tab}}">
+            с <input type="text" name="from" value="{{.FromParam}}" size="10"
+                placeholder="{{if eq .Tab "week"}}2026-09-14{{else}}2026-09{{end}}">
+            по <input type="text" name="to" value="{{.ToParam}}" size="10"
+                placeholder="{{if eq .Tab "week"}}2026-10-26{{else}}2026-10{{end}}">
+            <button type="submit">Показать</button>
+            <a href="/goods/calendar?tab={{.Tab}}">окно</a>
+        </form>
         {{if eq .Tab "month"}}
         <span style="margin-left:16px;">
             {{if .PrevMonthURL}}<a href="{{.PrevMonthURL}}">← {{.MonthParam}}</a>{{end}}
@@ -64,22 +73,25 @@
     {{else}}
     <div class="cal-wrap">
         <table class="cal">
+            <thead>
             <tr>
                 <th class="cal-name">Товар</th>
                 {{range .PeriodTitles}}<th class="cal-num">{{.}}</th>{{end}}
                 <th class="cal-num">{{.AvgHeader}}</th>
                 <th class="cal-num">коэф.</th>
             </tr>
-            {{range .Groups}}
-            <tr class="cal-group"><th colspan="{{len $.PeriodTitles}}">{{if .Name}}{{.Name}}{{else}}Без группы{{end}}</th></tr>
-            {{range .Rows}}
-            <tr>
-                <td class="cal-name">{{if .InternalCode}}<span class="code">{{.InternalCode}}</span> {{end}}{{.Name}}</td>
+            </thead>
+            <tbody>
+            {{range $gi, $g := .Groups}}
+            <tr class="cal-group" data-cal-group="{{$gi}}" onclick="calToggle('{{$gi}}')"><th colspan="{{len $.PeriodTitles}}"><span id="cal-mark-{{$gi}}"></span> {{if $g.Name}}{{$g.Name}}{{else}}Без группы{{end}}</th></tr>
+            {{range $g.Rows}}
+            <tr data-cal-row="{{$gi}}">
+                <td class="cal-name{{if .Weekly}} cal-weekly{{end}}"{{if and .Weekly (eq $.Tab "month")}} title="недельный учёт: месячного ряда и среднего по позиции нет"{{end}}>{{if .InternalCode}}<span class="code">{{.InternalCode}}</span> {{end}}{{.Name}}</td>
                 {{range .Cells}}
-                <td class="cal-num{{if .InWindow}} cal-win{{end}}" title="{{.Title}}">
+                <td class="cal-num{{if .InWindow}} cal-win{{end}}{{if .Class}} {{.Class}}{{end}}" title="{{.Title}}">
                     {{if .KgText}}<span class="cal-kg">{{.KgText}}</span>{{end}}
                     <span class="cal-qty">{{if .QtyText}}{{.QtyText}}{{else}}—{{end}}</span>
-                    <span class="cal-coeff">{{if .Coeff}}коэф. {{.Coeff}}{{end}}</span>
+                    <span class="cal-coeff">{{if .Coeff}}итог {{.Coeff}}{{end}}{{if .Delta}} <span class="cal-delta">{{.Delta}}</span>{{end}}</span>
                 </td>
                 {{end}}
                 <td class="cal-num"><span class="cal-qty">{{if .AvgText}}{{.AvgText}}{{else}}—{{end}}</span></td>
@@ -89,8 +101,55 @@
             {{end}}
         </table>
     </div>
-    <p class="readonly-hint">Ячейка: сверху кг (весовые), снизу штуки за период. Красная обводка — период участвует в расчёте среднего. Наведите на ячейку: коэффициент коррекции этого периода.</p>
+    <p class="readonly-hint">Ячейка: сверху кг (весовые), снизу штуки за период. Красная обводка — период участвует в расчёте среднего. Подсказка: коэффициент и сколько раз событие повторилось.</p>
+    <p class="cal-legend">
+        <span class="cal-disc">скидки</span>
+        <span class="cal-out">закончился</span>
+        <span class="cal-both">скидки + закончился</span>
+    </p>
     {{end}}
+    <script>
+        // Сворачивание групп: недельная — раскрыты, месячная — свёрнуты
+        // (как на «Сроках»). Только ES5: старые браузеры склада.
+        var CAL_TAB = '{{.Tab}}';
+        var CAL_COLLAPSED = {};
+
+        function calApply() {
+            var rows = document.getElementsByTagName('tr');
+            var i;
+            for (i = 0; i < rows.length; i++) {
+                var gid = rows[i].getAttribute ? rows[i].getAttribute('data-cal-row') : null;
+                if (gid === null || gid === undefined) {
+                    continue;
+                }
+                rows[i].style.display = CAL_COLLAPSED[gid] ? 'none' : '';
+            }
+            var marks = document.getElementsByTagName('span');
+            for (i = 0; i < marks.length; i++) {
+                var id = marks[i].getAttribute ? marks[i].getAttribute('id') : null;
+                if (!id || id.indexOf('cal-mark-') !== 0) {
+                    continue;
+                }
+                marks[i].innerHTML = CAL_COLLAPSED[id.slice(9)] ? '▶' : '▼';
+            }
+        }
+
+        function calToggle(gid) {
+            CAL_COLLAPSED[gid] = !CAL_COLLAPSED[gid];
+            calApply();
+        }
+
+        if (CAL_TAB === 'month') {
+            var heads = document.getElementsByTagName('tr');
+            for (var k = 0; k < heads.length; k++) {
+                var hid = heads[k].getAttribute ? heads[k].getAttribute('data-cal-group') : null;
+                if (hid !== null && hid !== undefined) {
+                    CAL_COLLAPSED[hid] = true;
+                }
+            }
+        }
+        calApply();
+    </script>
 </body>
 
 </html>

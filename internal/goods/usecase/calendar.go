@@ -41,7 +41,7 @@ type SalesCalendarReader interface {
 // PeriodCoeffReader — коэффициенты коррекции по периодам (реализует
 // *oucase.UseCase, владелец product_period_coeff).
 type PeriodCoeffReader interface {
-	CoefficientsBatch(ctx context.Context, productIDs []string, periodType ordercoeff.PeriodType, intervals []time.Time) (map[string]map[time.Time]int16, error)
+	PeriodsBatch(ctx context.Context, productIDs []string, periodType ordercoeff.PeriodType, intervals []time.Time) (map[string]map[time.Time]ordercoeff.PeriodCoeff, error)
 }
 
 // CalendarCell — одна ячейка календаря (товар × период).
@@ -51,7 +51,9 @@ type CalendarCell struct {
 	QtyText     string // штуки за период; пусто — данных нет
 	InWindow    bool   // период участвует в расчёте среднего (красная обводка)
 	Coeff       string // накопленный коэффициент периода; пусто — нет событий
+	Delta       string // вклад событий этого периода: +1/−2; пусто — ноль
 	Title       string // подсказка ячейки: период, продажи, коэффициент
+	Class       string // цвет события: cal-disc / cal-out / cal-both (пусто — событий нет)
 }
 
 // CalendarRow — строка календаря: товар и его ячейки по столбцам.
@@ -62,6 +64,7 @@ type CalendarRow struct {
 	Cells        []CalendarCell
 	AvgText      string // действующее среднее, шт/период
 	CoeffText    string // коэффициент текущего периода
+	Weekly       bool   // недельный учёт: месячного ряда и среднего нет
 }
 
 // CalendarGroup — группа товаров (разделение как на «Сроках»).
@@ -78,6 +81,8 @@ type CalendarPage struct {
 	PeriodTitles []string
 	Groups       []CalendarGroup
 	MonthParam   string // выбранный месяц (YYYY-MM), только для месячной вкладки
+	FromParam    string // «с» из формы диапазона (YYYY-MM или YYYY-MM-DD)
+	ToParam      string // «по» из формы диапазона
 	PrevMonthURL string
 	NextMonthURL string
 	NextDisabled bool
@@ -88,7 +93,7 @@ type CalendarPage struct {
 
 // CalendarPage собирает страницу календаря. tab — week|month (пусто = week),
 // month — YYYY-MM для месячной вкладки (пусто = текущий месяц).
-func (uc *GoodsUseCase) CalendarPage(ctx context.Context, tab, month string) (*CalendarPage, error) {
+func (uc *GoodsUseCase) CalendarPage(ctx context.Context, tab, month, from, to string) (*CalendarPage, error) {
 	done := metrics.Track(trackPkg, "CalendarPage")
 	defer done()
 
@@ -123,16 +128,24 @@ func (uc *GoodsUseCase) CalendarPage(ctx context.Context, tab, month string) (*C
 		ids[i] = v.ID
 	}
 
+	page.FromParam, page.ToParam = from, to
+
 	data, err := uc.calendarData(ctx, tab, month, ids, page)
 	if err != nil {
 		return nil, err
+	}
+
+	data, err = uc.extendRange(ctx, tab, from, to, ids, data)
+	if err != nil {
+		page.Error = err.Error()
+		return page, nil
 	}
 
 	for _, p := range data.periods {
 		page.PeriodTitles = append(page.PeriodTitles, periodTitle(p, tab))
 	}
 
-	coeffs, err := uc.periodCoeffs.CoefficientsBatch(ctx, ids, coeffPeriodType(tab), data.periods)
+	coeffs, err := uc.periodCoeffs.PeriodsBatch(ctx, ids, coeffPeriodType(tab), data.periods)
 	if err != nil {
 		return nil, fmt.Errorf("коэффициенты периодов: %w", err)
 	}
@@ -229,7 +242,7 @@ func (uc *GoodsUseCase) currentMonthData(ctx context.Context, ids []string, data
 }
 
 // buildCalendarGroups — строки и группы страницы.
-func buildCalendarGroups(visible []productInfo, data *calendarData, tab string, coeffs map[string]map[time.Time]int16) []CalendarGroup {
+func buildCalendarGroups(visible []productInfo, data *calendarData, tab string, stats map[string]map[time.Time]ordercoeff.PeriodCoeff) []CalendarGroup {
 	groups := make([]CalendarGroup, 0, 8)
 	groupIndex := make(map[string]int, 8)
 	currentStart := data.periods[len(data.periods)-1]
@@ -239,7 +252,7 @@ func buildCalendarGroups(visible []productInfo, data *calendarData, tab string, 
 		if a, ok := data.avg[v.ID]; ok {
 			avg = &a
 		}
-		row := buildCalendarRow(v, data.rowsByID[v.ID], avg, coeffs[v.ID], data.periods, tab, currentStart)
+		row := buildCalendarRow(v, data.rowsByID[v.ID], avg, stats[v.ID], data.periods, tab, currentStart)
 
 		idx, ok := groupIndex[v.Group]
 		if !ok {
@@ -254,11 +267,12 @@ func buildCalendarGroups(visible []productInfo, data *calendarData, tab string, 
 }
 
 // buildCalendarRow — одна строка: ячейки по столбцам, среднее, коэффициент.
-func buildCalendarRow(v productInfo, sales []averagesales.PeriodSales, avg *float64, coeffs map[time.Time]int16, periods []time.Time, tab string, currentStart time.Time) CalendarRow {
+func buildCalendarRow(v productInfo, sales []averagesales.PeriodSales, avg *float64, stats map[time.Time]ordercoeff.PeriodCoeff, periods []time.Time, tab string, currentStart time.Time) CalendarRow {
 	row := CalendarRow{
 		ProductID:    v.ID,
 		Name:         v.Name,
 		InternalCode: v.Code,
+		Weekly:       v.Weekly,
 		Cells:        make([]CalendarCell, 0, len(periods)),
 	}
 
@@ -274,21 +288,67 @@ func buildCalendarRow(v productInfo, sales []averagesales.PeriodSales, avg *floa
 			cell.KgText = formatKg(ps.Kg)
 			cell.InWindow = ps.InWindow
 		}
-		if c, ok := coeffs[p]; ok && c != 0 {
-			cell.Coeff = formatCoeff(c)
+		if st, ok := stats[p]; ok {
+			if st.Coeff != 0 {
+				cell.Coeff = formatCoeff(st.Coeff)
+			}
+			if d := st.Delta(); d != 0 {
+				cell.Delta = formatCoeff(d)
+			}
+			cell.Class = eventClass(st)
 		}
 		cell.Title = cellTitle(p, tab, cell)
+		if st, ok := stats[p]; ok {
+			if extra := eventCounts(st); extra != "" {
+				cell.Title += "; " + extra
+			}
+		}
 		row.Cells = append(row.Cells, cell)
 	}
 
 	if avg != nil {
 		row.AvgText = formatQty(*avg)
 	}
-	if c, ok := coeffs[currentStart]; ok && c != 0 {
-		row.CoeffText = formatCoeff(c)
+	if st, ok := stats[currentStart]; ok && st.Coeff != 0 {
+		row.CoeffText = formatCoeff(st.Coeff)
 	}
 
 	return row
+}
+
+// eventClass — цвет ячейки по фактам периода: скидки (жёлтый), «закончился»
+// (красный), оба события сразу — жёлтый фон с красным шрифтом.
+func eventClass(st ordercoeff.PeriodCoeff) string {
+	disc := st.Discount > 0
+	out := st.SoldOut > 0
+	switch {
+	case disc && out:
+		return "cal-both"
+	case disc:
+		return "cal-disc"
+	case out:
+		return "cal-out"
+	default:
+		return ""
+	}
+}
+
+// eventCounts — счётчики событий периода для подсказки: сколько раз повторилось.
+func eventCounts(st ordercoeff.PeriodCoeff) string {
+	parts := make([]string, 0, 4)
+	if st.Discount > 0 {
+		parts = append(parts, fmt.Sprintf("скидки %d", st.Discount))
+	}
+	if st.SoldOut > 0 {
+		parts = append(parts, fmt.Sprintf("закончился %d", st.SoldOut))
+	}
+	if st.Frozen > 0 {
+		parts = append(parts, fmt.Sprintf("заморозка %d", st.Frozen))
+	}
+	if st.Unavailable > 0 {
+		parts = append(parts, fmt.Sprintf("недоступен %d", st.Unavailable))
+	}
+	return strings.Join(parts, ", ")
 }
 
 // productsForTab — товары вкладки: недельная — только с недельным учётом.
@@ -298,7 +358,7 @@ func productsForTab(products []domain.Product, tab string) []productInfo {
 		if tab == TabWeek && !p.TrackWeekly {
 			continue
 		}
-		out = append(out, productInfo{ID: p.ID, Name: p.Name, Code: p.InternalCode, Group: p.GroupName})
+		out = append(out, productInfo{ID: p.ID, Name: p.Name, Code: p.InternalCode, Group: p.GroupName, Weekly: p.TrackWeekly})
 	}
 
 	return out
@@ -329,10 +389,11 @@ func monthURL(m time.Time) string {
 
 // productInfo — срез каталога для сборки строк календаря.
 type productInfo struct {
-	ID    string
-	Name  string
-	Code  string
-	Group string
+	ID     string
+	Name   string
+	Code   string
+	Group  string
+	Weekly bool // недельный учёт (track_weekly): месячного расчёта по нему нет
 }
 
 // periodSalesByProduct раскладывает строки оборотов по товарам.
