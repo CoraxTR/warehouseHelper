@@ -684,9 +684,9 @@ func shopPostEditError(err error) error {
 	msg := err.Error()
 	switch {
 	case strings.Contains(msg, "message to edit not found"):
-		return fmt.Errorf("%w: %v", discounts.ErrShopPostGone, err)
+		return fmt.Errorf("%w: %w", discounts.ErrShopPostGone, err)
 	case strings.Contains(msg, "message can't be edited"):
-		return fmt.Errorf("%w: %v", discounts.ErrShopPostNotEditable, err)
+		return fmt.Errorf("%w: %w", discounts.ErrShopPostNotEditable, err)
 	}
 
 	return err
