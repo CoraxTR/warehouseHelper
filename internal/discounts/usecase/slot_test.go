@@ -123,6 +123,8 @@ type fakeWarehouseNotifier struct {
 	shopTexts  []string
 	shopEdits  []fakeEdit
 	shopNextID int64
+	// shopEditErr — отказ правки поста (пост удалён / править нельзя).
+	shopEditErr error
 }
 
 // fakeEdit — правка письма: id сообщения, текст и кнопка (пусто — снята).
@@ -1082,7 +1084,7 @@ func (n *fakeWarehouseNotifier) NotifyShopHTML(text string) (int64, error) {
 func (n *fakeWarehouseNotifier) EditShopHTML(messageID int64, text string) error {
 	n.shopEdits = append(n.shopEdits, fakeEdit{ID: messageID, Text: text})
 
-	return nil
+	return n.shopEditErr
 }
 
 // Пара из прошлой рассылки в слот не идёт (антидубль), но её свежая ступень

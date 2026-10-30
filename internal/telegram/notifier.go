@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"warehouseHelper/internal/config"
+	"warehouseHelper/internal/discounts"
 	"warehouseHelper/internal/domain"
 )
 
@@ -669,6 +670,24 @@ func (n *Notifier) EditShopHTML(messageID int64, text string) error {
 		fieldParseMode:   parseModeHTML,
 		fieldLinkPreview: map[string]any{fieldPreviewOff: true},
 	})
+
+	return shopPostEditError(err)
+}
+
+// shopPostEditError — развести отказы правки поста по смыслу: «поста нет» и
+// «править нельзя» — разные решения наверху (новый пост против прав
+// администратора), а единственный признак, который даёт Bot API, — текст ответа.
+func shopPostEditError(err error) error {
+	if err == nil {
+		return nil
+	}
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "message to edit not found"):
+		return fmt.Errorf("%w: %w", discounts.ErrShopPostGone, err)
+	case strings.Contains(msg, "message can't be edited"):
+		return fmt.Errorf("%w: %w", discounts.ErrShopPostNotEditable, err)
+	}
 
 	return err
 }
