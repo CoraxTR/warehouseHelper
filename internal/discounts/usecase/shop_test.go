@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -350,5 +351,83 @@ func TestSyncShopPostKeepsNameAfterRestart(t *testing.T) {
 	}
 	if !strings.Contains(last, "5290,00 руб./шт.") {
 		t.Errorf("после рестарта блок без цены: %q", last)
+	}
+}
+
+// Пост старой рассылки удалили из канала: подчищать нечего, но и это не
+// повод не публиковать сегодняшнюю — раньше ошибка правки выходила наружу ДО
+// отправки нового поста, и день оставался без поста (выкатка на канал 30.10.2026).
+func TestPublishShopSurvivesGonePreviousPost(t *testing.T) {
+	h := publishHarness(t, lotInput("p1", "Колбаса", day(9), 100, shelfLifeInput(26)))
+	ctx := context.Background()
+
+	h.repo.prevShop = &discounts.DigestState{
+		PlannedAt:     h.now.AddDate(0, 0, -2),
+		ChatKind:      discounts.ChatWarehouse,
+		ShopMessageID: 77,
+		Items: []discounts.DigestItem{{
+			ProductID:     "p1",
+			BestBefore:    day(9),
+			Percent:       20,
+			Reason:        discounts.ReasonExpiry,
+			BlockQty:      100,
+			StockQty:      100,
+			ShopQty:       4,
+			ShopAvailable: 4,
+			Listed:        true,
+		}},
+	}
+	h.chat.shopEditErr = fmt.Errorf("%w: Bad Request: message to edit not found", discounts.ErrShopPostGone)
+
+	if err := h.uc.publishShop(ctx, h.now.Add(time.Hour)); err != nil {
+		t.Fatalf("публикация при удалённом прошлом посте: %v", err)
+	}
+	if len(h.chat.shopTexts) != 1 {
+		t.Fatalf("постов %d, want один: удалённый прошлый съел рассылку", len(h.chat.shopTexts))
+	}
+	if h.repo.digest.ShopMessageID == 0 {
+		t.Error("id нового поста не сохранён")
+	}
+}
+
+// Пост удалили из канала, а остатки изменились: правок в мёртвый id больше нет.
+// Склад получает уведомление, в канал уходит НОВЫЙ пост с текущими числами и
+// становится постом дня; альбом фото не переотправляется (решение владельца
+// 30.10.2026 — не восстанавливать прежнее сообщение, а делать новый пост).
+func TestSyncShopPostRepublishesGonePost(t *testing.T) {
+	h := publishHarness(t, lotInput("p1", "Колбаса", day(9), 100, shelfLifeInput(26)))
+	ctx := context.Background()
+
+	if err := h.uc.publishShop(ctx, h.now.Add(time.Hour)); err != nil {
+		t.Fatalf("публикация: %v", err)
+	}
+	first := h.repo.digest.ShopMessageID
+
+	h.repo.inputs[0].Qty = 97
+	h.chat.shopEditErr = fmt.Errorf("%w: Bad Request: message to edit not found", discounts.ErrShopPostGone)
+
+	if err := h.uc.syncShopPost(ctx, h.now.Add(time.Hour+time.Minute)); err != nil {
+		t.Fatalf("правка при удалённом посте: %v", err)
+	}
+	if len(h.chat.shopTexts) != 2 {
+		t.Fatalf("новый пост не опубликован: постов %d", len(h.chat.shopTexts))
+	}
+	if !strings.Contains(h.chat.shopTexts[1], "97 шт.") {
+		t.Errorf("новый пост без свежих чисел: %q", h.chat.shopTexts[1])
+	}
+	if h.repo.digest.ShopMessageID == first || h.repo.digest.ShopMessageID == 0 {
+		t.Errorf("id поста не переписан: был %d, стал %d", first, h.repo.digest.ShopMessageID)
+	}
+	notified := false
+	for _, text := range h.chat.texts {
+		if strings.Contains(text, "не найден") {
+			notified = true
+		}
+	}
+	if !notified {
+		t.Errorf("склад не уведомлён: %q", h.chat.texts)
+	}
+	if len(h.chat.shopPhotos) != 1 {
+		t.Errorf("альбом переотправлен: %d", len(h.chat.shopPhotos))
 	}
 }
