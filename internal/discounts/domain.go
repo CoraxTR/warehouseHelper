@@ -194,6 +194,7 @@ const (
 	SourceTelegramManual               // ручная скидка ТГ-канала: пара в работе, сайт берёт её подъёмом 16:00
 	SourceExpiry                       // лестница по сроку годности
 	SourceSurplus                      // избыток остатка к скорости продаж
+	SourcePermanent                    // постоянная скидка поставщика (products.permanent_discount, 03.11.2026)
 )
 
 // String — короткое имя источника для логов и отчётов.
@@ -209,6 +210,8 @@ func (s Source) String() string {
 		return "expiry"
 	case SourceSurplus:
 		return "surplus"
+	case SourcePermanent:
+		return ReasonPermanent
 	}
 	return "none" // недостижимо: все значения Source перечислены выше
 }
@@ -227,6 +230,7 @@ const (
 	OwnerExpiry                  // значение поставлено ступенью по сроку годности
 	OwnerEscalation              // значение поставлено ТГ-днём (план 14:00, подъём 16:00)
 	OwnerManual                  // значение поставлено человеком (подъём ручной ТГ на сайт)
+	OwnerPermanent               // значение поставлено постоянной скидкой поставщика (03.11.2026)
 )
 
 // ownerEscalation — значение владельца «ТГ-день». Своей метки причины у него нет
@@ -249,6 +253,8 @@ func (o Owner) String() string {
 		return ownerEscalation
 	case OwnerManual:
 		return ReasonManual
+	case OwnerPermanent:
+		return ReasonPermanent
 	}
 	return ""
 }
@@ -266,6 +272,8 @@ func ParseOwner(s string) Owner {
 		return OwnerEscalation
 	case ReasonManual:
 		return OwnerManual
+	case ReasonPermanent:
+		return OwnerPermanent
 	}
 	return OwnerNone
 }
@@ -293,29 +301,43 @@ type Candidate struct {
 }
 
 // Resolve — победитель среди кандидатов канала по приоритету:
-// ручная → срок годности → избыток.
+// ручная → максимум из {постоянная, срок годности, избыток}.
 //
 // Ручная скидка задана (manual != nil) — побеждает как есть, ВКЛЮЧАЯ 0:
 // «0 %» — такая же скидка менеджера, как 30 %, и лестницу расчётных скидок она
 // блокирует (решение владельца, сентябрь 2026 — инверсия прежнего «0 = NULL»).
-// nil ручной — ручного применения нет, скидку даёт расчётный источник
-// (срок или избыток), и только при значении > 0. Отрицательное значение ручной —
-// мусор из БД (запись валидируется 0..100), скидкой не считается.
+// nil ручной — ручного применения нет, скидку даёт расчётный источник, и только
+// при значении > 0. Постоянная скидка поставщика — пол канала сайта (решение
+// владельца 03.11.2026): лесенка и избыток могут её только поднять. При
+// равенстве побеждает постоянная — поднимать нечего, а место в окне она не
+// занимает (см. Row.Permanent). Отрицательное значение ручной — мусор из БД
+// (запись валидируется 0..100), скидкой не считается.
 // Нет ни одного кандидата → (nil, SourceNone).
-func Resolve(manual, expiry, surplus *int16) (*int16, Source) {
+func Resolve(manual, permanent, expiry, surplus *int16) (*int16, Source) {
 	if manual != nil && *manual >= 0 {
 		return manual, SourceManual
 	}
+	// Постоянная идёт первой: при равном проценте побеждает она (порядок
+	// кандидатов и решает ничью — «строго больше» ниже).
 	cands := []Candidate{
+		{Source: SourcePermanent, Percent: permanent},
 		{Source: SourceExpiry, Percent: expiry},
 		{Source: SourceSurplus, Percent: surplus},
 	}
+	var best *int16
+	var bestSource Source
 	for _, c := range cands {
-		if c.Percent != nil && *c.Percent > 0 {
-			return c.Percent, c.Source
+		if c.Percent == nil || *c.Percent <= 0 {
+			continue
+		}
+		if best == nil || *c.Percent > *best {
+			best, bestSource = c.Percent, c.Source
 		}
 	}
-	return nil, SourceNone
+	if best == nil {
+		return nil, SourceNone
+	}
+	return best, bestSource
 }
 
 // Input — вход матчинга формул: одна пара (товар, срок) вместе с товарными
@@ -359,4 +381,33 @@ type Input struct {
 	// TelegramOwner — владелец стоящего значения ТГ-колонки
 	// (product_stock.discount_telegram_owner): её пишет ТГ-день → "escalation".
 	TelegramOwner string
+
+	// Постоянная скидка поставщика (products.permanent_discount /
+	// permanent_discount_until, решение владельца 03.11.2026): пол канала сайта
+	// на срок до даты включительно. Хранится на ТОВАРЕ и приезжает в каждой паре
+	// товара, а действует ли она — решает PermanentActive.
+	Permanent      *int16
+	PermanentUntil *time.Time
+}
+
+// mskZone — день решений владельца считается по Москве: сервер живёт в UTC, а
+// «действует до 05.11» человек понимает как московские сутки (03.11.2026).
+var mskZone = time.FixedZone("МСК", 3*60*60)
+
+// dateLayout — календарный день в виде, котором дата приходит из DATE.
+const dateLayout = "2006-01-02"
+
+// PermanentActive — действующая постоянная скидка товара на день расчёта:
+// процент задан и дата окончания ещё не прошла (день включительно, по Москве).
+// Сравниваем календарные дни, а не моменты: DATE приезжает как полночь UTC, и
+// сравнение моментов сдвинуло бы границу на сутки.
+func (in Input) PermanentActive(day time.Time) *int16 {
+	if in.Permanent == nil || *in.Permanent <= 0 || in.PermanentUntil == nil {
+		return nil
+	}
+	if in.PermanentUntil.Format(dateLayout) < day.In(mskZone).Format(dateLayout) {
+		return nil
+	}
+
+	return in.Permanent
 }
