@@ -77,7 +77,7 @@ func TestPermanentDiscountGetter(t *testing.T) {
 	t.Parallel()
 
 	percent := int16(12)
-	until := time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC)
+	until := time.Date(2026, time.December, 1, 0, 0, 0, 0, time.UTC)
 	repo := &stubProductsRepo{permGetPercent: &percent, permGetUntil: &until}
 	uc := NewGoodsUseCase(nil, nil, repo, nil)
 

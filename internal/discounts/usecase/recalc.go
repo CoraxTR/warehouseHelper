@@ -467,7 +467,9 @@ func valueGone(p PairState, plans map[discounts.LotKey]discounts.LotPlan) bool {
 		return p.TelegramManual == nil
 	case discounts.OwnerSurplus, discounts.OwnerEscalation:
 		return !holdsValue(p, plans)
-	case discounts.OwnerNone, discounts.OwnerExpiry:
+	case discounts.OwnerNone, discounts.OwnerExpiry, discounts.OwnerPermanent:
+		// Постоянную скидку снимает только permanentWrites — по дате, остатку и
+		// карточке; здесь чужое основание, трогать нельзя (03.11.2026).
 		return false
 	}
 	return false // недостижимо: все владельцы перечислены выше
@@ -488,8 +490,8 @@ func holdsValue(p PairState, plans map[discounts.LotKey]discounts.LotPlan) bool 
 		return p.HasSurplus
 	case discounts.OwnerEscalation:
 		return p.TelegramActive() || !escalationOver(p, plans)
-	case discounts.OwnerNone, discounts.OwnerExpiry, discounts.OwnerManual:
-		return false
+	case discounts.OwnerNone, discounts.OwnerExpiry, discounts.OwnerManual, discounts.OwnerPermanent:
+		return false // постоянная живёт до даты, а не до избытка/рассылки
 	}
 	return false
 }
@@ -526,6 +528,8 @@ func sourceMark(owner discounts.Owner) string {
 		return discounts.SourceExpiry.String()
 	case discounts.OwnerSurplus:
 		return discounts.SourceSurplus.String()
+	case discounts.OwnerPermanent:
+		return discounts.SourcePermanent.String()
 	case discounts.OwnerNone, discounts.OwnerEscalation, discounts.OwnerManual:
 		return ""
 	}

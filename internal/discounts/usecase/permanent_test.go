@@ -7,13 +7,11 @@ import (
 	"warehouseHelper/internal/discounts"
 )
 
-func permPct(v int16) *int16 { return &v }
-
 // pairPermanent — пара товара с постоянной скидкой карточки.
-func pairPermanent(id string, bb time.Time, qty int64, percent *int16) PairState {
+func pairPermanent(bb time.Time, qty int64, percent *int16) PairState {
 	return PairState{
-		Key:        lotKey(id, bb),
-		ProductID:  id,
+		Key:        lotKey("p1", bb),
+		ProductID:  "p1",
 		BestBefore: bb,
 		Qty:        qty,
 		Permanent:  percent,
@@ -27,7 +25,7 @@ func TestPermanentWrites(t *testing.T) {
 	bb := day(9)
 
 	t.Run("ставит значение с владельцем permanent", func(t *testing.T) {
-		w := permanentWrites([]PairState{pairPermanent("p1", bb, 5, permPct(15))}, nil)
+		w := permanentWrites([]PairState{pairPermanent(bb, 5, new(int16(15)))}, nil)
 		if len(w) != 1 {
 			t.Fatalf("записей %d, want одну: %+v", len(w), w)
 		}
@@ -43,14 +41,14 @@ func TestPermanentWrites(t *testing.T) {
 	})
 
 	t.Run("нет остатка — скидки нет", func(t *testing.T) {
-		p := pairPermanent("p1", bb, 0, permPct(15))
+		p := pairPermanent(bb, 0, new(int16(15)))
 		if w := permanentWrites([]PairState{p}, nil); len(w) != 0 {
 			t.Fatalf("записи при нулевом остатке: %+v", w)
 		}
 	})
 
 	t.Run("дата вышла — снимает своё значение", func(t *testing.T) {
-		p := pairPermanent("p1", bb, 5, nil)
+		p := pairPermanent(bb, 5, nil)
 		p.GeneralOwner = discounts.OwnerPermanent
 		w := permanentWrites([]PairState{p}, nil)
 		if len(w) != 1 || w[0].General != nil {
@@ -59,7 +57,7 @@ func TestPermanentWrites(t *testing.T) {
 	})
 
 	t.Run("дата вышла, но значение чужое — не трогает", func(t *testing.T) {
-		p := pairPermanent("p1", bb, 5, nil)
+		p := pairPermanent(bb, 5, nil)
 		p.GeneralOwner = discounts.OwnerExpiry
 		if w := permanentWrites([]PairState{p}, nil); len(w) != 0 {
 			t.Fatalf("чужое значение тронуто: %+v", w)
@@ -67,9 +65,9 @@ func TestPermanentWrites(t *testing.T) {
 	})
 
 	t.Run("ступень глубже — постоянная не понижает", func(t *testing.T) {
-		p := pairPermanent("p1", bb, 5, permPct(15))
+		p := pairPermanent(bb, 5, new(int16(15)))
 		already := []discounts.DiscountWrite{{
-			ProductID: "p1", BestBefore: bb, General: permPct(30),
+			ProductID: "p1", BestBefore: bb, General: new(int16(30)),
 			Source: discounts.SourceExpiry.String(), GeneralOwner: discounts.OwnerExpiry.String(),
 		}}
 		if w := permanentWrites([]PairState{p}, already); len(w) != 0 {
@@ -78,17 +76,17 @@ func TestPermanentWrites(t *testing.T) {
 	})
 
 	t.Run("ручная выше — постоянная не пишется", func(t *testing.T) {
-		p := pairPermanent("p1", bb, 5, permPct(15))
-		p.Manual = permPct(25)
-		p.Applied = permPct(25)
+		p := pairPermanent(bb, 5, new(int16(15)))
+		p.Manual = new(int16(25))
+		p.Applied = new(int16(25))
 		if w := permanentWrites([]PairState{p}, nil); len(w) != 0 {
 			t.Fatalf("постоянная перебила ручную: %+v", w)
 		}
 	})
 
 	t.Run("ручной 0 (бан) — пара не трогается", func(t *testing.T) {
-		p := pairPermanent("p1", bb, 5, permPct(15))
-		p.Manual = permPct(0)
+		p := pairPermanent(bb, 5, new(int16(15)))
+		p.Manual = new(int16(0))
 		if w := permanentWrites([]PairState{p}, nil); len(w) != 0 {
 			t.Fatalf("забаненная пара получила скидку: %+v", w)
 		}

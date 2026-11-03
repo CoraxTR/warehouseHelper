@@ -135,11 +135,15 @@ func BuildDigest(rows []Row, capacity int) Digest {
 
 	d := Digest{Cap: capacity}
 	if capacity > 0 && len(slots) > capacity {
-		d.Discounts = append(slots[:capacity:capacity], permanent...)
+		d.Discounts = make([]Row, 0, capacity+len(permanent))
+		d.Discounts = append(d.Discounts, slots[:capacity]...)
+		d.Discounts = append(d.Discounts, permanent...)
 		d.Surplus = slots[capacity:]
 		return d
 	}
-	d.Discounts = append(slots, permanent...)
+	d.Discounts = make([]Row, 0, len(slots)+len(permanent))
+	d.Discounts = append(d.Discounts, slots...)
+	d.Discounts = append(d.Discounts, permanent...)
 
 	return d
 }
@@ -149,7 +153,7 @@ func BuildDigest(rows []Row, capacity int) Digest {
 // хвостом окна своим приоритетом.
 func SplitPermanent(rows []Row) (slots, permanent []Row) {
 	slots = make([]Row, 0, len(rows))
-	permanent = make([]Row, 0, 0)
+	permanent = make([]Row, 0)
 	for _, r := range rows {
 		if r.Permanent {
 			permanent = append(permanent, r)
@@ -283,6 +287,10 @@ func channelLabel(r Row) string {
 		return "Срок"
 	case SourceSurplus:
 		return "Избыток"
+	case SourcePermanent:
+		// Постоянная скидка поставщика: в окне её нет, но в отчёте и в подписи
+		// строки её надо отличать от лестницы и избытка (03.11.2026).
+		return "Постоянная"
 	}
 	return "" // недостижимо: все значения Source перечислены выше
 }

@@ -394,9 +394,6 @@ type Input struct {
 // «действует до 05.11» человек понимает как московские сутки (03.11.2026).
 var mskZone = time.FixedZone("МСК", 3*60*60)
 
-// dateLayout — календарный день в виде, котором дата приходит из DATE.
-const dateLayout = "2006-01-02"
-
 // PermanentActive — действующая постоянная скидка товара на день расчёта:
 // процент задан и дата окончания ещё не прошла (день включительно, по Москве).
 // Сравниваем календарные дни, а не моменты: DATE приезжает как полночь UTC, и
@@ -405,7 +402,7 @@ func (in Input) PermanentActive(day time.Time) *int16 {
 	if in.Permanent == nil || *in.Permanent <= 0 || in.PermanentUntil == nil {
 		return nil
 	}
-	if in.PermanentUntil.Format(dateLayout) < day.In(mskZone).Format(dateLayout) {
+	if in.PermanentUntil.Format(time.DateOnly) < day.In(mskZone).Format(time.DateOnly) {
 		return nil
 	}
 

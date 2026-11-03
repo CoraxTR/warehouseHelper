@@ -5,8 +5,6 @@ import (
 	"time"
 )
 
-func pct(v int16) *int16 { return &v }
-
 // Постоянная скидка поставщика — пол канала сайта (решение владельца
 // 03.11.2026): лесенка и избыток могут её только поднять, при равенстве
 // побеждает постоянная (поднимать нечего, а место в окне она не занимает).
@@ -20,14 +18,14 @@ func TestResolvePermanent(t *testing.T) {
 		want      *int16
 		wantSrc   Source
 	}{
-		{"постоянная без кандидатов", nil, pct(15), nil, nil, pct(15), SourcePermanent},
-		{"лесенка глубже постоянной", nil, pct(15), pct(30), nil, pct(30), SourceExpiry},
-		{"постоянная глубже лесенки", nil, pct(25), pct(10), nil, pct(25), SourcePermanent},
-		{"равенство — постоянная", nil, pct(20), pct(20), nil, pct(20), SourcePermanent},
-		{"избыток глубже постоянной", nil, pct(10), nil, pct(10), pct(10), SourcePermanent},
-		{"ручная главнее постоянной", pct(5), pct(30), nil, nil, pct(5), SourceManual},
-		{"ручная 0 — бан", pct(0), pct(30), pct(20), nil, pct(0), SourceManual},
-		{"постоянной нет — как раньше", nil, nil, pct(20), pct(10), pct(20), SourceExpiry},
+		{"постоянная без кандидатов", nil, new(int16(15)), nil, nil, new(int16(15)), SourcePermanent},
+		{"лесенка глубже постоянной", nil, new(int16(15)), new(int16(30)), nil, new(int16(30)), SourceExpiry},
+		{"постоянная глубже лесенки", nil, new(int16(25)), new(int16(10)), nil, new(int16(25)), SourcePermanent},
+		{"равенство — постоянная", nil, new(int16(20)), new(int16(20)), nil, new(int16(20)), SourcePermanent},
+		{"избыток глубже постоянной", nil, new(int16(10)), nil, new(int16(10)), new(int16(10)), SourcePermanent},
+		{"ручная главнее постоянной", new(int16(5)), new(int16(30)), nil, nil, new(int16(5)), SourceManual},
+		{"ручная 0 — бан", new(int16(0)), new(int16(30)), new(int16(20)), nil, new(int16(0)), SourceManual},
+		{"постоянной нет — как раньше", nil, nil, new(int16(20)), new(int16(10)), new(int16(20)), SourceExpiry},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -45,7 +43,7 @@ func TestResolvePermanent(t *testing.T) {
 // Дата окончания действует ВКЛЮЧИТЕЛЬНО и считается по московским суткам:
 // сервер живёт в UTC, а «до 05.11» человек понимает как московский день.
 func TestPermanentActive(t *testing.T) {
-	day := time.Date(2026, 11, 5, 1, 0, 0, 0, time.UTC) // 04:00 МСК, 5 ноября
+	day := time.Date(2026, time.November, 5, 1, 0, 0, 0, time.UTC) // 04:00 МСК, 5 ноября
 	until := func(d time.Time) *time.Time { return &d }
 
 	tests := []struct {
@@ -53,11 +51,11 @@ func TestPermanentActive(t *testing.T) {
 		in     Input
 		wantOK bool
 	}{
-		{"дата сегодня — действует", Input{Permanent: pct(15), PermanentUntil: until(time.Date(2026, 11, 5, 0, 0, 0, 0, time.UTC))}, true},
-		{"дата вчера — вышла", Input{Permanent: pct(15), PermanentUntil: until(time.Date(2026, 11, 4, 0, 0, 0, 0, time.UTC))}, false},
-		{"дата завтра — действует", Input{Permanent: pct(15), PermanentUntil: until(time.Date(2026, 11, 6, 0, 0, 0, 0, time.UTC))}, true},
-		{"без даты — не действует", Input{Permanent: pct(15)}, false},
-		{"без процента — не действует", Input{PermanentUntil: until(time.Date(2026, 11, 6, 0, 0, 0, 0, time.UTC))}, false},
+		{"дата сегодня — действует", Input{Permanent: new(int16(15)), PermanentUntil: until(time.Date(2026, time.November, 5, 0, 0, 0, 0, time.UTC))}, true},
+		{"дата вчера — вышла", Input{Permanent: new(int16(15)), PermanentUntil: until(time.Date(2026, time.November, 4, 0, 0, 0, 0, time.UTC))}, false},
+		{"дата завтра — действует", Input{Permanent: new(int16(15)), PermanentUntil: until(time.Date(2026, time.November, 6, 0, 0, 0, 0, time.UTC))}, true},
+		{"без даты — не действует", Input{Permanent: new(int16(15))}, false},
+		{"без процента — не действует", Input{PermanentUntil: until(time.Date(2026, time.November, 6, 0, 0, 0, 0, time.UTC))}, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

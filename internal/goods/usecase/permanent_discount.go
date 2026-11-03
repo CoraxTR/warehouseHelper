@@ -47,6 +47,8 @@ func (uc *GoodsUseCase) SetPermanentDiscount(ctx context.Context, productID stri
 		return errors.New("нужна дата окончания")
 	case *percent < permanentDiscountMin || *percent > permanentDiscountMax:
 		return fmt.Errorf("скидка должна быть от %d до %d %%", permanentDiscountMin, permanentDiscountMax)
+	default:
+		// пара заполнена и процент в диапазоне — дальше проверять нечего
 	}
 
 	var untilDate *time.Time
