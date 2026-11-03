@@ -390,44 +390,76 @@ func TestPublishShopSurvivesGonePreviousPost(t *testing.T) {
 	}
 }
 
-// Пост удалили из канала, а остатки изменились: правок в мёртвый id больше нет.
-// Склад получает уведомление, в канал уходит НОВЫЙ пост с текущими числами и
-// становится постом дня; альбом фото не переотправляется (решение владельца
-// 30.10.2026 — не восстанавливать прежнее сообщение, а делать новый пост).
-func TestSyncShopPostRepublishesGonePost(t *testing.T) {
-	h := publishHarness(t, lotInput("p1", "Колбаса", day(9), 100, shelfLifeInput(26)))
-	ctx := context.Background()
+// Пост в канале правкой не берётся (удалили или бот не может править): бот
+// принимает это как данность — нового поста не публикует, склад узнаёт один раз,
+// повторных правок в мёртвое сообщение нет, следующий пост выходит по
+// расписанию (решение владельца 03.11.2026, отменяет перепубликацию 30.10.2026).
+func TestSyncShopPostAcceptsLostPost(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+	}{
+		{"пост удалён", fmt.Errorf("%w: Bad Request: message to edit not found", discounts.ErrShopPostGone)},
+		{"править нельзя", fmt.Errorf("%w: Bad Request: message can't be edited", discounts.ErrShopPostNotEditable)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := publishHarness(t, lotInput("p1", "Колбаса", day(9), 100, shelfLifeInput(26)))
+			ctx := context.Background()
 
-	if err := h.uc.publishShop(ctx, h.now.Add(time.Hour)); err != nil {
-		t.Fatalf("публикация: %v", err)
-	}
-	first := h.repo.digest.ShopMessageID
+			if err := h.uc.publishShop(ctx, h.now.Add(time.Hour)); err != nil {
+				t.Fatalf("публикация: %v", err)
+			}
+			first := h.repo.digest.ShopMessageID
+			h.chat.shopEditErr = tc.err
 
-	h.repo.inputs[0].Qty = 97
-	h.chat.shopEditErr = fmt.Errorf("%w: Bad Request: message to edit not found", discounts.ErrShopPostGone)
+			h.repo.inputs[0].Qty = 97
+			if err := h.uc.syncShopPost(ctx, h.now.Add(time.Hour+time.Minute)); err != nil {
+				t.Fatalf("правка при потерянном посте: %v", err)
+			}
+			if len(h.chat.shopTexts) != 1 {
+				t.Fatalf("новый пост опубликован: постов %d, want один", len(h.chat.shopTexts))
+			}
+			if h.repo.digest.ShopMessageID != first {
+				t.Errorf("id поста переписан: был %d, стал %d", first, h.repo.digest.ShopMessageID)
+			}
+			if got := countTexts(h.chat.texts, "не правится"); got != 1 {
+				t.Errorf("уведомлений склада %d, want одно: %q", got, h.chat.texts)
+			}
+			if len(h.chat.shopPhotos) != 1 {
+				t.Errorf("альбом переотправлен: %d", len(h.chat.shopPhotos))
+			}
+			// Решение по позиции записывается независимо от поста: по нему живёт
+			// возврат скидки сроковой позиции на сайт и в ТГ.
+			if qty := h.repo.digest.Items[0].ShopQty; qty != 97 {
+				t.Errorf("решение по позиции не записано: остаток по акции %d, want 97", qty)
+			}
 
-	if err := h.uc.syncShopPost(ctx, h.now.Add(time.Hour+time.Minute)); err != nil {
-		t.Fatalf("правка при удалённом посте: %v", err)
+			// Следующий тик: в потерянный пост больше не стучимся, склад не
+			// дёргаем повторно.
+			edits := len(h.chat.shopEdits)
+			h.repo.inputs[0].Qty = 90
+			if err := h.uc.syncShopPost(ctx, h.now.Add(time.Hour+2*time.Minute)); err != nil {
+				t.Fatalf("повторная правка при потерянном посте: %v", err)
+			}
+			if len(h.chat.shopEdits) != edits {
+				t.Errorf("правка в потерянный пост отправлена повторно: попыток %d, было %d", len(h.chat.shopEdits), edits)
+			}
+			if got := countTexts(h.chat.texts, "не правится"); got != 1 {
+				t.Errorf("склад уведомлён %d раз, want одно: %q", got, h.chat.texts)
+			}
+		})
 	}
-	if len(h.chat.shopTexts) != 2 {
-		t.Fatalf("новый пост не опубликован: постов %d", len(h.chat.shopTexts))
-	}
-	if !strings.Contains(h.chat.shopTexts[1], "97 шт.") {
-		t.Errorf("новый пост без свежих чисел: %q", h.chat.shopTexts[1])
-	}
-	if h.repo.digest.ShopMessageID == first || h.repo.digest.ShopMessageID == 0 {
-		t.Errorf("id поста не переписан: был %d, стал %d", first, h.repo.digest.ShopMessageID)
-	}
-	notified := false
-	for _, text := range h.chat.texts {
-		if strings.Contains(text, "не найден") {
-			notified = true
+}
+
+// countTexts — сколько сообщений чата склада содержат подстроку.
+func countTexts(texts []string, sub string) int {
+	n := 0
+	for _, text := range texts {
+		if strings.Contains(text, sub) {
+			n++
 		}
 	}
-	if !notified {
-		t.Errorf("склад не уведомлён: %q", h.chat.texts)
-	}
-	if len(h.chat.shopPhotos) != 1 {
-		t.Errorf("альбом переотправлен: %d", len(h.chat.shopPhotos))
-	}
+
+	return n
 }

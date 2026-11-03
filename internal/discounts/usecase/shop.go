@@ -21,10 +21,11 @@ import (
 // отправки не должен съесть рассылку, но и вечно висеть нельзя.
 const shopPublishWindow = 30 * time.Minute
 
-// shopPostGoneNotice — что склад читает, когда пост в канале пропал и бот
-// публикует новый (решение владельца 30.10.2026).
-const shopPostGoneNotice = "Пост в чате скидок не найден: его удалили или бот больше не в этом канале. " +
-	"Публикую новый пост с текущими остатками — правок в прежнем не будет."
+// shopPostLostNotice — что склад читает, когда пост в канале правкой не берётся
+// (удалён или нередактируем): нового поста бот не публикует, следующий выйдет по
+// расписанию (решение владельца 03.11.2026).
+const shopPostLostNotice = "Пост в чате скидок не правится: его удалили или бот не может его редактировать. " +
+	"Новый пост сейчас не публикую — правок в потерянном посте не будет, следующий пост выйдет по расписанию."
 
 // shopConfirmInterval — подтверждение актуальности поста по таймеру: основной
 // путь правки — событие стока (подбор, приёмка, замена остатков), таймер лишь
@@ -321,18 +322,24 @@ func (uc *UseCase) syncShopPost(ctx context.Context, now time.Time) error {
 	if !changed {
 		return nil
 	}
+	// Пост этого дня уже потерян (удалён или нередактируем): правок в него больше
+	// не шлём. Решения по позициям выше при этом продолжают писаться — возврат
+	// сроковой позиции возвращает скидку на сайт и в ТГ независимо от поста.
+	if uc.shopPostLost(st.ShopMessageID) {
+		return nil
+	}
 
 	text := shopText(st.Items, data)
 	if text == "" || text == uc.shopTextValue() {
 		return nil
 	}
 	if err := uc.warehouse.EditShopHTML(st.ShopMessageID, text); err != nil {
-		// Пост из канала удалили: править нечего, но и молчать нельзя — нового
-		// поста в канале нет, а акция идёт. Склад узнаёт, читатель получает
-		// новый пост с текущими остатками (решение владельца 30.10.2026: не
-		// восстанавливать правкой существующее, а делать новый пост).
-		if errors.Is(err, discounts.ErrShopPostGone) {
-			return uc.republishShopPost(ctx, st, text)
+		// Правка не прошла и в этом сообщении уже не пройдёт: пост удалили из
+		// канала или его нельзя редактировать. Решение владельца 03.11.2026 — не
+		// публиковать новый пост сразу: принимаем как данность, следующий пост
+		// выйдет по расписанию.
+		if shopPostGone(err) {
+			return uc.acceptLostShopPost(st.ShopMessageID, err)
 		}
 
 		return fmt.Errorf("правка поста в чате скидок: %w", err)
@@ -349,28 +356,36 @@ func shopPostGone(err error) bool {
 	return errors.Is(err, discounts.ErrShopPostGone) || errors.Is(err, discounts.ErrShopPostNotEditable)
 }
 
-// republishShopPost — пост чата скидок пропал из канала: правок больше нет.
-// Склад получает уведомление, в канал уходит новый пост с текущими числами и
-// становится «тем самым» постом дня (альбом фото не переотправляем: фото уже
-// в чате, а пост-копия самодостаточна).
-func (uc *UseCase) republishShopPost(ctx context.Context, st *discounts.DigestState, text string) error {
-	if err := uc.warehouse.NotifyWarehouse(shopPostGoneNotice); err != nil {
-		slog.Info(fmt.Sprintf("discounts: уведомление склада о пропавшем посте: %v", err))
-	}
+// acceptLostShopPost — правка поста не прошла и в это сообщение уже не пройдёт
+// (пост удалён из канала или нередактируем). Решение владельца 03.11.2026:
+// нового поста не публикуем — принимаем как данность и ждём рассылку по
+// расписанию. Склад узнаёт один раз; повторных попыток правки в это сообщение
+// нет, а следующая рассылка в 15:00 публикуется штатно — у неё свой id, и метка
+// потерянного поста её не трогает.
+func (uc *UseCase) acceptLostShopPost(messageID int64, cause error) error {
+	uc.markShopPostLost(messageID)
+	slog.Info(fmt.Sprintf("discounts: пост в чате скидок не правится (%v) — оставляю как есть, новый пост по расписанию", cause))
 
-	messageID, err := uc.warehouse.NotifyShopHTML(text)
-	if err != nil {
-		return fmt.Errorf("повторная публикация поста в чате скидок: %w", err)
+	if err := uc.warehouse.NotifyWarehouse(shopPostLostNotice); err != nil {
+		slog.Info(fmt.Sprintf("discounts: уведомление склада о потерянном посте: %v", err))
 	}
-	if messageID != 0 {
-		if err := uc.repo.SetDigestShopMessage(ctx, discounts.ChatWarehouse, st.PlannedAt, messageID); err != nil {
-			return err
-		}
-	}
-	uc.setShopText(text)
-	slog.Info(fmt.Sprintf("discounts: пост в чате скидок опубликован заново (id %d): прежний удалён", messageID))
 
 	return nil
+}
+
+// shopPostLost — правки в это сообщение уже не пройдут: пост потерян.
+func (uc *UseCase) shopPostLost(messageID int64) bool {
+	uc.mailMu.Lock()
+	defer uc.mailMu.Unlock()
+
+	return messageID != 0 && uc.lostShopPost == messageID
+}
+
+func (uc *UseCase) markShopPostLost(messageID int64) {
+	uc.mailMu.Lock()
+	defer uc.mailMu.Unlock()
+
+	uc.lostShopPost = messageID
 }
 
 // shopCards — данные блоков поста: живые остатки, а у лота, которого в остатках
