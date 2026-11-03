@@ -61,6 +61,13 @@ type ProductsRepository interface {
 	// SetProductIncomingVAT — запись входящего НДС (products.vat_incoming, %):
 	// ручное поле страницы «Проверка цен», синки из МС её не трогают.
 	SetProductIncomingVAT(ctx context.Context, productID string, vat *int16) error
+	// SetProductPermanentDiscount — запись постоянной скидки поставщика
+	// (products.permanent_discount + permanent_discount_until): поле карточки
+	// позиции, синки из МС его не трогают. nil в обеих — снять скидку.
+	SetProductPermanentDiscount(ctx context.Context, productID string, percent *int16, until *time.Time) error
+	// ProductPermanentDiscount — чтение постоянной скидки товара для карточки
+	// позиции (nil, nil — не задана).
+	ProductPermanentDiscount(ctx context.Context, productID string) (*int16, *time.Time, error)
 	// LoadPriceSandboxes — снапшоты песочницы цен по всем товарам (ключ —
 	// product_id); отдельная таблица страницы «Проверка цен», products не трогает.
 	LoadPriceSandboxes(ctx context.Context) (map[string]domain.PriceSandbox, error)

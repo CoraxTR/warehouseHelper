@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"warehouseHelper/internal/domain"
 	"warehouseHelper/internal/msclient/client"
@@ -384,6 +385,14 @@ type stubProductsRepo struct {
 	// sandboxes/savedSandbox — песочница цен (Load/UpsertPriceSandbox).
 	incomingVAT    map[string]*int16
 	incomingVATErr error
+	// permPercents/permUntils — записанная постоянная скидка поставщика по id
+	// (SetProductPermanentDiscount), permGetPercent/permGetUntil — что отдаёт
+	// чтение (ProductPermanentDiscount), permErr — ошибка записи.
+	permPercents   map[string]*int16
+	permUntils     map[string]*time.Time
+	permErr        error
+	permGetPercent *int16
+	permGetUntil   *time.Time
 	sandboxes      map[string]domain.PriceSandbox
 	sandboxErr     error
 	savedSandbox   *domain.PriceSandbox
@@ -411,6 +420,27 @@ func (s *stubProductsRepo) SetProductSiteURL(_ context.Context, productID, siteU
 }
 
 // SetProductIncomingVAT — запись входящего НДС (страница «Проверка цен»).
+// SetProductPermanentDiscount — запись постоянной скидки поставщика (карточка
+// позиции): nil в обоих аргументах — снятие.
+func (s *stubProductsRepo) SetProductPermanentDiscount(_ context.Context, productID string, percent *int16, until *time.Time) error {
+	if s.permErr != nil {
+		return s.permErr
+	}
+	if s.permPercents == nil {
+		s.permPercents = make(map[string]*int16)
+		s.permUntils = make(map[string]*time.Time)
+	}
+	s.permPercents[productID] = percent
+	s.permUntils[productID] = until
+
+	return nil
+}
+
+// ProductPermanentDiscount — чтение постоянной скидки для окна карточки.
+func (s *stubProductsRepo) ProductPermanentDiscount(_ context.Context, _ string) (*int16, *time.Time, error) {
+	return s.permGetPercent, s.permGetUntil, nil
+}
+
 func (s *stubProductsRepo) SetProductIncomingVAT(_ context.Context, productID string, vat *int16) error {
 	if s.incomingVATErr != nil {
 		return s.incomingVATErr

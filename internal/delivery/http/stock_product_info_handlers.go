@@ -2,6 +2,7 @@ package http
 
 import (
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"slices"
@@ -40,23 +41,32 @@ type ProductInfoSchedule struct {
 
 // ProductInfo — ответ GET /ms/dates/product-info.
 type ProductInfo struct {
-	ProductID    string                `json:"product_id"`
-	ProductName  string                `json:"product_name"`
-	InternalCode string                `json:"internal_code"`
-	SiteURL      string                `json:"site_url"`
-	Suppliers    []ProductInfoSupplier `json:"suppliers"`
-	Schedules    []ProductInfoSchedule `json:"schedules"`
-	Error        string                `json:"error,omitempty"`
+	ProductID    string `json:"product_id"`
+	ProductName  string `json:"product_name"`
+	InternalCode string `json:"internal_code"`
+	SiteURL      string `json:"site_url"`
+	// Постоянная скидка поставщика (products.permanent_discount): нет скидки —
+	// поле не приходит, дата пустая.
+	PermanentDiscount      *int16                `json:"permanent_discount,omitempty"`
+	PermanentDiscountUntil string                `json:"permanent_discount_until,omitempty"`
+	Suppliers              []ProductInfoSupplier `json:"suppliers"`
+	Schedules              []ProductInfoSchedule `json:"schedules"`
+	Error                  string                `json:"error,omitempty"`
 }
 
 // ProductInfoSaveRequest — тело POST /ms/dates/product-info/save: сохраняется
 // то, что пришло; ссылка и цены — по наличию полей, варианты — полным набором.
 type ProductInfoSaveRequest struct {
-	ProductID  string                `json:"product_id"`
-	SiteURL    *string               `json:"site_url"`
-	Prices     []ProductInfoSupplier `json:"prices"`
-	Schedules  []ProductInfoSchedule `json:"schedules"`
-	SaveOrders bool                  `json:"save_orders"`
+	ProductID string  `json:"product_id"`
+	SiteURL   *string `json:"site_url"`
+	// Постоянная скидка поставщика: percent — процент, until — день окончания
+	// "YYYY-MM-DD". Форма шлёт оба поля всегда (пусто → null / ""), поэтому
+	// пустая пара означает «снять скидку», а не «не трогать».
+	PermanentDiscount      *int16                `json:"permanent_discount"`
+	PermanentDiscountUntil *string               `json:"permanent_discount_until"`
+	Prices                 []ProductInfoSupplier `json:"prices"`
+	Schedules              []ProductInfoSchedule `json:"schedules"`
+	SaveOrders             bool                  `json:"save_orders"`
 }
 
 // StockProductInfo — GET /ms/dates/product-info?id=<productID>.
@@ -79,6 +89,17 @@ func (h *Handler) StockProductInfo(w http.ResponseWriter, r *http.Request) {
 		ProductName:  product.Name,
 		InternalCode: product.InternalCode,
 		SiteURL:      product.SiteURL,
+	}
+
+	permPercent, permUntil, err := h.goodsUC.PermanentDiscount(r.Context(), productID)
+	if err != nil {
+		// Окно открывается и без скидки: ошибка чтения — не повод его не показать.
+		slog.Info("product info: permanent discount", "product_id", productID, "err", err)
+	} else {
+		info.PermanentDiscount = permPercent
+		if permUntil != nil {
+			info.PermanentDiscountUntil = permUntil.Format(time.DateOnly)
+		}
 	}
 
 	info.Suppliers = h.productInfoSuppliers(r, productID)
@@ -181,6 +202,23 @@ func (h *Handler) StockProductInfoSave(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Постоянная скидка поставщика: форма шлёт оба поля всегда, поэтому пустая
+	// пара — это осознанное «снять скидку», а не «поле не трогали» (03.11.2026).
+	// Пересчёт движка — ниже, после цен и вариантов: скидка считается от цены
+	// пары и срока поставки, по устаревшим значениям пол канала был бы неверным.
+	permSaved := false
+	if req.PermanentDiscount != nil || req.PermanentDiscountUntil != nil {
+		percent, until, err := parsePermanentDiscount(req.PermanentDiscount, req.PermanentDiscountUntil)
+		if err != nil {
+			problems = append(problems, "постоянная скидка: "+err.Error())
+		} else if err := h.goodsUC.SetPermanentDiscount(r.Context(), productID, percent, until); err != nil {
+			slog.Info("product info save: permanent discount", "product_id", productID, "err", err)
+			problems = append(problems, "постоянная скидка: "+err.Error())
+		} else {
+			permSaved = true
+		}
+	}
+
 	pricesSaved := 0
 	for _, p := range req.Prices {
 		if strings.TrimSpace(p.ID) == "" {
@@ -214,6 +252,16 @@ func (h *Handler) StockProductInfoSave(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Пересчёт сразу, а не минутным тиком: без него новая постоянная скидка не
+	// занимала бы пол канала сайта до следующего тика. Шов тот же, что у ручной
+	// скидки (OnManualDiscountChanged), — товар пересчитывается точечно.
+	if permSaved && h.discountsUC != nil {
+		if err := h.discountsUC.OnManualDiscountChanged(r.Context(), productID); err != nil {
+			slog.Info("product info save: recalc discounts", "product_id", productID, "err", err)
+			problems = append(problems, "пересчёт скидок: "+err.Error())
+		}
+	}
+
 	resp := map[string]any{"ok": len(problems) == 0, "prices_saved": pricesSaved}
 	if len(problems) > 0 {
 		resp["problems"] = problems
@@ -223,6 +271,27 @@ func (h *Handler) StockProductInfoSave(w http.ResponseWriter, r *http.Request) {
 		status = http.StatusConflict
 	}
 	writeJSON(w, status, resp)
+}
+
+// parsePermanentDiscount — поля формы постоянной скидки в аргументы юзкейса:
+// пустая дата — nil (скидка без даты не ставится, юзкейс скажет об этом сам),
+// дата разбирается как день МСК. Пустой процент и пустая дата — снятие.
+func parsePermanentDiscount(percent *int16, until *string) (*int16, *time.Time, error) {
+	if until == nil {
+		return percent, nil, nil
+	}
+
+	raw := strings.TrimSpace(*until)
+	if raw == "" {
+		return percent, nil, nil
+	}
+
+	day, err := time.ParseInLocation(time.DateOnly, raw, mskLoc)
+	if err != nil {
+		return nil, nil, errors.New("дата окончания — в формате ГГГГ-ММ-ДД")
+	}
+
+	return percent, &day, nil
 }
 
 // formatCutoff — время дедлайна в "HH:MM" для формы; nil — пустая строка.
