@@ -98,7 +98,9 @@ func (h *Handler) StockUpdateSave(w http.ResponseWriter, r *http.Request) {
 
 		return
 	}
-	if len(req.Scans) == 0 {
+	// Пустой батч в режиме одного товара — «остатка нет» (обнуление), см.
+	// ReplaceStock: оператор не нашёл на складе ни единицы (03.11.2026).
+	if len(req.Scans) == 0 && req.ProductID == "" {
 		http.Error(w, "нет сканов", http.StatusBadRequest)
 
 		return

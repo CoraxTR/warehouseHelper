@@ -28,7 +28,8 @@ const discountInputColumns = `
     s.best_before, s.qty,
     s.discount_general, s.discount_telegram,
     s.discount_general_manual, s.discount_telegram_manual, s.discount_source,
-    s.discount_general_owner, s.discount_telegram_owner`
+    s.discount_general_owner, s.discount_telegram_owner,
+    p.permanent_discount, p.permanent_discount_until`
 
 // discountInputQuery — снапшот целиком: лоты стока с товарными признаками.
 //
@@ -133,25 +134,27 @@ func (pg *PGClient) LoadDiscountInput(ctx context.Context, today time.Time) ([]d
 func scanDiscountInput(row pgx.Row) (discounts.Input, error) {
 	var (
 		in             discounts.Input
-		groupName      *string // NULL — товар без группы (products.group_name)
-		siteURL        *string // NULL — адрес карточки не задан (products.site_url)
-		salePrice      *int64  // NULL — МС не отдала цену продажи
-		discountSource *string // NULL — метки источника нет (product_stock.discount_source)
-		generalOwner   *string // NULL — владельца значения нет
-		telegramOwner  *string // NULL — владельца значения нет
+		groupName      *string    // NULL — товар без группы (products.group_name)
+		siteURL        *string    // NULL — адрес карточки не задан (products.site_url)
+		salePrice      *int64     // NULL — МС не отдала цену продажи
+		permanentUntil *time.Time // NULL — постоянной скидки нет (products.permanent_discount_until)
+		discountSource *string    // NULL — метки источника нет (product_stock.discount_source)
+		generalOwner   *string    // NULL — владельца значения нет
+		telegramOwner  *string    // NULL — владельца значения нет
 	)
 	if err := row.Scan(
 		&in.ProductID, &in.Name, &groupName, &in.ShortList, &in.ShelfLife, &in.TrackWeekly,
 		&in.UOM, &salePrice, &siteURL,
 		&in.BestBefore, &in.Qty,
 		&in.GeneralPlain, &in.TelegramPlain, &in.GeneralManual, &in.TelegramManual, &discountSource,
-		&generalOwner, &telegramOwner,
+		&generalOwner, &telegramOwner, &in.Permanent, &permanentUntil,
 	); err != nil {
 		return discounts.Input{}, fmt.Errorf("scan discount input: %w", err)
 	}
 	in.GroupName = textValue(groupName)
 	in.SiteURL = textValue(siteURL)
 	in.SalePrice = salePrice
+	in.PermanentUntil = permanentUntil
 	in.DiscountSource = textValue(discountSource)
 	in.GeneralOwner = textValue(generalOwner)
 	in.TelegramOwner = textValue(telegramOwner)

@@ -382,10 +382,14 @@ func (r *Registry) standingLocked() []discounts.Row {
 
 // windowOf — первые n строк среза; n <= 0 — весь срез (окно вмещает всё).
 func windowOf(rows []discounts.Row, n int) []discounts.Row {
-	if n > 0 && n < len(rows) {
-		return rows[:n]
+	// Постоянные скидки ёмкость не занимают (решение владельца 03.11.2026):
+	// режем по n только слотовые строки, постоянные остаются в окне всегда.
+	slots, permanent := discounts.SplitPermanent(rows)
+	if n > 0 && n < len(slots) {
+		return append(slots[:n:n], permanent...)
 	}
-	return rows
+
+	return append(slots, permanent...)
 }
 
 // beyondWindow — строки за пределами окна ёмкости n. n <= 0 (окно вмещает всё)

@@ -49,7 +49,7 @@ func TestResolve(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			gotPercent, gotSource := Resolve(tc.manual, tc.expiry, tc.surplus)
+			gotPercent, gotSource := Resolve(tc.manual, nil, tc.expiry, tc.surplus)
 			if gotSource != tc.wantSource {
 				t.Errorf("Resolve(...) source = %v, want %v", gotSource, tc.wantSource)
 			}

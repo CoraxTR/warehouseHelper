@@ -89,6 +89,9 @@ func (uc *UseCase) RecalcExpiry(ctx context.Context, now time.Time) error {
 	// 02.10.2026: снимаем мгновенно).
 	writes := append(expiryWrites(pairs), ownerWrites(pairs, uc.planQty(ctx, pairs))...)
 	writes = append(writes, banWrites(pairs)...)
+	// Постоянная скидка — последней: она видит, что уже поставлено в этом
+	// проходе, и не отбирает место у более глубокой ступени (03.11.2026).
+	writes = append(writes, permanentWrites(pairs, writes)...)
 
 	if err := uc.writeAndRegister(ctx, pairs, writes); err != nil {
 		return err
@@ -231,6 +234,9 @@ func (uc *UseCase) RecalcAffected(ctx context.Context, now time.Time, events map
 	// Снятие по запрету менеджера — тоже только по товару события: ручную 0
 	// ставят через страницу «Сроки», а её запись дёргает пересчёт товара.
 	writes = append(writes, writesForProducts(banWrites(pairs), affected)...)
+	// Постоянную скидку карточки меняют вне стока: событие приходит по товару,
+	// поэтому постоянные записи тоже режем по затронутым (03.11.2026).
+	writes = append(writes, writesForProducts(permanentWrites(pairs, writes), affected)...)
 
 	return uc.writeAndRegister(ctx, pairs, writes)
 }
@@ -461,7 +467,9 @@ func valueGone(p PairState, plans map[discounts.LotKey]discounts.LotPlan) bool {
 		return p.TelegramManual == nil
 	case discounts.OwnerSurplus, discounts.OwnerEscalation:
 		return !holdsValue(p, plans)
-	case discounts.OwnerNone, discounts.OwnerExpiry:
+	case discounts.OwnerNone, discounts.OwnerExpiry, discounts.OwnerPermanent:
+		// Постоянную скидку снимает только permanentWrites — по дате, остатку и
+		// карточке; здесь чужое основание, трогать нельзя (03.11.2026).
 		return false
 	}
 	return false // недостижимо: все владельцы перечислены выше
@@ -482,8 +490,8 @@ func holdsValue(p PairState, plans map[discounts.LotKey]discounts.LotPlan) bool 
 		return p.HasSurplus
 	case discounts.OwnerEscalation:
 		return p.TelegramActive() || !escalationOver(p, plans)
-	case discounts.OwnerNone, discounts.OwnerExpiry, discounts.OwnerManual:
-		return false
+	case discounts.OwnerNone, discounts.OwnerExpiry, discounts.OwnerManual, discounts.OwnerPermanent:
+		return false // постоянная живёт до даты, а не до избытка/рассылки
 	}
 	return false
 }
@@ -520,6 +528,8 @@ func sourceMark(owner discounts.Owner) string {
 		return discounts.SourceExpiry.String()
 	case discounts.OwnerSurplus:
 		return discounts.SourceSurplus.String()
+	case discounts.OwnerPermanent:
+		return discounts.SourcePermanent.String()
 	case discounts.OwnerNone, discounts.OwnerEscalation, discounts.OwnerManual:
 		return ""
 	}
@@ -593,6 +603,71 @@ func banWrites(pairs []PairState) []discounts.DiscountWrite {
 			Telegram:   p.TelegramPlain,
 		})
 	}
+	return writes
+}
+
+// permanentWrites — постоянная скидка поставщика в канал сайта (решение
+// владельца 03.11.2026). Стоит, пока действует дата карточки, и Место в окне не
+// занимает (см. discounts.Row.Permanent), поэтому пишется она и без кандидатов
+// лестницы/избытка.
+//
+// Только вверх: если в проходе уже поставлена более глубокая ступень или стоит
+// ручная, значение не трогаем (ручная задана — effective важнее, а понижать
+// автоматика не умеет в принципе). Снятие — по владельцу permanent: дата
+// вышла, карточку очистили или остатка нет (скидка без остатка не
+// показывается: правила «нет в наличии — нет в скидках»). Чужое значение не
+// трогаем никогда.
+func permanentWrites(pairs []PairState, already []discounts.DiscountWrite) []discounts.DiscountWrite {
+	type state struct {
+		top     int16 // максимальное значение, уже поставленное в этом проходе
+		written bool  // по паре в проходе уже есть запись
+	}
+	seen := make(map[discounts.LotKey]state, len(already))
+	for _, w := range already {
+		key := lotKey(w.ProductID, w.BestBefore)
+		st := seen[key]
+		st.written = true
+		if w.General != nil && *w.General > st.top {
+			st.top = *w.General
+		}
+		seen[key] = st
+	}
+
+	writes := make([]discounts.DiscountWrite, 0, len(pairs))
+	for _, p := range pairs {
+		if p.Frozen() {
+			continue // ручная 0 % — пара заморожена, значение снимет banWrites
+		}
+		st := seen[p.Key]
+		if p.Permanent != nil && p.Qty > 0 {
+			if st.top >= *p.Permanent || appliedTop(p) >= *p.Permanent {
+				continue // уже стоит не меньше: ручная или ступень глубже
+			}
+			writes = append(writes, discounts.DiscountWrite{
+				ProductID:  p.ProductID,
+				BestBefore: p.BestBefore,
+				General:    p.Permanent,
+				// Колонку ТГ ведёт ТГ-день: своё значение передаём как есть,
+				// чтобы запись general её не затирала.
+				Telegram:     p.TelegramPlain,
+				Source:       discounts.SourcePermanent.String(),
+				GeneralOwner: discounts.OwnerPermanent.String(),
+			})
+
+			continue
+		}
+		// Основания нет — снимаем только своё и только если в этом проходе по
+		// паре ничего не пишется (иначе своя же запись отменится).
+		if p.GeneralOwner == discounts.OwnerPermanent && !st.written {
+			writes = append(writes, discounts.DiscountWrite{
+				ProductID:  p.ProductID,
+				BestBefore: p.BestBefore,
+				General:    nil, // снятие: движок пишет NULL, а не 0
+				Telegram:   p.TelegramPlain,
+			})
+		}
+	}
+
 	return writes
 }
 

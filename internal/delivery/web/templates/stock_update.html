@@ -165,8 +165,14 @@
             if (UPDATE.busy) {
                 return;
             }
-            if (UPDATE.scans.length === 0) {
+            // Без сканов сохраняем только в режиме одного товара: это «остатка
+            // нет» — все лоты товара удаляются (03.11.2026). По группе пустой
+            // батч обнулил бы весь вид, поэтому там он по-прежнему запрещён.
+            if (UPDATE.scans.length === 0 && !document.body.getAttribute('data-product-id')) {
                 showError('Нет сканов — сначала отсканируйте штрих-коды');
+                return;
+            }
+            if (UPDATE.scans.length === 0 && !confirm('Сканов нет: остаток товара обнулится. Сохранить?')) {
                 return;
             }
             UPDATE.busy = true;

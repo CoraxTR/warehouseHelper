@@ -37,7 +37,7 @@ func TestScanDiscountInput(t *testing.T) {
 			name: "недельный товар — период 7 дней",
 			vals: []any{"p-week", "Молоко 3,2%", "Молочка", false, 14, true,
 				"кг", int64(129900), "https://www.steakhome.ru/catalog/element/milk/", bb, 24,
-				int16(20), nil, nil, int16(15), "expiry", "expiry", "escalation"},
+				int16(20), nil, nil, int16(15), "expiry", "expiry", "escalation", nil, nil},
 			want: discounts.Input{
 				ProductID: "p-week", Name: "Молоко 3,2%", GroupName: "Молочка",
 				ShelfLife: new(int16(14)), TrackWeekly: true, BestBefore: bb, Qty: 24,
@@ -52,7 +52,7 @@ func TestScanDiscountInput(t *testing.T) {
 			name: "месячный товар — период 30 дней",
 			vals: []any{"p-month", "Сыр", "Молочка", true, 90, false,
 				"кг", int64(219000), nil, bb, 8,
-				nil, int16(10), int16(30), nil, "", nil, nil},
+				nil, int16(10), int16(30), nil, "", nil, nil, nil, nil},
 			want: discounts.Input{
 				ProductID: "p-month", Name: "Сыр", GroupName: "Молочка", ShortList: true,
 				ShelfLife: new(int16(90)), BestBefore: bb, Qty: 8,
@@ -65,7 +65,7 @@ func TestScanDiscountInput(t *testing.T) {
 			name: "нет данных о продажах — дни периода всё равно из товарного признака",
 			vals: []any{"p-new", "Новинка", "Разное", false, 30, true,
 				"шт", nil, nil, bb, 5,
-				nil, nil, nil, nil, nil, nil, nil},
+				nil, nil, nil, nil, nil, nil, nil, nil, nil},
 			want: discounts.Input{
 				ProductID: "p-new", Name: "Новинка", GroupName: "Разное",
 				ShelfLife: new(int16(30)), TrackWeekly: true, BestBefore: bb, Qty: 5,
@@ -77,7 +77,7 @@ func TestScanDiscountInput(t *testing.T) {
 			name: "срок годности не задан — NULL",
 			vals: []any{"p-null", "Без срока", "Разное", false, nil, false,
 				"", nil, nil, bb, 3,
-				nil, nil, nil, nil, nil, nil, nil},
+				nil, nil, nil, nil, nil, nil, nil, nil, nil},
 			want: discounts.Input{
 				ProductID: "p-null", Name: "Без срока", GroupName: "Разное",
 				BestBefore: bb, Qty: 3, PeriodDays: 30,
@@ -87,7 +87,7 @@ func TestScanDiscountInput(t *testing.T) {
 			name: "нулевая скидка — ноль, а не NULL (трактовка — в домене)",
 			vals: []any{"p-zero", "Йогурт", "Молочка", false, 5, false,
 				"шт", int64(5990), "", bb, 4,
-				int16(0), nil, int16(0), nil, "surplus", nil, nil},
+				int16(0), nil, int16(0), nil, "surplus", nil, nil, nil, nil},
 			want: discounts.Input{
 				ProductID: "p-zero", Name: "Йогурт", GroupName: "Молочка",
 				ShelfLife: new(int16(5)), BestBefore: bb, Qty: 4,
@@ -105,7 +105,7 @@ func TestScanDiscountInput(t *testing.T) {
 			name: "группы нет и метки нет — NULL в обеих TEXT-колонках",
 			vals: []any{"p-nogroup", "Без группы", nil, false, 20, true,
 				"", nil, nil, bb, 7,
-				nil, int16(15), nil, nil, nil, nil, nil},
+				nil, int16(15), nil, nil, nil, nil, nil, nil, nil},
 			want: discounts.Input{
 				ProductID: "p-nogroup", Name: "Без группы", GroupName: "",
 				ShelfLife: new(int16(20)), TrackWeekly: true, BestBefore: bb, Qty: 7,
@@ -131,7 +131,7 @@ func TestScanDiscountInput(t *testing.T) {
 // TestScanDiscountInputBadRow — несовпадение колонок и значений не молчит:
 // ошибка оборачивается (errors.Is на ErrNoRows от подделки).
 func TestScanDiscountInputBadRow(t *testing.T) {
-	if _, err := scanDiscountInput(fakeRow{vals: []any{"p1", "Молоко"}}); err == nil {
+	if _, err := scanDiscountInput(fakeRow{vals: []any{"p1", "Молоко", nil, nil}}); err == nil {
 		t.Fatal("scanDiscountInput на короткой строке: ошибки нет")
 	}
 }
@@ -169,13 +169,14 @@ func TestScanDiscountInputColumnCount(t *testing.T) {
 	if row.dests != want {
 		t.Errorf("scan-хелпер разбирает %d колонок, в списке — %d", row.dests, want)
 	}
-	// 18 колонок: товарные признаки товара, включая данные карточки для письма
+	// 20 колонок (хвост списка — постоянная скидка поставщика с датой
+	// окончания, 03.11.2026): товарные признаки товара, включая данные карточки для письма
 	// складу (9: группа, срок, признак недельного ряда, единица измерения, цена
 	// продажи, адрес на сайте), срок и остаток лота (2), четыре скидки, метка
 	// источника и владельцы значений обеих колонок (7). Колонки оборота здесь
 	// нет — оборот приходит швом модуля средних продаж, а не из снапшота.
-	if want != 18 {
-		t.Errorf("в списке колонок %d, want 18 (оборота в снапшоте нет)", want)
+	if want != 20 {
+		t.Errorf("в списке колонок %d, want 20 (оборота в снапшоте нет)", want)
 	}
 }
 
@@ -458,8 +459,7 @@ func TestScanTodaySlotItem(t *testing.T) {
 	october := time.Date(2026, time.October, 1, 0, 0, 0, 0, time.UTC)
 
 	got, err := scanTodaySlotItem(fakeRow{vals: []any{
-		testLotMilk, october, int16(30), discounts.ReasonManual, nil, nil,
-	}})
+		testLotMilk, october, int16(30), discounts.ReasonManual, nil, nil}})
 	if err != nil {
 		t.Fatalf("scanTodaySlotItem: %v", err)
 	}

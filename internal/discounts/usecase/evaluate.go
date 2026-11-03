@@ -52,6 +52,10 @@ type PairState struct {
 	Surplus    *int16  // 10 при избытке, nil — избытка нет
 	Coeff      float64 // коэффициент избытка Q/(v×D), >1 — избыток
 	HasSurplus bool
+	// Permanent — действующая постоянная скидка товара (пол канала сайта,
+	// решение владельца 03.11.2026): nil — её нет или дата окончания вышла.
+	// Место в окне она не занимает (см. discounts.Row.Permanent).
+	Permanent *int16
 	// SurplusGroup — пара входит в группу избытка товара: избыток есть у неё
 	// самой или у любого более далёкого срока, и скидка 10 % ложится на все
 	// сроки группы (опора A, решение владельца 23.09.2026). Ставит Evaluate.
@@ -97,7 +101,7 @@ func (p PairState) Desired() (*int16, discounts.Source) {
 		// источник не победитель (скидка снимается — см. banWrites).
 		return nil, discounts.SourceNone
 	}
-	return discounts.Resolve(p.Manual, p.Expiry, p.Surplus)
+	return discounts.Resolve(p.Manual, p.Permanent, p.Expiry, p.Surplus)
 }
 
 // Frozen — пара заморожена ручным нулём: ручная скидка задана и равна 0
@@ -205,6 +209,9 @@ func (p PairState) rowWith(percent *int16, src discounts.Source) discounts.Row {
 		// источником, а не «избытком»: иначе в таблице стояло «избыток» при
 		// скидке 30 % (жалоба владельца, 23.09.2026).
 		SurplusGroup: p.SurplusGroup && src == discounts.SourceSurplus,
+		// Постоянная скидка место в окне не занимает — окно её пропускает мимо
+		// счётчика ёмкости (BuildDigest, windowOf).
+		Permanent: src == discounts.SourcePermanent,
 	}
 	if percent != nil {
 		row.Percent = *percent
@@ -250,6 +257,10 @@ func (p PairState) plainSource() discounts.Source {
 		return discounts.SourceExpiry
 	case discounts.ReasonSurplus:
 		return discounts.SourceSurplus
+	case discounts.ReasonPermanent:
+		// Метка постоянной скидки в БД: строка отчёта печатается ею, а не
+		// подписью расчётного кандидата (03.11.2026).
+		return discounts.SourcePermanent
 	}
 	_, src := p.Desired()
 	return src
@@ -401,6 +412,7 @@ func evaluatePair(in discounts.Input, cumQty int64, rates map[string]float64, da
 		Rate:          rate,
 		HasRate:       hasRate,
 		Manual:        manualDiscount(in.GeneralManual),
+		Permanent:     in.PermanentActive(day),
 		Applied:       effectiveDiscount(in.GeneralManual, in.GeneralPlain),
 		AppliedPlain:  positiveDiscount(in.GeneralPlain),
 		SourceRaw:     in.DiscountSource,

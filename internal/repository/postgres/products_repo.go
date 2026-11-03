@@ -265,6 +265,47 @@ func (pg *PGClient) SetProductSiteURL(ctx context.Context, productID, siteURL st
 	return nil
 }
 
+// SetProductPermanentDiscount записывает постоянную скидку поставщика
+// (products.permanent_discount, permanent_discount_until). nil означает «не
+// задана» и пишется как NULL: снятие скидки — это NULL в обеих колонках.
+// Единственное место записи колонок — карточка позиции, синки из МС их не
+// трогают (решение владельца 03.11.2026). Товара нет →
+// domain.ErrProductNotFound.
+func (pg *PGClient) SetProductPermanentDiscount(ctx context.Context, productID string, percent *int16, until *time.Time) error {
+	tag, err := pg.Pool.Exec(ctx, `
+        UPDATE products SET permanent_discount = $2, permanent_discount_until = $3 WHERE id = $1
+    `, productID, percent, until)
+	if err != nil {
+		return fmt.Errorf("set product permanent discount %s: %w", productID, err)
+	}
+
+	if tag.RowsAffected() == 0 {
+		return domain.ErrProductNotFound
+	}
+
+	return nil
+}
+
+// ProductPermanentDiscount — постоянная скидка поставщика товара (nil, nil —
+// не задана). Товара нет → domain.ErrProductNotFound.
+func (pg *PGClient) ProductPermanentDiscount(ctx context.Context, productID string) (*int16, *time.Time, error) {
+	var percent *int16
+	var until *time.Time
+
+	err := pg.Pool.QueryRow(ctx, `
+        SELECT permanent_discount, permanent_discount_until FROM products WHERE id = $1
+    `, productID).Scan(&percent, &until)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil, domain.ErrProductNotFound
+		}
+
+		return nil, nil, fmt.Errorf("get product permanent discount %s: %w", productID, err)
+	}
+
+	return percent, until, nil
+}
+
 // SetProductIncomingVAT записывает входящий НДС товара (products.vat_incoming, %) —
 // единственное место записи колонки: значение задаёт человек на странице
 // «Проверка цен», синки из МС и карточка позиции колонку не трогают. nil

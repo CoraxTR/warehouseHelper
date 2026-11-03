@@ -32,11 +32,15 @@ import (
 // остаток пары, у избыточных — план продаж по паре (сколько надо продать).
 // 0 — печатать количество нечем (избыточная пара вне раскладки).
 type Row struct {
-	ProductID    string
-	Name         string
-	BestBefore   time.Time
-	Percent      int16
-	Source       Source
+	ProductID  string
+	Name       string
+	BestBefore time.Time
+	Percent    int16
+	Source     Source
+	// Permanent — скидка постоянная (поставщика, products.permanent_discount):
+	// стоит на сайте, но место в окне НЕ занимает (решение владельца
+	// 03.11.2026). Окно пропускает такие строки мимо счётчика ёмкости.
+	Permanent    bool
 	Telegram     bool
 	Coeff        float64
 	DaysLeft     int
@@ -124,14 +128,41 @@ func BuildDigest(rows []Row, capacity int) Digest {
 	active := mergeGroups(rows)
 	Sort(active)
 
+	// Постоянные скидки место в окне не занимают (решение владельца 03.11.2026):
+	// ёмкость съедают только слотовые строки, постоянные едут сверх окна — они и
+	// так стоят на сайте, и вытеснять ими лестницу или избыток нельзя.
+	slots, permanent := SplitPermanent(active)
+
 	d := Digest{Cap: capacity}
-	if capacity > 0 && len(active) > capacity {
-		d.Discounts = active[:capacity]
-		d.Surplus = active[capacity:]
+	if capacity > 0 && len(slots) > capacity {
+		d.Discounts = make([]Row, 0, capacity+len(permanent))
+		d.Discounts = append(d.Discounts, slots[:capacity]...)
+		d.Discounts = append(d.Discounts, permanent...)
+		d.Surplus = slots[capacity:]
 		return d
 	}
-	d.Discounts = active
+	d.Discounts = make([]Row, 0, len(slots)+len(permanent))
+	d.Discounts = append(d.Discounts, slots...)
+	d.Discounts = append(d.Discounts, permanent...)
+
 	return d
+}
+
+// SplitPermanent — строки отчёта на слотовые и постоянные. Порядок внутри
+// каждой группы сохраняется (вход уже отсортирован), поэтому постоянные идут
+// хвостом окна своим приоритетом.
+func SplitPermanent(rows []Row) (slots, permanent []Row) {
+	slots = make([]Row, 0, len(rows))
+	permanent = make([]Row, 0)
+	for _, r := range rows {
+		if r.Permanent {
+			permanent = append(permanent, r)
+			continue
+		}
+		slots = append(slots, r)
+	}
+
+	return slots, permanent
 }
 
 // mergeGroups — строки отчёта, где пары одного товара из его группы избытка
@@ -256,6 +287,10 @@ func channelLabel(r Row) string {
 		return "Срок"
 	case SourceSurplus:
 		return "Избыток"
+	case SourcePermanent:
+		// Постоянная скидка поставщика: в окне её нет, но в отчёте и в подписи
+		// строки её надо отличать от лестницы и избытка (03.11.2026).
+		return "Постоянная"
 	}
 	return "" // недостижимо: все значения Source перечислены выше
 }

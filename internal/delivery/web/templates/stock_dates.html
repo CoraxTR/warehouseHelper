@@ -1348,6 +1348,14 @@
             html += '<div class="modal-title" style="font-size:11px;margin-top:14px;">Ссылка на сайт</div>';
             html += '<div class="modal-line"><input type="text" id="pi-site-url" value="' + esc(data.site_url || '') + '" style="width:100%;" placeholder="https://…"></div>';
 
+            html += '<div class="modal-title" style="font-size:11px;margin-top:14px;">Постоянная скидка поставщика</div>';
+            html += '<div class="modal-line">' +
+                '<input type="number" id="pi-perm-percent" min="1" max="90" step="1" value="' + esc(data.permanent_discount || '') + '" style="width:70px;" placeholder="%">' +
+                ' <span style="opacity:.7;">до</span> ' +
+                '<input type="date" id="pi-perm-until" value="' + esc(data.permanent_discount_until || '') + '" style="width:150px;">' +
+                '</div>';
+            html += '<div class="modal-line" style="opacity:.7;font-size:10px;">процент 1–90 и дата окончания; пусто в обоих полях — скидка снимается</div>';
+
             html += '<div class="modal-line" id="pi-status"></div>';
 
             box.innerHTML = html;
@@ -1483,9 +1491,20 @@
             }
 
             var siteIn = document.getElementById('pi-site-url');
+            // Постоянная скидка: поля шлём всегда, пустое — null/"" (значит
+            // «снять»). Пустая строка для числа в JSON не годится — шлём null.
+            var permIn = document.getElementById('pi-perm-percent');
+            var permUntilIn = document.getElementById('pi-perm-until');
+            var permRaw = permIn ? String(permIn.value).replace(/^\s+|\s+$/g, '') : '';
+            var permVal = permRaw === '' ? null : parseInt(permRaw, 10);
+            if (permVal !== null && isNaN(permVal)) {
+                permVal = null;
+            }
             var payload = {
                 product_id: PI.product_id,
                 site_url: siteIn ? siteIn.value : '',
+                permanent_discount: permVal,
+                permanent_discount_until: permUntilIn ? permUntilIn.value : '',
                 prices: prices,
                 schedules: schedules,
                 save_orders: true
