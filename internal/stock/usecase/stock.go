@@ -525,7 +525,17 @@ func (uc *StockUseCase) ReplaceStock(ctx context.Context, req ReplaceRequest) er
 	done := metrics.Track(trackPkg, "ReplaceStock")
 	defer done()
 	if len(req.Scans) == 0 {
-		return errors.New("нет сканов")
+		// Пустой батч — не «нечего делать», а «у товара остатка не нашлось»:
+		// оператор обновляет сроки по одному товару и не отсканировал ни одной
+		// единицы. Бывает, что на остатке висит 1 шт., а по факту её нет
+		// (приёмку забыли отсканировать) — раньше такой товар нельзя было
+		// обнулить вовсе (решение владельца 03.11.2026).
+		// Только в режиме одного товара: пустой батч по группе обнулил бы весь вид.
+		if req.ExpectedProductID == "" {
+			return errors.New("нет сканов")
+		}
+
+		return uc.zeroStockProduct(ctx, req.ExpectedProductID)
 	}
 
 	parsed, err := parseScans(req.Scans, req.ExpectedGroupCode)
@@ -549,6 +559,35 @@ func (uc *StockUseCase) ReplaceStock(ctx context.Context, req ReplaceRequest) er
 		return err
 	}
 	return uc.applyReplacePlans(ctx, order, plans, byID)
+}
+
+// zeroStockProduct — «остатка нет»: удаляет все лоты товара. Идёт тем же путём,
+// что и замена по сканам (репозиторий в одной транзакции → кэш → события →
+// день-стейт): скидки уходят вместе с лотами, «Сроки» и сайт видят ноль сразу.
+func (uc *StockUseCase) zeroStockProduct(ctx context.Context, productID string) error {
+	// Источник — кэш, а не БД: он и есть живое состояние остатков, и лишний
+	// поход в базу на каждое обнуление не нужен.
+	uc.mu.RLock()
+	cached, ok := uc.cache[productID]
+	var product stock.Product
+	if ok {
+		product = *cached
+		product.Lots = append([]stock.Lot(nil), cached.Lots...)
+	}
+	uc.mu.RUnlock()
+	if !ok {
+		return stock.ErrProductNotFound
+	}
+
+	deletes := make([]time.Time, 0, len(product.Lots))
+	for _, l := range product.Lots {
+		deletes = append(deletes, l.BestBefore)
+	}
+
+	plan := replacePlan{inCache: true, deletes: deletes}
+	byID := map[string]stock.Product{productID: product}
+
+	return uc.applyReplacePlans(ctx, []string{productID}, []replacePlan{plan}, byID)
 }
 
 // ReplaceInventoryLots — замена остатков товаров вида инвентаризации: каждый код

@@ -94,3 +94,11 @@ func TestBuildDigestPermanentBeyondCapacity(t *testing.T) {
 		}
 	}
 }
+
+// Постоянная скидка печатается в дайджесте своей подписью: иначе в отчёте она
+// выглядела бы ступенью по сроку или строкой без источника (03.11.2026).
+func TestChannelLabelPermanent(t *testing.T) {
+	if got := channelLabel(Row{Source: SourcePermanent}); got != "Постоянная" {
+		t.Errorf("channelLabel(постоянная) = %q, want Постоянная", got)
+	}
+}

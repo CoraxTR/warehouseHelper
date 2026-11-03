@@ -257,6 +257,10 @@ func (p PairState) plainSource() discounts.Source {
 		return discounts.SourceExpiry
 	case discounts.ReasonSurplus:
 		return discounts.SourceSurplus
+	case discounts.ReasonPermanent:
+		// Метка постоянной скидки в БД: строка отчёта печатается ею, а не
+		// подписью расчётного кандидата (03.11.2026).
+		return discounts.SourcePermanent
 	}
 	_, src := p.Desired()
 	return src

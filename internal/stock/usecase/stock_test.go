@@ -546,6 +546,45 @@ func TestReplaceStock(t *testing.T) {
 }
 
 // События замены: сначала удаления (05.09, 10.09), потом upsert с суммой.
+// Пустой батч в режиме одного товара — «остатка нет»: все лоты товара
+// удаляются. Бывает, что на остатке висит 1 шт., а по факту её нет (приёмку
+// забыли отсканировать) — раньше такой товар нельзя было обнулить вовсе.
+// По группе пустой батч остаётся ошибкой: он обнулил бы весь вид
+// (решение владельца 03.11.2026).
+func TestReplaceStockWithoutScansZeroesProduct(t *testing.T) {
+	repo := replaceRepo()
+	uc := newTestUC(repo, &mockPub{})
+	if err := uc.WarmUp(context.Background()); err != nil {
+		t.Fatalf("WarmUp: %v", err)
+	}
+
+	if err := uc.ReplaceStock(context.Background(), ReplaceRequest{ExpectedProductID: "p1"}); err != nil {
+		t.Fatalf("ReplaceStock без сканов: %v", err)
+	}
+	if len(repo.writes) != 1 {
+		t.Fatalf("writes: len = %d, want 1", len(repo.writes))
+	}
+	w := repo.writes[0]
+	if w.ProductID != "p1" {
+		t.Errorf("productID = %q, want p1", w.ProductID)
+	}
+	if len(w.Upserts) != 0 {
+		t.Errorf("upserts: len = %d, want 0 (остатка нет)", len(w.Upserts))
+	}
+	if len(w.Deletes) == 0 {
+		t.Errorf("лоты не удалены: %+v", w)
+	}
+
+	snap := uc.Snapshot()
+	if len(snap) != 1 || len(snap[0].Lots) != 0 {
+		t.Errorf("кэш: %+v, want товар без лотов", snap)
+	}
+
+	if err := uc.ReplaceStock(context.Background(), ReplaceRequest{}); err == nil {
+		t.Error("пустой батч без товара: ошибки нет, а по группе обнулять нельзя")
+	}
+}
+
 func TestReplaceStockPublishesEvents(t *testing.T) {
 	repo := replaceRepo()
 	pub := &mockPub{}
