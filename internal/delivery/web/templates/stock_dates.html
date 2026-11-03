@@ -52,7 +52,7 @@
     </table>
 
     <div id="modal-overlay" class="overlay hidden">
-        <div class="modal">
+        <div class="modal" id="modal-box" tabindex="-1">
             <div id="modal-content"></div>
         </div>
     </div>
@@ -1094,7 +1094,14 @@
 
         function showModal(html) {
             document.getElementById('modal-content').innerHTML = html;
-            document.getElementById('modal-overlay').className = 'overlay';
+            var overlay = document.getElementById('modal-overlay');
+            overlay.className = 'overlay';
+            // Окно открывается с начала и сразу в фокусе: длинное окно листается
+            // клавишами (пробел, стрелки), а не страницей под ним — до первого
+            // клика внутрь оно выглядело «неактивным» (03.11.2026).
+            var box = document.getElementById('modal-box');
+            box.scrollTop = 0;
+            box.focus();
         }
 
         function closeModal() {

@@ -427,11 +427,27 @@ form.search button { margin-left: 8px; }
     left: 0; top: 0; right: 0; bottom: 0;
     background: rgba(5, 5, 8, 0.75);
     z-index: 100;
+    /* Мини-окно карточки позиции бывает длинным (поставщики, варианты заказа,
+       ссылка, постоянная скидка): прокручивается САМО окно, а не страница под
+       ним, и верх окна не уезжает за край экрана (03.11.2026). */
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    display: flex;
+    align-items: flex-start;
+    justify-content: center;
+    padding: 24px 16px;
 }
 .modal {
-    position: fixed;
-    left: 50%; top: 50%;
-    transform: translate(-50%, -50%);
+    /* Было position: fixed + translate(-50%, -50%): высокое окно центрировалось
+       «минус половина высоты» — верхняя часть уходила за экран и не доставалась
+       ни скроллом страницы, ни скроллом окна (жалоба владельца 03.11.2026).
+       Теперь окно — элемент прокручиваемого overlay с собственной прокруткой. */
+    position: relative;
+    margin: auto;
+    max-height: calc(100vh - 48px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    outline: none;
     background: #131317;
     border: 1px solid #33333E;
     border-radius: 2px;
