@@ -317,6 +317,15 @@ func plainInput(v int16) func(*discounts.Input) {
 	return func(in *discounts.Input) { in.GeneralPlain = &v }
 }
 
+// permanentInput — постоянная скидка поставщика карточки товара: процент и дата
+// окончания (действует до неё включительно).
+func permanentInput(v int16, until time.Time) func(*discounts.Input) {
+	return func(in *discounts.Input) {
+		in.Permanent = &v
+		in.PermanentUntil = &until
+	}
+}
+
 // telegramInput — «простая» скидка ТГ-колонки лота.
 func telegramInput(v int16) func(*discounts.Input) {
 	return func(in *discounts.Input) { in.TelegramPlain = &v }
@@ -657,6 +666,58 @@ func TestRecalcSurplusWritesTenAtExcess(t *testing.T) {
 	}
 	if h.turn.calls != 1 || len(h.turn.asked) != 1 || h.turn.asked[0] != "p1" {
 		t.Errorf("свежий оборот запрошен %v (вызовов %d), want [p1]", h.turn.asked, h.turn.calls)
+	}
+}
+
+// Постоянная скидка поставщика — работа и часового пересчёта (05.11.2026):
+// её основание в карточке позиции, а не в стоке, поэтому без этого прохода пол
+// канала появлялся бы только по событию товара.
+func TestRecalcSurplusWritesPermanentDiscount(t *testing.T) {
+	now := recalcNow(1)
+	h := newRecalcHarness(now, lotInput("p1", "Вырезка Прайм", day(10), 25,
+		permanentInput(5, now.AddDate(0, 0, 30))))
+
+	if err := h.uc.RecalcSurplus(context.Background(), now); err != nil {
+		t.Fatalf("RecalcSurplus: %v", err)
+	}
+
+	batches := h.batches()
+	if len(batches) != 1 || len(batches[0]) != 1 {
+		t.Fatalf("батчи правок: %+v", batches)
+	}
+	w := batches[0][0]
+	if w.General == nil || *w.General != 5 {
+		t.Fatalf("general правки %v, want 5", w.General)
+	}
+	if w.Source != discounts.SourcePermanent.String() {
+		t.Errorf("метка источника %q, want permanent", w.Source)
+	}
+	if w.GeneralOwner != discounts.OwnerPermanent.String() {
+		t.Errorf("владелец %q, want permanent", w.GeneralOwner)
+	}
+	if got := h.uc.Window(12); len(got) != 1 || got[0].Source != discounts.SourcePermanent {
+		t.Errorf("окно реестра: %+v, want постоянную скидку", got)
+	}
+}
+
+// Дата карточки вышла — часовой проход снимает своё значение, не дожидаясь
+// события по товару или утра КТ-дня (раньше это умели только они).
+func TestRecalcSurplusRemovesExpiredPermanent(t *testing.T) {
+	now := recalcNow(1)
+	h := newRecalcHarness(now, lotInput("p1", "Вырезка Прайм", day(10), 25,
+		plainInput(5), sourceInput(discounts.SourcePermanent.String()),
+		ownerInput(discounts.OwnerPermanent.String())))
+
+	if err := h.uc.RecalcSurplus(context.Background(), now); err != nil {
+		t.Fatalf("RecalcSurplus: %v", err)
+	}
+
+	batches := h.batches()
+	if len(batches) != 1 || len(batches[0]) != 1 {
+		t.Fatalf("батчи правок: %+v", batches)
+	}
+	if got := batches[0][0].General; got != nil {
+		t.Errorf("снятие: general правки %v, want nil (NULL, а не 0)", got)
 	}
 }
 
