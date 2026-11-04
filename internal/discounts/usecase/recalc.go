@@ -113,6 +113,12 @@ func (uc *UseCase) RecalcExpiry(ctx context.Context, now time.Time) error {
 // роняет (считаем по сохранённому обороту, свежий догонит следующий час).
 // Маркер дня отмечается на каждом часу: он говорит «пересчёт за день был», по
 // нему приложение добирает пропущенный запуск после сна.
+//
+// Постоянная скидка поставщика ставится и снимается здесь же (05.11.2026): её
+// источник — карточка позиции, а не сток, поэтому без часового прохода пол
+// канала появлялся бы только по событию товара, а просроченный (дата окончания
+// вышла) висел бы до ближайшего события или до утра КТ-дня. Час — верхняя
+// граница: чаще основание не меняется.
 func (uc *UseCase) RecalcSurplus(ctx context.Context, now time.Time) error {
 	today := beginningOfDay(now)
 
@@ -132,7 +138,13 @@ func (uc *UseCase) RecalcSurplus(ctx context.Context, now time.Time) error {
 		pairs = Evaluate(inputs, rates, today)
 	}
 
-	if err := uc.writeAndRegister(ctx, pairs, ownerWrites(pairs, uc.planQty(ctx, pairs))); err != nil {
+	writes := ownerWrites(pairs, uc.planQty(ctx, pairs))
+	// Постоянная скидка карточки — последней: она видит, что уже поставлено в
+	// этом проходе, и не отбирает место у более глубокой ступени. Здесь же её
+	// снятие по дате окончания (05.11.2026).
+	writes = append(writes, permanentWrites(pairs, writes)...)
+
+	if err := uc.writeAndRegister(ctx, pairs, writes); err != nil {
 		return err
 	}
 

@@ -1472,7 +1472,8 @@ func normalizeDiscountWrites(writes []stock.DiscountWrite) ([]stock.DiscountWrit
 // Опечатка движка не должна тихо лечь в БД как чужой источник.
 func validateDiscountSource(source string) error {
 	switch source {
-	case "", stock.DiscountSourceManual, stock.DiscountSourceExpiry, stock.DiscountSourceSurplus:
+	case "", stock.DiscountSourceManual, stock.DiscountSourceExpiry, stock.DiscountSourceSurplus,
+		stock.DiscountSourcePermanent:
 		return nil
 	}
 
@@ -1487,7 +1488,7 @@ func validateDiscountSource(source string) error {
 func validateDiscountOwner(field, owner string) error {
 	switch owner {
 	case "", stock.DiscountOwnerSurplus, stock.DiscountOwnerExpiry,
-		stock.DiscountOwnerEscalation, stock.DiscountOwnerManual:
+		stock.DiscountOwnerEscalation, stock.DiscountOwnerManual, stock.DiscountOwnerPermanent:
 		return nil
 	}
 

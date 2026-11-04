@@ -1799,6 +1799,43 @@ func TestSetDiscountsWritesDBThenCacheThenEvent(t *testing.T) {
 	}
 }
 
+// Постоянная скидка поставщика (03.11.2026) — законные метка источника и
+// владелец значения. До этой правки валидаторы знали только manual/expiry/
+// surplus, и запись падала ЦЕЛИКОМ («скидки: неизвестный источник "permanent"»):
+// постоянная скидка не ложилась в БД, а вместе с ней отменялся весь батч прохода.
+func TestSetDiscountsAcceptsPermanentSource(t *testing.T) {
+	repo := &mockRepo{products: testStock()}
+	uc := newDiscountsUC(t, repo, &mockPub{})
+
+	percent := int16(5)
+	if err := uc.SetDiscounts(context.Background(), []stock.DiscountWrite{{
+		ProductID:    "p1",
+		BestBefore:   d(2026, 9, 1),
+		General:      &percent,
+		Source:       stock.DiscountSourcePermanent,
+		GeneralOwner: stock.DiscountOwnerPermanent,
+	}}); err != nil {
+		t.Fatalf("SetDiscounts с source/owner permanent: %v", err)
+	}
+
+	if len(repo.discounts) != 1 {
+		t.Fatalf("repo.discounts = %d, want 1", len(repo.discounts))
+	}
+	if w := repo.discounts[0]; w.Source != stock.DiscountSourcePermanent ||
+		w.GeneralOwner != stock.DiscountOwnerPermanent {
+		t.Errorf("метка/владелец: %q/%q, want permanent/permanent", w.Source, w.GeneralOwner)
+	}
+
+	// Валидация не должна стать всеядной: опечатка по-прежнему отбивается.
+	if err := uc.SetDiscounts(context.Background(), []stock.DiscountWrite{{
+		ProductID:  "p1",
+		BestBefore: d(2026, 9, 1),
+		Source:     "permanentt",
+	}}); err == nil {
+		t.Error("опечатка в метке источника: ошибки нет, а в БД лёг бы чужой источник")
+	}
+}
+
 // nil в DiscountWrite = скидка не задана (в БД NULL): в кэше поле обнуляется.
 func TestSetDiscountsNilClearsCache(t *testing.T) {
 	repo := &mockRepo{products: testStock()}
