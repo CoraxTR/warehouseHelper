@@ -145,9 +145,10 @@ const (
 // Метки источника действующей «простой» скидки сайта — значения колонки
 // product_stock.discount_source (CHECK в схеме). Пустая строка = метки нет.
 const (
-	DiscountSourceManual  = "manual"  // скидка поставлена вручную (не движком)
-	DiscountSourceExpiry  = "expiry"  // ступень лестницы по сроку годности
-	DiscountSourceSurplus = "surplus" // скидка на избыток остатка
+	DiscountSourceManual    = "manual"    // скидка поставлена вручную (не движком)
+	DiscountSourceExpiry    = "expiry"    // ступень лестницы по сроку годности
+	DiscountSourceSurplus   = "surplus"   // скидка на избыток остатка
+	DiscountSourcePermanent = "permanent" // постоянная скидка поставщика (пол канала сайта, из карточки товара)
 )
 
 // Владельцы стоящих значений колонок лота — значения колонок
@@ -160,6 +161,7 @@ const (
 	DiscountOwnerExpiry     = "expiry"     // значение поставлено ступенью по сроку
 	DiscountOwnerEscalation = "escalation" // значение поставлено ТГ-днём (план 14:00 / подъём 16:00)
 	DiscountOwnerManual     = "manual"     // значение поставлено человеком (подъём ручной ТГ на сайт)
+	DiscountOwnerPermanent  = "permanent"  // значение поставлено постоянной скидкой поставщика
 )
 
 // Ошибки домена.

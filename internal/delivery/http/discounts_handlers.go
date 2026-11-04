@@ -99,9 +99,10 @@ func discountDate(t time.Time) string {
 
 // sourceLabels — русские названия источников скидки для колонки «Источник».
 var sourceLabels = map[discounts.Source]string{
-	discounts.SourceManual:  "ручная",
-	discounts.SourceExpiry:  "по сроку",
-	discounts.SourceSurplus: "избыток",
+	discounts.SourceManual:    "ручная",
+	discounts.SourceExpiry:    "по сроку",
+	discounts.SourceSurplus:   "избыток",
+	discounts.SourcePermanent: "постоянная",
 }
 
 // discountSourceLabel — источник скидки по-русски. SourceNone и неизвестные
