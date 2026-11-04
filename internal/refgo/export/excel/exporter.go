@@ -22,6 +22,12 @@ const (
 	verticalAlignCenter = "center"
 )
 
+// addressRowHeight — высота строки 7 наклейки (адрес доставки) в pt.
+// 45 px = 33,75 pt. Высота закреплена (excelize ставит customHeight), поэтому
+// Excel больше не растягивает строку автоподбором под длинный адрес: наклейка
+// всегда одной высоты, а адрес длиннее трёх строк обрезается при печати.
+const addressRowHeight = 33.75
+
 type ExcelExporter struct{}
 
 func NewExcelExporter() *ExcelExporter {
@@ -519,7 +525,8 @@ func setCellsStyle(f *excelize.File, sheet string, startRow, header, regular, to
 
 	innerCounter++
 
-	err = f.SetRowHeight(sheet, innerCounter, -1)
+	// Строка 7 — адрес доставки: высота закреплена, иначе автоподбор растягивает её.
+	err = f.SetRowHeight(sheet, innerCounter, addressRowHeight)
 	if err != nil {
 		return err
 	}

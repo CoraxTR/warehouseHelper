@@ -59,8 +59,9 @@ func TestLabelRowHeights(t *testing.T) {
 		t.Fatalf("setCellsStyle: %v", err)
 	}
 
-	// Строка 7 высоты не задаёт (Excel берёт свою — там переносится адрес).
-	want := map[int]float64{1: 41.25, 2: 20, 3: 12, 4: 12, 5: 12, 6: 12, 8: 12}
+	// Строка 7 — адрес доставки: высота закреплена жёстко (45 px = 33,75 pt),
+	// чтобы автоподбор не растягивал наклейку под длинный адрес.
+	want := map[int]float64{1: 41.25, 2: 20, 3: 12, 4: 12, 5: 12, 6: 12, 7: 33.75, 8: 12}
 
 	for row, wantHeight := range want {
 		got, err := f.GetRowHeight("Sheet1", row)
