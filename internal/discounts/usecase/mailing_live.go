@@ -543,17 +543,28 @@ func (uc *UseCase) syncPhotoRequests(ctx context.Context, day time.Time, items [
 func displayedQty(items []discounts.DigestItem, data map[discounts.LotKey]lotData) map[discounts.LotKey]int64 {
 	out := make(map[discounts.LotKey]int64, len(items))
 	for _, it := range items {
-		key := lotKey(it.ProductID, it.BestBefore)
-		// Дельта остатка ЛОТА от снимка 14:45: продажа уменьшает блок, возврат
-		// увеличивает, но не выше записанного числа. Пересчёта избытка в окне
-		// нет — блок избытка это доля плана, а не остаток пары (решение
-		// владельца 18.10.2026).
-		block := it.BlockQty - (it.StockQty - data[key].Qty)
-		block = min(max(block, 0), it.BlockQty)
-		out[key] = block
+		out[lotKey(it.ProductID, it.BestBefore)] = blockLeft(it, data[lotKey(it.ProductID, it.BestBefore)].Qty)
 	}
 
 	return out
+}
+
+// blockLeft — сколько единиц блока по акции осталось при текущем остатке лота.
+// Точка отсчёта — снимок остатка на сборке рассылки (StockQty): продажа
+// уменьшает блок, возврат увеличивает, но не выше записанного числа. Считать
+// min(BlockQty, остаток) нельзя: у позиции избытка блок (доля плана) меньше
+// остатка лота, и тогда продажа вообще не двигает блок — пост стоял с
+// «Остаток по акции: 1 шт.» при уже проданной штуке (инцидент 06.11.2026).
+// Снимка нет (старые рассылки, StockQty = 0) — считаем по остатку.
+func blockLeft(it discounts.DigestItem, stock int64) int64 {
+	if stock <= 0 {
+		return 0
+	}
+	if it.StockQty <= 0 {
+		return min(it.BlockQty, stock)
+	}
+
+	return min(max(it.BlockQty-(it.StockQty-stock), 0), min(it.BlockQty, stock))
 }
 
 // SkipMailing — кнопка «Пропустить рассылку»: рассылки не будет, поэтому
