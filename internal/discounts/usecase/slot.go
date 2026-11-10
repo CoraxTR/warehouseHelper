@@ -187,6 +187,7 @@ func buildDayPlan(pairs []PairState, prev map[discounts.LotKey]struct{}, capacit
 			continue
 		}
 		class, pos := classifySlot(p)
+		//nolint:gocritic // switch по slotClass не проходит revive: без default — enforce-switch-style, с пустым default — identical-switch-branches
 		if class == classManual {
 			manual = append(manual, *pos)
 		} else if class == classRaise {
