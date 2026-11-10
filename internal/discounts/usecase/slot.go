@@ -187,19 +187,15 @@ func buildDayPlan(pairs []PairState, prev map[discounts.LotKey]struct{}, capacit
 			continue
 		}
 		class, pos := classifySlot(p)
-		switch class {
-		case classManual:
+		if class == classManual {
 			manual = append(manual, *pos)
-		case classRaise:
+		} else if class == classRaise {
 			raises = append(raises, *pos)
-		case classWeak:
+		} else if class == classWeak {
 			weak = append(weak, p)
-		case classNone:
-			// Ни ручной скидки дня, ни повышения: в плане делать нечего,
-			// скидка уже стоит на сайте либо её нет вовсе.
-		default:
-			// Неизвестный класс — тоже вне плана.
 		}
+		// classNone — ни ручной скидки дня, ни повышения: паре в плане делать
+		// нечего, скидка уже стоит на сайте либо её нет вовсе.
 	}
 	sortSlot(forced)
 	sortSlot(manual)
