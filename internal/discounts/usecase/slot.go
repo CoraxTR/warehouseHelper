@@ -81,31 +81,30 @@ type slotPosition struct {
 type slotClass int
 
 const (
-	classNone slotClass = iota
-	classManual
+	classManual slotClass = iota
 	classRaise
 	classWeak
 )
 
 // classifySlot — место пары в плане: ручная скидка дня, повышение по сроку
-// (в слот или «лишним») либо свежая ступень 10 % (материал добора). Пары без
-// кандидата дня в план не идут.
-func classifySlot(p PairState) (slotClass, *slotPosition) {
+// (в слот или «лишним») либо свежая ступень 10 % (материал добора). ok=false —
+// кандидата дня нет: паре в плане делать нечего.
+func classifySlot(p PairState) (slotClass, *slotPosition, bool) {
 	switch {
 	case p.Manual != nil && *p.Manual >= slotMainPercent:
-		return classManual, &slotPosition{pair: p, percent: *p.Manual, reason: discounts.ReasonManual}
+		return classManual, &slotPosition{pair: p, percent: *p.Manual, reason: discounts.ReasonManual}, true
 	case p.Manual == nil && p.Expiry != nil && *p.Expiry > appliedTop(p):
 		if *p.Expiry == slotBasePercent {
-			return classWeak, nil
+			return classWeak, nil, true
 		}
 		return classRaise, &slotPosition{
 			pair:          p,
 			percent:       *p.Expiry,
 			reason:        discounts.ReasonExpiry,
 			writeTelegram: true,
-		}
+		}, true
 	}
-	return classNone, nil
+	return classManual, nil, false
 }
 
 // banPlanPosition — пара, которую в слот не берём из-за ручного нуля. skip=true:
@@ -186,17 +185,20 @@ func buildDayPlan(pairs []PairState, prev map[discounts.LotKey]struct{}, capacit
 		if !slotEligible(p, prev) {
 			continue
 		}
-		class, pos := classifySlot(p)
-		//nolint:gocritic // switch по slotClass не проходит revive: без default — enforce-switch-style, с пустым default — identical-switch-branches
-		if class == classManual {
-			manual = append(manual, *pos)
-		} else if class == classRaise {
-			raises = append(raises, *pos)
-		} else if class == classWeak {
-			weak = append(weak, p)
+		class, pos, ok := classifySlot(p)
+		if !ok {
+			continue
 		}
-		// classNone — ни ручной скидки дня, ни повышения: паре в плане делать
-		// нечего, скидка уже стоит на сайте либо её нет вовсе.
+		switch class {
+		case classManual:
+			manual = append(manual, *pos)
+		case classRaise:
+			raises = append(raises, *pos)
+		case classWeak:
+			weak = append(weak, p)
+		default:
+			continue // неизвестный класс — в план не берём
+		}
 	}
 	sortSlot(forced)
 	sortSlot(manual)
