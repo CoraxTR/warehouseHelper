@@ -77,6 +77,54 @@ type slotPosition struct {
 	tgManual bool
 }
 
+// slotClass — к какому списку плана относится пара.
+type slotClass int
+
+const (
+	classNone slotClass = iota
+	classManual
+	classRaise
+	classWeak
+)
+
+// classifySlot — место пары в плане: ручная скидка дня, повышение по сроку
+// (в слот или «лишним») либо свежая ступень 10 % (материал добора). Пары без
+// кандидата дня в план не идут.
+func classifySlot(p PairState) (slotClass, *slotPosition) {
+	switch {
+	case p.Manual != nil && *p.Manual >= slotMainPercent:
+		return classManual, &slotPosition{pair: p, percent: *p.Manual, reason: discounts.ReasonManual}
+	case p.Manual == nil && p.Expiry != nil && *p.Expiry > appliedTop(p):
+		if *p.Expiry == slotBasePercent {
+			return classWeak, nil
+		}
+		return classRaise, &slotPosition{
+			pair:          p,
+			percent:       *p.Expiry,
+			reason:        discounts.ReasonExpiry,
+			writeTelegram: true,
+		}
+	}
+	return classNone, nil
+}
+
+// banPlanPosition — пара, которую в слот не берём из-за ручного нуля. skip=true:
+// полный запрет (ноль сайта) сайт не трогает вовсе, а запрет ТГ в рассылку не
+// пускает, но сегодняшнюю ступень по сроку отдаёт сайту сразу — как «лишним»
+// (решение владельца 10.11.2026): лесенка работает, в ТГ пара не идёт.
+func banPlanPosition(p PairState) (pos *slotPosition, skip bool) {
+	if p.Frozen() {
+		return nil, true
+	}
+	if !p.TelegramBanned() {
+		return nil, false
+	}
+	if p.Manual == nil && p.Expiry != nil && *p.Expiry > appliedTop(p) {
+		return &slotPosition{pair: p, percent: *p.Expiry, reason: discounts.ReasonExpiry}, true
+	}
+	return nil, true
+}
+
 // buildDayPlan — план дня из состояний пар: ручные скидки дня и сегодняшние
 // повышения по сроку в порядке приоритета отчёта (ручные → срок ↑) идут в слот
 // до заполнения ёмкости, не влезшие повышения — в лишние (скидка сайта сразу).
@@ -110,19 +158,9 @@ func buildDayPlan(pairs []PairState, prev map[discounts.LotKey]struct{}, capacit
 	// extra — позиции вне слота: их скидка сайта ставится сразу.
 	var extra []slotPosition
 	for _, p := range pairs {
-		if p.Frozen() {
-			continue // ручной ноль сайта замораживает пару целиком
-		}
-		if p.TelegramBanned() {
-			// Запрет «не в ТГ» (решение владельца 10.11.2026): в рассылку пару
-			// не берём, но сайт живёт обычной жизнью — сегодняшнюю ступень по
-			// сроку отдаём сразу, как «лишним».
-			if p.Manual == nil && p.Expiry != nil && *p.Expiry > appliedTop(p) {
-				extra = append(extra, slotPosition{
-					pair:    p,
-					percent: *p.Expiry,
-					reason:  discounts.ReasonExpiry,
-				})
+		if pos, skip := banPlanPosition(p); skip {
+			if pos != nil {
+				extra = append(extra, *pos)
 			}
 			continue
 		}
@@ -148,33 +186,14 @@ func buildDayPlan(pairs []PairState, prev map[discounts.LotKey]struct{}, capacit
 		if !slotEligible(p, prev) {
 			continue
 		}
-		switch {
-		case p.Manual != nil && *p.Manual >= slotMainPercent:
-			// Ручная скидка дня: значение уже стоит на сайте, в рассылке — как
-			// приглашение продавать по ней.
-			manual = append(manual, slotPosition{
-				pair:    p,
-				percent: *p.Manual,
-				reason:  discounts.ReasonManual,
-			})
-		case p.Manual == nil && p.Expiry != nil && *p.Expiry > appliedTop(p):
-			// Повышение по сроку: сегодня сайт получит эту ступень — сразу, если
-			// позиция в ёмкость не влезла, и в 16:00, если попала в рассылку.
-			// Пары с ручной скидкой сюда не идут: значение менеджера важнее, и
-			// автоматика его не поднимает (ни в слот, ни в лишние).
-			if *p.Expiry == slotBasePercent {
-				weak = append(weak, p)
-				continue
-			}
-			raises = append(raises, slotPosition{
-				pair:          p,
-				percent:       *p.Expiry,
-				reason:        discounts.ReasonExpiry,
-				writeTelegram: true,
-			})
-		default:
-			// Ни ручной скидки дня, ни сегодняшнего повышения: паре в плане
-			// делать нечего — скидка уже стоит на сайте либо её нет вовсе.
+		class, pos := classifySlot(p)
+		switch class {
+		case classManual:
+			manual = append(manual, *pos)
+		case classRaise:
+			raises = append(raises, *pos)
+		case classWeak:
+			weak = append(weak, p)
 		}
 	}
 	sortSlot(forced)
