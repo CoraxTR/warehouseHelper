@@ -403,10 +403,11 @@
         function productRow(p, n) {
             var lots = visibleLots(p);
             var ban = banSource(lots);
+            var tgBan = tgBanSource(lots);
             var html = '<tr data-row-product="' + esc(p.id) + '">';
             html += '<td class="col-toggle"></td>';
             // tabindex="-1" — строка может получить фокус (поиск), в обход Tab.
-            html += '<td class="col-name" tabindex="-1" data-role="name" data-product="' + esc(p.id) + '">' + esc(p.name) + banBadge(p.id, ban) + '</td>';
+            html += '<td class="col-name" tabindex="-1" data-role="name" data-product="' + esc(p.id) + '">' + esc(p.name) + banBadge(p.id, ban) + tgBanBadge(p.id, tgBan) + '</td>';
             for (var k = 0; k < n; k++) {
                 if (k < lots.length) {
                     var lot = lots[k];
@@ -425,18 +426,36 @@
             return html;
         }
 
-        // Ручной запрет: 0 в ручной скидке (сайт или ТГ) значит «скидки нет» для
-        // этого срока И всех более дальних сроков товара. Каскад считает сервер,
-        // здесь только показываем источник и даём снять.
-        function isManualZero(lot) {
-            return lot.discount_general_manual === 0 || lot.discount_telegram_manual === 0;
+        // Ручные нули: 0 в колонке САЙТА — полный запрет скидки (сайт и ТГ) для
+        // этого срока И всех более дальних сроков товара; 0 в колонке ТГ — запрет
+        // только попадания в ТГ, сайт живёт обычной жизнью (решение владельца
+        // 10.11.2026). Каскад считает сервер, здесь только показываем источник и
+        // даём снять.
+        function isGeneralZero(lot) {
+            return lot.discount_general_manual === 0;
         }
 
-        // banSource — лот-источник: самый близкий срок с ручным нулём.
+        function isTelegramZero(lot) {
+            return lot.discount_telegram_manual === 0;
+        }
+
+        // banSource — лот-источник полного запрета: самый близкий срок с ручным
+        // нулём в колонке сайта.
         function banSource(lots) {
+            return closestZero(lots, isGeneralZero);
+        }
+
+        // tgBanSource — лот-источник запрета ТГ: самый близкий срок с ручным
+        // нулём в ТГ-колонке.
+        function tgBanSource(lots) {
+            return closestZero(lots, isTelegramZero);
+        }
+
+        // closestZero — самый близкий по сроку лот, проходящий проверку.
+        function closestZero(lots, check) {
             var src = null;
             for (var i = 0; i < lots.length; i++) {
-                if (!isManualZero(lots[i])) {
+                if (!check(lots[i])) {
                     continue;
                 }
                 if (!src || String(lots[i].best_before) < String(src.best_before)) {
@@ -446,14 +465,9 @@
             return src;
         }
 
-        // banChannels — какие каналы запрещены у лота.
-        function banChannels(lot) {
-            var g = lot.discount_general_manual === 0;
-            var t = lot.discount_telegram_manual === 0;
-            if (g && t) {
-                return 'сайт и ТГ';
-            }
-            return g ? 'сайт' : 'ТГ';
+        // banChannels — ручной ноль сайта гасит оба канала.
+        function banChannels() {
+            return 'сайт и ТГ';
         }
 
         // Срок годности заканчивается сегодня (локальная дата склада) — подсветить «на заморозку».
@@ -1051,6 +1065,20 @@
                 '" data-bb="' + ban.best_before + '" title="снять ручной запрет">снять</button>';
         }
 
+        // tgBanBadge — плашка «запрет ТГ» и кнопка снятия: снимает только ноль
+        // ТГ-колонки, ручные значения сайта не трогает (решение владельца
+        // 10.11.2026).
+        function tgBanBadge(productID, tgBan) {
+            if (!tgBan) {
+                return '';
+            }
+            var title = 'ручная скидка 0 % в ТГ с ' + fmtDate(tgBan.best_before) +
+                ': этот и все более дальние сроки товара не попадают в ТГ, сайт работает как обычно';
+            return '<span class="ban-badge tg-ban" title="' + esc(title) + '">запрет ТГ</span>' +
+                '<button type="button" class="ban-clear" data-tgban="1" data-product="' + esc(productID) +
+                '" data-bb="' + tgBan.best_before + '" title="снять запрет ТГ">снять</button>';
+        }
+
         // --- клики по ячейкам ---
 
         function onBodyClick(ev) {
@@ -1059,6 +1087,10 @@
                 if (el.getAttribute) {
                     if (el.getAttribute('data-ban') === '1') {
                         clearBan(el.getAttribute('data-product'), el.getAttribute('data-bb'));
+                        return;
+                    }
+                    if (el.getAttribute('data-tgban') === '1') {
+                        clearTelegramBan(el.getAttribute('data-product'), el.getAttribute('data-bb'));
                         return;
                     }
                     var role = el.getAttribute('data-role');
@@ -1144,6 +1176,39 @@
             xhr.send(body);
         }
 
+        // clearTelegramBan — снять запрет ТГ: в ТГ-колонку уходит NULL, ручные
+        // значения сайта остаются как есть (решение владельца 10.11.2026).
+        function clearTelegramBan(productID, bb) {
+            var p = findProduct(productID);
+            if (!p) {
+                return;
+            }
+            var lot = findLot(p, bb);
+            if (!lot) {
+                return;
+            }
+            var body = JSON.stringify({
+                product_id: productID,
+                best_before: String(bb).slice(0, 10),
+                discount_general_manual: (lot.discount_general_manual == null) ? null : lot.discount_general_manual,
+                discount_telegram_manual: null
+            });
+            var xhr = new XMLHttpRequest();
+            xhr.open('POST', '/ms/dates/discount', true);
+            xhr.setRequestHeader('Content-Type', 'application/json');
+            xhr.onreadystatechange = function () {
+                if (xhr.readyState !== 4) {
+                    return;
+                }
+                if (xhr.status === 204) {
+                    loadActiveLots();
+                } else {
+                    alert('Не удалось снять запрет ТГ (HTTP ' + xhr.status + ')');
+                }
+            };
+            xhr.send(body);
+        }
+
         // renderBanPanel — сводка «на ком стоит запрет»: клик по имени открывает карточку.
         function onBanPanelClick(ev) {
             var el = ev.target || ev.srcElement;
@@ -1163,22 +1228,40 @@
             }
             var names = '';
             var count = 0;
+            var tgNames = '';
+            var tgCount = 0;
             for (var i = 0; i < items.length; i++) {
-                var ban = banSource(visibleLots(items[i]));
-                if (!ban) {
-                    continue;
+                var lots = visibleLots(items[i]);
+                var ban = banSource(lots);
+                if (ban) {
+                    count++;
+                    names += '<span class="ban-panel__item" data-ban-focus="' + esc(items[i].id) + '" title="' +
+                        esc(banChannels() + ', с ' + fmtDate(ban.best_before)) + '">' + esc(items[i].name) + '</span>';
                 }
-                count++;
-                names += '<span class="ban-panel__item" data-ban-focus="' + esc(items[i].id) + '" title="' +
-                    esc(banChannels(ban) + ', с ' + fmtDate(ban.best_before)) + '">' + esc(items[i].name) + '</span>';
+                var tgBan = tgBanSource(lots);
+                if (tgBan) {
+                    tgCount++;
+                    tgNames += '<span class="ban-panel__item" data-ban-focus="' + esc(items[i].id) + '" title="' +
+                        esc('ТГ, с ' + fmtDate(tgBan.best_before)) + '">' + esc(items[i].name) + '</span>';
+                }
             }
-            if (!count) {
+            if (!count && !tgCount) {
                 el.className = 'ban-panel hidden';
                 el.innerHTML = '';
                 return;
             }
+            var html = '';
+            if (count) {
+                html += 'Запрет (скидка 0 %): ' + count + ' — ' + names;
+            }
+            if (tgCount) {
+                if (html) {
+                    html += '<br>';
+                }
+                html += 'Запрет ТГ: ' + tgCount + ' — ' + tgNames;
+            }
             el.className = 'ban-panel';
-            el.innerHTML = 'Запрет (скидка 0 %): ' + count + ' — ' + names;
+            el.innerHTML = html;
         }
 
         // Клик по количеству: факт (текущая скидка) / Ставим (ручная).
@@ -1211,7 +1294,7 @@
             html += '<td><input type="number" id="d-gen" min="0" max="100" value="' + genVal + '"></td>';
             html += '<td><input type="number" id="d-tg" min="0" max="100" value="' + tgVal + '"></td></tr>';
             html += '</table>';
-            html += '<div class="modal-hint">Пустое поле = сброс ручной скидки. 0 = скидки нет: блокирует этот срок и все более дальние сроки товара</div>';
+            html += '<div class="modal-hint">Пустое поле = сброс ручной скидки. 0 в general = скидки нет: блокирует этот срок и все более дальние сроки товара (сайт и ТГ). 0 в telegram = запрет ТГ: этот и более дальние сроки не попадают в рассылку, сайт работает как обычно</div>';
             html += '<div class="modal-actions">';
             html += '<button type="button" onclick="closeModal()">Отмена</button>';
             html += '<button type="button" onclick="saveDiscount()">Сохранить</button>';

@@ -61,12 +61,20 @@ type PairState struct {
 	// сроки группы (опора A, решение владельца 23.09.2026). Ставит Evaluate.
 	SurplusGroup bool
 
-	// BlockedByManualZero — пара накрыта запретом менеджера: у товара есть пара
-	// с ручной 0 («скидка 0 %») и её срок не позже этой. Запрет каскадный:
-	// «0 блокирует все сроки дальше того, на который поставлен» (решение
-	// владельца, 15.09.2026), поэтому запрет получает и сама нулевая пара,
-	// и все пары товара с более далёким сроком. Ставит флаг Evaluate.
-	BlockedByManualZero bool
+	// BlockedByGeneralZero — пара накрыта запретом менеджера на СКИДКУ: у товара
+	// есть пара с ручным нулём в колонке сайта, и её срок не позже этой. Запрет
+	// каскадный: «0 блокирует все сроки дальше того, на который поставлен»
+	// (решение владельца, 15.09.2026), поэтому запрет получает и сама нулевая
+	// пара, и все пары товара с более далёким сроком. Гасит оба канала: скидки
+	// нет ни на сайте, ни в ТГ. Ставит флаг Evaluate.
+	BlockedByGeneralZero bool
+
+	// BlockedByTelegramZero — пара накрыта запретом на ПОПАДАНИЕ В ТГ: у товара
+	// есть пара с ручным нулём в ТГ-колонке, и её срок не позже этой (тот же
+	// каскад, решение владельца 10.11.2026). Сайт при этом живёт обычной жизнью:
+	// лестница по сроку, избыток и постоянная скидка считаются и пишутся как без
+	// запрета — режется только ТГ-канал (план рассылки, подъём, метка (ТГ)).
+	BlockedByTelegramZero bool
 
 	// То, что стоит в БД: Applied — эффективная скидка канала (ручная
 	// перекрывает plain), AppliedPlain — значение plain-колонки,
@@ -96,7 +104,7 @@ type PairState struct {
 // Замороженная ручным нулём пара даёт (0, SourceManual): скидки-значения нет,
 // но источник есть — это «скидка 0 %», а не «скидки нет» (см. Frozen).
 func (p PairState) Desired() (*int16, discounts.Source) {
-	if p.BlockedByManualZero && p.Manual == nil {
+	if p.BlockedByGeneralZero && p.Manual == nil {
 		// Каскадный запрет менеджера: скидки по паре быть не должно, ни один
 		// источник не победитель (скидка снимается — см. banWrites).
 		return nil, discounts.SourceNone
@@ -111,7 +119,15 @@ func (p PairState) Desired() (*int16, discounts.Source) {
 // slotEligible). Ручная > 0 работает как раньше: значение держит ручная,
 // автомат может поднимать только plain-колонку выше неё.
 func (p PairState) Frozen() bool {
-	return p.BlockedByManualZero || zeroManual(p.Manual)
+	return p.BlockedByGeneralZero || zeroManual(p.Manual)
+}
+
+// TelegramBanned — пара не попадает в ТГ: ручной ноль в ТГ-колонке у неё самой
+// либо каскадный запрет от более близкого срока. Сайт такая пара живёт как
+// обычно (см. BlockedByTelegramZero): режется только план рассылки, подъём и
+// метка (ТГ).
+func (p PairState) TelegramBanned() bool {
+	return p.BlockedByTelegramZero || zeroManual(p.TelegramManual)
 }
 
 // zeroManual — ручная скидка задана нулём: «0 %», а не «скидки нет».
@@ -119,22 +135,26 @@ func zeroManual(v *int16) bool {
 	return v != nil && *v == 0
 }
 
-// banThreshold — порог запрета скидок по товару: самый близкий срок среди пар
-// с заданной ручной нулём (по любой из колонок каналов — решение владельца
-// 15.09.2026, каналы симметричны). Пары с годностью не раньше порога
-// автоматических скидок не получают вовсе. nil — запрета нет.
-func banThreshold(lots []discounts.Input) *time.Time {
-	var ban *time.Time
+// banThresholds — пороги каскадных запретов по товару: самый близкий срок среди
+// пар с ручным нулём ОТДЕЛЬНО по каждой колонке (решение владельца 10.11.2026).
+//
+//   - site — ноль в колонке сайта: полный запрет скидки, гасит оба канала;
+//   - tg   — ноль в ТГ-колонке: запрет только попадания в ТГ, сайт живёт.
+//
+// Пары с годностью не раньше порога автоматических скидок не получают вовсе.
+// nil — соответствующего запрета нет.
+func banThresholds(lots []discounts.Input) (site, tg *time.Time) {
 	for _, in := range lots {
-		if !zeroManual(in.GeneralManual) && !zeroManual(in.TelegramManual) {
-			continue
-		}
-		if ban == nil || in.BestBefore.Before(*ban) {
+		if zeroManual(in.GeneralManual) && (site == nil || in.BestBefore.Before(*site)) {
 			bb := in.BestBefore
-			ban = &bb
+			site = &bb
+		}
+		if zeroManual(in.TelegramManual) && (tg == nil || in.BestBefore.Before(*tg)) {
+			bb := in.BestBefore
+			tg = &bb
 		}
 	}
-	return ban
+	return site, tg
 }
 
 // TelegramActive — у пары стоит ручная скидка ТГ-канала (> 0): пара в работе,
@@ -269,6 +289,9 @@ func (p PairState) plainSource() discounts.Source {
 // telegramValue — скидка ТГ-колонки как она стоит в БД: ручная ТГ важнее plain
 // (так же, как ручная сайта важнее его plain-колонки). nil — ТГ-скидки нет.
 func (p PairState) telegramValue() *int16 {
+	if p.TelegramBanned() {
+		return nil // ручной ноль ТГ — «в ТГ не идём», а не скидка 0 %
+	}
 	return effectiveDiscount(p.TelegramManual, p.TelegramPlain)
 }
 
@@ -321,14 +344,17 @@ func Evaluate(inputs []discounts.Input, rates map[string]float64, today time.Tim
 
 	for _, pid := range orderProducts(inputs) {
 		lots := byProduct[pid]
-		ban := banThreshold(lots)
+		siteBan, tgBan := banThresholds(lots)
 		var cum int64
 		first := len(out)
 		for _, in := range lots {
 			cum += in.Qty
 			state := evaluatePair(in, cum, rates, day)
-			if ban != nil && !in.BestBefore.Before(*ban) {
-				state.BlockedByManualZero = true
+			if siteBan != nil && !in.BestBefore.Before(*siteBan) {
+				state.BlockedByGeneralZero = true
+			}
+			if tgBan != nil && !in.BestBefore.Before(*tgBan) {
+				state.BlockedByTelegramZero = true
 			}
 			out = append(out, state)
 		}

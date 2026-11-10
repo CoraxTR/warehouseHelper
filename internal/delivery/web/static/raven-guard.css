@@ -484,6 +484,7 @@ td.cell-discount { text-align: center; white-space: nowrap; }
 /* Ручной запрет (скидка 0 %): лот-источник и все более дальние сроки товара */
 td.cell-pair.ban-lot { box-shadow: inset 0 0 0 2px #C0506B; }
 td.col-name .ban-badge { margin-left: 6px; padding: 1px 6px; border-radius: 8px; background: #4A2430; color: #EBBCCB; border: 1px solid #C0506B; font-size: 11px; }
+td.col-name .ban-badge.tg-ban { background: #22333F; color: #B9D6E6; border-color: #4E7F97; }
 td.col-name .ban-clear { margin-left: 4px; padding: 1px 6px; font-size: 11px; }
 .ban-panel { margin: 8px 12px; padding: 8px 12px; border: 1px solid #C0506B; border-radius: 6px; background: #2A1720; color: #EBBCCB; font-size: 13px; }
 .ban-panel__item { display: inline-block; margin-right: 10px; cursor: pointer; text-decoration: underline; }

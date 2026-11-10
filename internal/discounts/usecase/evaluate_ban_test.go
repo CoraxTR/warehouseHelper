@@ -142,3 +142,91 @@ func TestBanWritesClearBlockedPlain(t *testing.T) {
 		t.Errorf("сняты не те пары: %v, want 2026-09-20 и 2026-09-30", cleared)
 	}
 }
+
+// Ноль в ТГ-колонке — запрет только ТГ (решение владельца 10.11.2026): сайт
+// живёт обычной жизнью, каскад режет ТГ от ближнего нуля и дальше.
+func TestTelegramBanDoesNotFreezeSite(t *testing.T) {
+	f := banFixtures()
+
+	zero := int16(0)
+	plain := int16(40)
+	site := int16(25)
+	pairs := Evaluate([]discounts.Input{
+		{ProductID: "p1", Name: "Товар", BestBefore: f.bb(20), Qty: 1, GeneralPlain: &plain},
+		{ProductID: "p1", Name: "Товар", BestBefore: f.bb(30), Qty: 1, GeneralManual: &site, TelegramManual: &zero},
+		{ProductID: "p1", Name: "Товар", BestBefore: f.bb(40), Qty: 1, TelegramManual: &zero},
+	}, nil, f.today)
+
+	for _, i := range []int{1, 2} {
+		if !pairs[i].TelegramBanned() {
+			t.Errorf("пара %s: TelegramBanned = false, want true",
+				pairs[i].BestBefore.Format(time.DateOnly))
+		}
+		if pairs[i].Frozen() {
+			t.Errorf("пара %s: Frozen = true, want false — ТГ-ноль сайт не морозит",
+				pairs[i].BestBefore.Format(time.DateOnly))
+		}
+	}
+	if pairs[0].TelegramBanned() {
+		t.Error("ближняя пара накрыта ТГ-запретом, хотя ноль стоит дальше")
+	}
+
+	// Сайт пары под ТГ-запретом живёт: ручная скидка сайта побеждает как обычно.
+	pct, src := pairs[1].Desired()
+	if pct == nil || *pct != 25 || src != discounts.SourceManual {
+		t.Errorf("Desired пары под ТГ-запретом = (%v, %v), want (25, manual)", pct, src)
+	}
+}
+
+// Правка ТГ-колонки по запрету: чистим только ТГ, general не трогаем; пары вне
+// запрета и без стоячего значения не пишутся.
+func TestTelegramBanWritesClearOnlyTelegram(t *testing.T) {
+	f := banFixtures()
+
+	zero := int16(0)
+	tgPlain := int16(20)
+	pairs := Evaluate([]discounts.Input{
+		{ProductID: "p1", Name: "Товар", BestBefore: f.bb(10), Qty: 1, TelegramPlain: &tgPlain},
+		{ProductID: "p1", Name: "Товар", BestBefore: f.bb(20), Qty: 1, TelegramManual: &zero, TelegramPlain: &tgPlain},
+		{ProductID: "p1", Name: "Товар", BestBefore: f.bb(30), Qty: 1, TelegramManual: &zero},
+	}, nil, f.today)
+
+	writes := telegramBanWrites(pairs)
+	if len(writes) != 1 {
+		t.Fatalf("правок %d, want 1 (пара 20.09 со стоячим значением ТГ)", len(writes))
+	}
+	if writes[0].Telegram != nil {
+		t.Errorf("Telegram = %v, want nil (снятие)", *writes[0].Telegram)
+	}
+	if writes[0].BestBefore.Format(time.DateOnly) != "2026-09-20" {
+		t.Errorf("снята не та пара: %s", writes[0].BestBefore.Format(time.DateOnly))
+	}
+}
+
+// Пара под запретом ТГ в рассылку не попадает, но ступень сайта получает сразу
+// (как «лишняя») — иначе в ТГ-день сайт стоял бы на прошлом значении.
+func TestTelegramBannedPairOutOfSlotButSiteGetsStep(t *testing.T) {
+	f := banFixtures()
+
+	zero := int16(0)
+	step := int16(20)
+	bb := f.bb(25)
+	p := PairState{
+		ProductID:      "p1",
+		Name:           "Товар",
+		BestBefore:     bb,
+		Qty:            3,
+		DaysLeft:       10,
+		Expiry:         &step,
+		TelegramManual: &zero,
+	}
+	p.Key = lotKey("p1", bb)
+
+	plan := buildDayPlan([]PairState{p}, nil, 10)
+	if len(plan.slot) != 0 {
+		t.Fatalf("пара под запретом ТГ попала в слот: %d позиций", len(plan.slot))
+	}
+	if len(plan.extra) != 1 || plan.extra[0].percent != step {
+		t.Fatalf("extra = %+v, want одну позицию со ступенью %d", plan.extra, step)
+	}
+}

@@ -89,6 +89,7 @@ func (uc *UseCase) RecalcExpiry(ctx context.Context, now time.Time) error {
 	// 02.10.2026: снимаем мгновенно).
 	writes := append(expiryWrites(pairs), ownerWrites(pairs, uc.planQty(ctx, pairs))...)
 	writes = append(writes, banWrites(pairs)...)
+	writes = append(writes, telegramBanWrites(pairs)...)
 	// Постоянная скидка — последней: она видит, что уже поставлено в этом
 	// проходе, и не отбирает место у более глубокой ступени (03.11.2026).
 	writes = append(writes, permanentWrites(pairs, writes)...)
@@ -246,6 +247,7 @@ func (uc *UseCase) RecalcAffected(ctx context.Context, now time.Time, events map
 	// Снятие по запрету менеджера — тоже только по товару события: ручную 0
 	// ставят через страницу «Сроки», а её запись дёргает пересчёт товара.
 	writes = append(writes, writesForProducts(banWrites(pairs), affected)...)
+	writes = append(writes, writesForProducts(telegramBanWrites(pairs), affected)...)
 	// Постоянную скидку карточки меняют вне стока: событие приходит по товару,
 	// поэтому постоянные записи тоже режем по затронутым (03.11.2026).
 	writes = append(writes, writesForProducts(permanentWrites(pairs, writes), affected)...)
@@ -614,6 +616,25 @@ func banWrites(pairs []PairState) []discounts.DiscountWrite {
 			General:    nil, // снятие: движок пишет NULL, а не 0
 			Telegram:   p.TelegramPlain,
 		})
+	}
+	return writes
+}
+
+// telegramBanWrites — очистка ТГ-колонки у пар под запретом «не в ТГ» (ручная 0
+// в ТГ-колонке): решение владельца 10.11.2026 — стоячее значение плана рассылки
+// не должно учитываться при сборке новой, а после снятия запрета не всплывать
+// старым числом. Колонку сайта не трогаем: у ТГ-запрета сайт живёт обычной
+// жизнью. Пишем NULL, а не 0 (0 в plain-колонке — legacy-«скидки нет»).
+func telegramBanWrites(pairs []PairState) []discounts.DiscountWrite {
+	writes := make([]discounts.DiscountWrite, 0, len(pairs))
+	for _, p := range pairs {
+		if p.Frozen() || !p.TelegramBanned() || p.TelegramPlain == nil {
+			continue
+		}
+		w := writeFor(p)
+		w.Telegram = nil
+		w.TelegramOwner = discounts.OwnerNone.String()
+		writes = append(writes, w)
 	}
 	return writes
 }

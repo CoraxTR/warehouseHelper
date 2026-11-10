@@ -77,6 +77,53 @@ type slotPosition struct {
 	tgManual bool
 }
 
+// slotClass — к какому списку плана относится пара.
+type slotClass int
+
+const (
+	classManual slotClass = iota
+	classRaise
+	classWeak
+)
+
+// classifySlot — место пары в плане: ручная скидка дня, повышение по сроку
+// (в слот или «лишним») либо свежая ступень 10 % (материал добора). ok=false —
+// кандидата дня нет: паре в плане делать нечего.
+func classifySlot(p PairState) (slotClass, *slotPosition, bool) {
+	switch {
+	case p.Manual != nil && *p.Manual >= slotMainPercent:
+		return classManual, &slotPosition{pair: p, percent: *p.Manual, reason: discounts.ReasonManual}, true
+	case p.Manual == nil && p.Expiry != nil && *p.Expiry > appliedTop(p):
+		if *p.Expiry == slotBasePercent {
+			return classWeak, nil, true
+		}
+		return classRaise, &slotPosition{
+			pair:          p,
+			percent:       *p.Expiry,
+			reason:        discounts.ReasonExpiry,
+			writeTelegram: true,
+		}, true
+	}
+	return classManual, nil, false
+}
+
+// banPlanPosition — пара, которую в слот не берём из-за ручного нуля. skip=true:
+// полный запрет (ноль сайта) сайт не трогает вовсе, а запрет ТГ в рассылку не
+// пускает, но сегодняшнюю ступень по сроку отдаёт сайту сразу — как «лишним»
+// (решение владельца 10.11.2026): лесенка работает, в ТГ пара не идёт.
+func banPlanPosition(p PairState) (pos *slotPosition, skip bool) {
+	if p.Frozen() {
+		return nil, true
+	}
+	if !p.TelegramBanned() {
+		return nil, false
+	}
+	if p.Manual == nil && p.Expiry != nil && *p.Expiry > appliedTop(p) {
+		return &slotPosition{pair: p, percent: *p.Expiry, reason: discounts.ReasonExpiry}, true
+	}
+	return nil, true
+}
+
 // buildDayPlan — план дня из состояний пар: ручные скидки дня и сегодняшние
 // повышения по сроку в порядке приоритета отчёта (ручные → срок ↑) идут в слот
 // до заполнения ёмкости, не влезшие повышения — в лишние (скидка сайта сразу).
@@ -87,7 +134,9 @@ type slotPosition struct {
 // подписчик должен увидеть ровно её. Такие позиции не снимаются ни ёмкостью
 // слота, ни антидублем прошлой рассылки, ни порогом «успеет продаться» —
 // «принудительно» и значит принудительно. Остальное (заморозка ручным нулём
-// сайта) важнее: движок такую пару не трогает вовсе.
+// сайта) важнее: движок такую пару не трогает вовсе. Запрет «не в ТГ» (ручной
+// ноль в ТГ-колонке) режет только попадание в слот: сайт получает ступень дня
+// сразу, как «лишний» (решение владельца 10.11.2026).
 //
 // Свежая ступень ровно 10 % (сайт без скидки) места в слоте не занимает: она
 // сама — материал добора, в рассылке такая пара идёт под скидку дня (20 %), а не
@@ -105,9 +154,14 @@ func buildDayPlan(pairs []PairState, prev map[discounts.LotKey]struct{}, capacit
 	// prevSeen — пары, бывшие в прошлой рассылке: повторно не публикуем, но
 	// свежую ступень дня отдаём сайту (см. ниже).
 	prevSeen := make([]PairState, 0, capacity)
+	// extra — позиции вне слота: их скидка сайта ставится сразу.
+	var extra []slotPosition
 	for _, p := range pairs {
-		if p.Frozen() {
-			continue // ручной ноль сайта замораживает пару целиком
+		if pos, skip := banPlanPosition(p); skip {
+			if pos != nil {
+				extra = append(extra, *pos)
+			}
+			continue
 		}
 		if p.TelegramActive() {
 			// Ручная ТГ важнее расчётного кандидата: в рассылке пара стоит
@@ -131,33 +185,19 @@ func buildDayPlan(pairs []PairState, prev map[discounts.LotKey]struct{}, capacit
 		if !slotEligible(p, prev) {
 			continue
 		}
-		switch {
-		case p.Manual != nil && *p.Manual >= slotMainPercent:
-			// Ручная скидка дня: значение уже стоит на сайте, в рассылке — как
-			// приглашение продавать по ней.
-			manual = append(manual, slotPosition{
-				pair:    p,
-				percent: *p.Manual,
-				reason:  discounts.ReasonManual,
-			})
-		case p.Manual == nil && p.Expiry != nil && *p.Expiry > appliedTop(p):
-			// Повышение по сроку: сегодня сайт получит эту ступень — сразу, если
-			// позиция в ёмкость не влезла, и в 16:00, если попала в рассылку.
-			// Пары с ручной скидкой сюда не идут: значение менеджера важнее, и
-			// автоматика его не поднимает (ни в слот, ни в лишние).
-			if *p.Expiry == slotBasePercent {
-				weak = append(weak, p)
-				continue
-			}
-			raises = append(raises, slotPosition{
-				pair:          p,
-				percent:       *p.Expiry,
-				reason:        discounts.ReasonExpiry,
-				writeTelegram: true,
-			})
+		class, pos, ok := classifySlot(p)
+		if !ok {
+			continue
+		}
+		switch class {
+		case classManual:
+			manual = append(manual, *pos)
+		case classRaise:
+			raises = append(raises, *pos)
+		case classWeak:
+			weak = append(weak, p)
 		default:
-			// Ни ручной скидки дня, ни сегодняшнего повышения: паре в плане
-			// делать нечего — скидка уже стоит на сайте либо её нет вовсе.
+			continue // неизвестный класс — в план не берём
 		}
 	}
 	sortSlot(forced)
@@ -176,7 +216,6 @@ func buildDayPlan(pairs []PairState, prev map[discounts.LotKey]struct{}, capacit
 		}
 		slot = append(slot, manual...)
 	}
-	var extra []slotPosition
 	for _, r := range raises {
 		if len(slot) < capacity {
 			slot = append(slot, r)
@@ -645,7 +684,7 @@ func (uc *UseCase) replaceRegistry(pairs []PairState, _ time.Time) []Change {
 // (0 % — лестница по ней не работает, решение владельца, сентябрь 2026) и была
 // ли она в прошлой рассылке.
 func slotEligible(p PairState, prev map[discounts.LotKey]struct{}) bool {
-	if p.Frozen() {
+	if p.Frozen() || p.TelegramBanned() {
 		return false
 	}
 	if p.DaysLeft < slotMinDays {
