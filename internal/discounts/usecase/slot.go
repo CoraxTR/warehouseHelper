@@ -87,7 +87,9 @@ type slotPosition struct {
 // подписчик должен увидеть ровно её. Такие позиции не снимаются ни ёмкостью
 // слота, ни антидублем прошлой рассылки, ни порогом «успеет продаться» —
 // «принудительно» и значит принудительно. Остальное (заморозка ручным нулём
-// сайта) важнее: движок такую пару не трогает вовсе.
+// сайта) важнее: движок такую пару не трогает вовсе. Запрет «не в ТГ» (ручной
+// ноль в ТГ-колонке) режет только попадание в слот: сайт получает ступень дня
+// сразу, как «лишний» (решение владельца 10.11.2026).
 //
 // Свежая ступень ровно 10 % (сайт без скидки) места в слоте не занимает: она
 // сама — материал добора, в рассылке такая пара идёт под скидку дня (20 %), а не
@@ -105,9 +107,24 @@ func buildDayPlan(pairs []PairState, prev map[discounts.LotKey]struct{}, capacit
 	// prevSeen — пары, бывшие в прошлой рассылке: повторно не публикуем, но
 	// свежую ступень дня отдаём сайту (см. ниже).
 	prevSeen := make([]PairState, 0, capacity)
+	// extra — позиции вне слота: их скидка сайта ставится сразу.
+	var extra []slotPosition
 	for _, p := range pairs {
 		if p.Frozen() {
 			continue // ручной ноль сайта замораживает пару целиком
+		}
+		if p.TelegramBanned() {
+			// Запрет «не в ТГ» (решение владельца 10.11.2026): в рассылку пару
+			// не берём, но сайт живёт обычной жизнью — сегодняшнюю ступень по
+			// сроку отдаём сразу, как «лишним».
+			if p.Manual == nil && p.Expiry != nil && *p.Expiry > appliedTop(p) {
+				extra = append(extra, slotPosition{
+					pair:    p,
+					percent: *p.Expiry,
+					reason:  discounts.ReasonExpiry,
+				})
+			}
+			continue
 		}
 		if p.TelegramActive() {
 			// Ручная ТГ важнее расчётного кандидата: в рассылке пара стоит
@@ -176,7 +193,6 @@ func buildDayPlan(pairs []PairState, prev map[discounts.LotKey]struct{}, capacit
 		}
 		slot = append(slot, manual...)
 	}
-	var extra []slotPosition
 	for _, r := range raises {
 		if len(slot) < capacity {
 			slot = append(slot, r)
@@ -645,7 +661,7 @@ func (uc *UseCase) replaceRegistry(pairs []PairState, _ time.Time) []Change {
 // (0 % — лестница по ней не работает, решение владельца, сентябрь 2026) и была
 // ли она в прошлой рассылке.
 func slotEligible(p PairState, prev map[discounts.LotKey]struct{}) bool {
-	if p.Frozen() {
+	if p.Frozen() || p.TelegramBanned() {
 		return false
 	}
 	if p.DaysLeft < slotMinDays {

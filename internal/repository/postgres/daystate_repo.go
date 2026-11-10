@@ -162,16 +162,18 @@ func (pg *PGClient) SnapshotDone(ctx context.Context, date time.Time) (bool, err
 // включая заданный 0 («скидка 0 %», лестница по паре заморожена); ноль в
 // plain-колонке — legacy-«скидки нет» и лестницу не перекрывает.
 //
-// Запрет менеджера (решение владельца, 15.09.2026): ручная 0 блокирует все
-// сроки ДАЛЬШЕ того, на который поставлена, — пары товара с годностью не раньше
-// ban_from (самый близкий срок среди пар с ручной 0) в скидку дня дают 0.
+// Запрет менеджера на скидку (решение владельца, 15.09.2026): ручная 0 в
+// колонке САЙТА блокирует все сроки ДАЛЬШЕ того, на который поставлена, — пары
+// товара с годностью не раньше ban_from (самый близкий срок среди пар с ручной 0)
+// в скидку дня дают 0. Ноль в ТГ-колонке — запрет только попадания в ТГ, скидку
+// дня он не гасит (решение владельца 10.11.2026).
 func (pg *PGClient) SnapshotInsert(ctx context.Context, date time.Time) error {
 	if _, err := pg.Pool.Exec(ctx, `
         WITH lots AS (
             SELECT product_id, qty, best_before,
                    COALESCE(discount_general_manual, NULLIF(discount_general, 0)) AS eff,
                    MIN(best_before) FILTER (
-                       WHERE discount_general_manual = 0 OR discount_telegram_manual = 0
+                       WHERE discount_general_manual = 0
                    ) OVER (PARTITION BY product_id) AS ban_from
             FROM product_stock
         )
@@ -204,7 +206,7 @@ func (pg *PGClient) LotsSnapshot(ctx context.Context, productID string) ([]dayst
             SELECT MIN(best_before) AS ban_from
             FROM product_stock
             WHERE product_id = $1
-              AND (discount_general_manual = 0 OR discount_telegram_manual = 0)
+              AND discount_general_manual = 0
         )
         SELECT ps.qty,
                CASE WHEN b.ban_from IS NOT NULL AND ps.best_before >= b.ban_from THEN 0
