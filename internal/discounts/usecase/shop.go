@@ -166,7 +166,7 @@ func (uc *UseCase) publishShop(ctx context.Context, now time.Time) error {
 	for i := range items {
 		it := &items[i]
 		key := lotKey(it.ProductID, it.BestBefore)
-		it.ShopQty = max(0, min(it.BlockQty, data[key].Qty))
+		it.ShopQty = blockLeft(*it, data[key].Qty)
 		it.Listed = it.ShopQty > 0
 		it.ShopAvailable = it.ShopQty
 	}
@@ -555,7 +555,9 @@ func (uc *UseCase) applyShopDecision(ctx context.Context, plannedAt time.Time, i
 // показывать, остаётся ли она в посте и надо ли вернуть ей скидку. Возврат
 // избыточной позиции без избытка не возвращаем (решение владельца 18.10.2026).
 func shopDecide(it discounts.DigestItem, stock int64, pairs []PairState, key discounts.LotKey) shopDecideResult {
-	qty := max(0, min(it.BlockQty, stock))
+	// Блок считается дельтой от снимка остатка (blockLeft): продажа съедает
+	// блок даже у избытка, где остатка лота больше, чем блок.
+	qty := blockLeft(it, stock)
 	returned := it.ShopQty == 0 && qty > 0
 	if returned && it.Reason == discounts.ReasonSurplus && !surplusNow(pairs, key) {
 		return shopDecideResult{skip: true}

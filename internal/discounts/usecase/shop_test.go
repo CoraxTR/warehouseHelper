@@ -452,6 +452,88 @@ func TestSyncShopPostAcceptsLostPost(t *testing.T) {
 	}
 }
 
+// Продажа, когда остатка лота больше, чем блок по акции (избыток): единица
+// должна уходить из БЛОКА, а не только из остатка лота. Инцидент 06.11.2026:
+// Стейк Нью-Йорк Wagyu — в остатках 10 шт, в пост избытком попала 1 шт;
+// продали одну, и пост стоял с «Остаток по акции: 1 шт.» без метки «ПРОДАНО».
+func TestSyncShopPostDecrementsBlockBelowLotStock(t *testing.T) {
+	h := newSlotHarness(recalcNow(1), lotInput("p2", "Стейк Нью-Йорк", day(11), 9)) // 10 было, 1 продали
+	ctx := context.Background()
+
+	h.repo.prevShop = &discounts.DigestState{
+		PlannedAt:     h.now,
+		ChatKind:      discounts.ChatWarehouse,
+		ShopMessageID: 77,
+		Items: []discounts.DigestItem{{
+			ProductID:     "p2",
+			BestBefore:    day(11),
+			Percent:       20,
+			Reason:        discounts.ReasonSurplus,
+			BlockQty:      1,
+			StockQty:      10,
+			ShopQty:       1,
+			ShopAvailable: 1,
+			Listed:        true,
+			Shop:          discounts.ShopCard{Name: "Стейк Нью-Йорк", UOM: "шт"},
+		}},
+	}
+
+	if err := h.uc.syncShopPost(ctx, h.now.Add(25*time.Hour)); err != nil {
+		t.Fatalf("правка: %v", err)
+	}
+	if len(h.chat.shopEdits) == 0 {
+		t.Fatal("пост не отредактирован")
+	}
+
+	last := h.chat.shopEdits[len(h.chat.shopEdits)-1].Text
+	if !strings.Contains(last, discounts.ShopSoldMark) {
+		t.Errorf("нет метки «продано»: единственная штука блока продана: %q", last)
+	}
+	if !strings.Contains(last, "Остаток по акции: 0 шт.") {
+		t.Errorf("блок не вычтен за продажей: %q", last)
+	}
+	if !strings.Contains(last, "Доступно по акции: 1 шт.") {
+		t.Errorf("снимок «доступно» сдвинут: %q", last)
+	}
+}
+
+// shopDecide — арифметика блока поста: продажа съедает блок, возврат поднимает
+// его не выше записанного числа; остаток лота сверх блока (избыток) блок не
+// уменьшает, пока продажа не переступит через разницу со снимком.
+func TestShopDecideBlockBelowLotStock(t *testing.T) {
+	it := func(block, snapshot int64) discounts.DigestItem {
+		return discounts.DigestItem{
+			ProductID: "p2", BestBefore: day(11), Reason: discounts.ReasonExpiry,
+			BlockQty: block, StockQty: snapshot, ShopQty: block, Listed: true,
+		}
+	}
+
+	cases := []struct {
+		name     string
+		block    int64
+		snapshot int64
+		stock    int64
+		want     int64
+	}{
+		{"избыток: блок 1 из 10, продали 1", 1, 10, 9, 0},
+		{"избыток: блок 1 из 10, ещё никто не купил", 1, 10, 10, 1},
+		{"блок 3 из 3, продали 1", 3, 3, 2, 2},
+		{"блок 3 из 10, продали 2", 3, 10, 8, 1},
+		{"возврат выше снимка не поднимает блок", 3, 10, 12, 3},
+		{"лот списан под ноль", 3, 10, 0, 0},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			item := it(c.block, c.snapshot)
+			got := shopDecide(item, c.stock, nil, lotKey(item.ProductID, item.BestBefore))
+			if got.qty != c.want {
+				t.Errorf("qty = %d, want %d", got.qty, c.want)
+			}
+		})
+	}
+}
+
 // countTexts — сколько сообщений чата склада содержат подстроку.
 func countTexts(texts []string, sub string) int {
 	n := 0
