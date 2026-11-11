@@ -16,8 +16,8 @@ import (
 var msk = time.FixedZone("MSK", 3*60*60)
 
 // day — дата склада.
-func day(y int, m time.Month, d, hour, min int) time.Time {
-	return time.Date(y, m, d, hour, min, 0, 0, msk)
+func day(y int, m time.Month, d, hour, minute int) time.Time {
+	return time.Date(y, m, d, hour, minute, 0, 0, msk)
 }
 
 // fakeStock — кэш остатков: товар → партии.

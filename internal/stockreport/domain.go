@@ -15,7 +15,7 @@ package stockreport
 
 import (
 	"fmt"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -81,6 +81,8 @@ func Split(positions []Position) Report {
 			r.LowStock = append(r.LowStock, p)
 		case float64(p.Qty) >= *p.AvgWeek*excessFactor:
 			r.Excess = append(r.Excess, p)
+		default:
+			// Повода писать нет: остаток больше недельной нормы, но меньше двух.
 		}
 	}
 
@@ -137,12 +139,12 @@ func formatAvg(v float64) string {
 // sortByName — по имени без учёта регистра, при равенстве — по точному имени:
 // сортировка должна быть устойчивой к «Курица» / «курица».
 func sortByName(positions []Position) {
-	sort.Slice(positions, func(i, j int) bool {
-		a, b := strings.ToLower(positions[i].Name), strings.ToLower(positions[j].Name)
-		if a != b {
-			return a < b
+	slices.SortFunc(positions, func(a, b Position) int {
+		la, lb := strings.ToLower(a.Name), strings.ToLower(b.Name)
+		if la != lb {
+			return strings.Compare(la, lb)
 		}
 
-		return positions[i].Name < positions[j].Name
+		return strings.Compare(a.Name, b.Name)
 	})
 }

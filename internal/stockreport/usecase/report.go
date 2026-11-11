@@ -165,7 +165,7 @@ func (uc *UseCase) Build(ctx context.Context) ([]string, error) {
 
 	report := stockreport.Split(positions)
 
-	var parts []string
+	parts := make([]string, 0, 3)
 	parts = append(parts, messageParts(report.OutOfStockLines(), "Нет в наличии")...)
 	parts = append(parts, messageParts(report.LowStockLines(), "Остаток не больше средней продажи за неделю")...)
 	parts = append(parts, messageParts(report.ExcessLines(), "Избыток")...)
@@ -254,7 +254,7 @@ func messageParts(lines []string, title string) []string {
 // название товара хуже, чем превысить порог.
 func chunkLines(lines []string, limit int) [][]string {
 	var chunks [][]string
-	var current []string
+	current := make([]string, 0, len(lines))
 
 	size := 0
 	for _, line := range lines {

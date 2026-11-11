@@ -5,18 +5,15 @@ import (
 	"testing"
 )
 
-// avg — указатель на среднюю продажу за неделю (nil — истории нет).
-func avg(v float64) *float64 { return &v }
-
 func TestSplitClassification(t *testing.T) {
 	positions := []Position{
-		{Name: "Ноль с историей", Qty: 0, AvgWeek: avg(3)},
+		{Name: "Ноль с историей", Qty: 0, AvgWeek: new(3.0)},
 		{Name: "Ноль без истории", Qty: 0},
 		{Name: "История есть, остаток есть", Qty: 4, AvgWeek: nil},
-		{Name: "Кончается", Qty: 2, AvgWeek: avg(2)},
-		{Name: "Избыток", Qty: 10, AvgWeek: avg(3)},
-		{Name: "Середина", Qty: 4, AvgWeek: avg(3)},
-		{Name: "Нулевая средняя", Qty: 5, AvgWeek: avg(0)},
+		{Name: "Кончается", Qty: 2, AvgWeek: new(2.0)},
+		{Name: "Избыток", Qty: 10, AvgWeek: new(3.0)},
+		{Name: "Середина", Qty: 4, AvgWeek: new(3.0)},
+		{Name: "Нулевая средняя", Qty: 5, AvgWeek: new(0.0)},
 	}
 
 	got := Split(positions)
@@ -54,8 +51,8 @@ func TestSplitClassification(t *testing.T) {
 func TestReportLines(t *testing.T) {
 	r := Split([]Position{
 		{Name: "Молоко", Qty: 0},
-		{Name: "Сыр", Qty: 2, AvgWeek: avg(2.5)},
-		{Name: "Говядина", Qty: 10, AvgWeek: avg(3)},
+		{Name: "Сыр", Qty: 2, AvgWeek: new(2.5)},
+		{Name: "Говядина", Qty: 10, AvgWeek: new(3.0)},
 		{Name: "Новинка", Qty: 7},
 	})
 
