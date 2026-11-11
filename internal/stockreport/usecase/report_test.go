@@ -15,9 +15,10 @@ import (
 // процесса, time.Local в тестах запрещён линтером.
 var msk = time.FixedZone("MSK", 3*60*60)
 
-// day — дата склада.
-func day(y int, m time.Month, d, hour, minute int) time.Time {
-	return time.Date(y, m, d, hour, minute, 0, 0, msk)
+// day — момент времени в 2026 году по зоне склада (год фиксирован: тесты
+// проверяют время суток, а не календарь).
+func day(m time.Month, d, hour, minute int) time.Time {
+	return time.Date(2026, m, d, hour, minute, 0, 0, msk)
 }
 
 // fakeStock — кэш остатков: товар → партии.
@@ -63,17 +64,17 @@ func (f *fakeNotifier) NotifyWarehouseManagement(text string) error {
 func fixture() (*fakeStock, *fakeSales) {
 	st := &fakeStock{products: []stock.Product{
 		{ID: "p1", Name: "Молоко", Lots: []stock.Lot{
-			{BestBefore: day(2026, time.November, 20, 0, 0), Qty: 2},
-			{BestBefore: day(2026, time.November, 25, 0, 0), Qty: 3},
+			{BestBefore: day(time.November, 20, 0, 0), Qty: 2},
+			{BestBefore: day(time.November, 25, 0, 0), Qty: 3},
 		}},
 		{ID: "p2", Name: "Сыр", Lots: []stock.Lot{
-			{BestBefore: day(2026, time.November, 20, 0, 0), Qty: 2},
+			{BestBefore: day(time.November, 20, 0, 0), Qty: 2},
 		}},
 		{ID: "p3", Name: "Говядина", Lots: []stock.Lot{
-			{BestBefore: day(2026, time.December, 1, 0, 0), Qty: 10},
+			{BestBefore: day(time.December, 1, 0, 0), Qty: 10},
 		}},
 		{ID: "p4", Name: "Новинка", Lots: []stock.Lot{
-			{BestBefore: day(2026, time.December, 1, 0, 0), Qty: 7},
+			{BestBefore: day(time.December, 1, 0, 0), Qty: 7},
 		}},
 		{ID: "p5", Name: "Пусто"},
 	}}
@@ -92,7 +93,7 @@ func TestTickSendsThreeMessages(t *testing.T) {
 	st, sales := fixture()
 	notify := &fakeNotifier{}
 	uc := New(st, sales, notify)
-	uc.now = func() time.Time { return day(2026, time.November, 11, 16, 0) }
+	uc.now = func() time.Time { return day(time.November, 11, 16, 0) }
 
 	uc.Tick(context.Background(), reportTime)
 
@@ -121,7 +122,7 @@ func TestTickBeforeTimeDoesNothing(t *testing.T) {
 	st, sales := fixture()
 	notify := &fakeNotifier{}
 	uc := New(st, sales, notify)
-	uc.now = func() time.Time { return day(2026, time.November, 11, 15, 59) }
+	uc.now = func() time.Time { return day(time.November, 11, 15, 59) }
 
 	uc.Tick(context.Background(), reportTime)
 
@@ -135,7 +136,7 @@ func TestTickOncePerDay(t *testing.T) {
 	notify := &fakeNotifier{}
 	uc := New(st, sales, notify)
 
-	now := day(2026, time.November, 11, 16, 5)
+	now := day(time.November, 11, 16, 5)
 	uc.now = func() time.Time { return now }
 
 	uc.Tick(context.Background(), reportTime)
@@ -147,7 +148,7 @@ func TestTickOncePerDay(t *testing.T) {
 	}
 
 	// Следующий день — новый отчёт.
-	now = day(2026, time.November, 12, 16, 5)
+	now = day(time.November, 12, 16, 5)
 	uc.Tick(context.Background(), reportTime)
 
 	if len(notify.texts) != 6 {
@@ -157,12 +158,12 @@ func TestTickOncePerDay(t *testing.T) {
 
 func TestTickSkipsEmptyLists(t *testing.T) {
 	st := &fakeStock{products: []stock.Product{{ID: "p1", Name: "Молоко", Lots: []stock.Lot{
-		{BestBefore: day(2026, time.November, 20, 0, 0), Qty: 4},
+		{BestBefore: day(time.November, 20, 0, 0), Qty: 4},
 	}}}}
 	sales := &fakeSales{avg: map[string]float64{"p1": 3}}
 	notify := &fakeNotifier{}
 	uc := New(st, sales, notify)
-	uc.now = func() time.Time { return day(2026, time.November, 11, 16, 0) }
+	uc.now = func() time.Time { return day(time.November, 11, 16, 0) }
 
 	uc.Tick(context.Background(), reportTime)
 
@@ -177,7 +178,7 @@ func TestTickRetriesUndelivered(t *testing.T) {
 	st, sales := fixture()
 	notify := &fakeNotifier{fail: true}
 	uc := New(st, sales, notify)
-	now := day(2026, time.November, 11, 16, 0)
+	now := day(time.November, 11, 16, 0)
 	uc.now = func() time.Time { return now }
 
 	uc.Tick(context.Background(), reportTime)
@@ -188,7 +189,7 @@ func TestTickRetriesUndelivered(t *testing.T) {
 	// Telegram ожил: очередь доезжает на следующем тике, отчёт НЕ пересобирается
 	// (те же три сообщения, а не шесть).
 	notify.fail = false
-	now = day(2026, time.November, 11, 16, 1)
+	now = day(time.November, 11, 16, 1)
 	uc.Tick(context.Background(), reportTime)
 
 	if len(notify.texts) != 3 {
@@ -201,7 +202,7 @@ func TestTickSalesErrorRetriesNextTick(t *testing.T) {
 	sales.err = errors.New("БД недоступна")
 	notify := &fakeNotifier{}
 	uc := New(st, sales, notify)
-	now := day(2026, time.November, 11, 16, 0)
+	now := day(time.November, 11, 16, 0)
 	uc.now = func() time.Time { return now }
 
 	uc.Tick(context.Background(), reportTime)
@@ -211,7 +212,7 @@ func TestTickSalesErrorRetriesNextTick(t *testing.T) {
 
 	// Ошибка не закрыла день: следующий тик собирает отчёт заново.
 	sales.err = nil
-	now = day(2026, time.November, 11, 16, 1)
+	now = day(time.November, 11, 16, 1)
 	uc.Tick(context.Background(), reportTime)
 
 	if len(notify.texts) != 3 {

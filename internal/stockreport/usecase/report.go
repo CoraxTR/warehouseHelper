@@ -239,7 +239,7 @@ func messageParts(lines []string, title string) []string {
 		return []string{joined}
 	}
 
-	chunks := chunkLines(lines, messageMaxLen-headerReserve)
+	chunks := chunkLines(lines)
 	parts := make([]string, 0, len(chunks))
 	for i, chunk := range chunks {
 		parts = append(parts, fmt.Sprintf("%s (часть %d из %d):\n%s",
@@ -249,10 +249,13 @@ func messageParts(lines []string, title string) []string {
 	return parts
 }
 
-// chunkLines режет строки на пачки не длиннее limit байт (вместе с переводами
-// строк). Одна строка длиннее лимита уходит отдельной пачкой: разорвать
-// название товара хуже, чем превысить порог.
-func chunkLines(lines []string, limit int) [][]string {
+// chunkLines режет строки на пачки под лимит одного сообщения (messageMaxLen
+// минус запас на заголовок части), считая байты вместе с переводами строк.
+// Одна строка длиннее лимита уходит отдельной пачкой: разорвать название
+// товара хуже, чем превысить порог.
+func chunkLines(lines []string) [][]string {
+	const limit = messageMaxLen - headerReserve
+
 	var chunks [][]string
 	current := make([]string, 0, len(lines))
 
