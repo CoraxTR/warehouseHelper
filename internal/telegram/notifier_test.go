@@ -100,6 +100,54 @@ func TestNotifyWarehouseDisabledWithoutConfig(t *testing.T) {
 	}
 }
 
+func TestNotifyWarehouseManagementSendsToManagementChat(t *testing.T) {
+	var gotBody map[string]any
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Errorf("decode request body: %v", err)
+		}
+
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	n := testNotifier(&config.TelegramConfig{
+		BotToken:         "test-token",
+		WarehouseChatID:  -1001234567890,
+		ManagementChatID: -1007776665554,
+	}, srv.URL)
+
+	if err := n.NotifyWarehouseManagement("Молоко - нет в наличии"); err != nil {
+		t.Fatalf("NotifyWarehouseManagement error: %v", err)
+	}
+
+	// Отчёт управления уходит СВОИМ чатом, а не чатом склада.
+	if gotBody["chat_id"] != float64(-1007776665554) {
+		t.Errorf("chat_id = %v, want -1007776665554 (чат управления)", gotBody["chat_id"])
+	}
+}
+
+func TestNotifyWarehouseManagementDisabledWithoutConfig(t *testing.T) {
+	hit := false
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hit = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	n := testNotifier(&config.TelegramConfig{BotToken: "test-token"}, srv.URL)
+
+	if err := n.NotifyWarehouseManagement("test"); err != nil {
+		t.Fatalf("NotifyWarehouseManagement disabled error: %v", err)
+	}
+
+	if hit {
+		t.Error("без TG_WAREHOUSE_MANAGEMENT_CHAT_ID запросов быть не должно")
+	}
+}
+
 func TestNotifyEveryoneSendsToEveryoneChat(t *testing.T) {
 	var gotBody map[string]any
 

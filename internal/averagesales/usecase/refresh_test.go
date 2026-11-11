@@ -51,6 +51,38 @@ func TestAveragesReadsWindowWithoutMS(t *testing.T) {
 	}
 }
 
+// TestWeeklyAveragesNormalizesMonthlyToWeeks — единица отчёта по остаткам:
+// недельный товар отдаёт недельное среднее как есть, месячный — /4.
+func TestWeeklyAveragesNormalizesMonthlyToWeeks(t *testing.T) {
+	month := currentPeriodStart(intervalMonth, refreshNow)
+	week := currentPeriodStart(intervalWeek, refreshNow)
+	repo := &stubRepo{
+		monthly: []averagesales.TurnoverRow{
+			{ProductID: "p1", PeriodStart: month, Qty: 12}, // 12 шт/мес → 3 шт/нед
+		},
+		weekly: []averagesales.TurnoverRow{
+			{ProductID: "p2", PeriodStart: week, Qty: 7}, // недельный учёт — как есть
+		},
+	}
+	prods := &stubProducts{byID: map[string]averagesales.TurnoverProduct{
+		"p1": {ID: "p1", UOM: "шт"},
+		"p2": {ID: "p2", UOM: "шт", TrackWeekly: true},
+	}}
+
+	uc := newRefreshUC(repo, &stubSales{}, prods)
+
+	got, err := uc.WeeklyAverages(context.Background(), []string{"p1", "p2"})
+	if err != nil {
+		t.Fatalf("WeeklyAverages() error: %v", err)
+	}
+	if math.Abs(got["p1"]-3) > 1e-9 {
+		t.Errorf("WeeklyAverages()[p1] = %v, want 3 (месячное 12 / weeksPerMonth)", got["p1"])
+	}
+	if math.Abs(got["p2"]-7) > 1e-9 {
+		t.Errorf("WeeklyAverages()[p2] = %v, want 7 (недельное среднее как есть)", got["p2"])
+	}
+}
+
 func TestRefreshCurrentFetchesOnlyCurrentPeriod(t *testing.T) {
 	sales := &stubSales{rowsFn: func(_, _ time.Time, _ string, _ client.ProfitFilter) []client.ProfitRow {
 		return []client.ProfitRow{profitRow("p1", 8, 0)}

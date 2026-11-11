@@ -153,6 +153,7 @@ func (a *App) initDeps() {
 		a.initHTTPServer,
 		a.initStockCache,
 		a.initStockFreeze,
+		a.initStockReport,
 		a.initDayState,
 		a.initAverageSales,
 		a.initDiscounts,
@@ -248,6 +249,21 @@ func (a *App) initStockFreeze() {
 
 	a.background("сроки: уборка пар под заморозку", func() {
 		a.di.StockUC().StartExpiryWatch(a.ctx, freezeTime)
+	})
+}
+
+// initStockReport запускает ежедневный отчёт «остатки против средних продаж» в
+// чат управления складом (модуль stockreport): время — APP_STOCK_REPORT_TIME
+// (локальное, default 16:00). Три сообщения: нет в наличии; остаток не больше
+// средней продажи за неделю; избыток (от двух недель) + позиции без истории
+// продаж. Ошибки не роняют приложение — ретрай на следующем тике (недоступная
+// БД, отказ Telegram). Порядок важен: запускается после initStockCache, иначе
+// первый тик увидит пустой кэш остатков и отчёт «всё в норме».
+func (a *App) initStockReport() {
+	reportTime := a.di.Config().StockReportTime
+
+	a.background("stockreport: отчёт по остаткам в чат управления", func() {
+		a.di.StockReportUC().Start(a.ctx, reportTime)
 	})
 }
 
