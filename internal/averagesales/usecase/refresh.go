@@ -29,6 +29,11 @@ import (
 const (
 	monthlyWindow = 12
 	weeklyWindow  = 5
+	// weeksPerMonth — во сколько недель переводится месячное среднее для
+	// потребителей, которым нужна недельная единица (отчёт по остаткам,
+	// модуль stockreport). Решение владельца 11.11.2026: делим на 4, а не на
+	// 30/7 — цифра должна быть «как в неделях», а не календарно точной.
+	weeksPerMonth = 4
 )
 
 // turnoverScope — какие периоды обновлять: всё окно (12 завершённых месяцев +
@@ -73,6 +78,41 @@ func (uc *UseCase) Averages(ctx context.Context, productIDs []string) (map[strin
 	done := metrics.Track(trackPkg, "Averages")
 	defer done()
 
+	return uc.windowAverages(ctx, productIDs, periodAvg)
+}
+
+// WeeklyAverages возвращает среднюю продажу за НЕДЕЛЮ (шт) по данным БД:
+// недельные товары (track_weekly) — недельное среднее как есть, месячные —
+// среднемесячное / weeksPerMonth. Единица одна на все позиции — так отчёт по
+// остаткам сравнивает остаток со средним (решение владельца 11.11.2026).
+// К МС не обращается; товары без продаж в карту не попадают.
+func (uc *UseCase) WeeklyAverages(ctx context.Context, productIDs []string) (map[string]float64, error) {
+	done := metrics.Track(trackPkg, "WeeklyAverages")
+	defer done()
+
+	return uc.windowAverages(ctx, productIDs, weeklyAvg)
+}
+
+// periodAvg — среднее остаётся в единицах своего периода (ряд товара).
+func periodAvg(_ windowPlan, avg float64) float64 { return avg }
+
+// weeklyAvg — среднее приводится к неделе: недельный ряд — как есть, месячный
+// делится на weeksPerMonth.
+func weeklyAvg(plan windowPlan, avg float64) float64 {
+	if plan.weeklyTrack() {
+		return avg
+	}
+
+	return avg / weeksPerMonth
+}
+
+// windowAverages — общий расчёт средних: по каждой группе товаров своего ряда
+// читает окно из БД и переводит среднее нормализатором toOutput.
+func (uc *UseCase) windowAverages(
+	ctx context.Context,
+	productIDs []string,
+	toOutput func(windowPlan, float64) float64,
+) (map[string]float64, error) {
 	ids := uniqueIDs(productIDs)
 	out := make(map[string]float64, len(ids))
 	if len(ids) == 0 {
@@ -107,7 +147,7 @@ func (uc *UseCase) Averages(ctx context.Context, productIDs []string) (map[strin
 			if err != nil {
 				return nil, fmt.Errorf("среднее товара %s: %w", id, err)
 			}
-			out[id] = *avg
+			out[id] = toOutput(plan, *avg)
 		}
 	}
 

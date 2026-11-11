@@ -63,18 +63,22 @@ type Notifier struct {
 	everyoneChatID  int64
 	commonChatID    int64
 	discountChatID  int64
+	// managementChatID — чат управления складом (ежедневный отчёт по остаткам
+	// против средних продаж). Отдельно от чата склада и чата скидок.
+	managementChatID int64
 }
 
 // NewNotifier собирает Notifier из конфигурации Telegram.
 func NewNotifier(cfg *config.TelegramConfig) *Notifier {
 	return &Notifier{
-		httpClient:      &http.Client{Timeout: sendTimeout},
-		apiBaseURL:      telegramAPIBase,
-		botToken:        cfg.BotToken,
-		warehouseChatID: cfg.WarehouseChatID,
-		everyoneChatID:  cfg.EveryoneChatID,
-		commonChatID:    cfg.CommonChatID,
-		discountChatID:  cfg.DiscountChatID,
+		httpClient:       &http.Client{Timeout: sendTimeout},
+		apiBaseURL:       telegramAPIBase,
+		botToken:         cfg.BotToken,
+		warehouseChatID:  cfg.WarehouseChatID,
+		everyoneChatID:   cfg.EveryoneChatID,
+		commonChatID:     cfg.CommonChatID,
+		discountChatID:   cfg.DiscountChatID,
+		managementChatID: cfg.ManagementChatID,
 	}
 }
 
@@ -102,6 +106,18 @@ func (n *Notifier) NotifyWarehouseHTML(text string) error {
 		fieldText:      text,
 		fieldParseMode: parseModeHTML,
 	})
+}
+
+// NotifyWarehouseManagement отправляет сообщение в чат управления складом
+// (ежедневный отчёт по остаткам против средних продаж). Без настроенного
+// токена или chat_id чата управления — no-op: отчёт не уходит, приложение
+// не падает.
+func (n *Notifier) NotifyWarehouseManagement(text string) error {
+	if n.botToken == "" || n.managementChatID == 0 {
+		return nil
+	}
+
+	return n.sendMessage(context.Background(), n.managementChatID, text)
 }
 
 // NotifyEveryone отправляет сообщение в общий чат сотрудников.

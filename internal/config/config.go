@@ -100,6 +100,10 @@ type AppConfig struct {
 	// «Сроки»), от полуночи, локальное время процесса: пары со сроком ≤ завтра
 	// убираются из сроков, склад получает список на заморозку.
 	StockFreezeTime time.Duration
+	// StockReportTime — время ежедневного отчёта «остатки против средних
+	// продаж» в чат управления складом (модуль stockreport), от полуночи,
+	// локальное время процесса.
+	StockReportTime time.Duration
 	// DiscountWindowCap — ёмкость окна сайта (модуль скидок): сколько позиций
 	// показываем менеджеру в окне распродажи.
 	DiscountWindowCap int
@@ -424,6 +428,7 @@ func loadAppconfig() *AppConfig {
 	// APP_STOCK_FREEZE_TIME в формате "HH:MM" (локальное время процесса); по
 	// умолчанию 20:00; невалидное значение — дефолт.
 	stockFreezeTime := loadStockFreezeTime()
+	stockReportTime := loadStockReportTime()
 
 	// Модуль скидок: ёмкости окна сайта и слота ТГ (APP_DISCOUNT_WINDOW_CAP=12,
 	// APP_DISCOUNT_TELEGRAM_CAP=10) — неположительное значение сбрасывается на
@@ -465,6 +470,7 @@ func loadAppconfig() *AppConfig {
 		WeightsHistoryLimit:  weightsHistoryLimit,
 		DayStateSnapshotTime: dayStateSnapshotTime,
 		StockFreezeTime:      stockFreezeTime,
+		StockReportTime:      stockReportTime,
 		DiscountWindowCap:    discountWindowCap,
 		DiscountTelegramCap:  discountTelegramCap,
 		DiscountTGPlanTime:   discountTGPlanTime,
@@ -503,6 +509,22 @@ func loadStockFreezeTime() time.Duration {
 	}
 
 	return defaultFreezeTime
+}
+
+// loadStockReportTime — время ежедневного отчёта «остатки против средних
+// продаж» (модуль stockreport): APP_STOCK_REPORT_TIME в формате "HH:MM"
+// (локальное время процесса), по умолчанию 16:00. Неразбираемое значение —
+// дефолт (как у остальных времён приложения).
+func loadStockReportTime() time.Duration {
+	const defaultReportTime = 16 * time.Hour
+
+	if tStr := os.Getenv("APP_STOCK_REPORT_TIME"); tStr != "" {
+		if t, err := time.Parse("15:04", tStr); err == nil {
+			return time.Duration(t.Hour())*time.Hour + time.Duration(t.Minute())*time.Minute
+		}
+	}
+
+	return defaultReportTime
 }
 
 type MSWorker struct {
@@ -878,15 +900,20 @@ type TelegramConfig struct {
 	// владельца 18.10.2026). Отдельное значение: у чата своя аудитория и свои
 	// правила правок, складской чат живёт по своим.
 	DiscountChatID int64
+	// ManagementChatID — чат управления складом: ежедневный отчёт «остатки
+	// против средних продаж» (модуль stockreport, решение владельца 11.11.2026).
+	// Отдельный чат: склад получает оперативные письма, управление — сводку.
+	ManagementChatID int64
 }
 
 func loadTelegramConfig() *TelegramConfig {
 	return &TelegramConfig{
-		BotToken:        os.Getenv("TG_BOT_TOKEN"),
-		WarehouseChatID: parseEnvInt64("TG_WAREHOUSE_CHAT_ID"),
-		EveryoneChatID:  parseEnvInt64("TG_EVERYONE_CHAT_ID"),
-		CommonChatID:    parseEnvInt64("TG_COMMON_CHAT_ID"),
-		DiscountChatID:  parseEnvInt64("TG_DISCOUNT_CHAT_ID"),
+		BotToken:         os.Getenv("TG_BOT_TOKEN"),
+		WarehouseChatID:  parseEnvInt64("TG_WAREHOUSE_CHAT_ID"),
+		EveryoneChatID:   parseEnvInt64("TG_EVERYONE_CHAT_ID"),
+		CommonChatID:     parseEnvInt64("TG_COMMON_CHAT_ID"),
+		DiscountChatID:   parseEnvInt64("TG_DISCOUNT_CHAT_ID"),
+		ManagementChatID: parseEnvInt64("TG_WAREHOUSE_MANAGEMENT_CHAT_ID"),
 	}
 }
 
