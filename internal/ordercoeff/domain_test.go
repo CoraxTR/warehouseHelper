@@ -275,8 +275,8 @@ func row(start time.Time, soldOut, discount, frozen int16) PeriodCoeff {
 }
 
 func TestRecalcChain(t *testing.T) {
-	t.Run("пустой слайс", func(t *testing.T) {
-		RecalcChain(nil, 5) // не паникует
+	t.Run("пустой слайс", func(_ *testing.T) {
+		RecalcChain(nil, 5) // не паникует, писать некуда
 	})
 
 	t.Run("одна строка", func(t *testing.T) {

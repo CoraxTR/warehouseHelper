@@ -95,32 +95,31 @@ func RecalcChain(rows []PeriodCoeff, seed int16) {
 		return
 	}
 
-	// Значения цепочки считаем отдельно: coeff строк перезаписывается ниже
-	// (у всех, кроме последней строки блока, — ноль).
-	values := make([]int16, len(rows))
-	for i, row := range rows {
-		delta := row.Delta()
-		if i == 0 {
-			values[i] = seed + delta
-			continue
+	// Один проход: acc — накопленное значение текущего блока. Значение остаётся
+	// на последней строке блока, у остальных строк ноль (инвариант переноса),
+	// а следующий блок начинается со своего нуля.
+	acc := seed
+	for i := range rows {
+		acc += rows[i].Delta()
+		rows[i].Coeff = 0
+		if adjacentNext(rows, i) {
+			continue // значение переедет на следующую строку цепочки
 		}
-		prev := rows[i-1]
-		if NextPeriodStart(prev.PeriodType, prev.PeriodStart).Equal(row.PeriodStart) {
-			values[i] = values[i-1] + delta
-			continue
-		}
-		values[i] = delta
+		rows[i].Coeff = acc
+		acc = 0
+	}
+}
+
+// adjacentNext — следующая строка rows идёт сразу за строкой i (та же цепочка);
+// конец слайса — тоже «нет следующей».
+func adjacentNext(rows []PeriodCoeff, i int) bool {
+	j := i + 1
+	if j >= len(rows) {
+		return false
 	}
 
-	for i := range rows {
-		lastInBlock := i == len(rows)-1 ||
-			!NextPeriodStart(rows[i].PeriodType, rows[i].PeriodStart).Equal(rows[i+1].PeriodStart)
-		if lastInBlock {
-			rows[i].Coeff = values[i]
-			continue
-		}
-		rows[i].Coeff = 0
-	}
+	//nolint:gosec // G602: оба индекса ограничены размером rows (i — range, j — проверкой выше).
+	return NextPeriodStart(rows[i].PeriodType, rows[i].PeriodStart).Equal(rows[j].PeriodStart)
 }
 
 // ApplyEvent — чистое правило цепочки: применяет событие к текущему периоду.

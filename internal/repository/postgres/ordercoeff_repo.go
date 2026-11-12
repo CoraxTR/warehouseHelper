@@ -99,68 +99,123 @@ func (pg *PGClient) AdjustSoldOut(ctx context.Context, productID string, periodT
 
 	periodStart := ordercoeff.PeriodStart(periodType, at)
 
-	cur, err := pg.coeffPeriodForUpdate(ctx, tx, productID, periodType, periodStart)
+	seed, applied, err := pg.adjustPeriodCounter(ctx, tx, productID, periodType, periodStart, delta)
 	if err != nil {
 		return false, err
 	}
+	if !applied {
+		return false, nil
+	}
 
-	var seed int16
-	switch {
-	case cur == nil && delta < 0:
-		return false, nil // строки периода нет — снимать нечего
-	case cur == nil:
-		// Первое событие периода переносит coeff предыдущего на новую строку
-		// и обнуляет предыдущую (инвариант transfer). seed читается ДО
-		// обнуления — значение переносится, а не теряется.
-		prev, err := pg.coeffPeriodForUpdate(ctx, tx, productID, periodType, ordercoeff.PrevPeriodStart(periodType, periodStart))
-		if err != nil {
-			return false, err
+	if err := pg.recalcChainCoeffs(ctx, tx, productID, periodType, periodStart, seed); err != nil {
+		return false, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return false, fmt.Errorf("commit: %w", err)
+	}
+
+	return true, nil
+}
+
+// adjustPeriodCounter — правка строки периода на delta: существующая строка
+// (счётчик ±1) или новая (первое событие периода, с переносом coeff предыдущей).
+// Возвращает seed — coeff периода перед periodStart — для пересчёта цепочки;
+// applied=false — править нечего.
+func (pg *PGClient) adjustPeriodCounter(ctx context.Context, tx pgx.Tx, productID string, periodType ordercoeff.PeriodType, periodStart time.Time, delta int16) (int16, bool, error) {
+	cur, err := pg.coeffPeriodForUpdate(ctx, tx, productID, periodType, periodStart)
+	if err != nil {
+		return 0, false, err
+	}
+
+	if cur == nil {
+		if delta < 0 {
+			return 0, false, nil // строки периода нет — снимать нечего
 		}
-		if prev != nil {
-			seed = prev.Coeff
-		}
-		if _, err := tx.Exec(ctx, `
-            INSERT INTO product_period_coeff (product_id, period_type, period_start, coeff, sold_out, discount, frozen, unavailable)
-            VALUES ($1, $2, $3, 0, $4, 0, 0, 0)`,
-			productID, periodType, periodStart, delta,
-		); err != nil {
-			return false, fmt.Errorf("insert coeff: %w", err)
-		}
-		if prev != nil {
-			if _, err := tx.Exec(ctx, `
-                UPDATE product_period_coeff
-                SET coeff = 0
-                WHERE product_id = $1 AND period_type = $2 AND period_start = $3`,
-				productID, periodType, prev.PeriodStart,
-			); err != nil {
-				return false, fmt.Errorf("zero prev coeff: %w", err)
-			}
-		}
-	default:
-		if delta < 0 && cur.SoldOut == 0 {
-			return false, nil // живого «закончился» в периоде нет
-		}
-		prev, err := pg.coeffPeriodForUpdate(ctx, tx, productID, periodType, ordercoeff.PrevPeriodStart(periodType, periodStart))
-		if err != nil {
-			return false, err
-		}
-		if prev != nil {
-			seed = prev.Coeff
-		}
-		// coeff здесь не трогаем: его перепишет пересчёт каскада.
-		if _, err := tx.Exec(ctx, `
+
+		return pg.insertSoldOutPeriod(ctx, tx, productID, periodType, periodStart)
+	}
+
+	if delta < 0 && cur.SoldOut == 0 {
+		return 0, false, nil // живого «закончился» в периоде нет
+	}
+
+	seed, err := pg.prevPeriodCoeff(ctx, tx, productID, periodType, periodStart)
+	if err != nil {
+		return 0, false, err
+	}
+	// coeff здесь не трогаем: его перепишет пересчёт каскада.
+	if _, err := tx.Exec(ctx, `
             UPDATE product_period_coeff
             SET sold_out = sold_out + $4
             WHERE product_id = $1 AND period_type = $2 AND period_start = $3`,
-			productID, periodType, periodStart, delta,
-		); err != nil {
-			return false, fmt.Errorf("update sold_out: %w", err)
-		}
+		productID, periodType, periodStart, delta,
+	); err != nil {
+		return 0, false, fmt.Errorf("update sold_out: %w", err)
 	}
 
+	return seed, true, nil
+}
+
+// insertSoldOutPeriod — первое событие периода: строка создаётся, coeff
+// предыдущего периода переносится на неё и обнуляется у предыдущей
+// (инвариант transfer). seed читается ДО обнуления — значение переносится,
+// а не теряется.
+func (pg *PGClient) insertSoldOutPeriod(ctx context.Context, tx pgx.Tx, productID string, periodType ordercoeff.PeriodType, periodStart time.Time) (int16, bool, error) {
+	prev, err := pg.coeffPeriodForUpdate(ctx, tx, productID, periodType, ordercoeff.PrevPeriodStart(periodType, periodStart))
+	if err != nil {
+		return 0, false, err
+	}
+
+	var seed int16
+	if prev != nil {
+		seed = prev.Coeff
+	}
+
+	if _, err := tx.Exec(ctx, `
+            INSERT INTO product_period_coeff (product_id, period_type, period_start, coeff, sold_out, discount, frozen, unavailable)
+            VALUES ($1, $2, $3, 0, 1, 0, 0, 0)`,
+		productID, periodType, periodStart,
+	); err != nil {
+		return 0, false, fmt.Errorf("insert coeff: %w", err)
+	}
+
+	if prev == nil {
+		return seed, true, nil
+	}
+
+	if _, err := tx.Exec(ctx, `
+            UPDATE product_period_coeff
+            SET coeff = 0
+            WHERE product_id = $1 AND period_type = $2 AND period_start = $3`,
+		productID, periodType, prev.PeriodStart,
+	); err != nil {
+		return 0, false, fmt.Errorf("zero prev coeff: %w", err)
+	}
+
+	return seed, true, nil
+}
+
+// prevPeriodCoeff — coeff периода, предшествующего periodStart (0, если строки
+// о нём нет): значение переносится в строку нового периода.
+func (pg *PGClient) prevPeriodCoeff(ctx context.Context, tx pgx.Tx, productID string, periodType ordercoeff.PeriodType, periodStart time.Time) (int16, error) {
+	prev, err := pg.coeffPeriodForUpdate(ctx, tx, productID, periodType, ordercoeff.PrevPeriodStart(periodType, periodStart))
+	if err != nil {
+		return 0, err
+	}
+	if prev == nil {
+		return 0, nil
+	}
+
+	return prev.Coeff, nil
+}
+
+// recalcChainCoeffs — полный каскад: пересчёт coeff строки periodStart и всех
+// последующих периодов товара и запись результата.
+func (pg *PGClient) recalcChainCoeffs(ctx context.Context, tx pgx.Tx, productID string, periodType ordercoeff.PeriodType, periodStart time.Time, seed int16) error {
 	rows, err := pg.coeffChainForUpdate(ctx, tx, productID, periodType, periodStart)
 	if err != nil {
-		return false, err
+		return err
 	}
 
 	ordercoeff.RecalcChain(rows, seed)
@@ -172,15 +227,11 @@ func (pg *PGClient) AdjustSoldOut(ctx context.Context, productID string, periodT
             WHERE product_id = $1 AND period_type = $2 AND period_start = $3`,
 			productID, periodType, row.PeriodStart, row.Coeff,
 		); err != nil {
-			return false, fmt.Errorf("update chain coeff: %w", err)
+			return fmt.Errorf("update chain coeff: %w", err)
 		}
 	}
 
-	if err := tx.Commit(ctx); err != nil {
-		return false, fmt.Errorf("commit: %w", err)
-	}
-
-	return true, nil
+	return nil
 }
 
 // coeffChainForUpdate читает строки календаря периода from и позже (все поля
