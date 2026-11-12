@@ -25,6 +25,9 @@ import (
 // DiscountIncreases — только повышения скидки за день (значения, без времени).
 // SoldOutToday — «позиция закончилась в течение дня»; обычный приход маркер
 // не снимает, сбрасывается только явным возвратом (RollbackSoldOut).
+// SoldOutWithdrawn — «+1 «закончился» этого дня снят бэктречной недоступностью;
+// при возврате доступности +1 возвращается (инвариант: недоступность и
+// коэффициент не расходятся)».
 type DayState struct {
 	ProductID         string
 	Date              time.Time
@@ -34,6 +37,7 @@ type DayState struct {
 	DiscountIncreases []int16
 	Orderable         bool
 	SoldOutToday      bool
+	SoldOutWithdrawn  bool
 }
 
 // LotState — срез лота из product_stock, нужный для пересчёта дня.
@@ -188,27 +192,41 @@ type ReportCell struct {
 }
 
 // CellFor вычисляет ячейку отчёта по строке дня (d nil — строки нет).
-// Приоритет правил сверху вниз (владелец, 01.09.2026; уточнения 19.10.2026):
+// Приоритет правил сверху вниз (владелец, 01.09.2026; уточнения 19.10.2026
+// и 12.11.2026):
 //  1. дата > сегодня → пустая (таблица дополняется по мере накопления данных);
-//  2. прошлый день без данных (строки нет / in_stock = NULL) → красная с 'x':
+//  2. !orderable (любое состояние) → серая: недоступность для заказа —
+//     решение менеджера, а не состояние остатка, поэтому она видна и тогда,
+//     когда о наличии по дню данных нет (строка создана календарём «Доступность»
+//     с in_stock = NULL). Правило стоит ВЫШЕ «нет данных»: иначе бэктречная
+//     недоступность за прошедший/сегодняшний день не показывалась вовсе
+//     (красная 'x' за прошлый день перебивала её — дефект, 12.11.2026);
+//  3. прошлый день без данных (строки нет / in_stock = NULL) → красная с 'x':
 //     «позиции не было в наличии весь день» помечается так же, как «закончилась»
 //     (решение владельца 19.10.2026). Строки нет у товара без лотов в
 //     product_stock (списанный в ноль лот удаляется), NULL in_stock — день, до
 //     которого утренний снапшот не дошёл. Сегодняшний день без данных остаётся
 //     пустым: он ещё не сведён, красный 'x' там был бы враньём до снапшота;
-//  3. !orderable (любое состояние) → серая;
-//  4. !in_stock + скидка была (start или текущая) → жёлтая, шрифт красный:
+//  4. !in_stock + скидка была в течение дня → жёлтая, шрифт красный:
 //     «скидка → отсутствие»;
 //  5. !in_stock → красная, текст 'x';
-//  6. in_stock + sold_out + discount != NULL → жёлтая, шрифт красный;
+//  6. in_stock + sold_out + скидка была в течение дня → жёлтая, шрифт красный;
 //  7. in_stock + sold_out → красная;
-//  8. in_stock + скидка (текущая ИЛИ снятая за день) → жёлтая: переход
-//     10 % → 0 % выделяется тем же жёлтым, что и появление скидки (владелец,
-//     19.10.2026);
+//  8. in_stock + скидка была в течение дня → жёлтая;
 //  9. in_stock → серая (без скидки).
+//
+// «Скидка была в течение дня» — см. discountDuringDay: текущая, на начало дня
+// ИЛИ любой шаг повышения. Только по discount/discount_start судить нельзя:
+// скидка, поставленная после утреннего снапшота и снятая в тот же день, в
+// них не попадает (discount_start = NULL, к концу дня discount = NULL) —
+// остаётся лишь след в discount_increases, и клетка с текстом «20%» рисовалась
+// без жёлтой заливки (дефект, 12.11.2026).
 func CellFor(d *DayState, date, today time.Time) ReportCell {
 	if date.After(today) {
 		return ReportCell{Kind: CellEmpty}
+	}
+	if d != nil && !d.Orderable {
+		return ReportCell{Kind: CellGray, Text: TextFor(d)}
 	}
 	if d == nil || d.InStock == nil {
 		if date.Before(today) {
@@ -216,41 +234,50 @@ func CellFor(d *DayState, date, today time.Time) ReportCell {
 		}
 		return ReportCell{Kind: CellEmpty}
 	}
-	if !d.Orderable {
-		return ReportCell{Kind: CellGray, Text: TextFor(d)}
-	}
 	if !*d.InStock {
-		if d.DiscountStart != nil || d.Discount != nil {
+		if discountDuringDay(d) {
 			return ReportCell{Kind: CellYellowRed, Text: TextFor(d)}
 		}
 		return ReportCell{Kind: CellRed, Text: TextFor(d)}
 	}
-	if d.SoldOutToday && d.Discount != nil {
+	if d.SoldOutToday && discountDuringDay(d) {
 		return ReportCell{Kind: CellYellowRed, Text: TextFor(d)}
 	}
 	if d.SoldOutToday {
 		return ReportCell{Kind: CellRed, Text: TextFor(d)}
 	}
-	if d.Discount != nil || d.DiscountStart != nil {
+	if discountDuringDay(d) {
 		return ReportCell{Kind: CellYellow, Text: TextFor(d)}
 	}
 	return ReportCell{Kind: CellPlain, Text: TextFor(d)}
 }
 
-// TextFor — текст ячейки: discount_start → каждый шаг discount_increases →
-// стейт конца дня ('x' / размер скидки / '0%' если скидки нет). Повтор
-// последнего значения не дублируется: не менялась скидка — остаётся финал.
-// Примеры: 10% → 15% → 20%; закончился → 10% → 15% → x; скидки нет → 0%.
+// discountDuringDay — скидка действовала хотя бы часть дня: стоит на начало
+// (discount_start), поднималась в течение дня (discount_increases) или стоит
+// сейчас (discount). След в increases — единственный признак скидки, которую
+// поставили и сняли в один день после утреннего снапшота.
+func discountDuringDay(d *DayState) bool {
+	if d == nil {
+		return false
+	}
+	return d.Discount != nil || d.DiscountStart != nil || len(d.DiscountIncreases) > 0
+}
+
+// TextFor — текст ячейки: скидка на начало → каждый шаг повышения → состояние
+// конца дня ('x' / размер скидки, включая «0%» — скидка задана нулём).
+// Повтор последнего значения не дублируется: не менялась скидка — остаётся
+// финал. Ноль печатается и на начало дня, и в конце: явный 0 — ручной запрет
+// расчёта, а не «скидки нет», и жёлтая клетка без значения читается как
+// «скидка», хотя запрет её как раз и снял (владелец, 12.11.2026).
+// Примеры: 10% → 15% → 20%; закончился → 10% → 15% → x; скидки нет — пусто;
+// скидка задана нулём: 0%; снята в течение дня: 10% → 0%.
 func TextFor(d *DayState) string {
 	if d == nil {
 		return ""
 	}
-	// Повторы не дублируются (10 → 10 → 20 — это 10 → 20), а 0 % в ячейку не
-	// пишем вовсе: пустая скидка — пустой текст, заливка клетки говорит сама
-	// (решение владельца 18.10.2026).
 	parts := make([]string, 0, len(d.DiscountIncreases)+2)
 	add := func(v string) {
-		if v == "" || v == "0%" {
+		if v == "" {
 			return
 		}
 		if len(parts) > 0 && parts[len(parts)-1] == v {
@@ -258,19 +285,29 @@ func TextFor(d *DayState) string {
 		}
 		parts = append(parts, v)
 	}
+	// Ноль на начало дня тоже печатаем: явный 0 — ручной запрет расчёта, а не
+	// «скидки нет» (иначе жёлтая клетка остаётся без значения).
 	if d.DiscountStart != nil {
 		add(fmt.Sprintf("%d%%", *d.DiscountStart))
 	}
 	for _, v := range d.DiscountIncreases {
-		add(fmt.Sprintf("%d%%", v))
+		if v != 0 {
+			add(fmt.Sprintf("%d%%", v))
+		}
 	}
 	switch {
 	case d.InStock != nil && !*d.InStock:
+		// Явный ноль (ручной запрет) — тоже состояние дня: печатаем перед уходом
+		// в ноль, иначе жёлтая клетка остаётся без значения.
+		if d.Discount != nil && *d.Discount == 0 {
+			add(fmt.Sprintf("%d%%", *d.Discount))
+		}
 		add("x")
 	case d.Discount != nil:
+		// Ноль печатается: явный 0 — это ручной запрет расчёта, а не «скидки нет».
 		add(fmt.Sprintf("%d%%", *d.Discount))
 	default:
-		// скидки нет — в ячейку ничего не пишем (0 % не показываем)
+		// скидки нет вовсе (nil) — в ячейку ничего не пишем
 	}
 
 	return strings.Join(parts, " → ")

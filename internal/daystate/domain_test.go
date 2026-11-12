@@ -214,12 +214,30 @@ func TestCellFor(t *testing.T) {
 		{"закончилась — красная x", &DayState{Date: today, InStock: new(false), Orderable: true}, today, CellRed, "x"},
 		{"скидка → закончилась — жёлтая, красный шрифт", &DayState{Date: today, InStock: new(false), DiscountStart: new(int16(10)), Discount: new(int16(10)), Orderable: true}, today, CellYellowRed, "10% → x"},
 		{"скидка снята 10 % → 0 % — жёлтая", &DayState{Date: today, InStock: new(true), DiscountStart: new(int16(10)), Orderable: true}, today, CellYellow, "10%"},
-		{"скидка снята 10 % → 0 % (колонка 0) — жёлтая", &DayState{Date: today, InStock: new(true), DiscountStart: new(int16(10)), Discount: new(int16(0)), Orderable: true}, today, CellYellow, "10%"},
+		{"скидка снята 10 % → 0 % (колонка 0) — жёлтая, финал 0%", &DayState{Date: today, InStock: new(true), DiscountStart: new(int16(10)), Discount: new(int16(0)), Orderable: true}, today, CellYellow, "10% → 0%"},
+		// 12.11.2026: ручной запрет (скидка задана нулём) — скидки фактически нет,
+		// но клетка жёлтая: значение «0%» обязательно, иначе заливка врёт.
+		{"ручной запрет — жёлтая с 0%", &DayState{Date: today, InStock: new(true), Discount: new(int16(0)), Orderable: true}, today, CellYellow, "0%"},
+		{"ручной запрет с начала дня — жёлтая с 0%", &DayState{Date: today, InStock: new(true), DiscountStart: new(int16(0)), Discount: new(int16(0)), Orderable: true}, today, CellYellow, "0%"},
+		// Ровно случай со скриншота 12.11.2026: запрет стоит весь день, к концу
+		// дня скидки нет (discount = NULL) — клетка была жёлтой без значения.
+		{"ручной запрет весь день, скидки нет — жёлтая с 0%", &DayState{Date: today, InStock: new(true), DiscountStart: new(int16(0)), Orderable: true}, today, CellYellow, "0%"},
+		{"ручной запрет и позиция закончилась — 0% → x", &DayState{Date: today, InStock: new(false), Discount: new(int16(0)), Orderable: true}, today, CellYellowRed, "0% → x"},
 		{"в наличии без скидки — серая", &DayState{Date: today, InStock: new(true), Orderable: true}, today, CellPlain, ""},
 		{"в наличии + скидка — жёлтая", &DayState{Date: today, InStock: new(true), Discount: new(int16(15)), Orderable: true}, today, CellYellow, "15%"},
 		{"sold_out + скидка — жёлтая с красным шрифтом", &DayState{Date: today, InStock: new(true), Discount: new(int16(15)), SoldOutToday: true, Orderable: true}, today, CellYellowRed, "15%"},
 		{"sold_out — красная", &DayState{Date: today, InStock: new(true), SoldOutToday: true, Orderable: true}, today, CellRed, ""},
 		{"чёрная выигрывает у sold_out", &DayState{Date: today, InStock: new(true), SoldOutToday: true, Orderable: false}, today, CellGray, ""},
+		// 12.11.2026: скидка, поставленная после утреннего снапшота и снятая в
+		// тот же день, оставляет след только в discount_increases — клетка
+		// обязана быть жёлтой (была обычной с текстом «20%»).
+		{"скидка поставлена и снята в тот же день — жёлтая", &DayState{Date: today, InStock: new(true), DiscountIncreases: []int16{20}, Orderable: true}, today, CellYellow, "20%"},
+		{"скидка поставлена и снята, позиция закончилась — жёлтая, красный шрифт", &DayState{Date: today, InStock: new(false), DiscountIncreases: []int16{10}, Orderable: true}, today, CellYellowRed, "10% → x"},
+		{"sold_out + скидка только в increases — жёлтая, красный шрифт", &DayState{Date: today, InStock: new(true), DiscountIncreases: []int16{10}, SoldOutToday: true, Orderable: true}, today, CellYellowRed, "10%"},
+		// 12.11.2026: бэктречная недоступность видна и без данных о наличии —
+		// чёрная выигрывает у «прошлый день без данных → красная x».
+		{"недоступна вчера без данных о наличии — чёрная", &DayState{Date: yesterday, InStock: nil, Orderable: false}, yesterday, CellGray, ""},
+		{"недоступна сегодня без данных о наличии — чёрная", &DayState{Date: today, InStock: nil, Orderable: false}, today, CellGray, ""},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -241,8 +259,11 @@ func TestTextFor(t *testing.T) {
 		{"скидки нет — пусто (0 % не пишем)", &DayState{InStock: new(true)}, ""},
 		{"повтор не дублируется", &DayState{InStock: new(true), DiscountStart: new(int16(10)), DiscountIncreases: []int16{10, 20}, Discount: new(int16(20))}, "10% → 20%"},
 		{"повтор в конце не дублируется", &DayState{InStock: new(true), DiscountStart: new(int16(20)), DiscountIncreases: []int16{10}, Discount: new(int16(10))}, "20% → 10%"},
-		{"старт 0 % не пишем", &DayState{InStock: new(true), DiscountStart: new(int16(0)), DiscountIncreases: []int16{10}, Discount: new(int16(10))}, "10%"},
+		{"старт 0 % (ручной запрет), потом скидка — 0% → 10%", &DayState{InStock: new(true), DiscountStart: new(int16(0)), DiscountIncreases: []int16{10}, Discount: new(int16(10))}, "0% → 10%"},
 		{"старт без изменений", &DayState{InStock: new(true), DiscountStart: new(int16(10)), Discount: new(int16(10))}, "10%"},
+		{"скидка задана нулём — 0% (ручной запрет)", &DayState{InStock: new(true), Discount: new(int16(0))}, "0%"},
+		{"запрет с начала дня — 0%", &DayState{InStock: new(true), DiscountStart: new(int16(0)), Discount: new(int16(0))}, "0%"},
+		{"бан в конце дня — 10% → 0%", &DayState{InStock: new(true), DiscountStart: new(int16(10)), Discount: new(int16(0))}, "10% → 0%"},
 		{"цепочка повышений", &DayState{InStock: new(true), DiscountStart: new(int16(10)), DiscountIncreases: []int16{15, 20}, Discount: new(int16(20))}, "10% → 15% → 20%"},
 		{"понижение — финал отличается", &DayState{InStock: new(true), DiscountStart: new(int16(10)), Discount: new(int16(5))}, "10% → 5%"},
 		{"закончилась — финал x", &DayState{InStock: new(false), DiscountStart: new(int16(10)), DiscountIncreases: []int16{15}, Discount: new(int16(15))}, "10% → 15% → x"},

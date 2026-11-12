@@ -27,6 +27,18 @@ func PrevPeriodStart(pt PeriodType, start time.Time) time.Time {
 	}
 }
 
+// NextPeriodStart — начало периода, следующего за start.
+func NextPeriodStart(pt PeriodType, start time.Time) time.Time {
+	switch pt {
+	case PeriodWeek:
+		return start.AddDate(0, 0, 7)
+	case PeriodMonth:
+		return start.AddDate(0, 1, 0)
+	default:
+		return time.Time{}
+	}
+}
+
 // weekStart — понедельник недели, содержащей now (как в averagesales).
 func weekStart(now time.Time) time.Time {
 	offset := (int(now.Weekday()) + 6) % 7

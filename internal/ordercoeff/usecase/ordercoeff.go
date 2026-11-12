@@ -38,6 +38,10 @@ type Repository interface {
 	// PeriodsBatch — строки периода целиком (коэффициент + счётчики событий):
 	// календарь красит ячейку по факту события и показывает счётчики.
 	PeriodsBatch(ctx context.Context, productIDs []string, periodType ordercoeff.PeriodType, intervals []time.Time) (map[string]map[time.Time]ordercoeff.PeriodCoeff, error)
+	// AdjustSoldOut — правка счётчика «закончился» периода at на delta (+1/−1)
+	// с полным пересчётом каскада coeff от этого периода вперёд.
+	// applied=false: править нечего (delta<0 при sold_out=0 или строки периода нет).
+	AdjustSoldOut(ctx context.Context, productID string, periodType ordercoeff.PeriodType, at time.Time, delta int16) (applied bool, err error)
 }
 
 // UseCase — сценарии модуля.
@@ -122,15 +126,52 @@ func (uc *UseCase) PeriodsBatch(ctx context.Context, productIDs []string, period
 	return uc.repo.PeriodsBatch(ctx, productIDs, periodType, intervals)
 }
 
-// apply — общий путь события: период товара из каталога + запись в хранилище.
-func (uc *UseCase) apply(ctx context.Context, productID string, at time.Time, ev ordercoeff.EventType) (bool, error) {
-	weekly, err := uc.products.TrackWeekly(ctx, productID)
+// CancelSoldOut — бэктречная недоступность снимает «закончился» этого дня:
+// −1 к счётчику периода и полный пересчёт каскада. false — снимать нечего.
+func (uc *UseCase) CancelSoldOut(ctx context.Context, productID string, at time.Time) (bool, error) {
+	done := metrics.Track(trackPkg, "CancelSoldOut")
+	defer done()
+	return uc.adjustSoldOut(ctx, productID, at, -1)
+}
+
+// RestoreSoldOut — обратный ход: день снова доступен для заказа, +1
+// возвращается, каскад пересчитывается.
+func (uc *UseCase) RestoreSoldOut(ctx context.Context, productID string, at time.Time) (bool, error) {
+	done := metrics.Track(trackPkg, "RestoreSoldOut")
+	defer done()
+	return uc.adjustSoldOut(ctx, productID, at, 1)
+}
+
+// adjustSoldOut — общий путь Cancel/Restore: период товара из каталога, затем
+// правка счётчика и каскадный пересчёт одной транзакцией хранилища.
+func (uc *UseCase) adjustSoldOut(ctx context.Context, productID string, at time.Time, delta int16) (bool, error) {
+	pt, err := uc.periodType(ctx, productID)
 	if err != nil {
 		return false, err
 	}
-	pt := ordercoeff.PeriodMonth
-	if weekly {
-		pt = ordercoeff.PeriodWeek
+
+	return uc.repo.AdjustSoldOut(ctx, productID, pt, at, delta)
+}
+
+// periodType — гранулярность отрезка отслеживания товара (каталог).
+func (uc *UseCase) periodType(ctx context.Context, productID string) (ordercoeff.PeriodType, error) {
+	weekly, err := uc.products.TrackWeekly(ctx, productID)
+	if err != nil {
+		return 0, err
 	}
+	if weekly {
+		return ordercoeff.PeriodWeek, nil
+	}
+
+	return ordercoeff.PeriodMonth, nil
+}
+
+// apply — общий путь события: период товара из каталога + запись в хранилище.
+func (uc *UseCase) apply(ctx context.Context, productID string, at time.Time, ev ordercoeff.EventType) (bool, error) {
+	pt, err := uc.periodType(ctx, productID)
+	if err != nil {
+		return false, err
+	}
+
 	return uc.repo.ApplyCoeffEvent(ctx, productID, pt, at, ev)
 }

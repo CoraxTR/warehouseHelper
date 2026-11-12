@@ -30,6 +30,7 @@ type fakeRepo struct {
 	updated         []daystate.DayState
 	orderableCalls  []orderableCall
 	cleared         []string
+	withdrawnCalls  []withdrawnCall
 	lastKnownCalls  int
 	err             error
 	lastKnownErr    error
@@ -42,6 +43,12 @@ type orderableCall struct {
 	productID string
 	dates     []time.Time
 	orderable bool
+}
+
+type withdrawnCall struct {
+	productID string
+	date      time.Time
+	withdrawn bool
 }
 
 func (f *fakeRepo) EnsureDay(_ context.Context, d daystate.DayState) error {
@@ -151,6 +158,14 @@ func (f *fakeRepo) ClearSoldOut(_ context.Context, productID string, date time.T
 	return nil
 }
 
+func (f *fakeRepo) SetSoldOutWithdrawn(_ context.Context, productID string, date time.Time, withdrawn bool) error {
+	if f.err != nil {
+		return f.err
+	}
+	f.withdrawnCalls = append(f.withdrawnCalls, withdrawnCall{productID, date, withdrawn})
+	return nil
+}
+
 func (f *fakeRepo) ListByRange(_ context.Context, from, to time.Time) (map[string]map[time.Time]daystate.DayState, error) {
 	if f.err != nil {
 		return nil, f.err
@@ -248,8 +263,42 @@ func (f *fakeRollback) RollbackSoldOut(_ context.Context, productID string, _ ti
 	return true, nil
 }
 
+// fakeAdjust — заглушка коррекции «закончился» в ordercoeff (SoldOutAdjuster):
+// записывает вызовы, applied и ошибку задаёт тест.
+type fakeAdjust struct {
+	applied bool
+	err     error
+
+	cancelCalls  []string // productID|дата
+	restoreCalls []string
+}
+
+var _ SoldOutAdjuster = (*fakeAdjust)(nil)
+
+func (f *fakeAdjust) CancelSoldOut(_ context.Context, productID string, at time.Time) (bool, error) {
+	f.cancelCalls = append(f.cancelCalls, key(productID, at))
+	if f.err != nil {
+		return false, f.err
+	}
+	return f.applied, nil
+}
+
+func (f *fakeAdjust) RestoreSoldOut(_ context.Context, productID string, at time.Time) (bool, error) {
+	f.restoreCalls = append(f.restoreCalls, key(productID, at))
+	if f.err != nil {
+		return false, f.err
+	}
+	return f.applied, nil
+}
+
 func newTestUC(repo Repository, catalog CatalogProvider, soldOut SoldOutNotifier, unavailable UnavailableNotifier, rollback SoldOutRollbackNotifier, stockStatus StockStatusNotifier, now time.Time) *UseCase {
-	uc := NewUseCase(repo, catalog, soldOut, unavailable, rollback, stockStatus)
+	return newTestUCWithAdjuster(repo, catalog, soldOut, unavailable, rollback, &fakeAdjust{}, stockStatus, now)
+}
+
+// newTestUCWithAdjuster — то же с явной заглушкой коррекции «закончился»
+// (сценарии календаря, которые её дёргают).
+func newTestUCWithAdjuster(repo Repository, catalog CatalogProvider, soldOut SoldOutNotifier, unavailable UnavailableNotifier, rollback SoldOutRollbackNotifier, adjust SoldOutAdjuster, stockStatus StockStatusNotifier, now time.Time) *UseCase {
+	uc := NewUseCase(repo, catalog, soldOut, unavailable, rollback, adjust, stockStatus)
 	uc.now = func() time.Time { return now }
 	return uc
 }
@@ -866,5 +915,159 @@ func runBackInStockCase(t *testing.T, c backInStockCase, today time.Time) {
 	}
 	if c.wantOrderable != nil && repo.updated[0].Orderable != *c.wantOrderable {
 		t.Errorf("updated.Orderable = %v, want %v", repo.updated[0].Orderable, *c.wantOrderable)
+	}
+}
+
+// Бэктречная недоступность снимает +1 «закончился»: день, который закончился
+// и ещё не терял свой +1, зовёт CancelSoldOut и помечается withdrawn —
+// коэффициент обязан идти за доступностью (владелец, 12.11.2026, каскад).
+func TestSetUnavailable_CancelsSoldOut(t *testing.T) {
+	at := day(3)
+	tests := []struct {
+		name       string
+		row        *daystate.DayState // nil — строки дня нет
+		applied    bool
+		adjustErr  error
+		wantCancel int
+		wantMark   []bool // вызовы SetSoldOutWithdrawn; nil — вызовов нет
+	}{
+		{
+			name:       "закончился и был доступен — +1 снимаем",
+			row:        &daystate.DayState{ProductID: "p1", Date: at, InStock: new(false), SoldOutToday: true, Orderable: true},
+			applied:    true,
+			wantCancel: 1,
+			wantMark:   []bool{true},
+		},
+		{
+			name:    "не закончился — снимать нечего",
+			row:     &daystate.DayState{ProductID: "p1", Date: at, InStock: new(true), Orderable: true},
+			applied: true,
+		},
+		{
+			name:    "уже недоступен — повторно не снимаем",
+			row:     &daystate.DayState{ProductID: "p1", Date: at, InStock: new(false), SoldOutToday: true, Orderable: false},
+			applied: true,
+		},
+		{
+			name:    "плюс уже снят раньше — повторно не снимаем",
+			row:     &daystate.DayState{ProductID: "p1", Date: at, InStock: new(false), SoldOutToday: true, Orderable: true, SoldOutWithdrawn: true},
+			applied: true,
+		},
+		{
+			name:    "строки дня нет (бэктрек за давнюю дату)",
+			row:     nil,
+			applied: true,
+		},
+		{
+			name:       "в периоде нет живого +1 (applied=false) — метку не ставим",
+			row:        &daystate.DayState{ProductID: "p1", Date: at, InStock: new(false), SoldOutToday: true, Orderable: true},
+			applied:    false,
+			wantCancel: 1,
+		},
+		{
+			name:       "ошибка ordercoeff — метку не ставим, календарь записан",
+			row:        &daystate.DayState{ProductID: "p1", Date: at, InStock: new(false), SoldOutToday: true, Orderable: true},
+			applied:    true,
+			adjustErr:  errors.New("coeff down"),
+			wantCancel: 1,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			days := map[string]*daystate.DayState{}
+			if tc.row != nil {
+				days[key("p1", at)] = tc.row
+			}
+			repo := &fakeRepo{days: days}
+			adjust := &fakeAdjust{applied: tc.applied, err: tc.adjustErr}
+			uc := newTestUCWithAdjuster(repo, &fakeCatalog{}, &fakeSoldOut{}, &fakeUnavailable{}, &fakeRollback{}, adjust, &fakeStockStatus{}, day(5))
+
+			if err := uc.SetUnavailable(context.Background(), "p1", []time.Time{at}); err != nil {
+				t.Fatalf("SetUnavailable: %v", err)
+			}
+			if len(adjust.cancelCalls) != tc.wantCancel {
+				t.Errorf("CancelSoldOut: %v, want %d вызова", adjust.cancelCalls, tc.wantCancel)
+			}
+			if len(repo.withdrawnCalls) != len(tc.wantMark) {
+				t.Fatalf("SetSoldOutWithdrawn: %v, want %v", repo.withdrawnCalls, tc.wantMark)
+			}
+			for i, want := range tc.wantMark {
+				if repo.withdrawnCalls[i].withdrawn != want || repo.withdrawnCalls[i].productID != "p1" {
+					t.Errorf("SetSoldOutWithdrawn = %+v, want p1/%v", repo.withdrawnCalls[i], want)
+				}
+				if !repo.withdrawnCalls[i].date.Equal(at) {
+					t.Errorf("SetSoldOutWithdrawn date = %v, want %v", repo.withdrawnCalls[i].date, at)
+				}
+			}
+		})
+	}
+}
+
+// Обратный ход календаря возвращает снятый +1: день снова можно заказывать
+// (RestoreSoldOut + снятие отметки withdrawn).
+func TestSetOrderable_RestoresSoldOut(t *testing.T) {
+	at := day(3)
+	tests := []struct {
+		name        string
+		row         *daystate.DayState
+		applied     bool
+		adjustErr   error
+		wantRestore int
+		wantMark    []bool
+	}{
+		{
+			name:        "был недоступен и +1 снят — возвращаем",
+			row:         &daystate.DayState{ProductID: "p1", Date: at, InStock: new(false), SoldOutToday: true, Orderable: false, SoldOutWithdrawn: true},
+			applied:     true,
+			wantRestore: 1,
+			wantMark:    []bool{false},
+		},
+		{
+			name:    "был недоступен, но +1 не снимался — нечего возвращать",
+			row:     &daystate.DayState{ProductID: "p1", Date: at, InStock: new(false), SoldOutToday: true, Orderable: false},
+			applied: true,
+		},
+		{
+			name:    "день и так доступен — не трогаем",
+			row:     &daystate.DayState{ProductID: "p1", Date: at, InStock: new(true), SoldOutToday: true, Orderable: true, SoldOutWithdrawn: true},
+			applied: true,
+		},
+		{
+			name:        "в периоде уже есть +1 (applied=false) — метку не снимаем",
+			row:         &daystate.DayState{ProductID: "p1", Date: at, InStock: new(false), SoldOutToday: true, Orderable: false, SoldOutWithdrawn: true},
+			applied:     false,
+			wantRestore: 1,
+		},
+		{
+			name:        "ошибка ordercoeff — метку не снимаем, календарь записан",
+			row:         &daystate.DayState{ProductID: "p1", Date: at, InStock: new(false), SoldOutToday: true, Orderable: false, SoldOutWithdrawn: true},
+			applied:     true,
+			adjustErr:   errors.New("coeff up"),
+			wantRestore: 1,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := &fakeRepo{days: map[string]*daystate.DayState{key("p1", at): tc.row}}
+			adjust := &fakeAdjust{applied: tc.applied, err: tc.adjustErr}
+			uc := newTestUCWithAdjuster(repo, &fakeCatalog{}, &fakeSoldOut{}, &fakeUnavailable{}, &fakeRollback{}, adjust, &fakeStockStatus{}, day(5))
+
+			if err := uc.SetOrderable(context.Background(), "p1", []time.Time{at}); err != nil {
+				t.Fatalf("SetOrderable: %v", err)
+			}
+			if len(adjust.restoreCalls) != tc.wantRestore {
+				t.Errorf("RestoreSoldOut: %v, want %d вызова", adjust.restoreCalls, tc.wantRestore)
+			}
+			if len(repo.withdrawnCalls) != len(tc.wantMark) {
+				t.Fatalf("SetSoldOutWithdrawn: %v, want %v", repo.withdrawnCalls, tc.wantMark)
+			}
+			for i, want := range tc.wantMark {
+				if repo.withdrawnCalls[i].withdrawn != want {
+					t.Errorf("SetSoldOutWithdrawn = %+v, want %v", repo.withdrawnCalls[i], want)
+				}
+			}
+		})
 	}
 }
