@@ -306,6 +306,8 @@ func TextFor(d *DayState) string {
 	case d.Discount != nil:
 		// Ноль печатается: явный 0 — это ручной запрет расчёта, а не «скидки нет».
 		add(fmt.Sprintf("%d%%", *d.Discount))
+	default:
+		// скидки нет вовсе (nil) — в ячейку ничего не пишем
 	}
 
 	return strings.Join(parts, " → ")
