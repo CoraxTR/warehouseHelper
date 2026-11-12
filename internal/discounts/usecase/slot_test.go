@@ -405,8 +405,8 @@ func TestRunSlotPlanSkipsIneligibleLots(t *testing.T) {
 }
 
 // Добор недобранного слота: позиции со ступенью ровно 10 % (она уже стоит на
-// сайте — сама по себе не повышение) получают план 20 %: добор поднимает их до
-// скидки дня.
+// сайте — сама по себе не повышение) идут в рассылку СВОЕЙ ступенью (10 %):
+// попадание в рассылку процент не поднимает (решение владельца 12.11.2026).
 func TestRunSlotPlanDoborFillsByTenPercent(t *testing.T) {
 	h := newSlotHarness(recalcNow(1),
 		lotInput("p1", "Колбаса", day(9), 100, shelfLifeInput(26)),              // 20 % → слот
@@ -424,8 +424,13 @@ func TestRunSlotPlanDoborFillsByTenPercent(t *testing.T) {
 		t.Fatalf("правки добора: %+v, want три позиции", writes)
 	}
 	for _, w := range writes {
-		if w.Telegram == nil || *w.Telegram != slotMainPercent {
-			t.Errorf("правка %+v, want telegram=%d у всех позиций слота", w, slotMainPercent)
+		// Повышение по сроку идёт скидкой дня, добор — своей ступенью.
+		want := int16(slotBasePercent)
+		if w.ProductID == "p1" {
+			want = slotMainPercent
+		}
+		if w.Telegram == nil || *w.Telegram != want {
+			t.Errorf("правка %+v, want telegram=%d", w, want)
 		}
 		// General в правке — текущее значение сайта: шов переписывает обе
 		// колонки, поэтому значение обязано дойти как есть. У повышения по
@@ -454,8 +459,9 @@ func TestRunSlotPlanDoborFillsByTenPercent(t *testing.T) {
 }
 
 // Свежая ступень ровно 10 % (на сайте скидки нет) места в слоте не занимает: она
-// уходит в рассылку через добор — под скидку дня, а не под свою ступень (решение
-// владельца 29.09.2026). Сайт при этом остаётся без скидки: её поднимет 16:00.
+// уходит в рассылку через добор своей ступенью — подъёма до скидки дня нет
+// (решение владельца 12.11.2026). Сайт при этом остаётся без скидки: её поднимет
+// 16:00 до тех же 10 %.
 func TestRunSlotPlanFreshTenPercentGoesToDobor(t *testing.T) {
 	h := newSlotHarness(recalcNow(1),
 		lotInput("p1", "Томагавк", day(13), 4, shelfLifeInput(40)), // D=12 → ступень 10 %, сайт пуст
@@ -470,8 +476,8 @@ func TestRunSlotPlanFreshTenPercentGoesToDobor(t *testing.T) {
 		t.Fatalf("правки: %+v, want одна (ТГ-колонка добора)", writes)
 	}
 	w := writes[0]
-	if w.Telegram == nil || *w.Telegram != slotMainPercent {
-		t.Errorf("правка %+v, want telegram=%d (скидка дня, не ступень)", w, slotMainPercent)
+	if w.Telegram == nil || *w.Telegram != slotBasePercent {
+		t.Errorf("правка %+v, want telegram=%d (своя ступень, не скидка дня)", w, slotBasePercent)
 	}
 	if w.General != nil {
 		t.Errorf("general правки %v, want nil (сайт план не трогает)", *w.General)
@@ -480,11 +486,11 @@ func TestRunSlotPlanFreshTenPercentGoesToDobor(t *testing.T) {
 		t.Fatalf("позиции истории: %+v, want одна", h.repo.items)
 	}
 	item := h.repo.items[0][0]
-	if item.Percent != slotMainPercent || item.Reason != discounts.ReasonExpiry {
-		t.Errorf("позиция истории %+v, want %d %% и причину %q", item, slotMainPercent, discounts.ReasonExpiry)
+	if item.Percent != slotBasePercent || item.Reason != discounts.ReasonExpiry {
+		t.Errorf("позиция истории %+v, want %d %% и причину %q", item, slotBasePercent, discounts.ReasonExpiry)
 	}
-	// Склад видит пару позицией рассылки: метка канала (ТГ) и скидка дня.
-	if len(h.chat.texts) != 1 || !strings.Contains(h.chat.texts[0], "(ТГ) Томагавк (4 шт до 27.09) — 20%") {
+	// Склад видит пару позицией рассылки: метка канала (ТГ) и её ступень.
+	if len(h.chat.texts) != 1 || !strings.Contains(h.chat.texts[0], "(ТГ) Томагавк (4 шт до 27.09) — 10%") {
 		t.Errorf("сообщение складу: %q, want строку добора", h.chat.texts)
 	}
 }
@@ -537,7 +543,8 @@ func TestRunSlotPlanFreshTenPercentExtraWhenSlotFull(t *testing.T) {
 }
 
 // Добор из избытка: каждая пара раскладки объёма продаж — отдельная позиция
-// слота с планом 20 %, причиной surplus и контролем продаж (initialQty/planQty).
+// слота со скидкой избытка 10 % (без подъёма до скидки дня, решение владельца
+// 12.11.2026), причиной surplus и контролем продаж (initialQty/planQty).
 // В тексте рассылки ей печатается количество.
 func TestRunSlotPlanDoborFromSurplusSalesPlan(t *testing.T) {
 	h := newSlotHarness(recalcNow(1),
@@ -568,8 +575,8 @@ func TestRunSlotPlanDoborFromSurplusSalesPlan(t *testing.T) {
 	if surplus == nil {
 		t.Fatal("позиция добора из избытка (p2) в истории не найдена")
 	}
-	if surplus.Reason != discounts.ReasonSurplus || surplus.Percent != slotMainPercent {
-		t.Errorf("позиция избытка %+v, want reason=surplus percent=%d", surplus, slotMainPercent)
+	if surplus.Reason != discounts.ReasonSurplus || surplus.Percent != discounts.SurplusPercent() {
+		t.Errorf("позиция избытка %+v, want reason=surplus percent=%d", surplus, discounts.SurplusPercent())
 	}
 	if surplus.InitialQty == nil || *surplus.InitialQty != 100 || surplus.PlanQty == nil || *surplus.PlanQty != 51 {
 		t.Errorf("контроль продаж %v/%v, want initial=100 plan=51", surplus.InitialQty, surplus.PlanQty)
@@ -582,7 +589,7 @@ func TestRunSlotPlanDoborFromSurplusSalesPlan(t *testing.T) {
 	if !strings.Contains(text, "1. (ТГ) Колбаса (100 шт до 23.09) — 20%") {
 		t.Errorf("строка сроковой позиции плана: %q", text)
 	}
-	if !strings.Contains(text, "2. (ТГ) Сыр (51 шт до 25.09) — 20% (коэф 2,0)") {
+	if !strings.Contains(text, "2. (ТГ) Сыр (51 шт до 25.09) — 10% (коэф 2,0)") {
 		t.Errorf("строка добора из избытка с планом продаж: %q", text)
 	}
 }

@@ -318,8 +318,9 @@ func (uc *UseCase) refreshMailing(ctx context.Context, now time.Time, capacity i
 		return err
 	}
 
-	// ТГ-колонка: позиции, вошедшие в слот, получают скидку дня; вышедшие — 0,
-	// если значение ставил план (ручную ТГ менеджера не трогаем).
+	// ТГ-колонка: позиции, вошедшие в слот, получают скидку позиции плана (у
+	// добора — свою, без подъёма до скидки дня); вышедшие — 0, если значение
+	// ставил план (ручную ТГ менеджера не трогаем).
 	writes := liveTelegramWrites(pairs, plan, st.Items)
 	if len(writes) > 0 {
 		if err := uc.writer.SetDiscounts(ctx, writes); err != nil {
@@ -652,8 +653,9 @@ func (uc *UseCase) SkipMailing(ctx context.Context, callbackQueryID string, _, m
 
 // skipWrites — что поднять на сайт при пропуске рассылки: своя ступень по сроку
 // (её позиция получила бы сегодня в любом случае) и ручная ТГ менеджера.
-// Форс-повышение (добор до 20 %, избыток) остаётся невыполненным: рассылки не
-// было, и сайту оно не положено.
+// Добор избытка остаётся невыполненным: рассылки не было, и сайту он не положен.
+// Ступень по сроку (в том числе доборная 10 %) сайт получает и без рассылки —
+// её отдаёт skipTarget.
 func skipWrites(pairs []PairState, items []discounts.DigestItem) []discounts.DiscountWrite {
 	byKey := make(map[discounts.LotKey]int, len(pairs))
 	for i := range pairs {
@@ -720,7 +722,7 @@ func skipWrites(pairs []PairState, items []discounts.DigestItem) []discounts.Dis
 
 // skipTarget — что из плана позиции переживает пропуск рассылки: своя ступень по
 // сроку (сайт получил бы её и без рассылки) и ручная ТГ-скидка (решение
-// человека). Добор до скидки дня и избыток живут только рассылкой — им цели нет.
+// человека). Скидка добора из избытка живёт только рассылкой — ей цели нет.
 func skipTarget(p PairState, it discounts.DigestItem) (int16, discounts.Owner, bool) {
 	if p.Manual != nil {
 		return 0, discounts.OwnerNone, false // ручная сайта важнее (в том числе 0 %)
