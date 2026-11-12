@@ -118,7 +118,6 @@ func adjacentNext(rows []PeriodCoeff, i int) bool {
 		return false
 	}
 
-	//nolint:gosec // G602: оба индекса ограничены размером rows (i — range, j — проверкой выше).
 	return NextPeriodStart(rows[i].PeriodType, rows[i].PeriodStart).Equal(rows[j].PeriodStart)
 }
 

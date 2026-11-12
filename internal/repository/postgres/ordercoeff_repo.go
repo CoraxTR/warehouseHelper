@@ -122,7 +122,7 @@ func (pg *PGClient) AdjustSoldOut(ctx context.Context, productID string, periodT
 // (счётчик ±1) или новая (первое событие периода, с переносом coeff предыдущей).
 // Возвращает seed — coeff периода перед periodStart — для пересчёта цепочки;
 // applied=false — править нечего.
-func (pg *PGClient) adjustPeriodCounter(ctx context.Context, tx pgx.Tx, productID string, periodType ordercoeff.PeriodType, periodStart time.Time, delta int16) (int16, bool, error) {
+func (pg *PGClient) adjustPeriodCounter(ctx context.Context, tx pgx.Tx, productID string, periodType ordercoeff.PeriodType, periodStart time.Time, delta int16) (seed int16, applied bool, err error) {
 	cur, err := pg.coeffPeriodForUpdate(ctx, tx, productID, periodType, periodStart)
 	if err != nil {
 		return 0, false, err
@@ -140,7 +140,7 @@ func (pg *PGClient) adjustPeriodCounter(ctx context.Context, tx pgx.Tx, productI
 		return 0, false, nil // живого «закончился» в периоде нет
 	}
 
-	seed, err := pg.prevPeriodCoeff(ctx, tx, productID, periodType, periodStart)
+	seed, err = pg.prevPeriodCoeff(ctx, tx, productID, periodType, periodStart)
 	if err != nil {
 		return 0, false, err
 	}
@@ -161,13 +161,12 @@ func (pg *PGClient) adjustPeriodCounter(ctx context.Context, tx pgx.Tx, productI
 // предыдущего периода переносится на неё и обнуляется у предыдущей
 // (инвариант transfer). seed читается ДО обнуления — значение переносится,
 // а не теряется.
-func (pg *PGClient) insertSoldOutPeriod(ctx context.Context, tx pgx.Tx, productID string, periodType ordercoeff.PeriodType, periodStart time.Time) (int16, bool, error) {
+func (pg *PGClient) insertSoldOutPeriod(ctx context.Context, tx pgx.Tx, productID string, periodType ordercoeff.PeriodType, periodStart time.Time) (seed int16, applied bool, err error) {
 	prev, err := pg.coeffPeriodForUpdate(ctx, tx, productID, periodType, ordercoeff.PrevPeriodStart(periodType, periodStart))
 	if err != nil {
 		return 0, false, err
 	}
 
-	var seed int16
 	if prev != nil {
 		seed = prev.Coeff
 	}
