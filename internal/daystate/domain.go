@@ -188,27 +188,41 @@ type ReportCell struct {
 }
 
 // CellFor вычисляет ячейку отчёта по строке дня (d nil — строки нет).
-// Приоритет правил сверху вниз (владелец, 01.09.2026; уточнения 19.10.2026):
+// Приоритет правил сверху вниз (владелец, 01.09.2026; уточнения 19.10.2026
+// и 12.11.2026):
 //  1. дата > сегодня → пустая (таблица дополняется по мере накопления данных);
-//  2. прошлый день без данных (строки нет / in_stock = NULL) → красная с 'x':
+//  2. !orderable (любое состояние) → серая: недоступность для заказа —
+//     решение менеджера, а не состояние остатка, поэтому она видна и тогда,
+//     когда о наличии по дню данных нет (строка создана календарём «Доступность»
+//     с in_stock = NULL). Правило стоит ВЫШЕ «нет данных»: иначе бэктречная
+//     недоступность за прошедший/сегодняшний день не показывалась вовсе
+//     (красная 'x' за прошлый день перебивала её — дефект, 12.11.2026);
+//  3. прошлый день без данных (строки нет / in_stock = NULL) → красная с 'x':
 //     «позиции не было в наличии весь день» помечается так же, как «закончилась»
 //     (решение владельца 19.10.2026). Строки нет у товара без лотов в
 //     product_stock (списанный в ноль лот удаляется), NULL in_stock — день, до
 //     которого утренний снапшот не дошёл. Сегодняшний день без данных остаётся
 //     пустым: он ещё не сведён, красный 'x' там был бы враньём до снапшота;
-//  3. !orderable (любое состояние) → серая;
-//  4. !in_stock + скидка была (start или текущая) → жёлтая, шрифт красный:
+//  4. !in_stock + скидка была в течение дня → жёлтая, шрифт красный:
 //     «скидка → отсутствие»;
 //  5. !in_stock → красная, текст 'x';
-//  6. in_stock + sold_out + discount != NULL → жёлтая, шрифт красный;
+//  6. in_stock + sold_out + скидка была в течение дня → жёлтая, шрифт красный;
 //  7. in_stock + sold_out → красная;
-//  8. in_stock + скидка (текущая ИЛИ снятая за день) → жёлтая: переход
-//     10 % → 0 % выделяется тем же жёлтым, что и появление скидки (владелец,
-//     19.10.2026);
+//  8. in_stock + скидка была в течение дня → жёлтая;
 //  9. in_stock → серая (без скидки).
+//
+// «Скидка была в течение дня» — см. discountDuringDay: текущая, на начало дня
+// ИЛИ любой шаг повышения. Только по discount/discount_start судить нельзя:
+// скидка, поставленная после утреннего снапшота и снятая в тот же день, в
+// них не попадает (discount_start = NULL, к концу дня discount = NULL) —
+// остаётся лишь след в discount_increases, и клетка с текстом «20%» рисовалась
+// без жёлтой заливки (дефект, 12.11.2026).
 func CellFor(d *DayState, date, today time.Time) ReportCell {
 	if date.After(today) {
 		return ReportCell{Kind: CellEmpty}
+	}
+	if d != nil && !d.Orderable {
+		return ReportCell{Kind: CellGray, Text: TextFor(d)}
 	}
 	if d == nil || d.InStock == nil {
 		if date.Before(today) {
@@ -216,25 +230,33 @@ func CellFor(d *DayState, date, today time.Time) ReportCell {
 		}
 		return ReportCell{Kind: CellEmpty}
 	}
-	if !d.Orderable {
-		return ReportCell{Kind: CellGray, Text: TextFor(d)}
-	}
 	if !*d.InStock {
-		if d.DiscountStart != nil || d.Discount != nil {
+		if discountDuringDay(d) {
 			return ReportCell{Kind: CellYellowRed, Text: TextFor(d)}
 		}
 		return ReportCell{Kind: CellRed, Text: TextFor(d)}
 	}
-	if d.SoldOutToday && d.Discount != nil {
+	if d.SoldOutToday && discountDuringDay(d) {
 		return ReportCell{Kind: CellYellowRed, Text: TextFor(d)}
 	}
 	if d.SoldOutToday {
 		return ReportCell{Kind: CellRed, Text: TextFor(d)}
 	}
-	if d.Discount != nil || d.DiscountStart != nil {
+	if discountDuringDay(d) {
 		return ReportCell{Kind: CellYellow, Text: TextFor(d)}
 	}
 	return ReportCell{Kind: CellPlain, Text: TextFor(d)}
+}
+
+// discountDuringDay — скидка действовала хотя бы часть дня: стоит на начало
+// (discount_start), поднималась в течение дня (discount_increases) или стоит
+// сейчас (discount). След в increases — единственный признак скидки, которую
+// поставили и сняли в один день после утреннего снапшота.
+func discountDuringDay(d *DayState) bool {
+	if d == nil {
+		return false
+	}
+	return d.Discount != nil || d.DiscountStart != nil || len(d.DiscountIncreases) > 0
 }
 
 // TextFor — текст ячейки: discount_start → каждый шаг discount_increases →

@@ -220,6 +220,16 @@ func TestCellFor(t *testing.T) {
 		{"sold_out + скидка — жёлтая с красным шрифтом", &DayState{Date: today, InStock: new(true), Discount: new(int16(15)), SoldOutToday: true, Orderable: true}, today, CellYellowRed, "15%"},
 		{"sold_out — красная", &DayState{Date: today, InStock: new(true), SoldOutToday: true, Orderable: true}, today, CellRed, ""},
 		{"чёрная выигрывает у sold_out", &DayState{Date: today, InStock: new(true), SoldOutToday: true, Orderable: false}, today, CellGray, ""},
+		// 12.11.2026: скидка, поставленная после утреннего снапшота и снятая в
+		// тот же день, оставляет след только в discount_increases — клетка
+		// обязана быть жёлтой (была обычной с текстом «20%»).
+		{"скидка поставлена и снята в тот же день — жёлтая", &DayState{Date: today, InStock: new(true), DiscountIncreases: []int16{20}, Orderable: true}, today, CellYellow, "20%"},
+		{"скидка поставлена и снята, позиция закончилась — жёлтая, красный шрифт", &DayState{Date: today, InStock: new(false), DiscountIncreases: []int16{10}, Orderable: true}, today, CellYellowRed, "10% → x"},
+		{"sold_out + скидка только в increases — жёлтая, красный шрифт", &DayState{Date: today, InStock: new(true), DiscountIncreases: []int16{10}, SoldOutToday: true, Orderable: true}, today, CellYellowRed, "10%"},
+		// 12.11.2026: бэктречная недоступность видна и без данных о наличии —
+		// чёрная выигрывает у «прошлый день без данных → красная x».
+		{"недоступна вчера без данных о наличии — чёрная", &DayState{Date: yesterday, InStock: nil, Orderable: false}, yesterday, CellGray, ""},
+		{"недоступна сегодня без данных о наличии — чёрная", &DayState{Date: today, InStock: nil, Orderable: false}, today, CellGray, ""},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
