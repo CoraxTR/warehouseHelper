@@ -79,6 +79,50 @@ func transfer(cur, prev *PeriodCoeff) (newCur, newPrev *PeriodCoeff) {
 	return cur, prev
 }
 
+// RecalcChain пересчитывает coeff на месте для строк rows (отсортированы по
+// PeriodStart): «полный каскад» после правки счётчиков задним числом.
+// seed — coeff периода, предшествующего rows[0] (0, если строки о нём нет).
+// Правило как у ApplyEvent/transfer: coeff(P) = coeff(Prev(P)) + Delta(P) при
+// соседнем предыдущем периоде, иначе Delta(P); хранится только на последней
+// строке связной цепочки — у остальных ноль (инвариант переноса).
+//
+// Разрыв (в rows нет строки периода Prev(P) — чистый период) начинает новый
+// блок: его coeff считается без переноса, а coeff последней строки предыдущего
+// блока остаётся на месте — так же, как его оставил перенос при создании
+// следующей строки.
+func RecalcChain(rows []PeriodCoeff, seed int16) {
+	if len(rows) == 0 {
+		return
+	}
+
+	// Значения цепочки считаем отдельно: coeff строк перезаписывается ниже
+	// (у всех, кроме последней строки блока, — ноль).
+	values := make([]int16, len(rows))
+	for i, row := range rows {
+		delta := row.Delta()
+		if i == 0 {
+			values[i] = seed + delta
+			continue
+		}
+		prev := rows[i-1]
+		if NextPeriodStart(prev.PeriodType, prev.PeriodStart).Equal(row.PeriodStart) {
+			values[i] = values[i-1] + delta
+			continue
+		}
+		values[i] = delta
+	}
+
+	for i := range rows {
+		lastInBlock := i == len(rows)-1 ||
+			!NextPeriodStart(rows[i].PeriodType, rows[i].PeriodStart).Equal(rows[i+1].PeriodStart)
+		if lastInBlock {
+			rows[i].Coeff = values[i]
+			continue
+		}
+		rows[i].Coeff = 0
+	}
+}
+
 // ApplyEvent — чистое правило цепочки: применяет событие к текущему периоду.
 //
 // cur — состояние текущего периода (nil = период чистый, строки нет);

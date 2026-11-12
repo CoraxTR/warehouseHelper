@@ -25,6 +25,9 @@ import (
 // DiscountIncreases — только повышения скидки за день (значения, без времени).
 // SoldOutToday — «позиция закончилась в течение дня»; обычный приход маркер
 // не снимает, сбрасывается только явным возвратом (RollbackSoldOut).
+// SoldOutWithdrawn — «+1 «закончился» этого дня снят бэктречной недоступностью;
+// при возврате доступности +1 возвращается (инвариант: недоступность и
+// коэффициент не расходятся)».
 type DayState struct {
 	ProductID         string
 	Date              time.Time
@@ -34,6 +37,7 @@ type DayState struct {
 	DiscountIncreases []int16
 	Orderable         bool
 	SoldOutToday      bool
+	SoldOutWithdrawn  bool
 }
 
 // LotState — срез лота из product_stock, нужный для пересчёта дня.

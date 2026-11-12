@@ -358,10 +358,12 @@ func (d *DIContainer) OrderCoeffUC() *oucase.UseCase {
 // из календаря «Доступность товаров», эмитенты фактов в ordercoeff.
 // PGClient реализует ducecase.Repository; GoodsUC — ducecase.CatalogProvider
 // (каталог для страниц); OrderCoeffUC — SoldOutNotifier / UnavailableNotifier /
-// SoldOutRollbackNotifier (методы SoldOut, Unavailable, RollbackSoldOut).
+// SoldOutRollbackNotifier / SoldOutAdjuster (методы SoldOut, Unavailable,
+// RollbackSoldOut, CancelSoldOut, RestoreSoldOut — каскадная коррекция
+// «закончился» при бэктречной смене доступности).
 func (d *DIContainer) DayStateUC() *ducecase.UseCase {
 	if d.dayStateUC == nil {
-		d.dayStateUC = ducecase.NewUseCase(d.OrdersRepository(), d.GoodsUC(), d.OrderCoeffUC(), d.OrderCoeffUC(), d.OrderCoeffUC(), d.StockStatusNotifier())
+		d.dayStateUC = ducecase.NewUseCase(d.OrdersRepository(), d.GoodsUC(), d.OrderCoeffUC(), d.OrderCoeffUC(), d.OrderCoeffUC(), d.OrderCoeffUC(), d.StockStatusNotifier())
 	}
 
 	return d.dayStateUC
