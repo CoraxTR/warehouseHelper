@@ -3,7 +3,6 @@ package stockreport
 import (
 	"bytes"
 	"image/png"
-	"os"
 	"testing"
 	"time"
 
@@ -45,13 +44,6 @@ func TestDrawSurplusTable(t *testing.T) {
 	if err != nil || empty != nil {
 		t.Errorf("пустой список: data=%v err=%v, want nil/nil", empty, err)
 	}
-
-	// Образец для глаза: только когда путь задан явно.
-	if path := os.Getenv("SURPLUS_SAMPLE"); path != "" {
-		if err := os.WriteFile(path, data, 0o600); err != nil {
-			t.Fatalf("образец: %v", err)
-		}
-	}
 }
 
 // Длинное название переносится по словам и не вылезает за колонку.
@@ -61,7 +53,7 @@ func TestWrapWords(t *testing.T) {
 		t.Fatalf("шрифты: %v", err)
 	}
 
-	face := faces.face(cellPX, false)
+	face := faces.face(cellPX, weightRegular)
 	limit := nameW - 16
 	lines := wrapWords(face, "Ребра кальби нерезанные Мираторг. Охлаждённые, лот 18.11", limit)
 	if len(lines) < 2 {

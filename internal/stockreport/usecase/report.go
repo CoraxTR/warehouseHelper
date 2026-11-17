@@ -247,7 +247,7 @@ func (uc *UseCase) enqueue(parts []Part) {
 // HandleSurplusButton — нажатие «Выгрузить»: таблица избытков картинкой в чат
 // управления. Данные берутся заново у модуля скидок, а не из сборки отчёта:
 // между утренним отчётом и нажатием остатки и скидки успевают измениться.
-func (uc *UseCase) HandleSurplusButton(ctx context.Context, callbackQueryID string, chatID, messageID int64) error {
+func (uc *UseCase) HandleSurplusButton(ctx context.Context, callbackQueryID string, _, _ int64) error {
 	done := metrics.Track(trackPkg, "HandleSurplusButton")
 	defer done()
 

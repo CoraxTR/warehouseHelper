@@ -44,13 +44,13 @@ func (n *stubNotifier) NotifyWarehouseManagementHTML(text string) error {
 	return nil
 }
 
-func (n *stubNotifier) NotifyWarehouseManagementHTMLButton(text, buttonText, callbackData string) error {
+func (n *stubNotifier) NotifyWarehouseManagementHTMLButton(text, _, _ string) error {
 	n.texts = append(n.texts, text)
 
 	return nil
 }
 
-func (n *stubNotifier) NotifyWarehouseManagementPhoto(data []byte, caption string) error {
+func (n *stubNotifier) NotifyWarehouseManagementPhoto(data []byte, _ string) error {
 	n.photos = append(n.photos, data)
 
 	return nil

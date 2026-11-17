@@ -22,20 +22,29 @@ type faceSet struct {
 	cache   map[faceKey]font.Face
 }
 
+// weight — начертание: обычное или жирное. Не bool-флаг: revive ругается на
+// управляющие булевы параметры (flag-parameter), а вес читается как значение.
+type weight int
+
+const (
+	weightRegular weight = iota
+	weightBold
+)
+
 type faceKey struct {
 	size int
 	bold bool
 }
 
 // face отдаёт начертание нужного размера (кэшируется: нарезка небесплатна).
-func (f *faceSet) face(size int, bold bool) font.Face {
-	key := faceKey{size: size, bold: bold}
+func (f *faceSet) face(size int, w weight) font.Face {
+	key := faceKey{size: size, bold: w == weightBold}
 	if face, ok := f.cache[key]; ok {
 		return face
 	}
 
 	base := f.regular
-	if bold {
+	if key.bold {
 		base = f.bold
 	}
 
@@ -104,8 +113,8 @@ func (c *canvas) outline(x, y, w, h, thickness int, col color.Color) {
 
 // text печатает строку по центру точки (x, cy): cy — середина строки, а не
 // базовая линия, так клетки выравниваются без магии чисел.
-func (c *canvas) text(s string, x, cy, size int, bold bool, col color.Color) {
-	face := c.faces.face(size, bold)
+func (c *canvas) text(s string, x, cy, size int, w weight, col color.Color) {
+	face := c.faces.face(size, w)
 	if face == nil {
 		return
 	}
@@ -125,8 +134,8 @@ func (c *canvas) text(s string, x, cy, size int, bold bool, col color.Color) {
 
 // textLeft печатает строку от левого края (заголовки таблицы, подписи):
 // у центрирования по x заголовок уезжает за границу холста.
-func (c *canvas) textLeft(s string, x, cy, size int, bold bool, col color.Color) {
-	face := c.faces.face(size, bold)
+func (c *canvas) textLeft(s string, x, cy, size int, w weight, col color.Color) {
+	face := c.faces.face(size, w)
 	if face == nil {
 		return
 	}
@@ -146,7 +155,7 @@ func (c *canvas) textLeft(s string, x, cy, size int, bold bool, col color.Color)
 // textWrap печатает название в колонку с переносом по словам: строки
 // выравниваются по центру клетки, лишнее уходит в многоточие.
 func (c *canvas) textWrap(s string, x, y, width, height, size int, col color.Color) {
-	face := c.faces.face(size, false)
+	face := c.faces.face(size, weightRegular)
 	if face == nil {
 		return
 	}
@@ -159,7 +168,7 @@ func (c *canvas) textWrap(s string, x, y, width, height, size int, col color.Col
 	lineH := size + 4
 	top := y + (height-len(lines)*lineH)/2
 	for i, line := range lines {
-		c.text(line, x+width/2, top+lineH/2+i*lineH, size, false, col)
+		c.text(line, x+width/2, top+lineH/2+i*lineH, size, weightRegular, col)
 	}
 }
 

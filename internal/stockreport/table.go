@@ -79,27 +79,27 @@ func DrawSurplusTable(lots []discounts.SurplusLot, day time.Time) ([]byte, error
 
 	c := &canvas{img: img, faces: faces}
 
-	c.textLeft("ВЫГРУЗКА · ИЗБЫТОК", padX, padY+8, titlePX, true, colText)
+	c.textLeft("ВЫГРУЗКА · ИЗБЫТОК", padX, padY+8, titlePX, weightBold, colText)
 	c.textLeft(fmt.Sprintf("%s · %d товара · жёлтым — срок со скидкой",
-		day.Format("02.01.2006"), len(groups)), padX, padY+30, subPX, false, colMuted)
+		day.Format("02.01.2006"), len(groups)), padX, padY+30, subPX, weightRegular, colMuted)
 
 	y := padY + 44
 	c.cell(padX, y, nameW, groupH+headH, colPanel)
 	for i := range cols {
 		x := padX + nameW + i*(qtyW+bbW)
 		c.cell(x, y, qtyW+bbW, groupH, colHead)
-		c.text(fmt.Sprintf("ЛОТ %d", i+1), x+(qtyW+bbW)/2, y+groupH/2, headerPX, true, colGroup)
+		c.text(fmt.Sprintf("ЛОТ %d", i+1), x+(qtyW+bbW)/2, y+groupH/2, headerPX, weightBold, colGroup)
 	}
 	y += groupH
 
 	for i := range cols {
 		x := padX + nameW + i*(qtyW+bbW)
 		c.cell(x, y, qtyW, headH, colHead)
-		c.text("КОЛ-ВО", x+qtyW/2, y+headH/2, smallPX, true, colMuted)
+		c.text("КОЛ-ВО", x+qtyW/2, y+headH/2, smallPX, weightBold, colMuted)
 		c.cell(x+qtyW, y, bbW, headH, colHead)
-		c.text("СРОК", x+qtyW+bbW/2, y+headH/2, smallPX, true, colMuted)
+		c.text("СРОК", x+qtyW+bbW/2, y+headH/2, smallPX, weightBold, colMuted)
 	}
-	c.textLeft("ТОВАР", padX+10, y+headH/2, headerPX, true, colMuted)
+	c.textLeft("ТОВАР", padX+10, y+headH/2, headerPX, weightBold, colMuted)
 	y += headH
 
 	for _, g := range groups {
@@ -121,7 +121,7 @@ func DrawSurplusTable(lots []discounts.SurplusLot, day time.Time) ([]byte, error
 			}
 
 			c.cell(x, y, qtyW, rowH, fill)
-			c.text(fmt.Sprintf("%d", lot.Qty), x+qtyW/2, y+rowH/2, cellPX+1, true, colText)
+			c.text(fmt.Sprintf("%d", lot.Qty), x+qtyW/2, y+rowH/2, cellPX+1, weightBold, colText)
 			if lot.HasDiscount() {
 				// Рамка на всю пару: заливка на тёмной теме читается слабо,
 				// а жёлтый контур видно и на печати.
@@ -130,17 +130,17 @@ func DrawSurplusTable(lots []discounts.SurplusLot, day time.Time) ([]byte, error
 
 			c.cell(x+qtyW, y, bbW, rowH, fill)
 			if lot.HasDiscount() {
-				c.text(lot.BestBefore.Format("02.01"), x+qtyW+bbW/2, y+17, cellPX, false, colText)
-				c.text(lot.DiscountLabel(), x+qtyW+bbW/2, y+33, smallPX, true, colYellow)
+				c.text(lot.BestBefore.Format("02.01"), x+qtyW+bbW/2, y+17, cellPX, weightRegular, colText)
+				c.text(lot.DiscountLabel(), x+qtyW+bbW/2, y+33, smallPX, weightBold, colYellow)
 				continue
 			}
-			c.text(lot.BestBefore.Format("02.01"), x+qtyW+bbW/2, y+rowH/2, cellPX, false, colText)
+			c.text(lot.BestBefore.Format("02.01"), x+qtyW+bbW/2, y+rowH/2, cellPX, weightRegular, colText)
 		}
 
 		y += rowH
 	}
 
-	c.textLeft("Пустые клетки — у товара меньше сроков", padX, y+16, smallPX, false, colMuted)
+	c.textLeft("Пустые клетки — у товара меньше сроков", padX, y+16, smallPX, weightRegular, colMuted)
 
 	var buf bytes.Buffer
 	if err := png.Encode(&buf, img); err != nil {
