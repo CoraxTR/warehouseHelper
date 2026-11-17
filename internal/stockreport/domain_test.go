@@ -1,125 +1,67 @@
 package stockreport
 
 import (
-	"slices"
 	"strings"
 	"testing"
+	"time"
+
+	"warehouseHelper/internal/discounts"
 )
 
-func TestSplitClassification(t *testing.T) {
-	positions := []Position{
-		{Name: "Ноль с историей", Qty: 0, AvgWeek: new(3.0), Coeff: 5},
-		{Name: "Ноль без истории", Qty: 0},
-		{Name: "Кончается с коэффициентом", Qty: 2, AvgWeek: new(2.0), Coeff: 3},
-		{Name: "Избыток", Qty: 10, AvgWeek: new(3.0), Coeff: 2},
-		{Name: "Коэффициент единица", Qty: 10, AvgWeek: new(3.0), Coeff: 1},
-		{Name: "Середина", Qty: 4, AvgWeek: new(3.0)},
-		{Name: "Без истории с коэффициентом", Qty: 4, Coeff: 2},
-		{Name: "Без истории без коэффициента", Qty: 4},
-		{Name: "Нулевая средняя с коэффициентом", Qty: 5, AvgWeek: new(0.0), Coeff: 3},
-	}
+func avg(v float64) *float64 { return new(v) }
 
-	got := Split(positions)
-
-	// qty = 0 попадает ТОЛЬКО в «нет в наличии», даже когда средняя и
-	// коэффициент известны.
-	if names := names(got.OutOfStock); strings.Join(names, ",") != "Ноль без истории,Ноль с историей" {
-		t.Errorf("OutOfStock = %v, want [Ноль без истории Ноль с историей]", names)
-	}
-
-	// «Кончается» приоритетнее коэффициента: это действие важнее повода писать.
-	if names := names(got.LowStock); strings.Join(names, ",") != "Кончается с коэффициентом" {
-		t.Errorf("LowStock = %v, want [Кончается с коэффициентом]", names)
-	}
-
-	// Порог «запас ≥ 2 недель» отменён: в «избытке» только коэффициент > 1.
-	if names := names(got.Excess); strings.Join(names, ",") !=
-		"Без истории с коэффициентом,Избыток,Нулевая средняя с коэффициентом" {
-		t.Errorf("Excess = %v, want [Без истории с коэффициентом Избыток Нулевая средняя с коэффициентом]", names)
-	}
-
-	// Остаток выше недельной нормы при коэффициенте 0/1 — никуда: повода нет.
-	// Позиция без истории и без коэффициента — тоже никуда.
-	nowhere := []string{"Коэффициент единица", "Середина", "Без истории без коэффициента"}
-	for _, p := range append(got.OutOfStock, append(got.LowStock, got.Excess...)...) {
-		if slices.Contains(nowhere, p.Name) {
-			t.Errorf("«%s» попала в отчёт — не должна никуда", p.Name)
-		}
-	}
-}
-
-func TestReportItems(t *testing.T) {
-	r := Split([]Position{
-		{Name: "Молоко", Qty: 0},
-		{Name: "Кот & Ко", Qty: 0},
-		{Name: "Сыр", Qty: 2, AvgWeek: new(2.5)},
-		{Name: "Говядина", Qty: 10, AvgWeek: new(3.0), Coeff: 4},
-		{Name: "Новинка", Qty: 7, Coeff: 3},
+// Split: нулевой остаток уходит ТОЛЬКО в «нет в наличии»; без истории продаж
+// сравнивать не с чем; избыток здесь не считается вовсе — его отдаёт модуль
+// скидок.
+func TestSplit(t *testing.T) {
+	got := Split([]Position{
+		{Name: "Пусто", Qty: 0, AvgWeek: avg(5)},
+		{Name: "Кончается", Qty: 3, AvgWeek: avg(5)},
+		{Name: "Ровно норма", Qty: 5, AvgWeek: avg(5)},
+		{Name: "Без истории", Qty: 40},
+		{Name: "Выше нормы", Qty: 40, AvgWeek: avg(5)},
 	})
 
-	cases := []struct {
-		name  string
-		items []string
-		want  []string
-	}{
-		{
-			name:  "нет в наличии",
-			items: r.OutOfStockItems(),
-			want: []string{
-				"<b>1. Кот &amp; Ко</b>",
-				"<b>2. Молоко</b>",
-			},
-		},
-		{
-			name:  "кончается",
-			items: r.LowStockItems(),
-			want: []string{
-				"<b>1. Сыр</b>\n<code>остаток 2 шт · среднее 2.5/нед</code>",
-			},
-		},
-		{
-			name:  "избыток",
-			items: r.ExcessItems(),
-			want: []string{
-				"<b>1. Говядина</b>\n<code>10 шт · запас 3.3 нед · коэф 4</code>",
-				"<b>2. Новинка</b>\n<code>7 шт · нет истории продаж · коэф 3</code>",
-			},
-		},
+	if len(got.OutOfStock) != 1 || got.OutOfStock[0].Name != "Пусто" {
+		t.Fatalf("нет в наличии = %+v, want только «Пусто»", got.OutOfStock)
 	}
-
-	for _, c := range cases {
-		if strings.Join(c.items, "|") != strings.Join(c.want, "|") {
-			t.Errorf("%s:\n got  %q\n want %q", c.name, c.items, c.want)
-		}
+	if len(got.LowStock) != 2 {
+		t.Fatalf("кончается = %+v, want «Кончается» и «Ровно норма»", got.LowStock)
+	}
+	if len(got.Surplus) != 0 {
+		t.Errorf("избыток = %+v, want пусто (это расчёт модуля скидок)", got.Surplus)
 	}
 }
 
+// Блок избытка: номер, срок, накопленный остаток и план продаж до даты.
+func TestSurplusItems(t *testing.T) {
+	r := Report{Surplus: []discounts.SurplusLot{
+		{Name: "Кальби <нерезанные>", BestBefore: time.Date(2026, time.November, 21, 0, 0, 0, 0, time.UTC), CumQty: 120, PlannedQty: 45, Coeff: 2.7},
+		{Name: "Специя", BestBefore: time.Date(2026, time.December, 3, 0, 0, 0, 0, time.UTC), CumQty: 30, PlannedQty: 12, Coeff: 1.4},
+	}}
+
+	items := r.SurplusItems()
+	if len(items) != 2 {
+		t.Fatalf("блоков = %d, want 2", len(items))
+	}
+	if !strings.Contains(items[0], "<b>1. Кальби &lt;нерезанные&gt;</b> · до 21.11") {
+		t.Errorf("первый блок = %q", items[0])
+	}
+	if !strings.Contains(items[0], "накоплено 120 шт · продадим до срока ~45 шт · коэф 2,7") {
+		t.Errorf("числа первого блока = %q", items[0])
+	}
+	if !strings.Contains(items[1], "<b>2. Специя</b> · до 03.12") {
+		t.Errorf("второй блок = %q", items[1])
+	}
+}
+
+// Пустой отчёт: отправлять нечего.
 func TestReportEmpty(t *testing.T) {
-	if !Split(nil).Empty() {
-		t.Error("Empty() = false для пустого отчёта")
+	if !(Report{}).Empty() {
+		t.Error("пустой отчёт считается непустым")
 	}
-	if Split([]Position{{Name: "x", Qty: 0}}).Empty() {
-		t.Error("Empty() = true, а позиция «нет в наличии» есть")
+	r := Report{Surplus: []discounts.SurplusLot{{Name: "x"}}}
+	if r.Empty() {
+		t.Error("отчёт с избытком считается пустым")
 	}
-}
-
-func TestSplitSortsByName(t *testing.T) {
-	r := Split([]Position{
-		{Name: "яблоко", Qty: 0},
-		{Name: "Груша", Qty: 0},
-		{Name: "абрикос", Qty: 0},
-	})
-
-	if got := strings.Join(names(r.OutOfStock), ","); got != "абрикос,Груша,яблоко" {
-		t.Errorf("порядок = %q, want сортировку по имени без учёта регистра", got)
-	}
-}
-
-func names(positions []Position) []string {
-	out := make([]string, 0, len(positions))
-	for _, p := range positions {
-		out = append(out, p.Name)
-	}
-
-	return out
 }
