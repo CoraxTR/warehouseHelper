@@ -481,7 +481,7 @@ func (d *DIContainer) StockUC() *sucase.StockUseCase {
 // Своего хранилища у модуля нет.
 func (d *DIContainer) StockReportUC() *srucase.UseCase {
 	if d.stockReportUC == nil {
-		d.stockReportUC = srucase.New(d.StockUC(), d.AverageSalesUC(), d.OrderCoeffUC(), d.TelegramNotifier())
+		d.stockReportUC = srucase.New(d.StockUC(), d.AverageSalesUC(), d.DiscountsUC(), d.TelegramNotifier())
 	}
 
 	return d.stockReportUC

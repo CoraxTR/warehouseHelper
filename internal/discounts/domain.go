@@ -293,6 +293,22 @@ func (p LotPlan) Done(qty int64) bool {
 	return qty <= p.Initial-p.Plan
 }
 
+// SurplusLot — избыток пары для отчёта в чат управления: тот же расчёт, что
+// даёт скидку 10 % по избытку (Q/(v×D) > 1), поэтому числа чата и движка
+// скидок не расходятся.
+//
+// CumQty — остаток, накопленный до этого срока включительно (сам лот и все
+// лоты с более ранним сроком); PlannedQty — сколько ориентировочно продадим до
+// этой даты (скорость в день × остаток дней).
+type SurplusLot struct {
+	ProductID  string
+	Name       string
+	BestBefore time.Time
+	CumQty     int64
+	PlannedQty int64
+	Coeff      float64
+}
+
 // Candidate — один претендент на скидку пары (лот, канал) от своего источника.
 // Percent == nil — источник скидку не дал.
 type Candidate struct {

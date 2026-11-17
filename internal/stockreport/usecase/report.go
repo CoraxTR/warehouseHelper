@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"warehouseHelper/internal/discounts"
 	"warehouseHelper/internal/metrics"
 	"warehouseHelper/internal/stock"
 	"warehouseHelper/internal/stockreport"
@@ -51,13 +52,11 @@ type SalesReader interface {
 	WeeklyAverages(ctx context.Context, productIDs []string) (map[string]float64, error)
 }
 
-// CoeffReader — коэффициенты изменения заказа текущего периода (модуль
-// ordercoeff, владелец product_period_coeff). Товары без событий периода в
-// карту не попадают: коэффициент у них ноль.
-type CoeffReader interface {
-	// PeriodCoefficients — коэффициент текущего незакрытого периода: недельный
-	// у недельных товаров, месячный у остальных (гранулярность знает ordercoeff).
-	PeriodCoefficients(ctx context.Context, productIDs []string, at time.Time) (map[string]int16, error)
+// SurplusReader — избытки дня от модуля скидок (владелец расчёта: остаток,
+// накопленный до срока, против продаж до этой даты). Отчёт не считает избыток
+// сам: числа в чате обязаны совпадать с движком, который ставит 10 %.
+type SurplusReader interface {
+	SurplusLots(ctx context.Context, at time.Time) ([]discounts.SurplusLot, error)
 }
 
 // Notifier — сообщения в чат управления складом. HTML-вариант: отчёт уходит
@@ -71,10 +70,10 @@ type Notifier interface {
 // очередь недоставленного) под мутексом, потому что очередь пробует отправить
 // первый тик после рестарта.
 type UseCase struct {
-	stock  StockReader
-	sales  SalesReader
-	coeff  CoeffReader
-	notify Notifier
+	stock   StockReader
+	sales   SalesReader
+	surplus SurplusReader
+	notify  Notifier
 
 	// now — часы юзкейса (в тестах подменяются): день и время отчёта считаются
 	// по локальному времени склада.
@@ -94,13 +93,13 @@ type UseCase struct {
 
 // New собирает юзкейс. notify может быть nil (тесты): отправка тогда no-op,
 // сборка отчёта работает.
-func New(stockReader StockReader, salesReader SalesReader, coeffReader CoeffReader, notify Notifier) *UseCase {
+func New(stockReader StockReader, salesReader SalesReader, surplusReader SurplusReader, notify Notifier) *UseCase {
 	return &UseCase{
-		stock:  stockReader,
-		sales:  salesReader,
-		coeff:  coeffReader,
-		notify: notify,
-		now:    time.Now,
+		stock:   stockReader,
+		sales:   salesReader,
+		surplus: surplusReader,
+		notify:  notify,
+		now:     time.Now,
 	}
 }
 
@@ -169,15 +168,17 @@ func (uc *UseCase) Build(ctx context.Context) ([]string, error) {
 		return nil, fmt.Errorf("средние продажи за неделю: %w", err)
 	}
 
-	// Коэффициент текущего периода: без него блок «избыток» не собирается.
-	coeffs, err := uc.coeff.PeriodCoefficients(ctx, ids, uc.now())
+	// Избытки считает модуль скидок тем же расчётом, что даёт 10 %: отчёт
+	// только перекладывает готовые пары в блок. Ошибка чтения не отменяет
+	// первые два блока — «нет в наличии» важнее, а в логе остаётся след.
+	surplus, err := uc.surplus.SurplusLots(ctx, uc.now())
 	if err != nil {
-		return nil, fmt.Errorf("коэффициенты изменения заказа: %w", err)
+		slog.Warn("stockreport: избытки не прочитаны", "err", err)
 	}
 
 	positions := make([]stockreport.Position, 0, len(snapshot))
 	for _, p := range snapshot {
-		pos := stockreport.Position{Name: p.Name, Qty: lotQty(p.Lots), Coeff: coeffs[p.ID]}
+		pos := stockreport.Position{Name: p.Name, Qty: lotQty(p.Lots)}
 		if avg, ok := avgs[p.ID]; ok {
 			pos.AvgWeek = &avg
 		}
@@ -185,11 +186,12 @@ func (uc *UseCase) Build(ctx context.Context) ([]string, error) {
 	}
 
 	report := stockreport.Split(positions)
+	report.Surplus = surplus
 
 	parts := make([]string, 0, 3)
 	parts = append(parts, messageParts(report.OutOfStockItems(), "🟥", "НЕТ В НАЛИЧИИ")...)
 	parts = append(parts, messageParts(report.LowStockItems(), "🟨", "КОНЧАЕТСЯ")...)
-	parts = append(parts, messageParts(report.ExcessItems(), "🟦", "ИЗБЫТОК · коэф. > 1")...)
+	parts = append(parts, messageParts(report.SurplusItems(), "🟦", "ИЗБЫТОК")...)
 
 	return parts, nil
 }
