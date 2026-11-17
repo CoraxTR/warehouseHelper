@@ -51,6 +51,9 @@ type Repository interface {
 	// ListByRange читает строки за период [from, to]:
 	// map product_id → map date → строка (для страниц календаря и отчёта).
 	ListByRange(ctx context.Context, from, to time.Time) (map[string]map[time.Time]daystate.DayState, error)
+	// SetSoldOutWithdrawn — отметка «+1 этого дня снят недоступностью» (страховка
+	// от повторной правки коэффициента при повторных сохранениях календаря).
+	SetSoldOutWithdrawn(ctx context.Context, productID string, date time.Time, withdrawn bool) error
 }
 
 // CatalogProvider — каталог товаров для страниц daystate; реализует
@@ -77,6 +80,14 @@ type SoldOutRollbackNotifier interface {
 	RollbackSoldOut(ctx context.Context, productID string, at time.Time) (bool, error)
 }
 
+// SoldOutAdjuster — коррекция «закончился» в ordercoeff при бэктречной смене
+// доступности (реализует ordercoeff-ucase). Cancel снимает +1 дня, Restore
+// возвращает его при обратном ходе календаря; false — править нечего.
+type SoldOutAdjuster interface {
+	CancelSoldOut(ctx context.Context, productID string, at time.Time) (bool, error)
+	RestoreSoldOut(ctx context.Context, productID string, at time.Time) (bool, error)
+}
+
 // StockStatusNotifier — получатель уведомлений о смене наличия в течение дня
 // («закончился»/«появился»); реализует app-адаптер поверх telegram
 // (общий канал, TG_COMMON_CHAT_ID), связка в di.go. Наблюдатель: ошибка
@@ -96,6 +107,7 @@ type UseCase struct {
 	soldOut         SoldOutNotifier
 	unavailable     UnavailableNotifier
 	soldOutRollback SoldOutRollbackNotifier
+	soldOutAdjust   SoldOutAdjuster
 	stockStatus     StockStatusNotifier
 
 	now func() time.Time // переопределяется в тестах
@@ -103,13 +115,14 @@ type UseCase struct {
 
 // NewUseCase собирает сценарий; catalog и notifier'ы обязательны
 // (goods и ordercoeff реализуют, связка di.go).
-func NewUseCase(repo Repository, catalog CatalogProvider, soldOut SoldOutNotifier, unavailable UnavailableNotifier, soldOutRollback SoldOutRollbackNotifier, stockStatus StockStatusNotifier) *UseCase {
+func NewUseCase(repo Repository, catalog CatalogProvider, soldOut SoldOutNotifier, unavailable UnavailableNotifier, soldOutRollback SoldOutRollbackNotifier, soldOutAdjust SoldOutAdjuster, stockStatus StockStatusNotifier) *UseCase {
 	return &UseCase{
 		repo:            repo,
 		catalog:         catalog,
 		soldOut:         soldOut,
 		unavailable:     unavailable,
 		soldOutRollback: soldOutRollback,
+		soldOutAdjust:   soldOutAdjust,
 		stockStatus:     stockStatus,
 		now:             time.Now,
 	}
@@ -280,7 +293,9 @@ func (uc *UseCase) createDayRow(ctx context.Context, productID string, today tim
 
 // SetOrderable — календарь «Доступность товаров»: даты доступны для заказа
 // (любые, включая будущие). Строки создаются при необходимости, orderable
-// перезаписывается. Без эмита — отката «недоступен» в ordercoeff нет.
+// перезаписывается. Отката события Unavailable нет (его вклад 0), но снятый
+// ранее +1 «закончился» возвращается: день снова можно заказывать
+// (RestoreSoldOut + снятие отметки SoldOutWithdrawn).
 func (uc *UseCase) SetOrderable(ctx context.Context, productID string, dates []time.Time) error {
 	done := metrics.Track(trackPkg, "SetOrderable")
 	defer done()
@@ -289,12 +304,38 @@ func (uc *UseCase) SetOrderable(ctx context.Context, productID string, dates []t
 	if err != nil {
 		return err
 	}
-	return uc.repo.SetOrderable(ctx, productID, dates, true)
+	before := uc.dayRows(ctx, productID, dates)
+	if err := uc.repo.SetOrderable(ctx, productID, dates, true); err != nil {
+		return err
+	}
+
+	for _, d := range dates {
+		row, ok := before[d.Format(time.DateOnly)]
+		if !ok || !row.SoldOutToday || row.Orderable || !row.SoldOutWithdrawn {
+			continue
+		}
+		applied, err := uc.soldOutAdjust.RestoreSoldOut(ctx, productID, d)
+		if err != nil {
+			slog.Info(fmt.Sprintf("daystate: RestoreSoldOut %s %s: %v", productID, d.Format(time.DateOnly), err))
+			continue
+		}
+		if !applied {
+			continue
+		}
+		if err := uc.repo.SetSoldOutWithdrawn(ctx, productID, d, false); err != nil {
+			slog.Info(fmt.Sprintf("daystate: SetSoldOutWithdrawn(false) %s %s: %v", productID, d.Format(time.DateOnly), err))
+		}
+	}
+
+	return nil
 }
 
 // SetUnavailable — календарь «Доступность товаров»: даты недоступны для
 // заказа. На каждую дату эмитится Unavailable (вклад 0, держит цепочку
 // коэффициента); ошибка эмита логируется, запись не откатывается.
+// День, который уже был «закончился» и ещё не терял свой +1, дополнительно
+// снимает его (CancelSoldOut + отметка SoldOutWithdrawn): недоступность и
+// коэффициент не расходятся — товар, который нельзя заказать, не тянет +1.
 func (uc *UseCase) SetUnavailable(ctx context.Context, productID string, dates []time.Time) error {
 	done := metrics.Track(trackPkg, "SetUnavailable")
 	defer done()
@@ -303,6 +344,7 @@ func (uc *UseCase) SetUnavailable(ctx context.Context, productID string, dates [
 	if err != nil {
 		return err
 	}
+	before := uc.dayRows(ctx, productID, dates)
 	if err := uc.repo.SetOrderable(ctx, productID, dates, false); err != nil {
 		return err
 	}
@@ -310,8 +352,59 @@ func (uc *UseCase) SetUnavailable(ctx context.Context, productID string, dates [
 		if err := uc.unavailable.Unavailable(ctx, productID, d); err != nil {
 			slog.Info(fmt.Sprintf("daystate: Unavailable %s %s: %v", productID, d.Format(time.DateOnly), err))
 		}
+
+		row, ok := before[d.Format(time.DateOnly)]
+		if !ok || !row.SoldOutToday || !row.Orderable || row.SoldOutWithdrawn {
+			continue
+		}
+		applied, err := uc.soldOutAdjust.CancelSoldOut(ctx, productID, d)
+		if err != nil {
+			slog.Info(fmt.Sprintf("daystate: CancelSoldOut %s %s: %v", productID, d.Format(time.DateOnly), err))
+			continue
+		}
+		if !applied {
+			continue
+		}
+		if err := uc.repo.SetSoldOutWithdrawn(ctx, productID, d, true); err != nil {
+			slog.Info(fmt.Sprintf("daystate: SetSoldOutWithdrawn(true) %s %s: %v", productID, d.Format(time.DateOnly), err))
+		}
 	}
 	return nil
+}
+
+// dayRows — строки дня ДО записи календаря одним запросом: ключ — дата в
+// формате DATE. Чтение вспомогательное (нужно решить, что снимать/возвращать
+// в ordercoeff): ошибка логируется, сохранение календаря не блокируется.
+func (uc *UseCase) dayRows(ctx context.Context, productID string, dates []time.Time) map[string]daystate.DayState {
+	from, to := dateBounds(dates)
+	byProduct, err := uc.repo.ListByRange(ctx, from, to)
+	if err != nil {
+		slog.Info(fmt.Sprintf("daystate: чтение строк календаря %s: %v", productID, err))
+		return nil
+	}
+
+	out := make(map[string]daystate.DayState, len(byProduct[productID]))
+	for d, row := range byProduct[productID] {
+		out[d.Format(time.DateOnly)] = row
+	}
+
+	return out
+}
+
+// dateBounds — минимальная и максимальная даты набора (набор непустой:
+// normalizeDates отбрасывает пустой).
+func dateBounds(dates []time.Time) (from, to time.Time) {
+	from, to = dates[0], dates[0]
+	for _, d := range dates[1:] {
+		if d.Before(from) {
+			from = d
+		}
+		if d.After(to) {
+			to = d
+		}
+	}
+
+	return from, to
 }
 
 // normalizeDates проверяет товар и даты календаря, убирает дубликаты и

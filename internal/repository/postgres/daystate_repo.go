@@ -26,23 +26,36 @@ func (pg *PGClient) EnsureDay(ctx context.Context, d daystate.DayState) error {
 	return nil
 }
 
-// GetDay читает строку дня; строки нет — daystate.ErrDayNotFound.
-func (pg *PGClient) GetDay(ctx context.Context, productID string, date time.Time) (*daystate.DayState, error) {
+// dayStateColumns — колонки строки дня; порядок обязан совпадать с scanDayState.
+const dayStateColumns = `product_id, date, in_stock, discount_start, discount, discount_increases, orderable, sold_out_today, sold_out_withdrawn`
+
+// scanDayState читает строку дня (общий хелпер GetDay и ListByRange).
+func scanDayState(row rowScanner) (daystate.DayState, error) {
 	var d daystate.DayState
 	var increases []int16
-	err := pg.Pool.QueryRow(ctx, `
-        SELECT product_id, date, in_stock, discount_start, discount, discount_increases, orderable, sold_out_today
+	if err := row.Scan(&d.ProductID, &d.Date, &d.InStock, &d.DiscountStart, &d.Discount, &increases, &d.Orderable, &d.SoldOutToday, &d.SoldOutWithdrawn); err != nil {
+		return daystate.DayState{}, err
+	}
+	d.DiscountIncreases = increases
+
+	return d, nil
+}
+
+// GetDay читает строку дня; строки нет — daystate.ErrDayNotFound.
+func (pg *PGClient) GetDay(ctx context.Context, productID string, date time.Time) (*daystate.DayState, error) {
+	d, err := scanDayState(pg.Pool.QueryRow(ctx, `
+        SELECT `+dayStateColumns+`
         FROM product_day_state
         WHERE product_id = $1 AND date = $2`,
 		productID, date,
-	).Scan(&d.ProductID, &d.Date, &d.InStock, &d.DiscountStart, &d.Discount, &increases, &d.Orderable, &d.SoldOutToday)
+	))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, daystate.ErrDayNotFound
 	}
 	if err != nil {
 		return nil, fmt.Errorf("select day %s %s: %w", productID, date.Format(time.DateOnly), err)
 	}
-	d.DiscountIncreases = increases
+
 	return &d, nil
 }
 
@@ -237,9 +250,11 @@ func (pg *PGClient) LotsSnapshot(ctx context.Context, productID string) ([]dayst
 
 // ClearSoldOut сбрасывает маркер «закончилась» строки дня; строки нет —
 // не ошибка (нечего сбрасывать, откат — идемпотентное действие).
+// Факт отменяется целиком: вместе с маркером снимается и отметка «+1 снят
+// недоступностью» — возвращать в ordercoeff нечего.
 func (pg *PGClient) ClearSoldOut(ctx context.Context, productID string, date time.Time) error {
 	if _, err := pg.Pool.Exec(ctx, `
-        UPDATE product_day_state SET sold_out_today = false
+        UPDATE product_day_state SET sold_out_today = false, sold_out_withdrawn = false
         WHERE product_id = $1 AND date = $2`,
 		productID, date,
 	); err != nil {
@@ -248,11 +263,25 @@ func (pg *PGClient) ClearSoldOut(ctx context.Context, productID string, date tim
 	return nil
 }
 
+// SetSoldOutWithdrawn — отметка «+1 этого дня снят недоступностью» (страховка
+// от повторной правки коэффициента при повторных сохранениях календаря).
+// Строки нет — не ошибка: недоступность пишет её тем же батчем.
+func (pg *PGClient) SetSoldOutWithdrawn(ctx context.Context, productID string, date time.Time, withdrawn bool) error {
+	if _, err := pg.Pool.Exec(ctx, `
+        UPDATE product_day_state SET sold_out_withdrawn = $3
+        WHERE product_id = $1 AND date = $2`,
+		productID, date, withdrawn,
+	); err != nil {
+		return fmt.Errorf("set sold out withdrawn %s %s: %w", productID, date.Format(time.DateOnly), err)
+	}
+	return nil
+}
+
 // ListByRange читает строки за период [from, to]: map product_id → map date →
 // строка. Период — календарный месяц (календарь доступности, отчёт по наличию).
 func (pg *PGClient) ListByRange(ctx context.Context, from, to time.Time) (map[string]map[time.Time]daystate.DayState, error) {
 	rows, err := pg.Pool.Query(ctx, `
-        SELECT product_id, date, in_stock, discount_start, discount, discount_increases, orderable, sold_out_today
+        SELECT `+dayStateColumns+`
         FROM product_day_state
         WHERE date >= $1 AND date <= $2
         ORDER BY product_id, date`,
@@ -265,12 +294,10 @@ func (pg *PGClient) ListByRange(ctx context.Context, from, to time.Time) (map[st
 
 	out := map[string]map[time.Time]daystate.DayState{}
 	for rows.Next() {
-		var d daystate.DayState
-		var increases []int16
-		if err := rows.Scan(&d.ProductID, &d.Date, &d.InStock, &d.DiscountStart, &d.Discount, &increases, &d.Orderable, &d.SoldOutToday); err != nil {
+		d, err := scanDayState(rows)
+		if err != nil {
 			return nil, fmt.Errorf("list days scan: %w", err)
 		}
-		d.DiscountIncreases = increases
 		byDate := out[d.ProductID]
 		if byDate == nil {
 			byDate = map[time.Time]daystate.DayState{}

@@ -245,3 +245,86 @@ func TestPeriodStartWeek(t *testing.T) {
 		t.Errorf("PeriodStart(week, понедельник) = %v, want тот же день", gotMonday)
 	}
 }
+
+func TestNextPeriodStart(t *testing.T) {
+	got := NextPeriodStart(PeriodWeek, w1)
+	// w1..w3 — моменты внутри понедельников (12:00), поэтому следующий период
+	// от w1 — ровно w2; сравнивать с началом периода (00:00) здесь нельзя.
+	if want := w2; !got.Equal(want) {
+		t.Errorf("NextPeriodStart(week, w1) = %v, want %v", got, want)
+	}
+	oct := time.Date(2026, time.October, 1, 0, 0, 0, 0, time.UTC)
+	if got := NextPeriodStart(PeriodMonth, time.Date(2026, time.September, 1, 0, 0, 0, 0, time.UTC)); !got.Equal(oct) {
+		t.Errorf("NextPeriodStart(month, сентябрь) = %v, want %v", got, oct)
+	}
+	if got := NextPeriodStart(PeriodType(0), w1); !got.IsZero() {
+		t.Errorf("NextPeriodStart(неизвестный тип) = %v, want zero", got)
+	}
+}
+
+// row — строка периода недельного календаря с заданными счётчиками.
+func row(start time.Time, soldOut, discount, frozen int16) PeriodCoeff {
+	return PeriodCoeff{
+		ProductID:   "p1",
+		PeriodType:  PeriodWeek,
+		PeriodStart: PeriodStart(PeriodWeek, start),
+		SoldOut:     soldOut,
+		Discount:    discount,
+		Frozen:      frozen,
+	}
+}
+
+func TestRecalcChain(t *testing.T) {
+	t.Run("пустой слайс", func(_ *testing.T) {
+		RecalcChain(nil, 5) // не паникует, писать некуда
+	})
+
+	t.Run("одна строка", func(t *testing.T) {
+		rows := []PeriodCoeff{row(w1, 2, 0, 0)}
+		RecalcChain(rows, 0)
+		if got := rows[0].Coeff; got != 2 {
+			t.Errorf("coeff = %d, want 2", got)
+		}
+	})
+
+	t.Run("две соседние недели: значение только у последней", func(t *testing.T) {
+		rows := []PeriodCoeff{row(w1, 2, 0, 0), row(w2, 1, 0, 0)}
+		RecalcChain(rows, 0)
+		if got := rows[0].Coeff; got != 0 {
+			t.Errorf("w1.coeff = %d, want 0 (перенос обнуляет предыдущую)", got)
+		}
+		if got := rows[1].Coeff; got != 3 {
+			t.Errorf("w2.coeff = %d, want 3 (2 + 1)", got)
+		}
+	})
+
+	t.Run("разрыв между периодами", func(t *testing.T) {
+		rows := []PeriodCoeff{row(w1, 1, 0, 0), row(w3, 1, 0, 0)}
+		RecalcChain(rows, 0)
+		if got := rows[0].Coeff; got != 1 {
+			t.Errorf("w1.coeff = %d, want 1 (последняя строка своего блока)", got)
+		}
+		if got := rows[1].Coeff; got != 1 {
+			t.Errorf("w3.coeff = %d, want 1 (блок считается с нуля)", got)
+		}
+	})
+
+	t.Run("seed переносится", func(t *testing.T) {
+		rows := []PeriodCoeff{row(w2, 1, 0, 0), row(w3, 1, 0, 0)}
+		RecalcChain(rows, 5)
+		if got := rows[0].Coeff; got != 0 {
+			t.Errorf("w2.coeff = %d, want 0 (значение ушло на w3)", got)
+		}
+		if got := rows[1].Coeff; got != 7 {
+			t.Errorf("w3.coeff = %d, want 7 (5 + 1 + 1)", got)
+		}
+	})
+
+	t.Run("отрицательный итог", func(t *testing.T) {
+		rows := []PeriodCoeff{row(w1, 0, 2, 1)} // 0 − 2 − 2·1
+		RecalcChain(rows, 0)
+		if got := rows[0].Coeff; got != -4 {
+			t.Errorf("coeff = %d, want −4", got)
+		}
+	})
+}

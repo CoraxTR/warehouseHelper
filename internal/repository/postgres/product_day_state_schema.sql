@@ -30,5 +30,6 @@ CREATE TABLE product_day_state (
     discount_increases SMALLINT[] NOT NULL DEFAULT '{}',  -- повышения скидки за день (значения)
     orderable          BOOLEAN NOT NULL DEFAULT true,   -- доступна для заказа
     sold_out_today     BOOLEAN NOT NULL DEFAULT false,  -- позиция закончилась в течение дня (сбрасывается возвратом)
+    sold_out_withdrawn BOOLEAN NOT NULL DEFAULT false,  -- +1 «закончился» этого дня снят бэктречной недоступностью (возвращается вместе с доступностью)
     PRIMARY KEY (product_id, date)
 );

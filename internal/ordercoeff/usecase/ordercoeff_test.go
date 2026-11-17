@@ -15,8 +15,9 @@ type stubRepo struct {
 	err     error
 	coeffs  map[time.Time]int16
 
-	applyCalls []coeffApplyCall
-	coeffCalls int
+	applyCalls  []coeffApplyCall
+	coeffCalls  int
+	adjustCalls []coeffAdjustCall
 }
 
 type coeffApplyCall struct {
@@ -24,6 +25,21 @@ type coeffApplyCall struct {
 	periodType ordercoeff.PeriodType
 	at         time.Time
 	ev         ordercoeff.EventType
+}
+
+type coeffAdjustCall struct {
+	productID  string
+	periodType ordercoeff.PeriodType
+	at         time.Time
+	delta      int16
+}
+
+func (r *stubRepo) AdjustSoldOut(_ context.Context, productID string, periodType ordercoeff.PeriodType, at time.Time, delta int16) (bool, error) {
+	r.adjustCalls = append(r.adjustCalls, coeffAdjustCall{productID, periodType, at, delta})
+	if r.err != nil {
+		return false, r.err
+	}
+	return r.applied, nil
 }
 
 func (r *stubRepo) ApplyCoeffEvent(_ context.Context, productID string, periodType ordercoeff.PeriodType, at time.Time, ev ordercoeff.EventType) (bool, error) {
@@ -187,4 +203,88 @@ func TestCoefficientsPassThrough(t *testing.T) {
 
 func (r *stubRepo) PeriodsBatch(_ context.Context, _ []string, _ ordercoeff.PeriodType, _ []time.Time) (map[string]map[time.Time]ordercoeff.PeriodCoeff, error) {
 	return map[string]map[time.Time]ordercoeff.PeriodCoeff{}, nil
+}
+
+// Cancel/Restore: delta и период каталога доезжают до хранилища.
+func TestCancelRestoreSoldOut(t *testing.T) {
+	cases := []struct {
+		name   string
+		weekly bool
+		want   ordercoeff.PeriodType
+	}{
+		{"недельный товар → PeriodWeek", true, ordercoeff.PeriodWeek},
+		{"месячный товар → PeriodMonth", false, ordercoeff.PeriodMonth},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := &stubRepo{applied: true}
+			uc := NewUseCase(repo, &stubProducts{weekly: tc.weekly})
+
+			applied, err := uc.CancelSoldOut(context.Background(), "p1", testAt)
+			if err != nil {
+				t.Fatalf("CancelSoldOut: %v", err)
+			}
+			if !applied {
+				t.Error("CancelSoldOut: applied = false, want true")
+			}
+
+			applied, err = uc.RestoreSoldOut(context.Background(), "p1", testAt)
+			if err != nil {
+				t.Fatalf("RestoreSoldOut: %v", err)
+			}
+			if !applied {
+				t.Error("RestoreSoldOut: applied = false, want true")
+			}
+
+			if len(repo.adjustCalls) != 2 {
+				t.Fatalf("AdjustSoldOut: %d вызовов, want 2", len(repo.adjustCalls))
+			}
+			if got := repo.adjustCalls[0]; got.delta != -1 || got.periodType != tc.want || got.productID != "p1" || !got.at.Equal(testAt) {
+				t.Errorf("Cancel: %+v, want delta −1, period %v, p1, %v", got, tc.want, testAt)
+			}
+			if got := repo.adjustCalls[1]; got.delta != 1 || got.periodType != tc.want {
+				t.Errorf("Restore: %+v, want delta +1, period %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// Репозиторий сказал «править нечего» — это не ошибка.
+func TestCancelRestoreSoldOut_NotApplied(t *testing.T) {
+	repo := &stubRepo{applied: false}
+	uc := NewUseCase(repo, &stubProducts{weekly: true})
+
+	applied, err := uc.CancelSoldOut(context.Background(), "p1", testAt)
+	if err != nil {
+		t.Fatalf("CancelSoldOut: %v", err)
+	}
+	if applied {
+		t.Error("CancelSoldOut: applied = true, want false")
+	}
+
+	applied, err = uc.RestoreSoldOut(context.Background(), "p1", testAt)
+	if err != nil {
+		t.Fatalf("RestoreSoldOut: %v", err)
+	}
+	if applied {
+		t.Error("RestoreSoldOut: applied = true, want false")
+	}
+}
+
+// Ошибки каталога и хранилища возвращаются вызывающему.
+func TestAdjustSoldOut_Errors(t *testing.T) {
+	t.Run("каталог", func(t *testing.T) {
+		uc := NewUseCase(&stubRepo{applied: true}, &stubProducts{err: errors.New("catalog down")})
+		if _, err := uc.CancelSoldOut(context.Background(), "p1", testAt); err == nil {
+			t.Error("ошибка каталога: ожидалась ошибка")
+		}
+	})
+
+	t.Run("хранилище", func(t *testing.T) {
+		uc := NewUseCase(&stubRepo{err: errors.New("db down")}, &stubProducts{weekly: true})
+		if _, err := uc.RestoreSoldOut(context.Background(), "p1", testAt); err == nil {
+			t.Error("ошибка хранилища: ожидалась ошибка")
+		}
+	})
 }
