@@ -19,6 +19,7 @@ package stockreport
 import (
 	"fmt"
 	"html"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -28,9 +29,6 @@ import (
 )
 
 const (
-	// precision — знаков после запятой у среднего и запаса в неделях
-	// (решение владельца: округление до 1 знака).
-	precision = 1
 	// dateOnly — формат срока годности в блоке избытка: день и месяц, год
 	// лишний шум в телефоне.
 	dateOnly = "02.01"
@@ -109,7 +107,7 @@ func (r Report) OutOfStockItems() []string {
 func (r Report) LowStockItems() []string {
 	items := make([]string, 0, len(r.LowStock))
 	for i, p := range r.LowStock {
-		items = append(items, fmt.Sprintf("<b>%d. %s</b>\n<code>остаток %d шт · среднее %s/нед</code>",
+		items = append(items, fmt.Sprintf("<b>%d. %s</b>\n<code>остаток %d шт · продажа %s/нед</code>",
 			i+1, escape(p.Name), p.Qty, formatAvg(*p.AvgWeek)))
 	}
 
@@ -142,13 +140,10 @@ func escape(s string) string {
 	return html.EscapeString(s)
 }
 
-// formatAvg — число с одним знаком после запятой, без хвостового нуля и с
-// запятой вместо точки: так читается в русском сообщении.
+// formatAvg — средняя продажа целым числом: дробные штуки в чате не нужны
+// (решение владельца 17.11.2026).
 func formatAvg(v float64) string {
-	s := strconv.FormatFloat(v, 'f', precision, 64)
-	s = strings.ReplaceAll(s, ".", ",")
-
-	return strings.TrimSuffix(s, ",0")
+	return strconv.FormatInt(int64(math.Round(v)), 10)
 }
 
 // formatCoeff — коэффициент избытка: всегда один знак после запятой. Ноль

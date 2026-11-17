@@ -33,7 +33,24 @@ func TestSplit(t *testing.T) {
 	}
 }
 
-// Блок избытка: номер, срок, накопленный остаток и план продаж до даты.
+// LowStockItems: слово «продажа» вместо «среднее» и округление до целого
+// (решение владельца 17.11.2026: 4,6 → 5).
+func TestLowStockItemsRoundsAndNames(t *testing.T) {
+	r := Report{LowStock: []Position{{Name: "Сыр", Qty: 3, AvgWeek: avg(4.6)}}}
+
+	items := r.LowStockItems()
+	if len(items) != 1 {
+		t.Fatalf("блоков = %d, want 1", len(items))
+	}
+	if !strings.Contains(items[0], "продажа 5/нед") {
+		t.Errorf("строка %q, want «продажа 5/нед»", items[0])
+	}
+	if strings.Contains(items[0], "среднее") {
+		t.Errorf("строка %q: слово «среднее» осталось", items[0])
+	}
+}
+
+// Блок избытка: номер, срок, накопленный остаток, план продаж и коэффициент.
 func TestSurplusItems(t *testing.T) {
 	r := Report{Surplus: []discounts.SurplusLot{
 		{Name: "Кальби <нерезанные>", BestBefore: time.Date(2026, time.November, 21, 0, 0, 0, 0, time.UTC), CumQty: 120, PlannedQty: 45, Coeff: 2.7},
