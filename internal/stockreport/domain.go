@@ -1,35 +1,40 @@
 // Пакет stockreport — ежедневный отчёт «остатки против средних продаж» в чат
 // управления складом.
 //
-// Отчёт отвечает на три вопроса управления (решения владельца 11.11.2026):
+// Отчёт отвечает на три вопроса управления:
 //   - чего нет в наличии — заказывать;
 //   - что кончается: остаток не больше средней продажи за неделю;
-//   - что лежит: запас от двух недель и больше, плюс позиции без истории
-//     продаж (оценить нечем, но остаток есть) — они идут в конец списка.
+//   - где коэффициент изменения заказа больше единицы: позиция распродаётся
+//     быстрее, чем пополняется (решение владельца 17.11.2026: порог «запас
+//     от двух недель» отменён, блок отбирается ТОЛЬКО по коэффициенту).
+//     Позиции без истории продаж попадают в этот же блок, если коэффициент
+//     больше единицы: сравнивать остаток не с чем, но повод писать есть.
 //
 // Позиции, не попавшие ни в один список, в отчёт не входят вовсе.
 //
 // Пакет не знает ни про БД, ни про Telegram: он раскладывает готовые позиции
-// по спискам и собирает строки сообщений (юнит-тесты — без моков).
+// по спискам и собирает блоки сообщений в HTML (parse_mode=HTML; названия
+// товаров экранируются). Юнит-тесты — без моков.
 package stockreport
 
 import (
 	"fmt"
+	"html"
 	"slices"
 	"strconv"
 	"strings"
 )
 
 const (
-	// excessFactor — порог «избытка»: остаток ≥ 2 средних продаж за неделю.
-	excessFactor = 2
+	// excessCoeff — порог блока «избыток»: коэффициент больше единицы.
+	excessCoeff = 1
 	// precision — знаков после запятой у среднего и запаса в неделях
 	// (решение владельца: округление до 1 знака).
 	precision = 1
 )
 
-// Position — позиция отчёта: товар, физический остаток и средняя продажа за
-// неделю.
+// Position — позиция отчёта: товар, физический остаток, средняя продажа за
+// неделю и коэффициент изменения заказа текущего периода.
 type Position struct {
 	Name string
 	Qty  int64 // остаток, шт
@@ -38,21 +43,22 @@ type Position struct {
 	// отдаёт средние в недельной единице: недельные товары — как есть,
 	// месячные — среднемесячные / 4.
 	AvgWeek *float64
+	// Coeff — накопленный коэффициент изменения заказа текущего периода
+	// (модуль ordercoeff): недельный у недельных товаров, месячный у
+	// остальных. 0 — событий периода не было.
+	Coeff int16
 }
 
-// Report — списки отчёта. NoHistory — позиции с остатком, но без истории
-// продаж: сравнивать не с чем, они дописываются в конец сообщения об избытке.
+// Report — списки отчёта.
 type Report struct {
 	OutOfStock []Position
 	LowStock   []Position
 	Excess     []Position
-	NoHistory  []Position
 }
 
 // Empty — отправлять нечего: все списки пусты.
 func (r Report) Empty() bool {
-	return len(r.OutOfStock) == 0 && len(r.LowStock) == 0 &&
-		len(r.Excess) == 0 && len(r.NoHistory) == 0
+	return len(r.OutOfStock) == 0 && len(r.LowStock) == 0 && len(r.Excess) == 0
 }
 
 // Split раскладывает позиции по спискам. Порядок правил важен:
@@ -60,11 +66,11 @@ func (r Report) Empty() bool {
 //  1. qty ≤ 0 → «нет в наличии» и ТОЛЬКО туда: нулевой остаток не дублируется
 //     в «кончается»/«избытке», даже когда средняя известна;
 //  2. средняя неизвестна (nil или ≤ 0 — делить на неё нельзя, и продаж по
-//     сути не было) → «нет истории продаж» (хвост сообщения об избытке);
-//  3. qty ≤ средней недельной → «кончается»;
-//  4. qty ≥ 2 × средней недельной → «избыток»;
-//  5. остальное → никуда: остаток больше недельной нормы, но меньше двух —
-//     повода писать нет.
+//     сути не было): пишем только при коэффициенте больше единицы — в
+//     «избыток», строкой «нет истории продаж»;
+//  3. qty ≤ средней недельной → «кончается» (это действие важнее коэффициента);
+//  4. коэффициент больше единицы → «избыток»;
+//  5. остальное → никуда: остаток выше недельной нормы и повода писать нет.
 //
 // Все списки сортируются по имени: порядок обхода кэша остатков
 // недетерминирован, а сообщение должно быть одинаковым от прогона к прогону.
@@ -76,58 +82,68 @@ func Split(positions []Position) Report {
 		case p.Qty <= 0:
 			r.OutOfStock = append(r.OutOfStock, p)
 		case p.AvgWeek == nil || *p.AvgWeek <= 0:
-			r.NoHistory = append(r.NoHistory, p)
+			if p.Coeff > excessCoeff {
+				r.Excess = append(r.Excess, p)
+			}
 		case float64(p.Qty) <= *p.AvgWeek:
 			r.LowStock = append(r.LowStock, p)
-		case float64(p.Qty) >= *p.AvgWeek*excessFactor:
+		case p.Coeff > excessCoeff:
 			r.Excess = append(r.Excess, p)
 		default:
-			// Повода писать нет: остаток больше недельной нормы, но меньше двух.
+			// Остаток выше недельной нормы, коэффициент не больше единицы —
+			// повода писать нет.
 		}
 	}
 
 	sortByName(r.OutOfStock)
 	sortByName(r.LowStock)
 	sortByName(r.Excess)
-	sortByName(r.NoHistory)
 
 	return r
 }
 
-// OutOfStockLines — строки «нет в наличии»: «{name} - нет в наличии».
-func (r Report) OutOfStockLines() []string {
-	lines := make([]string, 0, len(r.OutOfStock))
-	for _, p := range r.OutOfStock {
-		lines = append(lines, p.Name+" - нет в наличии")
+// OutOfStockItems — блоки «нет в наличии»: «№. {name}».
+func (r Report) OutOfStockItems() []string {
+	items := make([]string, 0, len(r.OutOfStock))
+	for i, p := range r.OutOfStock {
+		items = append(items, fmt.Sprintf("<b>%d. %s</b>", i+1, escape(p.Name)))
 	}
 
-	return lines
+	return items
 }
 
-// LowStockLines — строки «кончается»: остаток и средняя продажа за неделю.
-func (r Report) LowStockLines() []string {
-	lines := make([]string, 0, len(r.LowStock))
-	for _, p := range r.LowStock {
-		lines = append(lines, fmt.Sprintf("%s - в наличии: %d - среднее в неделю: %s",
-			p.Name, p.Qty, formatAvg(*p.AvgWeek)))
+// LowStockItems — блоки «кончается»: имя и строка цифр (остаток, средняя).
+func (r Report) LowStockItems() []string {
+	items := make([]string, 0, len(r.LowStock))
+	for i, p := range r.LowStock {
+		items = append(items, fmt.Sprintf("<b>%d. %s</b>\n<code>остаток %d шт · среднее %s/нед</code>",
+			i+1, escape(p.Name), p.Qty, formatAvg(*p.AvgWeek)))
 	}
 
-	return lines
+	return items
 }
 
-// ExcessLines — строки «избытка»: запас в неделях, а в конце — позиции без
-// истории продаж отдельными строками «{name} - нет истории продаж».
-func (r Report) ExcessLines() []string {
-	lines := make([]string, 0, len(r.Excess)+len(r.NoHistory))
-	for _, p := range r.Excess {
-		lines = append(lines, fmt.Sprintf("%s - в наличии: %d - запас на %s недель",
-			p.Name, p.Qty, formatAvg(float64(p.Qty) / *p.AvgWeek)))
-	}
-	for _, p := range r.NoHistory {
-		lines = append(lines, p.Name+" - нет истории продаж")
+// ExcessItems — блоки «избыток»: имя и строка цифр (остаток, запас в неделях,
+// коэффициент). Позиция без истории продаж: вместо запаса — «нет истории
+// продаж», остаток всё равно показываем.
+func (r Report) ExcessItems() []string {
+	items := make([]string, 0, len(r.Excess))
+	for i, p := range r.Excess {
+		details := fmt.Sprintf("%d шт · нет истории продаж", p.Qty)
+		if p.AvgWeek != nil && *p.AvgWeek > 0 {
+			details = fmt.Sprintf("%d шт · запас %s нед", p.Qty, formatAvg(float64(p.Qty) / *p.AvgWeek))
+		}
+		items = append(items, fmt.Sprintf("<b>%d. %s</b>\n<code>%s · коэф %d</code>",
+			i+1, escape(p.Name), details, p.Coeff))
 	}
 
-	return lines
+	return items
+}
+
+// escape — название товара для parse_mode=HTML: «&», «<», «>» в названиях
+// ломают разметку, и сообщение целиком не уходит.
+func escape(name string) string {
+	return html.EscapeString(name)
 }
 
 // formatAvg — число с одним знаком после запятой: разделитель — точка

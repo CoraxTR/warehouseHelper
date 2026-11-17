@@ -288,3 +288,100 @@ func TestAdjustSoldOut_Errors(t *testing.T) {
 		}
 	})
 }
+
+// periodRepo — хранилище, отдающее разные коэффициенты по гранулярности:
+// недельные строки есть только у недельных товаров, месячные — у месячных.
+type periodRepo struct {
+	*stubRepo
+
+	weekly  map[string]int16
+	monthly map[string]int16
+	asked   []ordercoeff.PeriodType
+	starts  map[ordercoeff.PeriodType][]time.Time
+}
+
+func (r *periodRepo) CoefficientsBatch(_ context.Context, productIDs []string, pt ordercoeff.PeriodType, intervals []time.Time) (map[string]map[time.Time]int16, error) {
+	r.asked = append(r.asked, pt)
+	if r.starts == nil {
+		r.starts = map[ordercoeff.PeriodType][]time.Time{}
+	}
+	r.starts[pt] = intervals
+
+	src := r.weekly
+	if pt == ordercoeff.PeriodMonth {
+		src = r.monthly
+	}
+
+	out := make(map[string]map[time.Time]int16, len(productIDs))
+	for _, id := range productIDs {
+		c, ok := src[id]
+		if !ok {
+			continue
+		}
+		byPeriod := make(map[time.Time]int16, len(intervals))
+		for _, start := range intervals {
+			byPeriod[start] = c
+		}
+		out[id] = byPeriod
+	}
+
+	return out, nil
+}
+
+// TestPeriodCoefficientsWeeklyPriority — блок «избыток» отчёта управления
+// отбирается по коэффициенту ТЕКУЩЕГО периода: недельная строка приоритетнее
+// (товар отслеживается по неделям), месячная — запасной вариант; товары без
+// событий периода в карту не попадают (коэффициент у них ноль).
+func TestPeriodCoefficientsWeeklyPriority(t *testing.T) {
+	repo := &periodRepo{
+		stubRepo: &stubRepo{},
+		weekly:   map[string]int16{"w1": 3, "both": 2},
+		monthly:  map[string]int16{"m1": 4, "both": 5},
+	}
+	uc := NewUseCase(repo, &stubProducts{})
+
+	got, err := uc.PeriodCoefficients(context.Background(), []string{"w1", "m1", "both", "none"}, testAt)
+	if err != nil {
+		t.Fatalf("PeriodCoefficients() error: %v", err)
+	}
+
+	want := map[string]int16{"w1": 3, "m1": 4, "both": 2}
+	for id, w := range want {
+		if got[id] != w {
+			t.Errorf("PeriodCoefficients()[%s] = %d, want %d", id, got[id], w)
+		}
+	}
+	if _, ok := got["none"]; ok {
+		t.Errorf("товар без событий периода попал в карту: %v", got)
+	}
+
+	// Спросили ровно две гранулярности, каждая — на начало своего периода.
+	if len(repo.asked) != 2 {
+		t.Fatalf("запросов = %d, want 2 (недельный и месячный)", len(repo.asked))
+	}
+	week := ordercoeff.PeriodStart(ordercoeff.PeriodWeek, testAt)
+	month := ordercoeff.PeriodStart(ordercoeff.PeriodMonth, testAt)
+	if starts := repo.starts[ordercoeff.PeriodWeek]; len(starts) != 1 || !starts[0].Equal(week) {
+		t.Errorf("недельные интервалы = %v, want [%v]", starts, week)
+	}
+	if starts := repo.starts[ordercoeff.PeriodMonth]; len(starts) != 1 || !starts[0].Equal(month) {
+		t.Errorf("месячные интервалы = %v, want [%v]", starts, month)
+	}
+}
+
+// TestPeriodCoefficientsEmptyList — пустой каталог: ни одного запроса в БД.
+func TestPeriodCoefficientsEmptyList(t *testing.T) {
+	repo := &periodRepo{stubRepo: &stubRepo{}}
+	uc := NewUseCase(repo, &stubProducts{})
+
+	got, err := uc.PeriodCoefficients(context.Background(), nil, testAt)
+	if err != nil {
+		t.Fatalf("PeriodCoefficients(nil) error: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("PeriodCoefficients(nil) = %v, want пусто", got)
+	}
+	if len(repo.asked) != 0 {
+		t.Errorf("на пустом списке %d запросов, want 0", len(repo.asked))
+	}
+}

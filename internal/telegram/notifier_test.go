@@ -100,7 +100,7 @@ func TestNotifyWarehouseDisabledWithoutConfig(t *testing.T) {
 	}
 }
 
-func TestNotifyWarehouseManagementSendsToManagementChat(t *testing.T) {
+func TestNotifyWarehouseManagementHTMLSendsToManagementChat(t *testing.T) {
 	var gotBody map[string]any
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -118,17 +118,21 @@ func TestNotifyWarehouseManagementSendsToManagementChat(t *testing.T) {
 		ManagementChatID: -1007776665554,
 	}, srv.URL)
 
-	if err := n.NotifyWarehouseManagement("Молоко - нет в наличии"); err != nil {
+	if err := n.NotifyWarehouseManagementHTML("Молоко - нет в наличии"); err != nil {
 		t.Fatalf("NotifyWarehouseManagement error: %v", err)
 	}
 
-	// Отчёт управления уходит СВОИМ чатом, а не чатом склада.
+	// Отчёт управления уходит СВОИМ чатом, а не чатом склада, и с разметкой:
+	// плашки и нумерация позиций — HTML.
 	if gotBody["chat_id"] != float64(-1007776665554) {
 		t.Errorf("chat_id = %v, want -1007776665554 (чат управления)", gotBody["chat_id"])
 	}
+	if gotBody["parse_mode"] != "HTML" {
+		t.Errorf("parse_mode = %v, want HTML", gotBody["parse_mode"])
+	}
 }
 
-func TestNotifyWarehouseManagementDisabledWithoutConfig(t *testing.T) {
+func TestNotifyWarehouseManagementHTMLDisabledWithoutConfig(t *testing.T) {
 	hit := false
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -139,7 +143,7 @@ func TestNotifyWarehouseManagementDisabledWithoutConfig(t *testing.T) {
 
 	n := testNotifier(&config.TelegramConfig{BotToken: "test-token"}, srv.URL)
 
-	if err := n.NotifyWarehouseManagement("test"); err != nil {
+	if err := n.NotifyWarehouseManagementHTML("test"); err != nil {
 		t.Fatalf("NotifyWarehouseManagement disabled error: %v", err)
 	}
 

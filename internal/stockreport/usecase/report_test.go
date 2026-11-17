@@ -45,13 +45,32 @@ func (f *fakeSales) WeeklyAverages(_ context.Context, ids []string) (map[string]
 	return f.avg, nil
 }
 
+// fakeCoeff — коэффициенты текущего периода (модуль ordercoeff); requested —
+// какие товары спросили.
+type fakeCoeff struct {
+	coeff     map[string]int16
+	err       error
+	requested []string
+	at        time.Time
+}
+
+func (f *fakeCoeff) PeriodCoefficients(_ context.Context, ids []string, at time.Time) (map[string]int16, error) {
+	f.requested = append([]string{}, ids...)
+	f.at = at
+	if f.err != nil {
+		return nil, f.err
+	}
+
+	return f.coeff, nil
+}
+
 // fakeNotifier — чат управления: копит тексты, умеет отказывать.
 type fakeNotifier struct {
 	texts []string
 	fail  bool
 }
 
-func (f *fakeNotifier) NotifyWarehouseManagement(text string) error {
+func (f *fakeNotifier) NotifyWarehouseManagementHTML(text string) error {
 	if f.fail {
 		return errors.New("telegram недоступен")
 	}
@@ -60,8 +79,9 @@ func (f *fakeNotifier) NotifyWarehouseManagement(text string) error {
 	return nil
 }
 
-// fixture — каталог из четырёх позиций, по одной на каждый список отчёта.
-func fixture() (*fakeStock, *fakeSales) {
+// fixture — каталог из пяти позиций: по одной на каждый список отчёта плюс
+// «середина», которая никуда не попадает.
+func fixture() (*fakeStock, *fakeSales, *fakeCoeff) {
 	st := &fakeStock{products: []stock.Product{
 		{ID: "p1", Name: "Молоко", Lots: []stock.Lot{
 			{BestBefore: day(time.November, 20, 0, 0), Qty: 2},
@@ -79,20 +99,21 @@ func fixture() (*fakeStock, *fakeSales) {
 		{ID: "p5", Name: "Пусто"},
 	}}
 
-	// p1 — «середина»: остаток больше недельной нормы, но меньше двух норм —
+	// p1 — «середина»: остаток больше недельной нормы (5 > 4), коэффициент 0 —
 	// в отчёт не попадает (проверяется отдельным тестом ниже).
 	sales := &fakeSales{avg: map[string]float64{"p1": 4, "p2": 2.5, "p3": 3}}
+	coeff := &fakeCoeff{coeff: map[string]int16{"p3": 2, "p4": 3}}
 
-	return st, sales
+	return st, sales, coeff
 }
 
 // reportTime — 16:00, как в конфиге по умолчанию.
 const reportTime = 16 * time.Hour
 
 func TestTickSendsThreeMessages(t *testing.T) {
-	st, sales := fixture()
+	st, sales, coeff := fixture()
 	notify := &fakeNotifier{}
-	uc := New(st, sales, notify)
+	uc := New(st, sales, coeff, notify)
 	uc.now = func() time.Time { return day(time.November, 11, 16, 0) }
 
 	uc.Tick(context.Background(), reportTime)
@@ -102,9 +123,11 @@ func TestTickSendsThreeMessages(t *testing.T) {
 	}
 
 	want := []string{
-		"Пусто - нет в наличии",
-		"Сыр - в наличии: 2 - среднее в неделю: 2.5",
-		"Говядина - в наличии: 10 - запас на 3.3 недель\nНовинка - нет истории продаж",
+		"🟥 <b>НЕТ В НАЛИЧИИ · 1</b>\n\n<b>1. Пусто</b>",
+		"🟨 <b>КОНЧАЕТСЯ · 1</b>\n\n<b>1. Сыр</b>\n<code>остаток 2 шт · среднее 2.5/нед</code>",
+		"🟦 <b>ИЗБЫТОК · коэф. > 1 · 2</b>\n\n" +
+			"<b>1. Говядина</b>\n<code>10 шт · запас 3.3 нед · коэф 2</code>\n\n" +
+			"<b>2. Новинка</b>\n<code>7 шт · нет истории продаж · коэф 3</code>",
 	}
 	for i, w := range want {
 		if notify.texts[i] != w {
@@ -112,16 +135,23 @@ func TestTickSendsThreeMessages(t *testing.T) {
 		}
 	}
 
-	// Спросили средние по ВСЕМУ каталогу: позиция без остатка тоже в отчёте.
+	// Спросили средние и коэффициенты по ВСЕМУ каталогу: позиция без остатка
+	// тоже в отчёте.
 	if len(sales.requested) != 5 {
 		t.Errorf("запрошено средних по %d товарам, want 5: %v", len(sales.requested), sales.requested)
+	}
+	if len(coeff.requested) != 5 {
+		t.Errorf("запрошено коэффициентов по %d товарам, want 5: %v", len(coeff.requested), coeff.requested)
+	}
+	if !coeff.at.Equal(uc.now()) {
+		t.Errorf("коэффициенты спрошены на %v, want момент отчёта %v", coeff.at, uc.now())
 	}
 }
 
 func TestTickBeforeTimeDoesNothing(t *testing.T) {
-	st, sales := fixture()
+	st, sales, coeff := fixture()
 	notify := &fakeNotifier{}
-	uc := New(st, sales, notify)
+	uc := New(st, sales, coeff, notify)
 	uc.now = func() time.Time { return day(time.November, 11, 15, 59) }
 
 	uc.Tick(context.Background(), reportTime)
@@ -132,9 +162,9 @@ func TestTickBeforeTimeDoesNothing(t *testing.T) {
 }
 
 func TestTickOncePerDay(t *testing.T) {
-	st, sales := fixture()
+	st, sales, coeff := fixture()
 	notify := &fakeNotifier{}
-	uc := New(st, sales, notify)
+	uc := New(st, sales, coeff, notify)
 
 	now := day(time.November, 11, 16, 5)
 	uc.now = func() time.Time { return now }
@@ -161,13 +191,14 @@ func TestTickSkipsEmptyLists(t *testing.T) {
 		{BestBefore: day(time.November, 20, 0, 0), Qty: 4},
 	}}}}
 	sales := &fakeSales{avg: map[string]float64{"p1": 3}}
+	coeff := &fakeCoeff{}
 	notify := &fakeNotifier{}
-	uc := New(st, sales, notify)
+	uc := New(st, sales, coeff, notify)
 	uc.now = func() time.Time { return day(time.November, 11, 16, 0) }
 
 	uc.Tick(context.Background(), reportTime)
 
-	// Остаток больше недельной нормы, но меньше двух — позиция никуда не попала,
+	// Остаток выше недельной нормы, коэффициент 0 — позиция никуда не попала,
 	// отправлять нечего.
 	if len(notify.texts) != 0 {
 		t.Errorf("отправлено %q, want ничего", notify.texts)
@@ -175,9 +206,9 @@ func TestTickSkipsEmptyLists(t *testing.T) {
 }
 
 func TestTickRetriesUndelivered(t *testing.T) {
-	st, sales := fixture()
+	st, sales, coeff := fixture()
 	notify := &fakeNotifier{fail: true}
-	uc := New(st, sales, notify)
+	uc := New(st, sales, coeff, notify)
 	now := day(time.November, 11, 16, 0)
 	uc.now = func() time.Time { return now }
 
@@ -198,10 +229,10 @@ func TestTickRetriesUndelivered(t *testing.T) {
 }
 
 func TestTickSalesErrorRetriesNextTick(t *testing.T) {
-	st, sales := fixture()
+	st, sales, coeff := fixture()
 	sales.err = errors.New("БД недоступна")
 	notify := &fakeNotifier{}
-	uc := New(st, sales, notify)
+	uc := New(st, sales, coeff, notify)
 	now := day(time.November, 11, 16, 0)
 	uc.now = func() time.Time { return now }
 
@@ -220,13 +251,38 @@ func TestTickSalesErrorRetriesNextTick(t *testing.T) {
 	}
 }
 
-func TestMessagePartsSplitsLongList(t *testing.T) {
-	lines := make([]string, 0, 400)
-	for i := range 400 {
-		lines = append(lines, "Очень длинное название позиции номер "+strconv.Itoa(i)+" - нет в наличии")
+func TestTickCoeffErrorRetriesNextTick(t *testing.T) {
+	st, sales, coeff := fixture()
+	coeff.err = errors.New("product_period_coeff недоступна")
+	notify := &fakeNotifier{}
+	uc := New(st, sales, coeff, notify)
+	now := day(time.November, 11, 16, 0)
+	uc.now = func() time.Time { return now }
+
+	uc.Tick(context.Background(), reportTime)
+	if len(notify.texts) != 0 {
+		t.Fatalf("при ошибке чтения коэффициентов что-то отправлено: %q", notify.texts)
 	}
 
-	parts := messageParts(lines, "Нет в наличии")
+	// Отчёт без коэффициентов не собирается вовсе: иначе блок «избыток» молча
+	// оказался бы пустым и управление не увидело бы позиций.
+	coeff.err = nil
+	now = day(time.November, 11, 16, 1)
+	uc.Tick(context.Background(), reportTime)
+
+	if len(notify.texts) != 3 {
+		t.Errorf("после восстановления сообщений = %d, want 3", len(notify.texts))
+	}
+}
+
+func TestMessagePartsSplitsLongList(t *testing.T) {
+	items := make([]string, 0, 400)
+	for i := range 400 {
+		items = append(items, "<b>"+strconv.Itoa(i+1)+". Очень длинное название позиции номер "+
+			strconv.Itoa(i)+"</b>\n<code>10 шт · запас 3.3 нед · коэф 2</code>")
+	}
+
+	parts := messageParts(items, "🟥", "НЕТ В НАЛИЧИИ")
 	if len(parts) < 2 {
 		t.Fatalf("частей = %d, want больше одной", len(parts))
 	}
@@ -236,24 +292,30 @@ func TestMessagePartsSplitsLongList(t *testing.T) {
 		if len(p) > messageMaxLen {
 			t.Errorf("часть %d: %d байт, лимит %d", i+1, len(p), messageMaxLen)
 		}
-		if !strings.Contains(p, "(часть ") {
+		if !strings.Contains(p, "часть ") {
 			t.Errorf("часть %d без заголовка: %q", i+1, p)
 		}
-		restored += len(strings.Split(p, "\n")) - 1
+		body := strings.SplitN(p, "\n\n", 2)
+		if len(body) != 2 {
+			t.Fatalf("часть %d без тела: %q", i+1, p)
+		}
+		restored += len(strings.Split(body[1], "\n\n"))
 	}
 
-	if restored != len(lines) {
-		t.Errorf("строк в частях = %d, want %d", restored, len(lines))
+	if restored != len(items) {
+		t.Errorf("блоков в частях = %d, want %d", restored, len(items))
 	}
 }
 
-func TestMessagePartsSingleMessageWithoutHeader(t *testing.T) {
-	parts := messageParts([]string{"Сыр - в наличии: 2 - среднее в неделю: 2.5"}, "Нет в наличии")
+func TestMessagePartsSingleMessageWithHeader(t *testing.T) {
+	parts := messageParts([]string{"<b>1. Сыр</b>\n<code>остаток 2 шт · среднее 2.5/нед</code>"},
+		"🟨", "КОНЧАЕТСЯ")
 
 	if len(parts) != 1 {
 		t.Fatalf("частей = %d, want 1", len(parts))
 	}
-	if parts[0] != "Сыр - в наличии: 2 - среднее в неделю: 2.5" {
-		t.Errorf("одиночное сообщение = %q, want без заголовка", parts[0])
+	want := "🟨 <b>КОНЧАЕТСЯ · 1</b>\n\n<b>1. Сыр</b>\n<code>остаток 2 шт · среднее 2.5/нед</code>"
+	if parts[0] != want {
+		t.Errorf("сообщение = %q, want %q", parts[0], want)
 	}
 }
