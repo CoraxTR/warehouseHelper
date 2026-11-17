@@ -629,7 +629,7 @@ func periodsFrom(tab string, from, now time.Time) []time.Time {
 // по-старому (прочерк = продаж не было).
 func (uc *GoodsUseCase) availablePeriods(ctx context.Context, tab, from, to, month string) (map[string][]time.Time, error) {
 	if uc.availability == nil {
-		return nil, nil
+		return map[string][]time.Time{}, nil
 	}
 
 	interval := "month"
