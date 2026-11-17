@@ -49,7 +49,7 @@ func (uc *UseCase) Calendar(ctx context.Context, productIDs []string, active map
 			continue
 		}
 
-		since := windowSince(plan.interval, plan.n, now)
+		since := windowSince(plan.interval, lookback(plan.interval), now)
 		// Активные ячейки могут увести окно в прошлое дальше обычного окна:
 		// недоступные периоды в окно не входят и не тратят его ячеек.
 		if earliest := earliestActive(active, subset); !earliest.IsZero() && earliest.Before(since) {
@@ -75,6 +75,23 @@ func (uc *UseCase) Calendar(ctx context.Context, productIDs []string, active map
 	}
 
 	return out, nil
+}
+
+// readbackWeeks/readbackMonths — глубина чтения оборотов под окно среднего.
+// Окно собирается из N АКТИВНЫХ ячеек, а у редкого товара они растянуты по
+// годам: чтение ровно N периодов находило бы меньше N ячеек.
+const (
+	readbackWeeks  = 26
+	readbackMonths = 36
+)
+
+// lookback — сколько периодов назад читать обороты под окно среднего.
+func lookback(interval string) int {
+	if interval == intervalWeek {
+		return readbackWeeks
+	}
+
+	return readbackMonths
 }
 
 // earliestActive — самая дальняя активная ячейка выборки: нижняя граница
