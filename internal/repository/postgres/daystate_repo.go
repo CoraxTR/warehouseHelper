@@ -12,6 +12,7 @@ import (
 )
 
 // EnsureDay создаёт строку дня, если её нет (ON CONFLICT DO NOTHING);
+// EnsureDay создаёт строку дня, если её нет (ON CONFLICT DO NOTHING);
 // snapshot-значения используются только при вставке — существующая строка
 // (событие, календарь, снапшот) не перезаписывается.
 func (pg *PGClient) EnsureDay(ctx context.Context, d daystate.DayState) error {
@@ -308,5 +309,46 @@ func (pg *PGClient) ListByRange(ctx context.Context, from, to time.Time) (map[st
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("list days: %w", err)
 	}
+	return out, nil
+}
+
+// AvailablePeriods — периоды, в которых товар был доступен хотя бы один день
+// (in_stock или orderable). Календарю продаж нужен признак «ячейка подходит
+// для расчёта»: доступный период без продаж — это 0, недоступный — прочерк.
+//
+// interval — гранулярность столбцов календаря: "week" (с понедельника) или
+// "month" (с 1-го числа); иное значение считается месяцем. Считается по
+// строкам дней, поэтому бэктречная правка календаря «Доступность» видна сразу.
+func (pg *PGClient) AvailablePeriods(ctx context.Context, interval string, from, to time.Time) (map[string][]time.Time, error) {
+	unit := "month"
+	if interval == "week" {
+		unit = "week"
+	}
+
+	rows, err := pg.Pool.Query(ctx, `
+        SELECT product_id, date_trunc($3, date)::date
+        FROM product_day_state
+        WHERE date >= $1 AND date <= $2
+          AND (COALESCE(in_stock, false) OR orderable)
+        GROUP BY 1, 2
+        ORDER BY 1, 2`, from, to, unit)
+	if err != nil {
+		return nil, fmt.Errorf("периоды доступности: %w", err)
+	}
+	defer rows.Close()
+
+	out := make(map[string][]time.Time)
+	for rows.Next() {
+		var id string
+		var start time.Time
+		if err := rows.Scan(&id, &start); err != nil {
+			return nil, fmt.Errorf("периоды доступности: %w", err)
+		}
+		out[id] = append(out[id], start)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("периоды доступности: %w", err)
+	}
+
 	return out, nil
 }

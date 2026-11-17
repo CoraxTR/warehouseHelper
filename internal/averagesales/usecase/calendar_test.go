@@ -39,7 +39,7 @@ func TestCalendar_MonthlyWindowMarksUsedPeriods(t *testing.T) {
 		"p1": {ID: "p1", UOM: "кг", AverageWeight: &weight, TrackWeekly: false},
 	}}
 
-	got, err := newCalendarUC(repo, prods).Calendar(context.Background(), []string{"p1"})
+	got, err := newCalendarUC(repo, prods).Calendar(context.Background(), []string{"p1"}, nil)
 	if err != nil {
 		t.Fatalf("Calendar: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestCalendar_CurrentEntersWindowWhenHot(t *testing.T) {
 		"p1": {ID: "p1", UOM: "шт", TrackWeekly: true},
 	}}
 
-	got, err := newCalendarUC(repo, prods).Calendar(context.Background(), []string{"p1"})
+	got, err := newCalendarUC(repo, prods).Calendar(context.Background(), []string{"p1"}, nil)
 	if err != nil {
 		t.Fatalf("Calendar: %v", err)
 	}
@@ -120,7 +120,7 @@ func TestCalendar_SkipsProductWithoutSales(t *testing.T) {
 		"p1": {ID: "p1", UOM: "шт"},
 	}}
 
-	got, err := newCalendarUC(repo, prods).Calendar(context.Background(), []string{"p1"})
+	got, err := newCalendarUC(repo, prods).Calendar(context.Background(), []string{"p1"}, nil)
 	if err != nil {
 		t.Fatalf("Calendar: %v", err)
 	}
@@ -130,11 +130,80 @@ func TestCalendar_SkipsProductWithoutSales(t *testing.T) {
 }
 
 func TestCalendar_EmptyIDs(t *testing.T) {
-	got, err := newCalendarUC(&stubRepo{}, &stubProducts{}).Calendar(context.Background(), nil)
+	got, err := newCalendarUC(&stubRepo{}, &stubProducts{}).Calendar(context.Background(), nil, nil)
 	if err != nil {
 		t.Fatalf("Calendar: %v", err)
 	}
 	if len(got) != 0 {
 		t.Fatalf("пустой список должен дать пустую карту, got %+v", got)
+	}
+}
+
+func TestCalendar_ZeroCellsJoinActiveWindow(t *testing.T) {
+	current := currentPeriodStart(intervalMonth, refreshNow)
+	back := func(n int) time.Time { return current.AddDate(0, -n, 0) }
+
+	// Продажи только в двух месяцах; ещё три месяца товар был доступен, но не
+	// продавался — это ячейки 0, и они входят в окно наравне с продажами.
+	rows := []averagesales.TurnoverRow{
+		{ProductID: "p1", PeriodStart: back(2), Qty: 10},
+		{ProductID: "p1", PeriodStart: back(5), Qty: 20},
+	}
+	active := map[string][]time.Time{"p1": {back(2), back(3), back(4), back(5), back(6)}}
+
+	prods := &stubProducts{byID: map[string]averagesales.TurnoverProduct{
+		"p1": {ID: "p1", UOM: "шт"},
+	}}
+
+	got, err := newCalendarUC(&stubRepo{monthly: rows}, prods).Calendar(context.Background(), []string{"p1"}, active)
+	if err != nil {
+		t.Fatalf("Calendar: %v", err)
+	}
+
+	cal := got["p1"]
+	// Пять активных ячеек (меньше 12): (10+0+0+20+0)/5 = 6.
+	if cal.Avg != 6 {
+		t.Fatalf("Avg = %v, want 6 (нули доступности участвуют в среднем)", cal.Avg)
+	}
+	if len(cal.Periods) != 5 {
+		t.Fatalf("ячеек = %d, want 5 (продажи + доступность)", len(cal.Periods))
+	}
+
+	var zeros int
+	for _, p := range cal.Periods {
+		if !p.InWindow {
+			t.Errorf("период %s не в окне, а все пять активных должны участвовать", p.PeriodStart.Format(time.DateOnly))
+		}
+		if p.Qty == 0 {
+			zeros++
+		}
+	}
+	if zeros != 3 {
+		t.Fatalf("нулевых ячеек = %d, want 3", zeros)
+	}
+}
+
+func TestCalendar_DashPeriodsDoNotCount(t *testing.T) {
+	current := currentPeriodStart(intervalMonth, refreshNow)
+
+	// Данных доступности нет: периоды без продаж остаются прочерком и в окно
+	// не входят — среднее по двум ячейкам, а не по двенадцати.
+	rows := []averagesales.TurnoverRow{
+		{ProductID: "p1", PeriodStart: current.AddDate(0, -2, 0), Qty: 10},
+		{ProductID: "p1", PeriodStart: current.AddDate(0, -5, 0), Qty: 20},
+	}
+	prods := &stubProducts{byID: map[string]averagesales.TurnoverProduct{
+		"p1": {ID: "p1", UOM: "шт"},
+	}}
+
+	got, err := newCalendarUC(&stubRepo{monthly: rows}, prods).Calendar(context.Background(), []string{"p1"}, nil)
+	if err != nil {
+		t.Fatalf("Calendar: %v", err)
+	}
+	if got["p1"].Avg != 15 {
+		t.Fatalf("Avg = %v, want 15 (две ячейки с продажами)", got["p1"].Avg)
+	}
+	if len(got["p1"].Periods) != 2 {
+		t.Fatalf("ячеек = %d, want 2", len(got["p1"].Periods))
 	}
 }

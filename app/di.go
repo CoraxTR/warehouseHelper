@@ -309,6 +309,9 @@ func (d *DIContainer) GoodsUC() *gucase.GoodsUseCase {
 		d.goodsUC.SetOrderScheduleStore(d.OrdersRepository(), d.SuppliersUC(), d.ReceiveBarcodes())
 		// Календарь продаж: обороты (средние) и коэффициенты периодов — чужие модули.
 		d.goodsUC.SetCalendarStore(d.AverageSalesUC(), d.OrderCoeffUC())
+		if d.dayStateUC != nil {
+			d.goodsUC.SetCalendarAvailability(d.dayStateUC)
+		}
 	}
 
 	return d.goodsUC
@@ -365,6 +368,10 @@ func (d *DIContainer) DayStateUC() *ducecase.UseCase {
 	if d.dayStateUC == nil {
 		d.dayStateUC = ducecase.NewUseCase(d.OrdersRepository(), d.GoodsUC(), d.OrderCoeffUC(), d.OrderCoeffUC(), d.OrderCoeffUC(), d.OrderCoeffUC(), d.StockStatusNotifier())
 	}
+
+	// Календарь продаж читает доступность через шов каталога: 0 вместо
+	// прочерка и окно среднего по активным ячейкам.
+	d.GoodsUC().SetCalendarAvailability(d.dayStateUC)
 
 	return d.dayStateUC
 }

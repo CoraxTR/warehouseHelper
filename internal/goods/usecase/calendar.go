@@ -23,15 +23,25 @@ const (
 	// TabMonth — помесячная вкладка (все товары, листание по месяцам).
 	TabMonth = "month"
 
-	calendarWeeks  = 6  // окно недель: 5 завершённых + текущая
-	calendarMonths = 13 // окно месяцев: 12 завершённых + текущий
+	// calendarWeeks/calendarMonths — столбцы по умолчанию, когда активных
+	// ячеек окна нет вовсе (данных по товарам нет).
+	calendarWeeks  = 6
+	calendarMonths = 13
+
+	// calendarLookbackWeeks/Months — насколько глубоко ищем активные ячейки:
+	// недоступные периоды окно не занимают, поэтому оно может уехать в прошлое
+	// дальше обычного (запас — три окна).
+	calendarLookbackWeeks  = 26
+	calendarLookbackMonths = 36
 )
 
 // SalesCalendarReader — данные продаж для календаря (реализует
 // *aucase.UseCase, владелец оборотов).
 type SalesCalendarReader interface {
-	// Calendar — окно товаров: действующее среднее и периоды с пометкой участия.
-	Calendar(ctx context.Context, productIDs []string) (map[string]averagesales.SalesCalendar, error)
+	// Calendar — окно товаров: действующее среднее и периоды с пометкой
+	// участия. active — периоды доступности (шов AvailabilityReader):
+	// доступный период без продаж — ячейка 0, она же участвует в среднем.
+	Calendar(ctx context.Context, productIDs []string, active map[string][]time.Time) (map[string]averagesales.SalesCalendar, error)
 	// MonthlyTurnover — исторический диапазон месяцев (листание).
 	MonthlyTurnover(ctx context.Context, productIDs []string, since time.Time) ([]averagesales.TurnoverRow, error)
 	// WeeklyTurnover — исторический диапазон недель.
@@ -44,11 +54,20 @@ type PeriodCoeffReader interface {
 	PeriodsBatch(ctx context.Context, productIDs []string, periodType ordercoeff.PeriodType, intervals []time.Time) (map[string]map[time.Time]ordercoeff.PeriodCoeff, error)
 }
 
+// AvailabilityReader — периоды доступности товаров (реализует
+// *ducecase.UseCase, владелец product_day_state). Календарю нужен признак
+// «ячейка подходит для расчёта»: товар был доступен хоть один день периода, а
+// продаж не было — это 0, а не прочерк.
+type AvailabilityReader interface {
+	AvailablePeriods(ctx context.Context, interval string, from, to time.Time) (map[string][]time.Time, error)
+}
+
 // CalendarCell — одна ячейка календаря (товар × период).
 type CalendarCell struct {
 	PeriodStart time.Time
 	KgText      string // кг с тремя знаками (весовые); пусто — штучный товар
 	QtyText     string // штуки за период; пусто — данных нет
+	Zero        bool   // ноль: был доступен, продаж не было (ячейка расчёта)
 	InWindow    bool   // период участвует в расчёте среднего (красная обводка)
 	Coeff       string // накопленный коэффициент периода; пусто — нет событий
 	Delta       string // вклад событий этого периода: +1/−2; пусто — ноль
@@ -130,7 +149,12 @@ func (uc *GoodsUseCase) CalendarPage(ctx context.Context, tab, month, from, to s
 
 	page.FromParam, page.ToParam = from, to
 
-	data, err := uc.calendarData(ctx, tab, month, ids, page)
+	available, err := uc.availablePeriods(ctx, tab, from, to, month)
+	if err != nil {
+		return nil, err
+	}
+
+	data, err := uc.calendarData(ctx, tab, month, ids, page, available)
 	if err != nil {
 		return nil, err
 	}
@@ -150,7 +174,7 @@ func (uc *GoodsUseCase) CalendarPage(ctx context.Context, tab, month, from, to s
 		return nil, fmt.Errorf("коэффициенты периодов: %w", err)
 	}
 
-	page.Groups = buildCalendarGroups(visible, data, tab, coeffs)
+	page.Groups = buildCalendarGroups(visible, data, tab, coeffs, activeSets(available))
 
 	return page, nil
 }
@@ -166,18 +190,18 @@ type calendarData struct {
 // (со средними и пометкой окна), месяцы — окно, заканчивающееся выбранным
 // месяцем; для действующего месяца средние и пометки тоже приходят от
 // владельца, для истории — только продажи.
-func (uc *GoodsUseCase) calendarData(ctx context.Context, tab, month string, ids []string, page *CalendarPage) (*calendarData, error) {
+func (uc *GoodsUseCase) calendarData(ctx context.Context, tab, month string, ids []string, page *CalendarPage, available map[string][]time.Time) (*calendarData, error) {
 	if tab == TabWeek {
-		return uc.weekData(ctx, ids)
+		return uc.weekData(ctx, ids, available)
 	}
 
-	return uc.monthData(ctx, month, ids, page)
+	return uc.monthData(ctx, month, ids, page, available)
 }
 
 // weekData — недельная вкладка: столбцы считаются от текущей недели, продажи —
 // из окна averagesales (там же пометка участия в среднем).
-func (uc *GoodsUseCase) weekData(ctx context.Context, ids []string) (*calendarData, error) {
-	window, err := uc.salesCalendar.Calendar(ctx, ids)
+func (uc *GoodsUseCase) weekData(ctx context.Context, ids []string, available map[string][]time.Time) (*calendarData, error) {
+	window, err := uc.salesCalendar.Calendar(ctx, ids, available)
 	if err != nil {
 		return nil, fmt.Errorf("продажи окна: %w", err)
 	}
@@ -191,12 +215,17 @@ func (uc *GoodsUseCase) weekData(ctx context.Context, ids []string) (*calendarDa
 		data.rowsByID[id] = cal.Periods
 		data.avg[id] = cal.Avg
 	}
+	// Столбцы — от самой дальней участвующей ячейки: иначе она за краем окна.
+	// Уже стандартного окна страница не становится.
+	if oldest := oldestInWindow(data.rowsByID); !oldest.IsZero() && oldest.Before(data.periods[0]) {
+		data.periods = periodsFrom(TabWeek, oldest, uc.now())
+	}
 
 	return data, nil
 }
 
 // monthData — месячная вкладка: окно заканчивается выбранным месяцем.
-func (uc *GoodsUseCase) monthData(ctx context.Context, month string, ids []string, page *CalendarPage) (*calendarData, error) {
+func (uc *GoodsUseCase) monthData(ctx context.Context, month string, ids []string, page *CalendarPage, available map[string][]time.Time) (*calendarData, error) {
 	now := uc.now()
 	start := monthStart(month, now)
 
@@ -211,7 +240,7 @@ func (uc *GoodsUseCase) monthData(ctx context.Context, month string, ids []strin
 	data := &calendarData{periods: monthPeriods(rangeStart, calendarMonths)}
 
 	if start.Equal(currentMonthStart(now)) {
-		return uc.currentMonthData(ctx, ids, data)
+		return uc.currentMonthData(ctx, ids, data, available)
 	}
 
 	turnover, err := uc.salesCalendar.MonthlyTurnover(ctx, ids, data.periods[0])
@@ -225,8 +254,8 @@ func (uc *GoodsUseCase) monthData(ctx context.Context, month string, ids []strin
 
 // currentMonthData — действующий диапазон: средние и обводку окна отдаёт
 // владелец оборотов (Calendar считает окно сам).
-func (uc *GoodsUseCase) currentMonthData(ctx context.Context, ids []string, data *calendarData) (*calendarData, error) {
-	window, err := uc.salesCalendar.Calendar(ctx, ids)
+func (uc *GoodsUseCase) currentMonthData(ctx context.Context, ids []string, data *calendarData, available map[string][]time.Time) (*calendarData, error) {
+	window, err := uc.salesCalendar.Calendar(ctx, ids, available)
 	if err != nil {
 		return nil, fmt.Errorf("продажи окна: %w", err)
 	}
@@ -237,12 +266,15 @@ func (uc *GoodsUseCase) currentMonthData(ctx context.Context, ids []string, data
 		data.rowsByID[id] = cal.Periods
 		data.avg[id] = cal.Avg
 	}
+	if oldest := oldestInWindow(data.rowsByID); !oldest.IsZero() && oldest.Before(data.periods[0]) {
+		data.periods = periodsFrom(TabMonth, oldest, uc.now())
+	}
 
 	return data, nil
 }
 
 // buildCalendarGroups — строки и группы страницы.
-func buildCalendarGroups(visible []productInfo, data *calendarData, tab string, stats map[string]map[time.Time]ordercoeff.PeriodCoeff) []CalendarGroup {
+func buildCalendarGroups(visible []productInfo, data *calendarData, tab string, stats map[string]map[time.Time]ordercoeff.PeriodCoeff, active map[string]map[time.Time]struct{}) []CalendarGroup {
 	groups := make([]CalendarGroup, 0, 8)
 	groupIndex := make(map[string]int, 8)
 	currentStart := data.periods[len(data.periods)-1]
@@ -252,7 +284,7 @@ func buildCalendarGroups(visible []productInfo, data *calendarData, tab string, 
 		if a, ok := data.avg[v.ID]; ok {
 			avg = &a
 		}
-		row := buildCalendarRow(v, data.rowsByID[v.ID], avg, stats[v.ID], data.periods, tab, currentStart)
+		row := buildCalendarRow(v, data.rowsByID[v.ID], avg, stats[v.ID], data.periods, tab, currentStart, active[v.ID])
 
 		idx, ok := groupIndex[v.Group]
 		if !ok {
@@ -267,7 +299,7 @@ func buildCalendarGroups(visible []productInfo, data *calendarData, tab string, 
 }
 
 // buildCalendarRow — одна строка: ячейки по столбцам, среднее, коэффициент.
-func buildCalendarRow(v productInfo, sales []averagesales.PeriodSales, avg *float64, stats map[time.Time]ordercoeff.PeriodCoeff, periods []time.Time, tab string, currentStart time.Time) CalendarRow {
+func buildCalendarRow(v productInfo, sales []averagesales.PeriodSales, avg *float64, stats map[time.Time]ordercoeff.PeriodCoeff, periods []time.Time, tab string, currentStart time.Time, active map[time.Time]struct{}) CalendarRow {
 	row := CalendarRow{
 		ProductID:    v.ID,
 		Name:         v.Name,
@@ -287,6 +319,11 @@ func buildCalendarRow(v productInfo, sales []averagesales.PeriodSales, avg *floa
 			cell.QtyText = formatQty(ps.Qty)
 			cell.KgText = formatKg(ps.Kg)
 			cell.InWindow = ps.InWindow
+		} else if _, ok := active[p]; ok {
+			// Товар был доступен, но продаж не было: 0 — подходящая для
+			// расчёта ячейка, в отличие от прочерка.
+			cell.QtyText = "0"
+			cell.Zero = true
 		}
 		if st, ok := stats[p]; ok {
 			if st.Coeff != 0 {
@@ -536,4 +573,92 @@ func periodFull(p time.Time, tab string) string {
 	months := [...]string{"янв", "фев", "мар", "апр", "май", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"}
 
 	return months[int(p.Month())-1] + " " + p.Format("2006")
+}
+
+// activeSets — периоды доступности по товарам множествами: быстрый поиск
+// «период есть» при сборке ячеек.
+func activeSets(available map[string][]time.Time) map[string]map[time.Time]struct{} {
+	out := make(map[string]map[time.Time]struct{}, len(available))
+	for id, periods := range available {
+		set := make(map[time.Time]struct{}, len(periods))
+		for _, p := range periods {
+			set[p] = struct{}{}
+		}
+		out[id] = set
+	}
+
+	return out
+}
+
+// oldestInWindow — самая дальняя ячейка, участвующая в среднем. С неё
+// начинаются столбцы страницы по умолчанию: иначе участвующая в расчёте
+// ячейка оказывается за краем окна.
+func oldestInWindow(rowsByID map[string][]averagesales.PeriodSales) time.Time {
+	var out time.Time
+	for _, list := range rowsByID {
+		for _, ps := range list {
+			if ps.InWindow && (out.IsZero() || ps.PeriodStart.Before(out)) {
+				out = ps.PeriodStart
+			}
+		}
+	}
+
+	return out
+}
+
+// periodsFrom — столбцы от периода from до текущего включительно (по
+// возрастанию), не больше calendarMaxCells.
+func periodsFrom(tab string, from, now time.Time) []time.Time {
+	current, step := currentWeekStart(now), func(t time.Time) time.Time { return t.AddDate(0, 0, 7) }
+	if tab == TabMonth {
+		current = currentMonthStart(now)
+		step = func(t time.Time) time.Time { return t.AddDate(0, 1, 0) }
+	}
+
+	out := make([]time.Time, 0, 32)
+	for p := from; !p.After(current) && len(out) < calendarMaxCells; p = step(p) {
+		out = append(out, p)
+	}
+
+	return out
+}
+
+// availablePeriods — периоды доступности товаров для ячеек календаря. Читаем
+// от самой дальней из границ: окно среднего (lookback), листание по месяцам и
+// запрошенный диапазон. Шов не подключён — пустая карта: страница работает
+// по-старому (прочерк = продаж не было).
+func (uc *GoodsUseCase) availablePeriods(ctx context.Context, tab, from, to, month string) (map[string][]time.Time, error) {
+	if uc.availability == nil {
+		return nil, nil
+	}
+
+	interval := "month"
+	if tab == TabWeek {
+		interval = "week"
+	}
+
+	out, err := uc.availability.AvailablePeriods(ctx, interval, uc.availabilityFloor(tab, month, from, to), uc.now())
+	if err != nil {
+		return nil, fmt.Errorf("доступность по периодам: %w", err)
+	}
+
+	return out, nil
+}
+
+// availabilityFloor — с какого периода читать доступность: граница lookback,
+// но не позже начала запрошенного диапазона или окна листания.
+func (uc *GoodsUseCase) availabilityFloor(tab, month, from, to string) time.Time {
+	now := uc.now()
+	floor := now.AddDate(0, 0, -7*calendarLookbackWeeks)
+	if tab == TabMonth {
+		floor = now.AddDate(0, -calendarLookbackMonths, 0)
+		if start := monthStart(month, now); start.Before(floor) {
+			floor = start
+		}
+	}
+	if r, err := parseRange(tab, from, to, now); err == nil && r.from.Before(floor) {
+		floor = r.from
+	}
+
+	return floor
 }

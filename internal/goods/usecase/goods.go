@@ -203,6 +203,11 @@ type GoodsUseCase struct {
 	salesCalendar SalesCalendarReader
 	periodCoeffs  PeriodCoeffReader
 
+	// availability — периоды доступности товаров (шов daystate, nil в тестах):
+	// отличают «0» (доступен, продаж не было) от прочерка и задают окно
+	// среднего по активным ячейкам.
+	availability AvailabilityReader
+
 	// now — источник времени (тесты подменяют: календарь привязан к неделе/месяцу).
 	now func() time.Time
 
@@ -240,6 +245,12 @@ func NewGoodsUseCase(f ProductFolderClient, products ProductClient, repo Product
 func (uc *GoodsUseCase) SetCalendarStore(sales SalesCalendarReader, coeffs PeriodCoeffReader) {
 	uc.salesCalendar = sales
 	uc.periodCoeffs = coeffs
+}
+
+// SetCalendarAvailability подключает чтение периодов доступности (di.go после
+// создания юзкейса daystate: владелец строк дней — он, каталог только читает).
+func (uc *GoodsUseCase) SetCalendarAvailability(a AvailabilityReader) {
+	uc.availability = a
 }
 
 // SetTurnoverBackfiller подключает асинхронный бэкфилл оборотов (di.go после
