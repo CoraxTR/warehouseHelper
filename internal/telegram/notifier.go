@@ -126,6 +126,91 @@ func (n *Notifier) NotifyWarehouseManagementHTML(text string) error {
 	})
 }
 
+// NotifyWarehouseManagementHTMLButton — то же сообщение с одной inline-кнопкой
+// (выгрузка таблицы избытков из отчёта по остаткам). Без токена или chat_id
+// чата управления — no-op, как и обычный вариант.
+func (n *Notifier) NotifyWarehouseManagementHTMLButton(text, buttonText, callbackData string) error {
+	if n.botToken == "" || n.managementChatID == 0 {
+		return nil
+	}
+
+	return n.postJSON(context.Background(), "sendMessage", map[string]any{
+		fieldChatID:    n.managementChatID,
+		fieldText:      text,
+		fieldParseMode: parseModeHTML,
+		fieldReplyMarkup: map[string]any{
+			fieldInlineKbd: [][]map[string]string{{{
+				fieldText:         buttonText,
+				fieldCallbackData: callbackData,
+			}}},
+		},
+	})
+}
+
+// NotifyWarehouseManagementPhoto — картинка с подписью в чат управления
+// (выгрузка таблицы избытков из отчёта). Без токена или chat_id — no-op.
+func (n *Notifier) NotifyWarehouseManagementPhoto(data []byte, caption string) error {
+	if n.botToken == "" || n.managementChatID == 0 || len(data) == 0 {
+		return nil
+	}
+
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+
+	if err := mw.WriteField(fieldChatID, fmt.Sprintf("%d", n.managementChatID)); err != nil {
+		return fmt.Errorf("multipart chat_id: %w", err)
+	}
+	if caption != "" {
+		if err := mw.WriteField("caption", caption); err != nil {
+			return fmt.Errorf("multipart caption: %w", err)
+		}
+	}
+
+	h := make(textproto.MIMEHeader)
+	h.Set("Content-Disposition", `form-data; name="photo"; filename="surplus.png"`)
+	h.Set("Content-Type", "image/png")
+
+	part, err := mw.CreatePart(h)
+	if err != nil {
+		return fmt.Errorf("multipart photo: %w", err)
+	}
+	if _, err := part.Write(data); err != nil {
+		return fmt.Errorf("multipart write photo: %w", err)
+	}
+	if err := mw.Close(); err != nil {
+		return fmt.Errorf("multipart close: %w", err)
+	}
+
+	url := fmt.Sprintf("%s/bot%s/sendPhoto", n.apiBaseURL, n.botToken)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, url, &body)
+	if err != nil {
+		return fmt.Errorf("failed to create telegram request: %w", err)
+	}
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+
+	resp, err := n.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("telegram request failed: %w", err)
+	}
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			slog.Error(fmt.Sprintf("failed to close telegram response body: %v", err))
+		}
+	}()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return fmt.Errorf("telegram API returned %s: %s", resp.Status, string(snippet))
+	}
+
+	return nil
+}
+
+// ManagementCallbackAck — гасит «часики» на кнопке отчёта управления.
+func (n *Notifier) ManagementCallbackAck(callbackQueryID string) error {
+	return n.AnswerCallback(context.Background(), callbackQueryID)
+}
+
 // NotifyEveryone отправляет сообщение в общий чат сотрудников.
 // Без настроенного токена или chat_id общего чата — no-op.
 func (n *Notifier) NotifyEveryone(text string) error {

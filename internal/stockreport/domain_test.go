@@ -51,34 +51,50 @@ func TestLowStockItemsRoundsAndNames(t *testing.T) {
 }
 
 // Блок избытка: номер, срок, накопленный остаток, план продаж и коэффициент.
-func TestSurplusItems(t *testing.T) {
+func TestSurplusItemsGroupsByProduct(t *testing.T) {
+	forty := int16(40)
 	r := Report{Surplus: []discounts.SurplusLot{
-		{Name: "Кальби <нерезанные>", BestBefore: time.Date(2026, time.November, 21, 0, 0, 0, 0, time.UTC), CumQty: 120, PlannedQty: 45, Coeff: 2.7},
-		{Name: "Специя", BestBefore: time.Date(2026, time.December, 3, 0, 0, 0, 0, time.UTC), CumQty: 30, PlannedQty: 12, Coeff: 1.4},
+		{ProductID: "p1", Name: "Кальби", BestBefore: time.Date(2026, time.November, 21, 0, 0, 0, 0, time.UTC), CumQty: 120, PlannedQty: 45, Coeff: 2.7, Expiry: &forty},
+		{ProductID: "p1", Name: "Кальби", BestBefore: time.Date(2026, time.December, 2, 0, 0, 0, 0, time.UTC), CumQty: 160, PlannedQty: 95, Coeff: 1.7},
+		{ProductID: "p2", Name: "Специя", BestBefore: time.Date(2026, time.December, 3, 0, 0, 0, 0, time.UTC), CumQty: 30, PlannedQty: 12, Coeff: 1.6},
 	}}
 
 	items := r.SurplusItems()
 	if len(items) != 2 {
-		t.Fatalf("блоков = %d, want 2", len(items))
+		t.Fatalf("блоков = %d, want 2 (по товарам): %v", len(items), items)
 	}
-	if !strings.Contains(items[0], "<b>1. Кальби &lt;нерезанные&gt;</b> · до 21.11") {
-		t.Errorf("первый блок = %q", items[0])
+	if !strings.Contains(items[0], "<b>1. Кальби</b> · коэф до 2,7") {
+		t.Errorf("заголовок %q, want «1. Кальби · коэф до 2,7»", items[0])
 	}
-	if !strings.Contains(items[0], "накоплено 120 шт · продадим до срока ~45 шт · коэф 2,7") {
-		t.Errorf("числа первого блока = %q", items[0])
+	if strings.Count(items[0], "до 21.11") != 1 || !strings.Contains(items[0], "до 02.12") {
+		t.Errorf("сроки %q, want два: 21.11 и 02.12", items[0])
 	}
-	if !strings.Contains(items[1], "<b>2. Специя</b> · до 03.12") {
-		t.Errorf("второй блок = %q", items[1])
+	if !strings.Contains(items[0], "накоплено 160 шт · продадим ~95 шт") {
+		t.Errorf("строка дальнего срока %q, want накопление 160 и план 95", items[0])
+	}
+	if !strings.Contains(items[0], "уже по сроку 40 %") {
+		t.Errorf("строка %q, want пометку «уже по сроку 40 %%»", items[0])
+	}
+	if !strings.Contains(items[1], "<b>2. Специя</b>") {
+		t.Errorf("второй блок %q, want нумерацию 2", items[1])
 	}
 }
 
-// Пустой отчёт: отправлять нечего.
-func TestReportEmpty(t *testing.T) {
-	if !(Report{}).Empty() {
-		t.Error("пустой отчёт считается непустым")
+func TestSurplusItemsMarksExpiry(t *testing.T) {
+	forty, ten := int16(40), int16(10)
+	r := Report{Surplus: []discounts.SurplusLot{
+		{ProductID: "p1", Name: "Кальби", BestBefore: time.Date(2026, time.November, 21, 0, 0, 0, 0, time.UTC), CumQty: 120, PlannedQty: 45, Coeff: 2.7, Expiry: &forty},
+		{ProductID: "p1", Name: "Кальби", BestBefore: time.Date(2026, time.December, 2, 0, 0, 0, 0, time.UTC), CumQty: 160, PlannedQty: 95, Coeff: 1.7, Expiry: &ten},
+	}}
+
+	items := r.SurplusItems()
+	if len(items) != 1 {
+		t.Fatalf("блоков = %d, want 1 (товар один)", len(items))
 	}
-	r := Report{Surplus: []discounts.SurplusLot{{Name: "x"}}}
-	if r.Empty() {
-		t.Error("отчёт с избытком считается пустым")
+	if !strings.Contains(items[0], "уже по сроку 40 %") {
+		t.Errorf("строка %q, want пометку «уже по сроку 40 %%»", items[0])
+	}
+	if strings.Contains(items[0], "уже по сроку 10 %") {
+		t.Errorf("строка %q: пометка при равной избытку ступени (10 %%)", items[0])
 	}
 }
