@@ -293,6 +293,7 @@ func TestAdjustSoldOut_Errors(t *testing.T) {
 // недельные строки есть только у недельных товаров, месячные — у месячных.
 type periodRepo struct {
 	*stubRepo
+
 	weekly  map[string]int16
 	monthly map[string]int16
 	asked   []ordercoeff.PeriodType

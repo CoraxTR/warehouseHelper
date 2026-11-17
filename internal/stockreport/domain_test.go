@@ -1,6 +1,7 @@
 package stockreport
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -39,9 +40,9 @@ func TestSplitClassification(t *testing.T) {
 
 	// Остаток выше недельной нормы при коэффициенте 0/1 — никуда: повода нет.
 	// Позиция без истории и без коэффициента — тоже никуда.
+	nowhere := []string{"Коэффициент единица", "Середина", "Без истории без коэффициента"}
 	for _, p := range append(got.OutOfStock, append(got.LowStock, got.Excess...)...) {
-		switch p.Name {
-		case "Коэффициент единица", "Середина", "Без истории без коэффициента":
+		if slices.Contains(nowhere, p.Name) {
 			t.Errorf("«%s» попала в отчёт — не должна никуда", p.Name)
 		}
 	}
