@@ -16,6 +16,7 @@
         table.cal td.cal-win { border: 2px solid #C0392B; }
         table.cal .cal-kg { display: block; color: #9BA0A8; font-size: 11px; }
         table.cal .cal-qty { display: block; font-weight: 600; }
+        table.cal td.cal-zero .cal-qty { color: #8a94a0; font-weight: 500; }
         table.cal .cal-coeff { display: block; font-size: 10px; color: #7A8089; }
         table.cal tr.cal-group th { background: #1B1B22; text-align: left; text-transform: uppercase; letter-spacing: 0.06em; font-size: 11px; }
         .cal-tabs { margin: 12px 0; }
@@ -88,7 +89,7 @@
             <tr data-cal-row="{{$gi}}">
                 <td class="cal-name{{if .Weekly}} cal-weekly{{end}}"{{if and .Weekly (eq $.Tab "month")}} title="недельный учёт: месячного ряда и среднего по позиции нет"{{end}}>{{if .InternalCode}}<span class="code">{{.InternalCode}}</span> {{end}}{{.Name}}</td>
                 {{range .Cells}}
-                <td class="cal-num{{if .InWindow}} cal-win{{end}}{{if .Class}} {{.Class}}{{end}}" title="{{.Title}}">
+                <td class="cal-num{{if .InWindow}} cal-win{{end}}{{if .Zero}} cal-zero{{end}}{{if .Class}} {{.Class}}{{end}}" title="{{.Title}}">
                     {{if .KgText}}<span class="cal-kg">{{.KgText}}</span>{{end}}
                     <span class="cal-qty">{{if .QtyText}}{{.QtyText}}{{else}}—{{end}}</span>
                     <span class="cal-coeff">{{if .Coeff}}итог {{.Coeff}}{{end}}{{if .Delta}} <span class="cal-delta">{{.Delta}}</span>{{end}}</span>
@@ -101,7 +102,7 @@
             {{end}}
         </table>
     </div>
-    <p class="readonly-hint">Ячейка: сверху кг (весовые), снизу штуки за период. Красная обводка — период участвует в расчёте среднего. Подсказка: коэффициент и сколько раз событие повторилось.</p>
+    <p class="readonly-hint">Ячейка: сверху кг (весовые), снизу штуки за период. 0 — товар был доступен, продаж не было (ячейка участвует в расчёте); прочерк — товара не было в наличии и он не был доступен для заказа (в расчёт не входит). Красная обводка — период участвует в расчёте среднего. Подсказка: коэффициент и сколько раз событие повторилось.</p>
     <p class="cal-legend">
         <span class="cal-disc">скидки</span>
         <span class="cal-out">закончился</span>

@@ -166,6 +166,46 @@ func (f *fakeRepo) SetSoldOutWithdrawn(_ context.Context, productID string, date
 	return nil
 }
 
+func (f *fakeRepo) AvailablePeriods(_ context.Context, interval string, from, to time.Time) (map[string][]time.Time, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+
+	sets := map[string]map[time.Time]struct{}{}
+	for _, d := range f.days {
+		if d.Date.Before(from) || d.Date.After(to) {
+			continue
+		}
+		inStock := d.InStock != nil && *d.InStock
+		if !inStock && !d.Orderable {
+			continue
+		}
+		if sets[d.ProductID] == nil {
+			sets[d.ProductID] = map[time.Time]struct{}{}
+		}
+		sets[d.ProductID][fakePeriodStart(interval, d.Date)] = struct{}{}
+	}
+
+	out := make(map[string][]time.Time, len(sets))
+	for id, set := range sets {
+		for p := range set {
+			out[id] = append(out[id], p)
+		}
+	}
+
+	return out, nil
+}
+
+// fakePeriodStart — начало периода (неделя с понедельника / месяц) для заглушки.
+func fakePeriodStart(interval string, d time.Time) time.Time {
+	if interval == "week" {
+		offset := (int(d.Weekday()) + 6) % 7
+		return time.Date(d.Year(), d.Month(), d.Day(), 0, 0, 0, 0, d.Location()).AddDate(0, 0, -offset)
+	}
+
+	return time.Date(d.Year(), d.Month(), 1, 0, 0, 0, 0, d.Location())
+}
+
 func (f *fakeRepo) ListByRange(_ context.Context, from, to time.Time) (map[string]map[time.Time]daystate.DayState, error) {
 	if f.err != nil {
 		return nil, f.err
@@ -1069,5 +1109,42 @@ func TestSetOrderable_RestoresSoldOut(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestAvailablePeriodsGroupsByPeriod(t *testing.T) {
+	inStock, outOfStock := true, false
+	at := func(m time.Month, d int) time.Time { return time.Date(2026, m, d, 0, 0, 0, 0, time.UTC) }
+
+	repo := &fakeRepo{days: map[string]*daystate.DayState{
+		// p1: в наличии в понедельник и доступен для заказа в среду — одна неделя.
+		"a": {ProductID: "p1", Date: at(time.September, 14), InStock: &inStock, Orderable: true},
+		"b": {ProductID: "p1", Date: at(time.September, 16), Orderable: true},
+		// p2: ни в наличии, ни для заказа — в первый день; во второй доступен для заказа.
+		"c": {ProductID: "p2", Date: at(time.September, 15)},
+		"d": {ProductID: "p2", Date: at(time.September, 22), InStock: &outOfStock, Orderable: true},
+	}}
+
+	uc := newTestUC(repo, nil, nil, nil, nil, nil, at(time.September, 16))
+
+	got, err := uc.AvailablePeriods(context.Background(), "week", at(time.September, 14), at(time.September, 30))
+	if err != nil {
+		t.Fatalf("AvailablePeriods: %v", err)
+	}
+
+	if len(got["p1"]) != 1 || !got["p1"][0].Equal(at(time.September, 14)) {
+		t.Fatalf("p1 = %v, want одна неделя с 14.09", got["p1"])
+	}
+	if len(got["p2"]) != 1 || !got["p2"][0].Equal(at(time.September, 21)) {
+		t.Fatalf("p2 = %v, want одна неделя с 21.09 (только доступный для заказа день)", got["p2"])
+	}
+
+	// Неизвестный интервал трактуется как месяц — календарь не падает.
+	months, err := uc.AvailablePeriods(context.Background(), "day", at(time.September, 1), at(time.September, 30))
+	if err != nil {
+		t.Fatalf("AvailablePeriods(day): %v", err)
+	}
+	if len(got["p1"]) == 0 || len(months["p1"]) != 1 || !months["p1"][0].Equal(at(time.September, 1)) {
+		t.Fatalf("месяцы p1 = %v, want один сентябрь", months["p1"])
 	}
 }

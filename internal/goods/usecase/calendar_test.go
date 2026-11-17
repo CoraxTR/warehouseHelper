@@ -22,7 +22,7 @@ type stubSales struct {
 	monthlySince time.Time
 }
 
-func (s *stubSales) Calendar(context.Context, []string) (map[string]averagesales.SalesCalendar, error) {
+func (s *stubSales) Calendar(context.Context, []string, map[string][]time.Time) (map[string]averagesales.SalesCalendar, error) {
 	if s.err != nil {
 		return nil, s.err
 	}
@@ -294,5 +294,87 @@ func TestCalendarPage_DataError(t *testing.T) {
 
 	if _, err := uc.CalendarPage(context.Background(), TabWeek, "", "", ""); err == nil {
 		t.Fatal("ошибка данных проглочена")
+	}
+}
+
+// stubAvailability — периоды доступности товаров (шов daystate).
+type stubAvailability struct {
+	periods  map[string][]time.Time
+	err      error
+	interval string
+	from, to time.Time
+}
+
+func (s *stubAvailability) AvailablePeriods(_ context.Context, interval string, from, to time.Time) (map[string][]time.Time, error) {
+	s.interval, s.from, s.to = interval, from, to
+	if s.err != nil {
+		return nil, s.err
+	}
+
+	return s.periods, nil
+}
+
+func TestCalendarPage_ZeroCellForAvailablePeriod(t *testing.T) {
+	week := currentWeekStart(calendarNow)
+
+	sales := &stubSales{cal: map[string]averagesales.SalesCalendar{
+		"p1": {
+			Avg:     2,
+			Periods: []averagesales.PeriodSales{{PeriodStart: week, Qty: 2, InWindow: true}},
+		},
+	}}
+	avail := &stubAvailability{periods: map[string][]time.Time{
+		"p1": {week, week.AddDate(0, 0, -7)},
+	}}
+
+	uc := newCalendarUC(calendarProducts(), sales, &stubCoeffs{})
+	uc.SetCalendarAvailability(avail)
+
+	page, err := uc.CalendarPage(context.Background(), TabWeek, "", "", "")
+	if err != nil {
+		t.Fatalf("CalendarPage: %v", err)
+	}
+	if avail.interval != "week" {
+		t.Fatalf("интервал доступности = %q, want week", avail.interval)
+	}
+
+	row := page.Groups[0].Rows[0]
+
+	// Предыдущая неделя: продаж нет, но товар был доступен → 0, а не прочерк.
+	prev := row.Cells[len(row.Cells)-2]
+	if prev.QtyText != "0" || !prev.Zero {
+		t.Fatalf("ячейка доступной недели без продаж = %q (Zero=%v), want «0»", prev.QtyText, prev.Zero)
+	}
+
+	// Недоступная неделя остаётся прочерком.
+	dash := row.Cells[len(row.Cells)-3]
+	if dash.QtyText != "" || dash.Zero {
+		t.Fatalf("ячейка недоступной недели = %q (Zero=%v), want прочерк", dash.QtyText, dash.Zero)
+	}
+}
+
+func TestCalendarPage_DefaultColumnsReachOldestWindowCell(t *testing.T) {
+	week := currentWeekStart(calendarNow)
+	oldest := week.AddDate(0, 0, -7*8) // дальше стандартного окна в шесть столбцов
+
+	sales := &stubSales{cal: map[string]averagesales.SalesCalendar{
+		"p1": {
+			Avg:     1,
+			Periods: []averagesales.PeriodSales{{PeriodStart: oldest, Qty: 1, InWindow: true}},
+		},
+	}}
+
+	uc := newCalendarUC(calendarProducts(), sales, &stubCoeffs{})
+
+	page, err := uc.CalendarPage(context.Background(), TabWeek, "", "", "")
+	if err != nil {
+		t.Fatalf("CalendarPage: %v", err)
+	}
+
+	if len(page.PeriodTitles) != 9 {
+		t.Fatalf("столбцов = %d, want 9 (от самой дальней участвующей ячейки)", len(page.PeriodTitles))
+	}
+	if page.PeriodTitles[0] != periodTitle(oldest, TabWeek) {
+		t.Fatalf("первый столбец = %q, want %q", page.PeriodTitles[0], periodTitle(oldest, TabWeek))
 	}
 }

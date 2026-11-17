@@ -54,6 +54,10 @@ type Repository interface {
 	// SetSoldOutWithdrawn — отметка «+1 этого дня снят недоступностью» (страховка
 	// от повторной правки коэффициента при повторных сохранениях календаря).
 	SetSoldOutWithdrawn(ctx context.Context, productID string, date time.Time, withdrawn bool) error
+	// AvailablePeriods — периоды (неделя/месяц), в которых товар был доступен
+	// хотя бы один день: in_stock или orderable. Календарь продаж отличает
+	// «0» (доступен, продаж не было) от прочерка (недоступен / нет данных).
+	AvailablePeriods(ctx context.Context, interval string, from, to time.Time) (map[string][]time.Time, error)
 }
 
 // CatalogProvider — каталог товаров для страниц daystate; реализует
