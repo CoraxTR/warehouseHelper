@@ -1130,3 +1130,64 @@ func TestRunSlotPlanPrevPairGetsSiteStep(t *testing.T) {
 		t.Error("вторая позиция не попала в слот")
 	}
 }
+
+// Лот с остатком суток в рассылку не идёт — не успеет продаться, — но ступень
+// дня сайт получает сразу, на финальной сборке 14:45 (решение владельца
+// 17.11.2026: «не в ТГ» ≠ «не поднимать сайт»). До правки ветка
+// `DaysLeft < slotMinDays` выбрасывала пару из плана молча: в ТГ-день утренний
+// пересмотр ступень не пишет, и сайт стоял на прошлой ступени до следующего
+// КТ-дня, которого у лота могло уже не быть.
+func TestExtrasShortLifeGetsSiteStep(t *testing.T) {
+	h := newSlotHarness(recalcNow(1),
+		lotInput("p1", "Кальби", day(2), 1, shelfLifeInput(35), plainInput(40)), // D=1 → ступень 50, сайт 40
+	)
+
+	if err := h.uc.RecalcSurplus(context.Background(), h.now); err != nil {
+		t.Fatalf("RecalcSurplus (наполнение): %v", err)
+	}
+	h.tasks.texts, h.tasks.tries = nil, nil
+
+	if err := h.uc.RunSlotPlan(context.Background(), h.now, 10); err != nil {
+		t.Fatalf("план дня: %v", err)
+	}
+	if err := h.uc.applyExtras(context.Background(), h.now.Add(mailingFreezeAfter), 10); err != nil {
+		t.Fatalf("финальная сборка: %v", err)
+	}
+
+	byPID := map[string]discounts.DiscountWrite{}
+	for _, w := range h.allWrites() {
+		byPID[w.ProductID] = w
+	}
+	short := byPID["p1"]
+	if short.General == nil || *short.General != 50 {
+		t.Errorf("лот на сутки: %+v, want general=50 (ступень сайта сразу)", short)
+	}
+	if short.Telegram != nil {
+		t.Errorf("лот на сутки telegram %v, want nil (в рассылку не идёт)", short.Telegram)
+	}
+}
+
+// Ступень не выше уже стоящей — писать нечего: «не в ТГ» не повод трогать сайт.
+func TestExtrasShortLifeNoWriteWithoutRaise(t *testing.T) {
+	h := newSlotHarness(recalcNow(1),
+		lotInput("p1", "Кальби", day(2), 1, shelfLifeInput(35), plainInput(50)), // сайт уже на сегодняшней ступени
+	)
+
+	if err := h.uc.RecalcSurplus(context.Background(), h.now); err != nil {
+		t.Fatalf("RecalcSurplus (наполнение): %v", err)
+	}
+	h.tasks.texts, h.tasks.tries = nil, nil
+
+	if err := h.uc.RunSlotPlan(context.Background(), h.now, 10); err != nil {
+		t.Fatalf("план дня: %v", err)
+	}
+	if err := h.uc.applyExtras(context.Background(), h.now.Add(mailingFreezeAfter), 10); err != nil {
+		t.Fatalf("финальная сборка: %v", err)
+	}
+
+	for _, w := range h.allWrites() {
+		if w.ProductID == "p1" && w.General != nil && *w.General != 50 {
+			t.Errorf("правка без повышения: %+v, want ничего", w)
+		}
+	}
+}
