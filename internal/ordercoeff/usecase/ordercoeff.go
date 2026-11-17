@@ -139,6 +139,12 @@ func (uc *UseCase) PeriodCoefficients(ctx context.Context, productIDs []string, 
 		return map[string]int16{}, nil
 	}
 
+	// Ключи периодов в БД — календарные даты в UTC (DATE приходит полночью UTC),
+	// а часы модуля живут по местному времени: «понедельник 00:00 МСК» и
+	// «понедельник 00:00 UTC» — разные моменты, и карта по ключу-времени
+	// оказывалась пустой (17.11.2026: отчёт терял блок «избыток» целиком).
+	at = time.Date(at.Year(), at.Month(), at.Day(), 0, 0, 0, 0, time.UTC)
+
 	weekAt := ordercoeff.PeriodStart(ordercoeff.PeriodWeek, at)
 	monthAt := ordercoeff.PeriodStart(ordercoeff.PeriodMonth, at)
 
