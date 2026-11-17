@@ -80,7 +80,7 @@ func TestBuildThreeBlocks(t *testing.T) {
 	if !strings.Contains(parts[2], "ИЗБЫТОК · 1") {
 		t.Errorf("блок «избыток» = %q", parts[2])
 	}
-	if !strings.Contains(parts[2], "до 21.11") || !strings.Contains(parts[2], "накоплено 120 шт · продадим до срока ~45 шт · коэф 2,7") {
+	if !strings.Contains(parts[2], "до 21.11") || !strings.Contains(parts[2], "накоплено 120 шт · продадим ~45 шт") || !strings.Contains(parts[2], "коэф до 2,7") {
 		t.Errorf("содержимое блока «избыток» = %q", parts[2])
 	}
 }

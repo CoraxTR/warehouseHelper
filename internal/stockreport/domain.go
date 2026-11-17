@@ -114,21 +114,69 @@ func (r Report) LowStockItems() []string {
 	return items
 }
 
-// SurplusItems — блоки «избыток»: позиция и срок годности, накопленный до
-// этого срока остаток и сколько ориентировочно продадим до этой даты.
+// SurplusItems — блоки «избыток»: одна позиция на ТОВАР, внутри — строки по
+// срокам. Позиция и срок, накопленный до срока остаток, план продаж до даты и
+// пометка, если сайт уже живёт ступенью по сроку (решение владельца 17.11.2026).
+//
+// Товар повторяется один раз: у лота с тремя сроками три отдельные строки
+// читались бы как три разных товара, а сортировка по коэффициенту ещё и
+// раскидывала бы их по списку.
 func (r Report) SurplusItems() []string {
-	items := make([]string, 0, len(r.Surplus))
-	for i, s := range r.Surplus {
-		line := fmt.Sprintf("накоплено %d шт · продадим до срока ~%d шт · коэф %s",
-			s.CumQty, s.PlannedQty, formatCoeff(s.Coeff))
-		if s.ExpiryWins() {
-			line += fmt.Sprintf(" · уже по сроку %d %%", *s.Expiry)
+	groups := groupSurplus(r.Surplus)
+
+	items := make([]string, 0, len(groups))
+	for i, g := range groups {
+		lines := make([]string, 0, len(g.Lots))
+		for _, s := range g.Lots {
+			line := fmt.Sprintf("до %s — накоплено %d шт · продадим ~%d шт",
+				s.BestBefore.Format(dateOnly), s.CumQty, s.PlannedQty)
+			if s.ExpiryWins() {
+				line += fmt.Sprintf(" · уже по сроку %d %%", *s.Expiry)
+			}
+			lines = append(lines, "<code>"+line+"</code>")
 		}
-		items = append(items, fmt.Sprintf("<b>%d. %s</b> · до %s\n<code>%s</code>",
-			i+1, escape(s.Name), s.BestBefore.Format(dateOnly), line))
+		items = append(items, fmt.Sprintf("<b>%d. %s</b> · коэф до %s\n%s",
+			i+1, escape(g.Name), formatCoeff(g.Lots[0].Coeff), strings.Join(lines, "\n")))
 	}
 
 	return items
+}
+
+// surplusGroup — позиция блока избытка: товар и его сроки с избытком.
+type surplusGroup struct {
+	Name string
+	Lots []discounts.SurplusLot
+}
+
+// groupSurplus — товары в порядке модуля скидок (по убыванию коэффициента),
+// сроки внутри — по возрастанию срока: накопленный остаток читается сверху
+// вниз, как FIFO.
+func groupSurplus(lots []discounts.SurplusLot) []surplusGroup {
+	groups := make([]surplusGroup, 0, len(lots))
+	index := make(map[string]int, len(lots))
+
+	for _, s := range lots {
+		idx, ok := index[s.ProductID]
+		if !ok {
+			idx = len(groups)
+			index[s.ProductID] = idx
+			groups = append(groups, surplusGroup{Name: s.Name})
+		}
+		groups[idx].Lots = append(groups[idx].Lots, s)
+	}
+
+	for i := range groups {
+		sortLotsByDate(groups[i].Lots)
+	}
+
+	return groups
+}
+
+// sortLotsByDate — сроки внутри позиции по возрастанию даты.
+func sortLotsByDate(lots []discounts.SurplusLot) {
+	slices.SortStableFunc(lots, func(a, b discounts.SurplusLot) int {
+		return a.BestBefore.Compare(b.BestBefore)
+	})
 }
 
 // sortByName — порядок по имени: обход кэша остатков недетерминирован, а
