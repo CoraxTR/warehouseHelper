@@ -119,9 +119,13 @@ func (r Report) LowStockItems() []string {
 func (r Report) SurplusItems() []string {
 	items := make([]string, 0, len(r.Surplus))
 	for i, s := range r.Surplus {
-		items = append(items, fmt.Sprintf(
-			"<b>%d. %s</b> · до %s\n<code>накоплено %d шт · продадим до срока ~%d шт · коэф %s</code>",
-			i+1, escape(s.Name), s.BestBefore.Format(dateOnly), s.CumQty, s.PlannedQty, formatCoeff(s.Coeff)))
+		line := fmt.Sprintf("накоплено %d шт · продадим до срока ~%d шт · коэф %s",
+			s.CumQty, s.PlannedQty, formatCoeff(s.Coeff))
+		if s.ExpiryWins() {
+			line += fmt.Sprintf(" · уже по сроку %d %%", *s.Expiry)
+		}
+		items = append(items, fmt.Sprintf("<b>%d. %s</b> · до %s\n<code>%s</code>",
+			i+1, escape(s.Name), s.BestBefore.Format(dateOnly), line))
 	}
 
 	return items

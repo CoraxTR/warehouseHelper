@@ -82,3 +82,24 @@ func TestReportEmpty(t *testing.T) {
 		t.Error("отчёт с избытком считается пустым")
 	}
 }
+
+// Скидка сайта уже стоит по сроку и она глубже избытка — пара помечается,
+// чтобы в чате не читалось «ничего не делаем» (решение владельца 17.11.2026).
+func TestSurplusItemsMarksExpiry(t *testing.T) {
+	forty, ten := int16(40), int16(10)
+	r := Report{Surplus: []discounts.SurplusLot{
+		{Name: "Кальби", BestBefore: time.Date(2026, time.November, 21, 0, 0, 0, 0, time.UTC), CumQty: 120, PlannedQty: 45, Coeff: 2.7, Expiry: &forty},
+		{Name: "Специя", BestBefore: time.Date(2026, time.December, 3, 0, 0, 0, 0, time.UTC), CumQty: 30, PlannedQty: 12, Coeff: 1.6, Expiry: &ten},
+	}}
+
+	items := r.SurplusItems()
+	if len(items) != 2 {
+		t.Fatalf("блоков = %d, want 2", len(items))
+	}
+	if !strings.Contains(items[0], "уже по сроку 40 %") {
+		t.Errorf("строка %q, want пометку «уже по сроку 40 %%»", items[0])
+	}
+	if strings.Contains(items[1], "уже по сроку") {
+		t.Errorf("строка %q: пометка при равной ступени (10 %%)", items[1])
+	}
+}

@@ -307,6 +307,15 @@ type SurplusLot struct {
 	CumQty     int64
 	PlannedQty int64
 	Coeff      float64
+	// Expiry — ступень по сроку на сегодня (nil — вне окна). Если она глубже
+	// избытка, на сайте стоит именно она: в чате такая пара помечается, чтобы
+	// избыток не читался как «ничего не делаем».
+	Expiry *int16
+}
+
+// ExpiryWins — скидка сайта уже идёт от лестницы по сроку, а не от избытка.
+func (s SurplusLot) ExpiryWins() bool {
+	return s.Expiry != nil && *s.Expiry > SurplusPercent()
 }
 
 // Candidate — один претендент на скидку пары (лот, канал) от своего источника.

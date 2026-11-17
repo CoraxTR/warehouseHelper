@@ -50,6 +50,7 @@ func (uc *UseCase) SurplusLots(ctx context.Context, now time.Time) ([]discounts.
 			CumQty:     p.CumQty,
 			PlannedQty: int64(math.Round(p.Rate * float64(p.DaysLeft))),
 			Coeff:      p.Coeff,
+			Expiry:     p.Expiry,
 		})
 	}
 	// Тяжёлые избытки — первыми: чем больше коэффициент, тем важнее решение.
