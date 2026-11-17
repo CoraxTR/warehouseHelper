@@ -9,6 +9,7 @@ package usecase
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"warehouseHelper/internal/metrics"
@@ -119,6 +120,53 @@ func (uc *UseCase) CoefficientsBatch(ctx context.Context, productIDs []string, p
 	defer done()
 
 	return uc.repo.CoefficientsBatch(ctx, productIDs, periodType, intervals)
+}
+
+// PeriodCoefficients — коэффициенты ТЕКУЩЕГО периода по списку товаров:
+// недельный у товаров с недельным учётом, месячный у остальных (гранулярность
+// знает сам модуль — потребителю не нужно её спрашивать по товару).
+//
+// Два запроса на весь список вместо запроса на товар: product_period_coeff
+// хранит строки только той гранулярности, в которой товар отслеживается,
+// поэтому недельная строка есть только у недельных товаров, месячная — только
+// у месячных. Товары без событий периода в карту не попадают — коэффициент
+// у них ноль.
+func (uc *UseCase) PeriodCoefficients(ctx context.Context, productIDs []string, at time.Time) (map[string]int16, error) {
+	done := metrics.Track(trackPkg, "PeriodCoefficients")
+	defer done()
+
+	if len(productIDs) == 0 {
+		return map[string]int16{}, nil
+	}
+
+	weekAt := ordercoeff.PeriodStart(ordercoeff.PeriodWeek, at)
+	monthAt := ordercoeff.PeriodStart(ordercoeff.PeriodMonth, at)
+
+	weekly, err := uc.repo.CoefficientsBatch(ctx, productIDs, ordercoeff.PeriodWeek, []time.Time{weekAt})
+	if err != nil {
+		return nil, fmt.Errorf("недельные коэффициенты: %w", err)
+	}
+	monthly, err := uc.repo.CoefficientsBatch(ctx, productIDs, ordercoeff.PeriodMonth, []time.Time{monthAt})
+	if err != nil {
+		return nil, fmt.Errorf("месячные коэффициенты: %w", err)
+	}
+
+	out := make(map[string]int16, len(weekly)+len(monthly))
+	for id, byPeriod := range weekly {
+		if c, ok := byPeriod[weekAt]; ok {
+			out[id] = c
+		}
+	}
+	for id, byPeriod := range monthly {
+		if _, ok := out[id]; ok {
+			continue // недельная строка приоритетнее: товар отслеживается по неделям
+		}
+		if c, ok := byPeriod[monthAt]; ok {
+			out[id] = c
+		}
+	}
+
+	return out, nil
 }
 
 // PeriodsBatch — строки периодов целиком: коэффициент и счётчики событий.

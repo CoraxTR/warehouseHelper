@@ -33,6 +33,8 @@ const (
 	headerReserve = 120
 	// pollInterval — период проверки «наступило ли время отчёта».
 	pollInterval = time.Minute
+	// itemSep — разделитель блоков позиций: пустая строка между карточками.
+	itemSep = "\n\n"
 )
 
 // StockReader — кэш остатков модуля «Сроки»: весь каталог с лотами. Товары без
@@ -49,9 +51,20 @@ type SalesReader interface {
 	WeeklyAverages(ctx context.Context, productIDs []string) (map[string]float64, error)
 }
 
-// Notifier — сообщения в чат управления складом.
+// CoeffReader — коэффициенты изменения заказа текущего периода (модуль
+// ordercoeff, владелец product_period_coeff). Товары без событий периода в
+// карту не попадают: коэффициент у них ноль.
+type CoeffReader interface {
+	// PeriodCoefficients — коэффициент текущего незакрытого периода: недельный
+	// у недельных товаров, месячный у остальных (гранулярность знает ordercoeff).
+	PeriodCoefficients(ctx context.Context, productIDs []string, at time.Time) (map[string]int16, error)
+}
+
+// Notifier — сообщения в чат управления складом. HTML-вариант: отчёт уходит
+// с parse_mode=HTML (плашки и нумерация), поэтому названия экранируются на
+// стороне сборки.
 type Notifier interface {
-	NotifyWarehouseManagement(text string) error
+	NotifyWarehouseManagementHTML(text string) error
 }
 
 // UseCase — ежедневный отчёт. Живёт в одной горутине: состояние (маркер дня и
@@ -60,6 +73,7 @@ type Notifier interface {
 type UseCase struct {
 	stock  StockReader
 	sales  SalesReader
+	coeff  CoeffReader
 	notify Notifier
 
 	// now — часы юзкейса (в тестах подменяются): день и время отчёта считаются
@@ -80,10 +94,11 @@ type UseCase struct {
 
 // New собирает юзкейс. notify может быть nil (тесты): отправка тогда no-op,
 // сборка отчёта работает.
-func New(stockReader StockReader, salesReader SalesReader, notify Notifier) *UseCase {
+func New(stockReader StockReader, salesReader SalesReader, coeffReader CoeffReader, notify Notifier) *UseCase {
 	return &UseCase{
 		stock:  stockReader,
 		sales:  salesReader,
+		coeff:  coeffReader,
 		notify: notify,
 		now:    time.Now,
 	}
@@ -154,9 +169,15 @@ func (uc *UseCase) Build(ctx context.Context) ([]string, error) {
 		return nil, fmt.Errorf("средние продажи за неделю: %w", err)
 	}
 
+	// Коэффициент текущего периода: без него блок «избыток» не собирается.
+	coeffs, err := uc.coeff.PeriodCoefficients(ctx, ids, uc.now())
+	if err != nil {
+		return nil, fmt.Errorf("коэффициенты изменения заказа: %w", err)
+	}
+
 	positions := make([]stockreport.Position, 0, len(snapshot))
 	for _, p := range snapshot {
-		pos := stockreport.Position{Name: p.Name, Qty: lotQty(p.Lots)}
+		pos := stockreport.Position{Name: p.Name, Qty: lotQty(p.Lots), Coeff: coeffs[p.ID]}
 		if avg, ok := avgs[p.ID]; ok {
 			pos.AvgWeek = &avg
 		}
@@ -166,9 +187,9 @@ func (uc *UseCase) Build(ctx context.Context) ([]string, error) {
 	report := stockreport.Split(positions)
 
 	parts := make([]string, 0, 3)
-	parts = append(parts, messageParts(report.OutOfStockLines(), "Нет в наличии")...)
-	parts = append(parts, messageParts(report.LowStockLines(), "Остаток не больше средней продажи за неделю")...)
-	parts = append(parts, messageParts(report.ExcessLines(), "Избыток")...)
+	parts = append(parts, messageParts(report.OutOfStockItems(), "🟥", "НЕТ В НАЛИЧИИ")...)
+	parts = append(parts, messageParts(report.LowStockItems(), "🟨", "КОНЧАЕТСЯ")...)
+	parts = append(parts, messageParts(report.ExcessItems(), "🟦", "ИЗБЫТОК · коэф. > 1")...)
 
 	return parts, nil
 }
@@ -198,7 +219,7 @@ func (uc *UseCase) flushQueue() {
 		text := uc.pending[0]
 		uc.mu.RUnlock()
 
-		if err := uc.notify.NotifyWarehouseManagement(text); err != nil {
+		if err := uc.notify.NotifyWarehouseManagementHTML(text); err != nil {
 			slog.Info(fmt.Sprintf("stockreport: сообщение не доставлено (повтор на следующем тике): %v", err))
 			return
 		}
@@ -225,50 +246,52 @@ func (uc *UseCase) markDone(now time.Time) {
 	uc.lastRunDay = normalizeDate(now)
 }
 
-// messageParts собирает одно сообщение из строк; если не влезает в лимит
-// Telegram — делит на части с заголовком и сквозной нумерацией (иначе длинный
-// список не уйдёт вовсе). Одиночное сообщение идёт без заголовка — формат
-// владельца: только строки позиций.
-func messageParts(lines []string, title string) []string {
-	if len(lines) == 0 {
+// messageParts собирает сообщение блока: заголовок «эмодзи <b>НАЗВАНИЕ · N</b>»
+// и блоки позиций через пустую строку. Не влезает в лимит Telegram — делится
+// на части с тем же заголовком и пометкой «часть i из n»; нумерация позиций
+// сквозная, потому что проставлена до деления (по номеру позиции в чате можно
+// сослаться).
+func messageParts(items []string, emoji, title string) []string {
+	if len(items) == 0 {
 		return nil
 	}
 
-	joined := strings.Join(lines, "\n")
+	header := fmt.Sprintf("%s <b>%s · %d</b>", emoji, title, len(items))
+	joined := header + "\n\n" + strings.Join(items, itemSep)
 	if len(joined) <= messageMaxLen {
 		return []string{joined}
 	}
 
-	chunks := chunkLines(lines)
+	chunks := chunkItems(items)
 	parts := make([]string, 0, len(chunks))
 	for i, chunk := range chunks {
-		parts = append(parts, fmt.Sprintf("%s (часть %d из %d):\n%s",
-			title, i+1, len(chunks), strings.Join(chunk, "\n")))
+		parts = append(parts, fmt.Sprintf("%s <b>%s · часть %d из %d</b>\n\n%s",
+			emoji, title, i+1, len(chunks), strings.Join(chunk, itemSep)))
 	}
 
 	return parts
 }
 
-// chunkLines режет строки на пачки под лимит одного сообщения (messageMaxLen
-// минус запас на заголовок части), считая байты вместе с переводами строк.
-// Одна строка длиннее лимита уходит отдельной пачкой: разорвать название
-// товара хуже, чем превысить порог.
-func chunkLines(lines []string) [][]string {
+// chunkItems режет блоки на пачки под лимит одного сообщения (messageMaxLen
+// минус запас на заголовок части), считая байты вместе с разделителями.
+// Один блок длиннее лимита уходит отдельной пачкой: разорвать название товара
+// хуже, чем превысить порог.
+func chunkItems(items []string) [][]string {
 	const limit = messageMaxLen - headerReserve
 
 	var chunks [][]string
-	current := make([]string, 0, len(lines))
+	current := make([]string, 0, len(items))
 
 	size := 0
-	for _, line := range lines {
-		add := len(line) + 1
+	for _, item := range items {
+		add := len(item) + len(itemSep)
 		if size+add > limit && len(current) > 0 {
 			chunks = append(chunks, current)
 			current = nil
 			size = 0
 		}
 
-		current = append(current, line)
+		current = append(current, item)
 		size += add
 	}
 

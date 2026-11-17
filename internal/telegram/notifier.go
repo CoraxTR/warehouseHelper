@@ -108,16 +108,22 @@ func (n *Notifier) NotifyWarehouseHTML(text string) error {
 	})
 }
 
-// NotifyWarehouseManagement отправляет сообщение в чат управления складом
-// (ежедневный отчёт по остаткам против средних продаж). Без настроенного
-// токена или chat_id чата управления — no-op: отчёт не уходит, приложение
-// не падает.
-func (n *Notifier) NotifyWarehouseManagement(text string) error {
+// NotifyWarehouseManagementHTML отправляет сообщение в чат управления складом
+// (ежедневный отчёт по остаткам против средних продаж) с parse_mode=HTML:
+// отчёт размечен плашками и нумерацией, названия экранирует сборка. Отдельный
+// метод, а не флаг: у обычных сообщений разметка не разбирается. Без
+// настроенного токена или chat_id чата управления — no-op: отчёт не уходит,
+// приложение не падает.
+func (n *Notifier) NotifyWarehouseManagementHTML(text string) error {
 	if n.botToken == "" || n.managementChatID == 0 {
 		return nil
 	}
 
-	return n.sendMessage(context.Background(), n.managementChatID, text)
+	return n.postJSON(context.Background(), "sendMessage", map[string]any{
+		fieldChatID:    n.managementChatID,
+		fieldText:      text,
+		fieldParseMode: parseModeHTML,
+	})
 }
 
 // NotifyEveryone отправляет сообщение в общий чат сотрудников.

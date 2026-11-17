@@ -468,11 +468,13 @@ func (d *DIContainer) StockUC() *sucase.StockUseCase {
 
 // StockReportUC — ежедневный отчёт «остатки против средних продаж» в чат
 // управления складом: StockUC — StockReader (кэш остатков), AverageSalesUC —
-// SalesReader (средние за неделю), TelegramNotifier — Notifier (отдельный чат
-// управления, TG_WAREHOUSE_MANAGEMENT_CHAT_ID). Своего хранилища у модуля нет.
+// SalesReader (средние за неделю), OrderCoeffUC — CoeffReader (коэффициент
+// текущего периода: блок «избыток» отбирается по нему), TelegramNotifier —
+// Notifier (отдельный чат управления, TG_WAREHOUSE_MANAGEMENT_CHAT_ID).
+// Своего хранилища у модуля нет.
 func (d *DIContainer) StockReportUC() *srucase.UseCase {
 	if d.stockReportUC == nil {
-		d.stockReportUC = srucase.New(d.StockUC(), d.AverageSalesUC(), d.TelegramNotifier())
+		d.stockReportUC = srucase.New(d.StockUC(), d.AverageSalesUC(), d.OrderCoeffUC(), d.TelegramNotifier())
 	}
 
 	return d.stockReportUC
