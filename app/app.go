@@ -17,6 +17,7 @@ import (
 	"warehouseHelper/internal/config"
 	ducase "warehouseHelper/internal/discounts/usecase"
 	"warehouseHelper/internal/metrics"
+	srucase "warehouseHelper/internal/stockreport/usecase"
 	tusecase "warehouseHelper/internal/tasks/usecase"
 	"warehouseHelper/internal/telegram"
 )
@@ -355,8 +356,9 @@ func (a *App) initBotPoller() {
 	complaintsUC := a.di.ComplaintsUC()
 	tasksUC := a.di.TasksUC()
 	mailingUC := a.di.DiscountsUC()
+	stockReportUC := a.di.StockReportUC()
 	poller := telegram.NewPoller(token, func(ctx context.Context, cb telegram.CallbackQuery) error {
-		return handleCallback(ctx, complaintsUC, tasksUC, mailingUC, cb)
+		return handleCallback(ctx, complaintsUC, tasksUC, mailingUC, stockReportUC, cb)
 	})
 	poller.SetMessageHandler(a.botMessageHandler())
 
@@ -389,6 +391,12 @@ type taskCallbackHandler interface {
 	HandleWho(ctx context.Context, callbackQueryID string, chatID, messageID, taskID, employeeID int64) error
 }
 
+// stockReportCallbackHandler — кнопка «Выгрузить» под блоком избытка отчёта по
+// остаткам: таблица избытков картинкой в чат управления.
+type stockReportCallbackHandler interface {
+	HandleSurplusButton(ctx context.Context, callbackQueryID string, chatID, messageID int64) error
+}
+
 // mailingCallbackHandler — кнопки модуля «Скидки»: «Пропустить рассылку» под
 // живым письмом склада (рассылки не будет, скидки уходят на сайт сразу,
 // позиции остаются доступными следующей рассылке) и «Переделать фото» под
@@ -402,7 +410,10 @@ type mailingCallbackHandler interface {
 // кнопки нажатие уходит своему модулю. Поллер один на токен, а кнопки
 // принадлежат разным модулям (жалобы, внутренние задачи, скидки) — диспетчер
 // живёт здесь, а не внутри модуля. Чужие данные — не наше нажатие, молчание.
-func handleCallback(ctx context.Context, complaints complaintCallbackHandler, tasks taskCallbackHandler, mailing mailingCallbackHandler, cb telegram.CallbackQuery) error {
+func handleCallback(ctx context.Context, complaints complaintCallbackHandler, tasks taskCallbackHandler, mailing mailingCallbackHandler, stockReport stockReportCallbackHandler, cb telegram.CallbackQuery) error {
+	if cb.Data == srucase.SurplusCallback {
+		return stockReport.HandleSurplusButton(ctx, cb.ID, cb.ChatID, cb.MessageID)
+	}
 	if cb.Data == ducase.MailingSkipCallback {
 		return mailing.SkipMailing(ctx, cb.ID, cb.ChatID, cb.MessageID)
 	}

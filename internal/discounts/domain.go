@@ -8,7 +8,9 @@ package discounts
 
 import (
 	"errors"
+	"fmt"
 	"math"
+	"strings"
 	"time"
 )
 
@@ -306,11 +308,36 @@ type SurplusLot struct {
 	BestBefore time.Time
 	CumQty     int64
 	PlannedQty int64
-	Coeff      float64
+	// Qty — остаток самой пары (без более ранних сроков).
+	Qty   int64
+	Coeff float64
 	// Expiry — ступень по сроку на сегодня (nil — вне окна). Если она глубже
 	// избытка, на сайте стоит именно она: в чате такая пара помечается, чтобы
 	// избыток не читался как «ничего не делаем».
 	Expiry *int16
+	// Site — действующая скидка сайта (победитель Resolve), %; nil — нет.
+	Site *int16
+	// TG — скидка ТГ-канала: ручная ТГ, иначе значение колонки.
+	TG *int16
+}
+
+// HasDiscount — на паре стоит скидка хотя бы в одном канале (в таблице такая
+// клетка подсвечивается).
+func (s SurplusLot) HasDiscount() bool {
+	return s.Site != nil || s.TG != nil
+}
+
+// DiscountLabel — скидки пары для подписи под сроком: «40%» или «10% · ТГ 20%».
+func (s SurplusLot) DiscountLabel() string {
+	parts := make([]string, 0, 2)
+	if s.Site != nil {
+		parts = append(parts, fmt.Sprintf("%d%%", *s.Site))
+	}
+	if s.TG != nil {
+		parts = append(parts, fmt.Sprintf("ТГ %d%%", *s.TG))
+	}
+
+	return strings.Join(parts, " · ")
 }
 
 // ExpiryWins — скидка сайта уже идёт от лестницы по сроку, а не от избытка.

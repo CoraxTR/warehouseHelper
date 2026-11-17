@@ -43,14 +43,22 @@ func (uc *UseCase) SurplusLots(ctx context.Context, now time.Time) ([]discounts.
 		if !p.HasSurplus {
 			continue
 		}
+		site, _ := discounts.Resolve(p.Manual, p.Permanent, p.Expiry, p.Surplus)
+		tg := p.TelegramManual
+		if tg == nil {
+			tg = p.TelegramPlain
+		}
 		out = append(out, discounts.SurplusLot{
 			ProductID:  p.ProductID,
 			Name:       p.Name,
 			BestBefore: p.BestBefore,
 			CumQty:     p.CumQty,
+			Qty:        p.Qty,
 			PlannedQty: int64(math.Round(p.Rate * float64(p.DaysLeft))),
 			Coeff:      p.Coeff,
 			Expiry:     p.Expiry,
+			Site:       site,
+			TG:         tg,
 		})
 	}
 	// Тяжёлые избытки — первыми: чем больше коэффициент, тем важнее решение.

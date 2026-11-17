@@ -36,6 +36,11 @@ const (
 	pollInterval = time.Minute
 	// itemSep — разделитель блоков позиций: пустая строка между карточками.
 	itemSep = "\n\n"
+	// SurplusButton — текст кнопки под блоком избытка.
+	SurplusButton = "📷 Выгрузить таблицей"
+	// SurplusCallback — данные кнопки; префикс sr: принадлежит отчёту, чтобы
+	// диспетчер бота не отдал нажатие другому модулю.
+	SurplusCallback = "sr:surplus"
 )
 
 // StockReader — кэш остатков модуля «Сроки»: весь каталог с лотами. Товары без
@@ -64,6 +69,22 @@ type SurplusReader interface {
 // стороне сборки.
 type Notifier interface {
 	NotifyWarehouseManagementHTML(text string) error
+	// NotifyWarehouseManagementHTMLButton — то же сообщение с одной кнопкой.
+	NotifyWarehouseManagementHTMLButton(text, buttonText, callbackData string) error
+	// NotifyWarehouseManagementPhoto — картинка с подписью в чат управления.
+	NotifyWarehouseManagementPhoto(data []byte, caption string) error
+	// ManagementCallbackAck — закрыть нажатие кнопки («часики»).
+	ManagementCallbackAck(callbackQueryID string) error
+}
+
+// Part — одно сообщение отчёта: текст и необязательная кнопка под ним.
+//
+// Кнопка живёт только под блоком избытка: таблица выгрузки собирается по тем
+// же товарам, что в блоке, поэтому и предлагается там же.
+type Part struct {
+	Text     string
+	Button   string
+	Callback string
 }
 
 // UseCase — ежедневный отчёт. Живёт в одной горутине: состояние (маркер дня и
@@ -88,7 +109,7 @@ type UseCase struct {
 	// следующего тика по порядку, срез только после успеха. Недоставленное
 	// ДОПИСЫВАЕТСЯ, не перезаписывается (иначе список прошлого прохода
 	// потерялся бы).
-	pending []string
+	pending []Part
 }
 
 // New собирает юзкейс. notify может быть nil (тесты): отправка тогда no-op,
@@ -152,7 +173,7 @@ func (uc *UseCase) Tick(ctx context.Context, at time.Duration) {
 
 // Build собирает сообщения отчёта: по одному на список, длинные списки делятся
 // на части. Пустые списки сообщений не дают вовсе.
-func (uc *UseCase) Build(ctx context.Context) ([]string, error) {
+func (uc *UseCase) Build(ctx context.Context) ([]Part, error) {
 	done := metrics.Track(trackPkg, "Build")
 	defer done()
 
@@ -188,16 +209,30 @@ func (uc *UseCase) Build(ctx context.Context) ([]string, error) {
 	report := stockreport.Split(positions)
 	report.Surplus = surplus
 
-	parts := make([]string, 0, 3)
-	parts = append(parts, messageParts(report.OutOfStockItems(), "🟥", "НЕТ В НАЛИЧИИ")...)
-	parts = append(parts, messageParts(report.LowStockItems(), "🟨", "КОНЧАЕТСЯ")...)
-	parts = append(parts, messageParts(report.SurplusItems(), "🟦", "ИЗБЫТОК")...)
+	parts := make([]Part, 0, 3)
+	for _, text := range messageParts(report.OutOfStockItems(), "🟥", "НЕТ В НАЛИЧИИ") {
+		parts = append(parts, Part{Text: text})
+	}
+	for _, text := range messageParts(report.LowStockItems(), "🟨", "КОНЧАЕТСЯ") {
+		parts = append(parts, Part{Text: text})
+	}
+
+	surplusParts := messageParts(report.SurplusItems(), "🟦", "ИЗБЫТОК")
+	for i, text := range surplusParts {
+		part := Part{Text: text}
+		// Кнопка — под последней частью блока: она открывает таблицу по всем
+		// позициям блока, а не по видимой части сообщения.
+		if i == len(surplusParts)-1 {
+			part.Button, part.Callback = SurplusButton, SurplusCallback
+		}
+		parts = append(parts, part)
+	}
 
 	return parts, nil
 }
 
 // enqueue ставит сообщения в очередь отправки и сразу пробует отправить.
-func (uc *UseCase) enqueue(parts []string) {
+func (uc *UseCase) enqueue(parts []Part) {
 	if len(parts) == 0 {
 		return
 	}
@@ -209,6 +244,46 @@ func (uc *UseCase) enqueue(parts []string) {
 	uc.flushQueue()
 }
 
+// HandleSurplusButton — нажатие «Выгрузить»: таблица избытков картинкой в чат
+// управления. Данные берутся заново у модуля скидок, а не из сборки отчёта:
+// между утренним отчётом и нажатием остатки и скидки успевают измениться.
+func (uc *UseCase) HandleSurplusButton(ctx context.Context, callbackQueryID string, chatID, messageID int64) error {
+	done := metrics.Track(trackPkg, "HandleSurplusButton")
+	defer done()
+
+	if err := uc.notify.ManagementCallbackAck(callbackQueryID); err != nil {
+		slog.Warn("stockreport: подтверждение нажатия не отправлено", "err", err)
+	}
+
+	now := uc.now()
+
+	lots, err := uc.surplus.SurplusLots(ctx, now)
+	if err != nil {
+		return fmt.Errorf("избытки для выгрузки: %w", err)
+	}
+
+	table, err := stockreport.DrawSurplusTable(lots, now)
+	if err != nil {
+		return fmt.Errorf("таблица избытков: %w", err)
+	}
+	if len(table) == 0 {
+		return uc.notify.NotifyWarehouseManagementHTML("Избытков нет — выгружать нечего.")
+	}
+
+	caption := fmt.Sprintf("Избыток · %s · %d товаров", now.Format("02.01.2006"), len(lots))
+
+	return uc.notify.NotifyWarehouseManagementPhoto(table, caption)
+}
+
+// send отправляет одно сообщение отчёта: с кнопкой или без.
+func (uc *UseCase) send(part Part) error {
+	if part.Button == "" || part.Callback == "" {
+		return uc.notify.NotifyWarehouseManagementHTML(part.Text)
+	}
+
+	return uc.notify.NotifyWarehouseManagementHTMLButton(part.Text, part.Button, part.Callback)
+}
+
 // flushQueue отправляет недоставленное по порядку, пока Telegram не откажет
 // (тогда остаток очереди ждёт следующего тика) или очередь не кончится.
 func (uc *UseCase) flushQueue() {
@@ -218,10 +293,10 @@ func (uc *UseCase) flushQueue() {
 			uc.mu.RUnlock()
 			return
 		}
-		text := uc.pending[0]
+		part := uc.pending[0]
 		uc.mu.RUnlock()
 
-		if err := uc.notify.NotifyWarehouseManagementHTML(text); err != nil {
+		if err := uc.send(part); err != nil {
 			slog.Info(fmt.Sprintf("stockreport: сообщение не доставлено (повтор на следующем тике): %v", err))
 			return
 		}
