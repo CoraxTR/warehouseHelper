@@ -186,7 +186,6 @@ func isSubmitValidationErr(err error) bool {
 		msordersuc.ErrManualEmptyRows,
 		msordersuc.ErrManualBadQty,
 		msordersuc.ErrEmptyOrderID,
-		msordersuc.ErrSubmitEmptyRows,
 		msordersuc.ErrSubmitBadRow,
 		msordersuc.ErrSubmitNoRecords,
 		msordersuc.ErrSubmitDuplicateID,

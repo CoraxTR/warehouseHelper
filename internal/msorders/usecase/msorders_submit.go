@@ -43,7 +43,6 @@ const (
 
 // Ошибки валидации submit (400 на клиенте).
 var (
-	ErrSubmitEmptyRows      = errors.New("нет набранных строк — отсканируйте хотя бы одну позицию")
 	ErrSubmitBadRow         = errors.New("битая строка отправки")
 	ErrSubmitNoRecords      = errors.New("нет сканов в строке")
 	ErrSubmitDuplicateID    = errors.New("позиция передана дважды")
@@ -83,6 +82,9 @@ type WarehouseNotifier interface {
 
 // SubmitRequest — набранные сканы страницы заказа: покрыты только строки с
 // записями (ненабранные активные строки сервер заглушает сам — B1).
+// Пустой Rows — закрытие подбора без единого скана (решение владельца
+// 18.11.2026): строки, уже покрытые резервом МС, остаются как есть, остальные
+// активные уходят заглушками — ровно то же правило B1.
 type SubmitRequest struct {
 	Rows []SubmitRow `json:"rows"`
 }
@@ -185,6 +187,10 @@ func (uc *UseCase) Submit(ctx context.Context, id string, req SubmitRequest) (Su
 	// Журнал сроков — до шва остатков: даты подобранных единиц не зависят от
 	// того, прошло ли списание (заказ в МС уже обновлён).
 	res.JournalWarn = uc.writeSubmitJournal(ctx, id, req, records, entry)
+	if len(lots) == 0 {
+		// Сканов нет (закрытие без подбора) — списывать нечего, шов не дёргаем.
+		return res, nil
+	}
 	if uc.picker == nil {
 		// Без шва (не подключён) заказ уже обновлён — остатки не списаны.
 		slog.Error(fmt.Sprintf("msorders: stock picker not wired for order %s", id))
@@ -200,12 +206,11 @@ func (uc *UseCase) Submit(ctx context.Context, id string, req SubmitRequest) (Su
 }
 
 // validateSubmit разбирает и проверяет вход: строки, ids без дублей, записи
-// сканов (дата ДДММГГГГ → UTC-полночь, вес 0..99999 г).
+// сканов (дата ДДММГГГГ → UTC-полночь, вес 0..99999 г). Пустой набор строк —
+// легальный вход «закрыть подбор без сканов» (решение владельца 18.11.2026):
+// пассивные строки (резерв > 0 / без кода) остаются как есть, ненабранные
+// активные уходят заглушками 0,0001 по общему правилу B1.
 func validateSubmit(req SubmitRequest) (map[int][]parsedScan, error) {
-	if len(req.Rows) == 0 {
-		return nil, ErrSubmitEmptyRows
-	}
-
 	records := make(map[int][]parsedScan, len(req.Rows))
 	seen := make(map[string]struct{})
 	for i := range req.Rows {

@@ -269,7 +269,6 @@ func TestSubmitValidation(t *testing.T) {
 		req  SubmitRequest
 		want error
 	}{
-		{"пусто", SubmitRequest{}, ErrSubmitEmptyRows},
 		{"нет записей", SubmitRequest{Rows: []SubmitRow{{IDs: []string{"pos-1"}}}}, ErrSubmitNoRecords},
 		{"битая строка", SubmitRequest{Rows: []SubmitRow{{IDs: []string{" "}, Records: []ScanRecord{{BB: "10102026"}}}}}, ErrSubmitBadRow},
 		{"плохая дата", SubmitRequest{Rows: []SubmitRow{{IDs: []string{"pos-1"}, Records: []ScanRecord{{BB: "32022026"}}}}}, ErrSubmitBadBB},
@@ -290,6 +289,39 @@ func TestSubmitValidation(t *testing.T) {
 				t.Error("PUT выполнен при битом запросе")
 			}
 		})
+	}
+}
+
+// TestSubmitNoScans — закрытие подбора без единого скана (решение владельца
+// 18.11.2026): пассивная строка (резерв == qty) уходит как есть, ненабранная
+// активная — заглушками 0,0001 по правилу B1, списание сроков не дёргается.
+func TestSubmitNoScans(t *testing.T) {
+	fake, o := submitOrder()
+	// pos-2 целиком в резерве МС → пассивная («как есть»).
+	fake.positions = []client.MSPosition{
+		position("pos-1", "21110001", "Соус терияки", 3, 50000, 0),
+		position("pos-2", "00220002", "Стейк Нью-Йорк", 0.5, 279000, 0.5),
+	}
+	picker := &fakePicker{}
+	uc := NewUseCase(fake, submitCatalog(), picker, nil, nil)
+	if _, err := uc.Submit(context.Background(), o.ID, SubmitRequest{}); err != nil {
+		t.Fatalf("Submit без сканов: %v", err)
+	}
+
+	rows := decodePutPositions(t, fake.putBody[0])
+	if len(rows) != 4 { // pos-1-заглушка + 2 новых + pos-2 как есть
+		t.Fatalf("позиций в PUT = %d, want 4", len(rows))
+	}
+	q1, rs1 := rowQty(t, rows, "pos-1")
+	if q1 != 0.0001 || rs1 != 0 {
+		t.Errorf("pos-1 qty/reserve = %v/%v, want 0,0001/0", q1, rs1)
+	}
+	q2, rs2 := rowQty(t, rows, "pos-2")
+	if q2 != 0.5 || rs2 != 0.5 {
+		t.Errorf("pos-2 qty/reserve = %v/%v, want 0,5/0,5 (резерв не тронут)", q2, rs2)
+	}
+	if picker.calls != 0 {
+		t.Errorf("PickStock вызван %d раз(а), want 0 (сканов нет)", picker.calls)
 	}
 }
 
