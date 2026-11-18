@@ -1388,6 +1388,38 @@ html.day .mark--done { color: #1A7F37; }
                 updateSubmitBtn();
             }
 
+            // Строки, которые при отправке без сканов уйдут заглушками 0,0001
+            // (правило B1): активные, с кодом склада, без сканов и без резерва
+            // МС. Пассивные (резерв > 0 / без кода) сервер оставляет как есть.
+            function emptySubmitStubs() {
+                var out = [];
+                for (var i = 0; i < rows.length; i++) {
+                    var r = rows[i];
+                    if (!r.active || r.merged || !r.hascode || r.records.length > 0 || r.reserve > 0) { continue; }
+                    var cell = r.tr.querySelector('.cell-name');
+                    var qtyText = r.weighted ? fmtKgText(Math.round(r.qty * 1000))
+                        : Math.round(r.qty) + ' шт';
+                    out.push((cell ? cell.textContent : r.code) + ' — ' + qtyText);
+                }
+                return out;
+            }
+
+            // Подтверждение закрытия подбора без единого скана (решение
+            // владельца 18.11.2026): строки в резерве МС уходят как есть,
+            // ненабранные активные — заглушками 0,0001.
+            function confirmEmptySubmit() {
+                var stubs = emptySubmitStubs();
+                var text = 'Ни один штрих-код не отсканирован. Закрыть подбор?';
+                if (stubs.length === 0) {
+                    return confirm(text + ' Все строки уже в резерве МС или без кода склада —'
+                        + ' их количества не меняются.');
+                }
+                var shown = stubs.slice(0, 5).join('; ');
+                if (stubs.length > 5) { shown += '; и ещё ' + (stubs.length - 5); }
+                return confirm(text + ' Строки без сканов уйдут заглушками 0,0001'
+                    + ' («ожидание единицы»): ' + shown + '.');
+            }
+
             function doSubmit() {
                 if (submitting) { return; }
                 // Возврат в сроки ждёт: незакрытое окно блокирует отправку подбора.
@@ -1398,10 +1430,9 @@ html.day .mark--done { color: #1A7F37; }
                     return;
                 }
                 var payload = collectSubmitRows();
-                if (payload.length === 0) {
-                    setStatus('Нет набранных позиций — отсканируйте хотя бы одну');
-                    return;
-                }
+                // Пустой набор — закрытие без сканов: подтверждение со списком
+                // строк, которые уйдут заглушками (B1), остальное решает сервер.
+                if (payload.length === 0 && !confirmEmptySubmit()) { return; }
 
                 submitting = true;
                 submitBtn.disabled = true;
