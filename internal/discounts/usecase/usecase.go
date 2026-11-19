@@ -35,6 +35,13 @@ type UseCase struct {
 	// допродажи». Ставится связкой из настроек (di.go), 0 — ёмкость не
 	// ограничена. Читать и писать — под mu (SetWindowCap/WindowCap).
 	windowCap int
+	// winPrev/winSeeded — окно ёмкости прошлого прохода и признак, что проход уже
+	// был: по переходу «окно прошлого → окно этого» решается вход пары в окно
+	// (windowedWrites, window.go). Первый проход процесса окна прошлого не имеет,
+	// вход по нему не считается. Читать и писать — под mu
+	// (windowState/storeWindow).
+	winPrev   map[discounts.LotKey]struct{}
+	winSeeded bool
 	// reg — реестр активных пар: снапшот последнего расчёта (верх окна) и
 	// предыдущие эффективные значения для уведомлений (registry.go).
 	// Маркеры расписания в памяти процесса: чтобы не дёргать проверки каждую
@@ -147,6 +154,22 @@ func (uc *UseCase) WindowCap() int {
 	defer uc.mu.Unlock()
 
 	return uc.windowCap
+}
+
+// windowState — окно ёмкости прошлого прохода и признак, что проход уже был.
+func (uc *UseCase) windowState() (map[discounts.LotKey]struct{}, bool) {
+	uc.mu.Lock()
+	defer uc.mu.Unlock()
+
+	return uc.winPrev, uc.winSeeded
+}
+
+// storeWindow — запомнить окно этого прохода как «прошлое» для следующего.
+func (uc *UseCase) storeWindow(win map[discounts.LotKey]struct{}) {
+	uc.mu.Lock()
+	defer uc.mu.Unlock()
+
+	uc.winPrev, uc.winSeeded = win, true
 }
 
 // MarkDirty отмечает товары, по которым нужен свежий оборот: шов стока

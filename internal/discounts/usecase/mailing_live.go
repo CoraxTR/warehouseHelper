@@ -378,7 +378,7 @@ func (uc *UseCase) applyExtras(ctx context.Context, now time.Time, capacity int)
 	if err != nil {
 		return err
 	}
-	extra := extraWrites(plan)
+	extra := uc.windowedWrites(pairs, extraWrites(plan))
 	if len(extra) > 0 {
 		if err := uc.writer.SetDiscounts(ctx, extra); err != nil {
 			return fmt.Errorf("финальная сборка: скидка лишним: %w", err)

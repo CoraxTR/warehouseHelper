@@ -527,6 +527,10 @@ func (uc *UseCase) RunRaise(ctx context.Context, now time.Time) error {
 	pairs := Evaluate(inputs, rates, day)
 
 	raised, writes := raiseWrites(pairs, plan)
+	// Окно ёмкости — граница канала сайта (window.go): подъём паре за окном не
+	// пишется, и маркер подъёма ей не ставим — на сайте её скидки нет.
+	writes = uc.windowedWrites(pairs, writes)
+	raised = raisedWrites(writes, raised)
 	if len(writes) > 0 {
 		if err := uc.writer.SetDiscounts(ctx, writes); err != nil {
 			return fmt.Errorf("подъём скидок: %w", err)
