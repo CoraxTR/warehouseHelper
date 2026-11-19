@@ -788,6 +788,10 @@ func appliedTop(p PairState) int16 {
 // если записывать было нечего. Изменения эффективной скидки (реестр сравнивает
 // новый расчёт с предыдущим) уходят людям в общий канал.
 func (uc *UseCase) writeAndRegister(ctx context.Context, pairs []PairState, writes []discounts.DiscountWrite) error {
+	// Окно ёмкости — граница канала сайта: значения ставятся парам окна, у пар
+	// за окном наше значение снимается, пустое место пары окна заполняется её
+	// кандидатом (window.go).
+	writes = uc.windowedWrites(pairs, writes)
 	if len(writes) > 0 {
 		if err := uc.writer.SetDiscounts(ctx, writes); err != nil {
 			return fmt.Errorf("запись скидок: %w", err)
