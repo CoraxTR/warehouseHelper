@@ -52,6 +52,16 @@ func (uc *UseCase) PlanPreview(ctx context.Context, capacity int) (DayPlanPrevie
 	pairs := Evaluate(inputs, rates, day)
 	plan := buildDayPlan(pairs, prev, capacity)
 
+	// «Сразу на сайт» — только позиции окна ёмкости: за окном скидка живёт
+	// кандидатом и до сайта не доходит (window.go), в счётчике её нет.
+	win := windowKeys(pairs, uc.WindowCap())
+	extra := 0
+	for _, s := range plan.extra {
+		if _, ok := win[s.pair.Key]; ok {
+			extra++
+		}
+	}
+
 	// Дата в шапке — как у сообщения складу (writeSlot): без неё отчёт печатает
 	// нулевой год.
 	digest := discounts.BuildDigest(uc.windowRows(pairs, plan.slot), uc.WindowCap())
@@ -60,6 +70,6 @@ func (uc *UseCase) PlanPreview(ctx context.Context, capacity int) (DayPlanPrevie
 	return DayPlanPreview{
 		Text:       digest.Text(),
 		SlotCount:  len(plan.slot),
-		ExtraCount: len(plan.extra),
+		ExtraCount: extra,
 	}, nil
 }
