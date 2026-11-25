@@ -7,9 +7,8 @@ import "testing"
 // (23.09.2026): «Филе-Миньон Signature — должна стоять скидка по срокам, а на
 // последний срок избыток».
 //
-// С 25.11.2026 действует правило «одна карточка товара — одна позиция», поэтому
-// позиция у товара одна: ближний срок скидкой по сроку. Проверяем и то, и
-// другое: строка не получила чужой источник, и товар не размножился.
+// С 25.11.2026 позиция в актуальных — одна на товар (ёмкость «12 строк = 12
+// товаров»), остальные лоты ждут в «доступно для допродажи» своими строками.
 func TestBuildDigestKeepsExpiryRowsOutOfGroup(t *testing.T) {
 	rows := []Row{
 		{ProductID: "p1", Name: "Стейк Филе-Миньон Мираторг Signature. Охл. 380 гр.", BestBefore: bb(2026, 9, 27), Percent: 20, Source: SourceExpiry, SurplusGroup: true},
@@ -38,11 +37,23 @@ func TestBuildDigestKeepsExpiryRowsOutOfGroup(t *testing.T) {
 	if !row.BestBefore.Equal(bb(2026, 9, 27)) {
 		t.Errorf("ближний срок строки %v, want 27.09", row.BestBefore)
 	}
+
+	// Дальние лоты того же товара не выброшены — они ждут в дополнительном
+	// списке своими строками, в порядке приоритета (срок ↑, затем избыток).
+	if len(d.Surplus) != 2 {
+		t.Fatalf("в дополнительном %d строк, want 2 (%v)", len(d.Surplus), names(d.Surplus))
+	}
+	if !d.Surplus[0].BestBefore.Equal(bb(2026, 9, 30)) || d.Surplus[0].Source != SourceExpiry {
+		t.Errorf("первая строка дополнительного %+v, want 30.09 сроком", d.Surplus[0])
+	}
+	if !d.Surplus[1].BestBefore.Equal(bb(2026, 10, 2)) || d.Surplus[1].Source != SourceSurplus {
+		t.Errorf("вторая строка дополнительного %+v, want 02.10 избытком", d.Surplus[1])
+	}
 }
 
-// Одна карточка товара — одна позиция: избыток на дальнем сроке не появляется
-// вторым разом, если на ближнем сроке стоит ручная скидка. Случай владельца
-// (25.11.2026): Ти-Бон — ручная 30 % до 07.12 и избыток 10 % до 28.12.
+// Товар попадает в актуальные один раз — первой своей строкой. Случай владельца
+// (25.11.2026): Ти-Бон — ручная 30 % до 07.12 и избыток 10 % до 28.12; избыток
+// в актуальных не показываем, но и не теряем: он в дополнительном списке.
 func TestBuildDigestOneRowPerProduct(t *testing.T) {
 	rows := []Row{
 		{ProductID: "tbone", Name: "Стейк Ти-Бон Праймбиф. Охл.", BestBefore: bb(2026, 12, 7), Percent: 30, Source: SourceManual},
@@ -61,8 +72,8 @@ func TestBuildDigestOneRowPerProduct(t *testing.T) {
 	if !row.BestBefore.Equal(bb(2026, 12, 7)) {
 		t.Errorf("срок строки %v, want 07.12", row.BestBefore)
 	}
-	if len(d.Surplus) != 0 {
-		t.Errorf("в «доступно для допродажи» попал дубль товара: %v", names(d.Surplus))
+	if len(d.Surplus) != 1 || !d.Surplus[0].BestBefore.Equal(bb(2026, 12, 28)) {
+		t.Fatalf("дополнительный список %v, want одну строку 28.12", names(d.Surplus))
 	}
 }
 
@@ -83,8 +94,28 @@ func TestBuildDigestOneRowPerProductFreesSlot(t *testing.T) {
 	if d.Discounts[1].ProductID != "sirloin" {
 		t.Errorf("второй слот занял %q, want Сирлойн", d.Discounts[1].ProductID)
 	}
-	if len(d.Surplus) != 0 {
-		t.Errorf("позиция ушла в «доступно для допродажи»: %v", names(d.Surplus))
+	if len(d.Surplus) != 1 || d.Surplus[0].ProductID != "tbone" {
+		t.Errorf("дополнительный список %v, want лот Ти-Бона", names(d.Surplus))
+	}
+}
+
+// Ближний лот продался — его пара ушла из расчёта, и следующий лот товара
+// поднимается в актуальные сам, без отдельного кода (владелец, 25.11.2026).
+func TestBuildDigestPromotesNextLotAfterSale(t *testing.T) {
+	first := Row{ProductID: "p1", Name: "Стейк Филе-Миньон. Охл.", BestBefore: bb(2026, 9, 27), Percent: 20, Source: SourceExpiry}
+	next := Row{ProductID: "p1", Name: "Стейк Филе-Миньон. Охл.", BestBefore: bb(2026, 9, 30), Percent: 20, Source: SourceExpiry}
+
+	before := BuildDigest([]Row{first, next}, 12)
+	if len(before.Discounts) != 1 || !before.Discounts[0].BestBefore.Equal(bb(2026, 9, 27)) {
+		t.Fatalf("до продажи в актуальных %v, want 27.09", names(before.Discounts))
+	}
+
+	after := BuildDigest([]Row{next}, 12)
+	if len(after.Discounts) != 1 || !after.Discounts[0].BestBefore.Equal(bb(2026, 9, 30)) {
+		t.Fatalf("после продажи в актуальных %v, want 30.09", names(after.Discounts))
+	}
+	if len(after.Surplus) != 0 {
+		t.Errorf("дополнительный список после продажи %v, want пусто", names(after.Surplus))
 	}
 }
 
