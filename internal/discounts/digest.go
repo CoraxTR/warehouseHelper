@@ -129,13 +129,28 @@ func Compare(a, b Row) int {
 // раз. Дата отчёта (Digest.Date) проставляется вызывающим — своих часов пакет не
 // заводит.
 func BuildDigest(rows []Row, capacity int) Digest {
+	return digestOf(firstPerProduct(WindowRows(rows)), capacity)
+}
+
+// WindowRows — позиции окна ёмкости без правила «одна карточка товара»: группы
+// избытка свёрнуты, постоянные едут сверх окна. Ёмкость здесь не режется —
+// её применяет вызывающий (digestOf для отчёта, windowOf для окна реестра).
+// Нужен там, где вопрос «что в работе», а не «что стоит в актуальных»:
+// подсветка страницы «Сроки» (Registry.ActiveLots раскрывает группу в пары).
+func WindowRows(rows []Row) []Row {
 	active := mergeGroups(rows)
 	Sort(active)
 
+	return active
+}
+
+// digestOf — разложить позиции по двум секциям: активные (не больше capacity) и
+// «доступно для допродажи» (слотовые строки за ёмкостью).
+func digestOf(rows []Row, capacity int) Digest {
 	// Постоянные скидки место в окне не занимают (решение владельца 03.11.2026):
 	// ёмкость съедают только слотовые строки, постоянные едут сверх окна — они и
 	// так стоят на сайте, и вытеснять ими лестницу или избыток нельзя.
-	slots, permanent := SplitPermanent(active)
+	slots, permanent := SplitPermanent(rows)
 
 	d := Digest{Cap: capacity}
 	if capacity > 0 && len(slots) > capacity {
@@ -150,6 +165,30 @@ func BuildDigest(rows []Row, capacity int) Digest {
 	d.Discounts = append(d.Discounts, permanent...)
 
 	return d
+}
+
+// firstPerProduct — одна позиция на карточку товара (решение владельца
+// 25.11.2026): в актуальных скидках товар показывается один раз — своей первой
+// строкой в порядке отчёта (ручная → срок → избыток, внутри — ближний срок).
+// Поэтому избыток на дальнем сроке не дублирует товар, у которого ближний срок
+// уже закрыт ручной скидкой, а освободившийся слот занимает следующая позиция.
+// Постоянные скидки правила не касаются: они идут своим хвостом сверх окна и
+// место в ёмкости не занимают (их карточка может стоять и в слотах, и в хвосте).
+func firstPerProduct(rows []Row) []Row {
+	seen := make(map[string]struct{}, len(rows))
+	out := make([]Row, 0, len(rows))
+
+	for _, r := range rows {
+		if !r.Permanent {
+			if _, ok := seen[r.ProductID]; ok {
+				continue
+			}
+			seen[r.ProductID] = struct{}{}
+		}
+		out = append(out, r)
+	}
+
+	return out
 }
 
 // SplitPermanent — строки отчёта на слотовые и постоянные. Порядок внутри

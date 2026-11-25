@@ -271,7 +271,10 @@ func (r *Registry) ActiveLots(capacity int) []discounts.LotKey {
 // activeLots — ключи пар активных позиций: обычная строка даёт один ключ, строка
 // группы — по ключу на каждый её срок.
 func activeLots(rows []discounts.Row, capacity int) []discounts.LotKey {
-	active := discounts.BuildDigest(rows, capacity).Discounts
+	// WindowRows, а не BuildDigest: правило «одна карточка товара — одна позиция»
+	// относится к актуальным скидкам, а здесь вопрос «что в работе» — группа
+	// избытка раскрывается во все свои сроки (решение владельца 25.11.2026).
+	active := windowOf(discounts.WindowRows(rows), capacity)
 	keys := make([]discounts.LotKey, 0, len(active))
 	for _, row := range active {
 		if len(row.Dates) == 0 {
