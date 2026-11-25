@@ -116,3 +116,35 @@ func TestPermanentPairFreesWindowSlotForNextPair(t *testing.T) {
 		t.Errorf("пар окна %d, want 2 (постоянная + одна слотовая): %+v", len(keys), keys)
 	}
 }
+
+// Избыток, легший поверх постоянной, — слотовая позиция. Постоянная в карточке
+// есть (5 %), но на сайте стоит 10 % избытком (owner=surplus), значит товар
+// занимает место в окне. Иначе строка с избытком уезжала в хвост постоянных мимо
+// правила «одна карточка товара» и товар печатался дважды: ручная 30 % в
+// актуальных и избыток 10 % там же отдельной строкой (Ти-Бон, 25.11.2026).
+func TestSurplusOverPermanentTakesSlot(t *testing.T) {
+	perm := PairState{
+		ProductID: "tbone", Name: "Ти-Бон", BestBefore: day(12), Qty: 16, DaysLeft: 12,
+		Manual: new(int16(30)), Permanent: new(int16(5)),
+	}
+	far := PairState{
+		ProductID: "tbone", Name: "Ти-Бон", BestBefore: day(33), Qty: 20, DaysLeft: 33,
+		Permanent: new(int16(5)), Surplus: new(int16(10)), HasSurplus: true, Coeff: 1.1,
+	}
+
+	if row := far.Row(); row.Permanent {
+		t.Fatalf("строка избытка помечена постоянной: %+v", row)
+	}
+
+	d := discounts.BuildDigest([]discounts.Row{perm.Row(), far.Row()}, 12)
+
+	if len(d.Discounts) != 1 {
+		t.Fatalf("активных строк %d, want 1 (одна карточка — одна позиция): %+v", len(d.Discounts), d.Discounts)
+	}
+	if d.Discounts[0].Source != discounts.SourceManual || d.Discounts[0].Percent != 30 {
+		t.Errorf("в актуальных %+v, want ручную 30 %%", d.Discounts[0])
+	}
+	if len(d.Surplus) != 1 || d.Surplus[0].Percent != 10 {
+		t.Errorf("допродажа %+v, want избыток 10 %% на дальнем сроке", d.Surplus)
+	}
+}
