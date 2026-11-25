@@ -276,6 +276,18 @@ func (n *fakeCommonNotifier) NotifyCommon(_ context.Context, text string) error 
 	return nil
 }
 
+// NotifyCommonRich — rich-вариант того же сообщения: для тестов это тот же
+// текст (разметку собирает доменный слой).
+func (n *fakeCommonNotifier) NotifyCommonRich(ctx context.Context, markdown string) error {
+	return n.NotifyCommon(ctx, markdown)
+}
+
+// SendDetailsRich — rich-ответ в конкретный чат: помнит попытку так же, как
+// обычный SendDetails.
+func (n *fakeCommonNotifier) SendDetailsRich(ctx context.Context, chatID int64, markdown string) error {
+	return n.SendDetails(ctx, chatID, markdown)
+}
+
 // SendDetails — ответ в конкретный чат: помнит все попытки, ошибку отдаёт по
 // флагу теста. Удачные попытки отдельно не копим: команде важен сам факт ответа.
 func (n *fakeCommonNotifier) SendDetails(_ context.Context, chatID int64, text string) error {

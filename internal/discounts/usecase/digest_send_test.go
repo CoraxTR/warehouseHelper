@@ -58,7 +58,7 @@ func goldenDigest(now time.Time) string {
 	}, 0)
 	d.Date = now
 
-	return d.Text()
+	return d.MessageMarkdown()
 }
 
 // Рассылка 09:00 уходит один раз за день: текст — отчёт реестра, после отправки
@@ -79,8 +79,8 @@ func TestSendDigestSendsRegistryTextOncePerDay(t *testing.T) {
 	if got := h.common.tries[0]; got != want {
 		t.Fatalf("текст общего канала:\n%q\nwant:\n%q", got, want)
 	}
-	// тот же текст отдаёт реестр под мутексом юзкейса (Digest().Text())
-	if got := h.uc.Digest(0).Text(); got != want {
+	// тот же текст отдаёт реестр под мутексом юзкейса (Digest().MessageMarkdown())
+	if got := h.uc.Digest(0).MessageMarkdown(); got != want {
 		t.Errorf("текст реестра и доменного сборщика разошлись:\n%q\n%q", got, want)
 	}
 	if !h.digestFlag() {
@@ -196,19 +196,21 @@ func TestDigestShowsOnlyStandingDiscounts(t *testing.T) {
 
 	// Утро ТГ-дня: расчёт дал паре ступень по сроку, на сайте скидки ещё нет.
 	h.uc.reg.Replace([]PairState{regPair("p1", "Томагавк", day(12), expiryOpt())})
-	if text := h.uc.Digest(12).Text(); strings.Contains(text, "Томагавк") {
+	if text := h.uc.Digest(12).MessageMarkdown(); strings.Contains(text, "Томагавк") {
 		t.Errorf("скидка дня видна в дайджесте до плана:\n%s", text)
 	}
 
 	// 14:00: план записал скидку дня в ТГ-колонку (сайт пока без скидки).
 	h.uc.reg.Replace([]PairState{regPair("p1", "Томагавк", day(12), expiryOpt(), telegramOpt(20), sourceOpt(discounts.ReasonExpiry))})
-	if text := h.uc.Digest(12).Text(); !strings.Contains(text, "(ТГ) Томагавк (до 26.09) — 20%") {
+	if text := h.uc.Digest(12).MessageMarkdown(); !strings.Contains(text, "<td>Томагавк</td><td>до 26.09</td>") ||
+		!strings.Contains(text, "<td>ТГ</td>") {
 		t.Errorf("позиция рассылки не попала в дайджест:\n%s", text)
 	}
 
 	// 16:00: сайт догнал рассылку — строка печатается скидкой сайта и её меткой.
 	h.uc.reg.Replace([]PairState{regPair("p1", "Томагавк", day(12), expiryOpt(), appliedOpt(20), sourceOpt(discounts.ReasonExpiry))})
-	if text := h.uc.Digest(12).Text(); !strings.Contains(text, "(Срок) Томагавк (до 26.09) — 20%") {
+	if text := h.uc.Digest(12).MessageMarkdown(); !strings.Contains(text, "<td>Томагавк</td><td>до 26.09</td>") ||
+		!strings.Contains(text, "<td>Срок</td>") {
 		t.Errorf("стоящая скидка напечатана не своим источником:\n%s", text)
 	}
 }

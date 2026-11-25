@@ -23,7 +23,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"time"
 
 	"warehouseHelper/internal/discounts"
 )
@@ -93,53 +92,80 @@ func Split(positions []Position) Report {
 	return r
 }
 
-// OutOfStockItems — блоки «нет в наличии»: «№. {name}».
-func (r Report) OutOfStockItems() []string {
-	items := make([]string, 0, len(r.OutOfStock))
-	for i, p := range r.OutOfStock {
-		items = append(items, fmt.Sprintf("<b>%d. %s</b>", i+1, escape(p.Name)))
-	}
-
-	return items
-}
-
-// LowStockItems — блоки «кончается»: имя и строка цифр (остаток, средняя).
-func (r Report) LowStockItems() []string {
-	items := make([]string, 0, len(r.LowStock))
-	for i, p := range r.LowStock {
-		items = append(items, fmt.Sprintf("<b>%d. %s</b>\n<code>остаток %d шт · продажа %s/нед</code>",
-			i+1, escape(p.Name), p.Qty, formatAvg(*p.AvgWeek)))
-	}
-
-	return items
-}
-
-// SurplusItems — блоки «избыток»: одна позиция на ТОВАР, внутри — строки по
-// срокам. Позиция и срок, накопленный до срока остаток, план продаж до даты и
-// пометка, если сайт уже живёт ступенью по сроку (решение владельца 17.11.2026).
+// RichMarkdown — сообщение отчёта для rich-сообщения Telegram
+// (sendRichMessage, markdown): три блока под стрелкой (<details>), «кончается»
+// и «избыток» — таблицами с рамками. Пустой блок не печатается, пустой отчёт —
+// пустая строка (слать нечего).
 //
-// Товар повторяется один раз: у лота с тремя сроками три отдельные строки
-// читались бы как три разных товара, а сортировка по коэффициенту ещё и
-// раскидывала бы их по списку.
-func (r Report) SurplusItems() []string {
-	groups := groupSurplus(r.Surplus)
+// Решения владельца 25.11.2026: линии между товарами (bordered); «остаток» и
+// «продажа» — отдельными колонками; «накоплено / продадим» — одной ячейкой;
+// коэффициент избытка в таблице не печатается; подсветка (mark) убрана —
+// белый текст на светло-жёлтом не читался, скидка выделена жирным.
+//
+// Названия экранируются: в rich-режиме текст разбирается как HTML, и «Z&P» в
+// имени товара иначе ломает разметку.
+func (r Report) RichMarkdown() string {
+	var b strings.Builder
 
-	items := make([]string, 0, len(groups))
-	for i, g := range groups {
-		lines := make([]string, 0, len(g.Lots))
-		for _, s := range g.Lots {
-			line := fmt.Sprintf("до %s — накоплено %d шт · продадим ~%d шт",
-				s.BestBefore.Format(dateOnly), s.CumQty, s.PlannedQty)
-			if s.ExpiryWins() {
-				line += fmt.Sprintf(" · уже по сроку %d %%", *s.Expiry)
-			}
-			lines = append(lines, "<code>"+line+"</code>")
+	if len(r.OutOfStock) > 0 {
+		fmt.Fprintf(&b, "<details><summary>🟥 НЕТ В НАЛИЧИИ · %d</summary>\n\n", len(r.OutOfStock))
+		for i, p := range r.OutOfStock {
+			fmt.Fprintf(&b, "%d. %s\n", i+1, escape(p.Name))
 		}
-		items = append(items, fmt.Sprintf("<b>%d. %s</b> · коэф до %s\n%s",
-			i+1, escape(g.Name), formatCoeff(g.Lots[0].Coeff), strings.Join(lines, "\n")))
+		b.WriteString("\n</details>\n\n")
 	}
 
-	return items
+	if len(r.LowStock) > 0 {
+		fmt.Fprintf(&b, "<details><summary>🟨 КОНЧАЕТСЯ · %d</summary>\n\n", len(r.LowStock))
+		b.WriteString("<table bordered compact>\n")
+		b.WriteString("<tr><th>Товар</th><th>Остаток</th><th>Продажа/нед</th></tr>\n")
+		for _, p := range r.LowStock {
+			fmt.Fprintf(&b, "<tr><td>%s</td><td>%d</td><td>%s</td></tr>\n",
+				escape(p.Name), p.Qty, formatAvg(*p.AvgWeek))
+		}
+		b.WriteString("</table>\n\n</details>\n\n")
+	}
+
+	if groups := groupSurplus(r.Surplus); len(groups) > 0 {
+		fmt.Fprintf(&b, "<details><summary>🟦 ИЗБЫТОК · %d</summary>\n\n", len(groups))
+		b.WriteString("<table bordered compact>\n")
+		b.WriteString("<tr><th>Товар</th><th>Срок</th><th>Накоплено / продадим</th><th>Скидка</th></tr>\n")
+		for _, g := range groups {
+			for i, s := range g.Lots {
+				name := ""
+				switch {
+				case i > 0:
+					// Ячейка имени занята первой строкой (rowspan).
+				case len(g.Lots) > 1:
+					// Имя склеено по строкам лотов: три срока одного товара
+					// не должны читаться как три товара.
+					name = fmt.Sprintf(`<td rowspan="%d">%s</td>`, len(g.Lots), escape(g.Name))
+				default:
+					name = fmt.Sprintf("<td>%s</td>", escape(g.Name))
+				}
+				fmt.Fprintf(&b, "<tr>%s<td>%s</td><td>%d / ~%d</td><td>%s</td></tr>\n",
+					name, s.BestBefore.Format(dateOnly), s.CumQty, s.PlannedQty, discountCell(s))
+			}
+		}
+		b.WriteString("</table>\n\n</details>\n\n")
+	}
+
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// discountCell — скидка пары для таблицы избытка: что должно стоять на сайте.
+// Берём большее из действующей скидки сайта и ступени по сроку: избыток
+// поднимает постоянную, но глубже лестницы не бывает. Нет скидки — прочерк.
+func discountCell(s discounts.SurplusLot) string {
+	best := s.Site
+	if s.Expiry != nil && (best == nil || *s.Expiry > *best) {
+		best = s.Expiry
+	}
+	if best == nil || *best <= 0 {
+		return "—"
+	}
+
+	return fmt.Sprintf("<b>%d %%</b>", *best)
 }
 
 // surplusGroup — позиция блока избытка: товар и его сроки с избытком.
@@ -196,15 +222,4 @@ func escape(s string) string {
 // (решение владельца 17.11.2026).
 func formatAvg(v float64) string {
 	return strconv.FormatInt(int64(math.Round(v)), 10)
-}
-
-// formatCoeff — коэффициент избытка: всегда один знак после запятой. Ноль
-// после точки не срезаем: «коэф 1» читалось бы как «избытка нет».
-func formatCoeff(v float64) string {
-	return strings.ReplaceAll(strconv.FormatFloat(v, 'f', 1, 64), ".", ",")
-}
-
-// SurplusDate — срок пары в формате сообщения (для тестов и вызывающих).
-func SurplusDate(t time.Time) string {
-	return t.Format(dateOnly)
 }

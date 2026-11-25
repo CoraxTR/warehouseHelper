@@ -793,7 +793,7 @@ func TestRunStepsDigestAfterRecalc(t *testing.T) {
 
 	var digest string
 	for _, text := range h.common.texts {
-		if strings.HasPrefix(text, "Дайджест по скидкам") {
+		if strings.HasPrefix(text, "# Актуальные скидки для сайта") {
 			digest = text
 		}
 	}

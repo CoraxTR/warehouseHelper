@@ -11,7 +11,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"strings"
 	"sync"
 	"time"
 
@@ -24,23 +23,8 @@ import (
 const (
 	trackPkg = "stockreport"
 
-	// messageMaxLen — предел ОДНОГО сообщения. Лимит Telegram 4096 символов,
-	// но len() в Go считает БАЙТЫ, а кириллица — 2 байта на символ: порог 3500
-	// байт даёт двойной запас. Длинный список иначе не уйдёт вовсе, и очередь
-	// ретрая станет вечной.
-	messageMaxLen = 3500
-	// headerReserve — байты под заголовок части («Нет в наличии (часть 3 из 7):»)
-	// при делении длинного списка.
-	headerReserve = 120
 	// pollInterval — период проверки «наступило ли время отчёта».
 	pollInterval = time.Minute
-	// itemSep — разделитель блоков позиций: пустая строка между карточками.
-	itemSep = "\n\n"
-	// SurplusButton — текст кнопки под блоком избытка.
-	SurplusButton = "📷 Выгрузить таблицей"
-	// SurplusCallback — данные кнопки; префикс sr: принадлежит отчёту, чтобы
-	// диспетчер бота не отдал нажатие другому модулю.
-	SurplusCallback = "sr:surplus"
 )
 
 // StockReader — кэш остатков модуля «Сроки»: весь каталог с лотами. Товары без
@@ -64,27 +48,18 @@ type SurplusReader interface {
 	SurplusLots(ctx context.Context, at time.Time) ([]discounts.SurplusLot, error)
 }
 
-// Notifier — сообщения в чат управления складом. HTML-вариант: отчёт уходит
-// с parse_mode=HTML (плашки и нумерация), поэтому названия экранируются на
-// стороне сборки.
+// Notifier — сообщения в чат управления складом. Rich-вариант: отчёт уходит
+// одним rich-сообщением (заголовки, таблицы, сворачиваемые блоки), названия
+// экранируются на стороне сборки.
 type Notifier interface {
-	NotifyWarehouseManagementHTML(text string) error
-	// NotifyWarehouseManagementHTMLButton — то же сообщение с одной кнопкой.
-	NotifyWarehouseManagementHTMLButton(text, buttonText, callbackData string) error
-	// NotifyWarehouseManagementPhoto — картинка с подписью в чат управления.
-	NotifyWarehouseManagementPhoto(data []byte, caption string) error
-	// ManagementCallbackAck — закрыть нажатие кнопки («часики»).
-	ManagementCallbackAck(callbackQueryID string) error
+	NotifyWarehouseManagementRich(markdown string) error
 }
 
-// Part — одно сообщение отчёта: текст и необязательная кнопка под ним.
-//
-// Кнопка живёт только под блоком избытка: таблица выгрузки собирается по тем
-// же товарам, что в блоке, поэтому и предлагается там же.
+// Part — сообщение отчёта: rich-markdown одного прохода. Частей в проходе не
+// больше одной: лимит rich-сообщения (32 768 символов) перекрывает весь отчёт,
+// резать на куски больше не нужно.
 type Part struct {
-	Text     string
-	Button   string
-	Callback string
+	Text string
 }
 
 // UseCase — ежедневный отчёт. Живёт в одной горутине: состояние (маркер дня и
@@ -209,26 +184,12 @@ func (uc *UseCase) Build(ctx context.Context) ([]Part, error) {
 	report := stockreport.Split(positions)
 	report.Surplus = surplus
 
-	parts := make([]Part, 0, 3)
-	for _, text := range messageParts(report.OutOfStockItems(), "🟥", "НЕТ В НАЛИЧИИ") {
-		parts = append(parts, Part{Text: text})
-	}
-	for _, text := range messageParts(report.LowStockItems(), "🟨", "КОНЧАЕТСЯ") {
-		parts = append(parts, Part{Text: text})
+	text := report.RichMarkdown()
+	if text == "" {
+		return nil, nil // все три списка пусты — отправлять нечего
 	}
 
-	surplusParts := messageParts(report.SurplusItems(), "🟦", "ИЗБЫТОК")
-	for i, text := range surplusParts {
-		part := Part{Text: text}
-		// Кнопка — под последней частью блока: она открывает таблицу по всем
-		// позициям блока, а не по видимой части сообщения.
-		if i == len(surplusParts)-1 {
-			part.Button, part.Callback = SurplusButton, SurplusCallback
-		}
-		parts = append(parts, part)
-	}
-
-	return parts, nil
+	return []Part{{Text: text}}, nil
 }
 
 // enqueue ставит сообщения в очередь отправки и сразу пробует отправить.
@@ -244,44 +205,9 @@ func (uc *UseCase) enqueue(parts []Part) {
 	uc.flushQueue()
 }
 
-// HandleSurplusButton — нажатие «Выгрузить»: таблица избытков картинкой в чат
-// управления. Данные берутся заново у модуля скидок, а не из сборки отчёта:
-// между утренним отчётом и нажатием остатки и скидки успевают измениться.
-func (uc *UseCase) HandleSurplusButton(ctx context.Context, callbackQueryID string, _, _ int64) error {
-	done := metrics.Track(trackPkg, "HandleSurplusButton")
-	defer done()
-
-	if err := uc.notify.ManagementCallbackAck(callbackQueryID); err != nil {
-		slog.Warn("stockreport: подтверждение нажатия не отправлено", "err", err)
-	}
-
-	now := uc.now()
-
-	lots, err := uc.surplus.SurplusLots(ctx, now)
-	if err != nil {
-		return fmt.Errorf("избытки для выгрузки: %w", err)
-	}
-
-	table, err := stockreport.DrawSurplusTable(lots, now)
-	if err != nil {
-		return fmt.Errorf("таблица избытков: %w", err)
-	}
-	if len(table) == 0 {
-		return uc.notify.NotifyWarehouseManagementHTML("Избытков нет — выгружать нечего.")
-	}
-
-	caption := fmt.Sprintf("Избыток · %s · %d товаров", now.Format("02.01.2006"), len(lots))
-
-	return uc.notify.NotifyWarehouseManagementPhoto(table, caption)
-}
-
-// send отправляет одно сообщение отчёта: с кнопкой или без.
+// send отправляет одно сообщение отчёта.
 func (uc *UseCase) send(part Part) error {
-	if part.Button == "" || part.Callback == "" {
-		return uc.notify.NotifyWarehouseManagementHTML(part.Text)
-	}
-
-	return uc.notify.NotifyWarehouseManagementHTMLButton(part.Text, part.Button, part.Callback)
+	return uc.notify.NotifyWarehouseManagementRich(part.Text)
 }
 
 // flushQueue отправляет недоставленное по порядку, пока Telegram не откажет
@@ -321,62 +247,6 @@ func (uc *UseCase) markDone(now time.Time) {
 	defer uc.mu.Unlock()
 
 	uc.lastRunDay = normalizeDate(now)
-}
-
-// messageParts собирает сообщение блока: заголовок «эмодзи <b>НАЗВАНИЕ · N</b>»
-// и блоки позиций через пустую строку. Не влезает в лимит Telegram — делится
-// на части с тем же заголовком и пометкой «часть i из n»; нумерация позиций
-// сквозная, потому что проставлена до деления (по номеру позиции в чате можно
-// сослаться).
-func messageParts(items []string, emoji, title string) []string {
-	if len(items) == 0 {
-		return nil
-	}
-
-	header := fmt.Sprintf("%s <b>%s · %d</b>", emoji, title, len(items))
-	joined := header + "\n\n" + strings.Join(items, itemSep)
-	if len(joined) <= messageMaxLen {
-		return []string{joined}
-	}
-
-	chunks := chunkItems(items)
-	parts := make([]string, 0, len(chunks))
-	for i, chunk := range chunks {
-		parts = append(parts, fmt.Sprintf("%s <b>%s · часть %d из %d</b>\n\n%s",
-			emoji, title, i+1, len(chunks), strings.Join(chunk, itemSep)))
-	}
-
-	return parts
-}
-
-// chunkItems режет блоки на пачки под лимит одного сообщения (messageMaxLen
-// минус запас на заголовок части), считая байты вместе с разделителями.
-// Один блок длиннее лимита уходит отдельной пачкой: разорвать название товара
-// хуже, чем превысить порог.
-func chunkItems(items []string) [][]string {
-	const limit = messageMaxLen - headerReserve
-
-	var chunks [][]string
-	current := make([]string, 0, len(items))
-
-	size := 0
-	for _, item := range items {
-		add := len(item) + len(itemSep)
-		if size+add > limit && len(current) > 0 {
-			chunks = append(chunks, current)
-			current = nil
-			size = 0
-		}
-
-		current = append(current, item)
-		size += add
-	}
-
-	if len(current) > 0 {
-		chunks = append(chunks, current)
-	}
-
-	return chunks
 }
 
 // lotQty — физический остаток товара: сумма остатков всех партий. Пустой Lots —

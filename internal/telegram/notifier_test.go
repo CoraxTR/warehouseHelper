@@ -1,9 +1,11 @@
 package telegram
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"warehouseHelper/internal/config"
@@ -100,10 +102,13 @@ func TestNotifyWarehouseDisabledWithoutConfig(t *testing.T) {
 	}
 }
 
-func TestNotifyWarehouseManagementHTMLSendsToManagementChat(t *testing.T) {
+func TestNotifyWarehouseManagementRichSendsRichMessage(t *testing.T) {
+	var gotPath string
 	var gotBody map[string]any
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+
 		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
 			t.Errorf("decode request body: %v", err)
 		}
@@ -118,21 +123,35 @@ func TestNotifyWarehouseManagementHTMLSendsToManagementChat(t *testing.T) {
 		ManagementChatID: -1007776665554,
 	}, srv.URL)
 
-	if err := n.NotifyWarehouseManagementHTML("Молоко - нет в наличии"); err != nil {
-		t.Fatalf("NotifyWarehouseManagement error: %v", err)
+	const md = "# Отчёт\n\n<table bordered compact></table>"
+	if err := n.NotifyWarehouseManagementRich(md); err != nil {
+		t.Fatalf("NotifyWarehouseManagementRich error: %v", err)
 	}
 
-	// Отчёт управления уходит СВОИМ чатом, а не чатом склада, и с разметкой:
-	// плашки и нумерация позиций — HTML.
+	// Отчёт управления — своим чатом и методом sendRichMessage: текст уходит
+	// в rich_message.markdown, а не в text с parse_mode.
+	if !strings.HasSuffix(gotPath, "/sendRichMessage") {
+		t.Errorf("метод %q, want sendRichMessage", gotPath)
+	}
 	if gotBody["chat_id"] != float64(-1007776665554) {
 		t.Errorf("chat_id = %v, want -1007776665554 (чат управления)", gotBody["chat_id"])
 	}
-	if gotBody["parse_mode"] != "HTML" {
-		t.Errorf("parse_mode = %v, want HTML", gotBody["parse_mode"])
+	rich, ok := gotBody["rich_message"].(map[string]any)
+	if !ok {
+		t.Fatalf("rich_message = %v, want объект", gotBody["rich_message"])
+	}
+	if rich["markdown"] != md {
+		t.Errorf("markdown = %q, want %q", rich["markdown"], md)
+	}
+	if _, has := gotBody["text"]; has {
+		t.Error("plain-поле text ушло вместе с rich-сообщением")
+	}
+	if _, has := gotBody["parse_mode"]; has {
+		t.Error("parse_mode не нужен: разметку несёт rich_message")
 	}
 }
 
-func TestNotifyWarehouseManagementHTMLDisabledWithoutConfig(t *testing.T) {
+func TestNotifyWarehouseManagementRichDisabledWithoutConfig(t *testing.T) {
 	hit := false
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -143,12 +162,42 @@ func TestNotifyWarehouseManagementHTMLDisabledWithoutConfig(t *testing.T) {
 
 	n := testNotifier(&config.TelegramConfig{BotToken: "test-token"}, srv.URL)
 
-	if err := n.NotifyWarehouseManagementHTML("test"); err != nil {
-		t.Fatalf("NotifyWarehouseManagement disabled error: %v", err)
+	if err := n.NotifyWarehouseManagementRich("test"); err != nil {
+		t.Fatalf("NotifyWarehouseManagementRich disabled error: %v", err)
 	}
 
 	if hit {
 		t.Error("без TG_WAREHOUSE_MANAGEMENT_CHAT_ID запросов быть не должно")
+	}
+}
+
+func TestNotifyCommonRichSendsToCommonChat(t *testing.T) {
+	var gotBody map[string]any
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Errorf("decode request body: %v", err)
+		}
+
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	n := testNotifier(&config.TelegramConfig{
+		BotToken:     "test-token",
+		CommonChatID: -1005554443332,
+	}, srv.URL)
+
+	if err := n.NotifyCommonRich(context.Background(), "# Актуальные скидки для сайта"); err != nil {
+		t.Fatalf("NotifyCommonRich error: %v", err)
+	}
+
+	if gotBody["chat_id"] != float64(-1005554443332) {
+		t.Errorf("chat_id = %v, want общий канал", gotBody["chat_id"])
+	}
+	rich, ok := gotBody["rich_message"].(map[string]any)
+	if !ok || rich["markdown"] != "# Актуальные скидки для сайта" {
+		t.Errorf("rich_message = %v, want markdown дайджеста", gotBody["rich_message"])
 	}
 }
 

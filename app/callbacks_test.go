@@ -57,7 +57,6 @@ func TestHandleCallbackRoutes(t *testing.T) {
 		want  []string
 	}{
 		{"кнопка жалобы", "complaint_details:12", []string{"complaint:cb-1:-1005:12"}},
-		{"выгрузка избытка", "sr:surplus", []string{"surplus:cb-1:-1005:777"}},
 		{"отметка задачи", "task_done:7", []string{"done:cb-1:-1005:777:7"}},
 		{"выбор сотрудника", "task_who:7:3", []string{"who:cb-1:-1005:777:7:3"}},
 		{"пропуск рассылки", "ds:skip", []string{"skip:cb-1:-1005:777"}},
@@ -68,14 +67,14 @@ func TestHandleCallbackRoutes(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.title, func(t *testing.T) {
-			complaints, tasks, mailing, report := &stubComplaints{}, &stubTasks{}, &stubMailing{}, &stubStockReport{}
+			complaints, tasks, mailing := &stubComplaints{}, &stubTasks{}, &stubMailing{}
 			cb := telegram.CallbackQuery{ID: "cb-1", ChatID: -1005, MessageID: 777, Data: tt.data}
 
-			if err := handleCallback(context.Background(), complaints, tasks, mailing, report, cb); err != nil {
+			if err := handleCallback(context.Background(), complaints, tasks, mailing, cb); err != nil {
 				t.Fatalf("диспетчер: %v", err)
 			}
 
-			got := append(append(append(append([]string{}, complaints.calls...), tasks.calls...), mailing.calls...), report.calls...)
+			got := append(append(append([]string{}, complaints.calls...), tasks.calls...), mailing.calls...)
 			if len(got) != len(tt.want) {
 				t.Fatalf("вызовы %v, want %v", got, tt.want)
 			}
@@ -86,13 +85,4 @@ func TestHandleCallbackRoutes(t *testing.T) {
 			}
 		})
 	}
-}
-
-// stubStockReport — кнопка «Выгрузить» отчёта по остаткам.
-type stubStockReport struct{ calls []string }
-
-func (s *stubStockReport) HandleSurplusButton(_ context.Context, callbackQueryID string, chatID, messageID int64) error {
-	s.calls = append(s.calls, fmt.Sprintf("surplus:%s:%d:%d", callbackQueryID, chatID, messageID))
-
-	return nil
 }
