@@ -12,12 +12,13 @@ import (
 // 25.11.2026: 12 строк = 12 товаров). До правки дальние лоты выбивали из окна
 // следующую карточку, и её значения не писались вовсе.
 func TestWindowCapacityCountsProducts(t *testing.T) {
-	pairs := []PairState{
-		// Товар с двумя лотами — по сроку, оба в окне по приоритету.
-		{ProductID: "multi", Name: "Филе-Миньон", BestBefore: day(10), Qty: 5, DaysLeft: 10, Expiry: new(int16(20))},
-		{ProductID: "multi", Name: "Филе-Миньон", BestBefore: day(13), Qty: 5, DaysLeft: 13, Expiry: new(int16(20))},
-	}
-	for i := 0; i < 11; i++ {
+	pairs := make([]PairState, 0, 13)
+	// Товар с двумя лотами — по сроку, оба в окне по приоритету.
+	pairs = append(pairs,
+		PairState{ProductID: "multi", Name: "Филе-Миньон", BestBefore: day(10), Qty: 5, DaysLeft: 10, Expiry: new(int16(20))},
+		PairState{ProductID: "multi", Name: "Филе-Миньон", BestBefore: day(13), Qty: 5, DaysLeft: 13, Expiry: new(int16(20))},
+	)
+	for i := range 11 {
 		pairs = append(pairs, PairState{
 			ProductID:  fmt.Sprintf("p%02d", i),
 			Name:       fmt.Sprintf("Товар %d", i),
@@ -37,7 +38,7 @@ func TestWindowCapacityCountsProducts(t *testing.T) {
 	// Последний по приоритету товар не выброшен из окна.
 	last := discounts.LotKey{ProductID: "p10", BestBefore: day(24)}
 	if _, ok := keys[last]; !ok {
-		t.Errorf("товар p10 не попал в окно: место заняли дальние лоты другого товара")
+		t.Error("товар p10 не попал в окно: место заняли дальние лоты другого товара")
 	}
 	// Оба лота многолотьевого товара — в окне: значения дальних лотов не снимаются.
 	for _, dt := range []int{10, 13} {
