@@ -35,6 +35,10 @@ const (
 	parseModeHTML  = "HTML"
 	fieldParseMode = "parse_mode"
 
+	// rich-сообщения (Bot API 10.x): контент в rich_message, разметка — markdown.
+	fieldRichMessage = "rich_message"
+	fieldMarkdown    = "markdown"
+
 	// Имена полей payload'ов Bot API — повторяются в каждом методе нотифаера
 	// (goconst: вынесены в константы, 16.09.2026).
 	fieldChatID       = "chat_id"
@@ -108,107 +112,17 @@ func (n *Notifier) NotifyWarehouseHTML(text string) error {
 	})
 }
 
-// NotifyWarehouseManagementHTML отправляет сообщение в чат управления складом
-// (ежедневный отчёт по остаткам против средних продаж) с parse_mode=HTML:
-// отчёт размечен плашками и нумерацией, названия экранирует сборка. Отдельный
-// метод, а не флаг: у обычных сообщений разметка не разбирается. Без
-// настроенного токена или chat_id чата управления — no-op: отчёт не уходит,
+// NotifyWarehouseManagementRich отправляет rich-сообщение в чат управления
+// складом (ежедневный отчёт по остаткам против средних продаж): sendRichMessage
+// с markdown — заголовки, таблицы и сворачиваемые блоки разбирает клиент.
+// Без настроенного токена или chat_id чата управления — no-op: отчёт не уходит,
 // приложение не падает.
-func (n *Notifier) NotifyWarehouseManagementHTML(text string) error {
+func (n *Notifier) NotifyWarehouseManagementRich(markdown string) error {
 	if n.botToken == "" || n.managementChatID == 0 {
 		return nil
 	}
 
-	return n.postJSON(context.Background(), "sendMessage", map[string]any{
-		fieldChatID:    n.managementChatID,
-		fieldText:      text,
-		fieldParseMode: parseModeHTML,
-	})
-}
-
-// NotifyWarehouseManagementHTMLButton — то же сообщение с одной inline-кнопкой
-// (выгрузка таблицы избытков из отчёта по остаткам). Без токена или chat_id
-// чата управления — no-op, как и обычный вариант.
-func (n *Notifier) NotifyWarehouseManagementHTMLButton(text, buttonText, callbackData string) error {
-	if n.botToken == "" || n.managementChatID == 0 {
-		return nil
-	}
-
-	return n.postJSON(context.Background(), "sendMessage", map[string]any{
-		fieldChatID:    n.managementChatID,
-		fieldText:      text,
-		fieldParseMode: parseModeHTML,
-		fieldReplyMarkup: map[string]any{
-			fieldInlineKbd: [][]map[string]string{{{
-				fieldText:         buttonText,
-				fieldCallbackData: callbackData,
-			}}},
-		},
-	})
-}
-
-// NotifyWarehouseManagementPhoto — картинка с подписью в чат управления
-// (выгрузка таблицы избытков из отчёта). Без токена или chat_id — no-op.
-func (n *Notifier) NotifyWarehouseManagementPhoto(data []byte, caption string) error {
-	if n.botToken == "" || n.managementChatID == 0 || len(data) == 0 {
-		return nil
-	}
-
-	var body bytes.Buffer
-	mw := multipart.NewWriter(&body)
-
-	if err := mw.WriteField(fieldChatID, fmt.Sprintf("%d", n.managementChatID)); err != nil {
-		return fmt.Errorf("multipart chat_id: %w", err)
-	}
-	if caption != "" {
-		if err := mw.WriteField("caption", caption); err != nil {
-			return fmt.Errorf("multipart caption: %w", err)
-		}
-	}
-
-	h := make(textproto.MIMEHeader)
-	h.Set("Content-Disposition", `form-data; name="photo"; filename="surplus.png"`)
-	h.Set("Content-Type", "image/png")
-
-	part, err := mw.CreatePart(h)
-	if err != nil {
-		return fmt.Errorf("multipart photo: %w", err)
-	}
-	if _, err := part.Write(data); err != nil {
-		return fmt.Errorf("multipart write photo: %w", err)
-	}
-	if err := mw.Close(); err != nil {
-		return fmt.Errorf("multipart close: %w", err)
-	}
-
-	url := fmt.Sprintf("%s/bot%s/sendPhoto", n.apiBaseURL, n.botToken)
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, url, &body)
-	if err != nil {
-		return fmt.Errorf("failed to create telegram request: %w", err)
-	}
-	req.Header.Set("Content-Type", mw.FormDataContentType())
-
-	resp, err := n.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("telegram request failed: %w", err)
-	}
-	defer func() {
-		if err := resp.Body.Close(); err != nil {
-			slog.Error(fmt.Sprintf("failed to close telegram response body: %v", err))
-		}
-	}()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return fmt.Errorf("telegram API returned %s: %s", resp.Status, string(snippet))
-	}
-
-	return nil
-}
-
-// ManagementCallbackAck — гасит «часики» на кнопке отчёта управления.
-func (n *Notifier) ManagementCallbackAck(callbackQueryID string) error {
-	return n.AnswerCallback(context.Background(), callbackQueryID)
+	return n.sendRichMessage(context.Background(), n.managementChatID, markdown)
 }
 
 // NotifyEveryone отправляет сообщение в общий чат сотрудников.
@@ -230,6 +144,16 @@ func (n *Notifier) NotifyCommon(ctx context.Context, text string) error {
 	}
 
 	return n.sendMessage(ctx, n.commonChatID, text)
+}
+
+// NotifyCommonRich — rich-сообщение в общий канал (дайджест скидок): H1 и
+// таблица вместо простыни строк. Без токена или chat_id канала — no-op.
+func (n *Notifier) NotifyCommonRich(ctx context.Context, markdown string) error {
+	if n.botToken == "" || n.commonChatID == 0 {
+		return nil
+	}
+
+	return n.sendRichMessage(ctx, n.commonChatID, markdown)
 }
 
 // NotifyCommonStatus отправляет в общий канал HTML-сообщение с inline-кнопкой
@@ -470,6 +394,15 @@ func (n *Notifier) SendDetails(ctx context.Context, chatID int64, text string) e
 	return n.sendMessage(ctx, chatID, text)
 }
 
+// SendDetailsRich — rich-сообщение в конкретный чат (ответ на /discounts).
+func (n *Notifier) SendDetailsRich(ctx context.Context, chatID int64, markdown string) error {
+	if n.botToken == "" || chatID == 0 {
+		return nil
+	}
+
+	return n.sendRichMessage(ctx, chatID, markdown)
+}
+
 // AnswerCallback закрывает callback-query («часики» на inline-кнопке).
 // Без токена — no-op.
 func (n *Notifier) AnswerCallback(ctx context.Context, callbackQueryID string) error {
@@ -638,6 +571,16 @@ func (n *Notifier) sendMessage(ctx context.Context, chatID int64, text string) e
 	return n.postJSON(ctx, "sendMessage", map[string]any{
 		fieldChatID: chatID,
 		fieldText:   text,
+	})
+}
+
+// sendRichMessage — rich-сообщение (sendRichMessage): контент едет в поле
+// rich_message, ровно одно из html / markdown / blocks. Markdown разбирает
+// клиент: HTML-таблицы и <details> внутри него тоже он.
+func (n *Notifier) sendRichMessage(ctx context.Context, chatID int64, markdown string) error {
+	return n.postJSON(ctx, "sendRichMessage", map[string]any{
+		fieldChatID:      chatID,
+		fieldRichMessage: map[string]any{fieldMarkdown: markdown},
 	})
 }
 

@@ -40,14 +40,14 @@ func (uc *UseCase) SendDigest(ctx context.Context, now time.Time) error {
 		return nil
 	}
 
-	text := uc.Digest(uc.WindowCap()).Text()
+	text := uc.Digest(uc.WindowCap()).MessageMarkdown()
 	if uc.common == nil {
 		// Канал не подключён (нет токена/чата) — как в notifyChanges: текст
 		// только в лог, маркер дня не ставим (канал могут подключить позже).
 		slog.Info(fmt.Sprintf("discounts: дайджест (канал не подключён): %s", text))
 		return nil
 	}
-	if err := uc.common.NotifyCommon(ctx, text); err != nil {
+	if err := uc.common.NotifyCommonRich(ctx, text); err != nil {
 		return fmt.Errorf("рассылка дайджеста в общий канал: %w", err)
 	}
 
@@ -63,7 +63,7 @@ func (uc *UseCase) SendDigest(ctx context.Context, now time.Time) error {
 // проверяем — команду принимает бот, любой участник вправе увидеть отчёт.
 // Реестр пуст — короткий ответ noDataText (расчёт не дублируем).
 func (uc *UseCase) ReplyDigest(ctx context.Context, chatID int64) error {
-	text := uc.Digest(uc.WindowCap()).Text()
+	text := uc.Digest(uc.WindowCap()).MessageMarkdown()
 	if uc.emptyRegistry() {
 		text = noDataText
 	}
@@ -72,7 +72,7 @@ func (uc *UseCase) ReplyDigest(ctx context.Context, chatID int64) error {
 		slog.Info(fmt.Sprintf("discounts: ответ на /discounts в чат %d (канал не подключён): %s", chatID, text))
 		return nil
 	}
-	if err := uc.common.SendDetails(ctx, chatID, text); err != nil {
+	if err := uc.common.SendDetailsRich(ctx, chatID, text); err != nil {
 		return fmt.Errorf("ответ на /discounts в чат %d: %w", chatID, err)
 	}
 	return nil

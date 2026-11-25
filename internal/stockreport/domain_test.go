@@ -33,68 +33,82 @@ func TestSplit(t *testing.T) {
 	}
 }
 
-// LowStockItems: слово «продажа» вместо «среднее» и округление до целого
-// (решение владельца 17.11.2026: 4,6 → 5).
-func TestLowStockItemsRoundsAndNames(t *testing.T) {
+// «Кончается» — таблица из трёх колонок (решение владельца 25.11.2026):
+// остаток и продажа разными колонками, средняя округлена до целого, слова
+// «среднее» в отчёте нет.
+func TestRichMarkdownLowStockTable(t *testing.T) {
 	r := Report{LowStock: []Position{{Name: "Сыр", Qty: 3, AvgWeek: avg(4.6)}}}
 
-	items := r.LowStockItems()
-	if len(items) != 1 {
-		t.Fatalf("блоков = %d, want 1", len(items))
+	md := r.RichMarkdown()
+	for _, want := range []string{
+		"<summary>🟨 КОНЧАЕТСЯ · 1</summary>",
+		"<table bordered compact>",
+		"<th>Остаток</th><th>Продажа/нед</th>",
+		"<tr><td>Сыр</td><td>3</td><td>5</td></tr>",
+	} {
+		if !strings.Contains(md, want) {
+			t.Errorf("в разметке нет %q:\n%s", want, md)
+		}
 	}
-	if !strings.Contains(items[0], "продажа 5/нед") {
-		t.Errorf("строка %q, want «продажа 5/нед»", items[0])
-	}
-	if strings.Contains(items[0], "среднее") {
-		t.Errorf("строка %q: слово «среднее» осталось", items[0])
-	}
-}
-
-// Блок избытка: номер, срок, накопленный остаток, план продаж и коэффициент.
-func TestSurplusItemsGroupsByProduct(t *testing.T) {
-	forty := int16(40)
-	r := Report{Surplus: []discounts.SurplusLot{
-		{ProductID: "p1", Name: "Кальби", BestBefore: time.Date(2026, time.November, 21, 0, 0, 0, 0, time.UTC), CumQty: 120, PlannedQty: 45, Coeff: 2.7, Expiry: &forty},
-		{ProductID: "p1", Name: "Кальби", BestBefore: time.Date(2026, time.December, 2, 0, 0, 0, 0, time.UTC), CumQty: 160, PlannedQty: 95, Coeff: 1.7},
-		{ProductID: "p2", Name: "Специя", BestBefore: time.Date(2026, time.December, 3, 0, 0, 0, 0, time.UTC), CumQty: 30, PlannedQty: 12, Coeff: 1.6},
-	}}
-
-	items := r.SurplusItems()
-	if len(items) != 2 {
-		t.Fatalf("блоков = %d, want 2 (по товарам): %v", len(items), items)
-	}
-	if !strings.Contains(items[0], "<b>1. Кальби</b> · коэф до 2,7") {
-		t.Errorf("заголовок %q, want «1. Кальби · коэф до 2,7»", items[0])
-	}
-	if strings.Count(items[0], "до 21.11") != 1 || !strings.Contains(items[0], "до 02.12") {
-		t.Errorf("сроки %q, want два: 21.11 и 02.12", items[0])
-	}
-	if !strings.Contains(items[0], "накоплено 160 шт · продадим ~95 шт") {
-		t.Errorf("строка дальнего срока %q, want накопление 160 и план 95", items[0])
-	}
-	if !strings.Contains(items[0], "уже по сроку 40 %") {
-		t.Errorf("строка %q, want пометку «уже по сроку 40 %%»", items[0])
-	}
-	if !strings.Contains(items[1], "<b>2. Специя</b>") {
-		t.Errorf("второй блок %q, want нумерацию 2", items[1])
+	if strings.Contains(md, "среднее") {
+		t.Errorf("слово «среднее» осталось:\n%s", md)
 	}
 }
 
-func TestSurplusItemsMarksExpiry(t *testing.T) {
+// «Избыток»: одна позиция на товар, имя склеено rowspan по строкам лотов,
+// «накоплено / продадим» одной ячейкой, скидка — большее из сайта и ступени
+// по сроку, коэффициента в таблице нет.
+func TestRichMarkdownSurplusRowspan(t *testing.T) {
 	forty, ten := int16(40), int16(10)
 	r := Report{Surplus: []discounts.SurplusLot{
 		{ProductID: "p1", Name: "Кальби", BestBefore: time.Date(2026, time.November, 21, 0, 0, 0, 0, time.UTC), CumQty: 120, PlannedQty: 45, Coeff: 2.7, Expiry: &forty},
 		{ProductID: "p1", Name: "Кальби", BestBefore: time.Date(2026, time.December, 2, 0, 0, 0, 0, time.UTC), CumQty: 160, PlannedQty: 95, Coeff: 1.7, Expiry: &ten},
+		{ProductID: "p2", Name: "Специя", BestBefore: time.Date(2026, time.December, 3, 0, 0, 0, 0, time.UTC), CumQty: 30, PlannedQty: 12, Coeff: 1.6},
 	}}
 
-	items := r.SurplusItems()
-	if len(items) != 1 {
-		t.Fatalf("блоков = %d, want 1 (товар один)", len(items))
+	md := r.RichMarkdown()
+	for _, want := range []string{
+		"<summary>🟦 ИЗБЫТОК · 2</summary>",
+		`<td rowspan="2">Кальби</td><td>21.11</td><td>120 / ~45</td><td><b>40 %</b></td>`,
+		"<td>02.12</td><td>160 / ~95</td><td><b>10 %</b></td>",
+		"<td>Специя</td><td>03.12</td><td>30 / ~12</td><td>—</td>",
+	} {
+		if !strings.Contains(md, want) {
+			t.Errorf("в разметке нет %q:\n%s", want, md)
+		}
 	}
-	if !strings.Contains(items[0], "уже по сроку 40 %") {
-		t.Errorf("строка %q, want пометку «уже по сроку 40 %%»", items[0])
+	if strings.Contains(md, "коэф") {
+		t.Errorf("коэффициент остался в таблице:\n%s", md)
 	}
-	if strings.Contains(items[0], "уже по сроку 10 %") {
-		t.Errorf("строка %q: пометка при равной избытку ступени (10 %%)", items[0])
+	if got := strings.Count(md, "Кальби"); got != 1 {
+		t.Errorf("имя товара встречается %d раз, want 1 (rowspan)", got)
+	}
+}
+
+// «Нет в наличии» — нумерованный список под стрелкой, без таблицы.
+func TestRichMarkdownOutOfStockList(t *testing.T) {
+	r := Report{OutOfStock: []Position{{Name: "Соль Z&P"}, {Name: "Вырезка"}}}
+
+	md := r.RichMarkdown()
+	if !strings.Contains(md, "<summary>🟥 НЕТ В НАЛИЧИИ · 2</summary>") {
+		t.Errorf("нет шапки блока:\n%s", md)
+	}
+	if !strings.Contains(md, "1. Соль Z&amp;P\n2. Вырезка") {
+		t.Errorf("список или экранирование «&» сломаны:\n%s", md)
+	}
+	if strings.Contains(md, "<table") {
+		t.Errorf("в блоке «нет в наличии» появилась таблица:\n%s", md)
+	}
+}
+
+// Пустой блок не печатается, пустой отчёт — пустая строка: отправлять нечего.
+func TestRichMarkdownSkipsEmptyBlocks(t *testing.T) {
+	if got := (Report{}).RichMarkdown(); got != "" {
+		t.Errorf("пустой отчёт = %q, want пусто", got)
+	}
+
+	md := Report{OutOfStock: []Position{{Name: "Пусто"}}}.RichMarkdown()
+	if strings.Contains(md, "КОНЧАЕТСЯ") || strings.Contains(md, "ИЗБЫТОК") {
+		t.Errorf("пустые блоки напечатаны:\n%s", md)
 	}
 }

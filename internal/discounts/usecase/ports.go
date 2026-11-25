@@ -153,8 +153,13 @@ type WarehouseNotifier interface {
 // задачей с кнопкой «кто выполнил» (модуль «Внутренние задачи»).
 type CommonNotifier interface {
 	NotifyCommon(ctx context.Context, text string) error
+	// NotifyCommonRich — то же в общий канал, но rich-сообщением
+	// (sendRichMessage, markdown): у дайджеста H1 и таблица вместо строк.
+	NotifyCommonRich(ctx context.Context, markdown string) error
 	// SendDetails — обычный текст в конкретный чат (ответ на /discounts).
 	SendDetails(ctx context.Context, chatID int64, text string) error
+	// SendDetailsRich — rich-сообщение в конкретный чат (ответ на /discounts).
+	SendDetailsRich(ctx context.Context, chatID int64, markdown string) error
 }
 
 // TaskOpener — шов модуля «Внутренние задачи» (реализация — tasks/usecase):

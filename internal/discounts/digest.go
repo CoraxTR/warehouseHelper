@@ -2,6 +2,7 @@ package discounts
 
 import (
 	"fmt"
+	"html"
 	"slices"
 	"strconv"
 	"strings"
@@ -258,6 +259,59 @@ func (d Digest) Text() string {
 		}
 	}
 	return b.String()
+}
+
+// MessageMarkdown — текст дайджеста для rich-сообщения (sendRichMessage,
+// markdown): заголовок H1 и таблица позиций вместо простыни строк.
+//
+// Секции «Доступно для допродажи» здесь нет (решение владельца 25.11.2026):
+// менеджеры ставят на сайт только активные позиции, а «скидка в памяти» живёт
+// на странице «Скидки» (там секции и так таблицами). Text() остаётся для
+// страницы и не меняется.
+//
+// Разметка — rich markdown Telegram: HTML-таблица с рамками (атрибуты bordered,
+// compact) и экранированные названия: в rich-режиме названия разбираются как
+// HTML, а «Z&P» в имени товара иначе ломает сообщение.
+func (d Digest) MessageMarkdown() string {
+	var b strings.Builder
+	b.WriteString("# Актуальные скидки для сайта\n\n")
+
+	if len(d.Discounts) == 0 {
+		b.WriteString("*Скидок нет*\n")
+
+		return b.String()
+	}
+
+	fmt.Fprintf(&b, "*%s · %d %s*\n\n", d.Date.Format("02.01.2006"), len(d.Discounts), positionsWord(len(d.Discounts)))
+	b.WriteString("<table bordered compact>\n")
+	b.WriteString("<tr><th>Товар</th><th>Срок</th><th>шт</th><th>Скидка</th><th>Канал</th></tr>\n")
+	for _, r := range d.Discounts {
+		qty := "—"
+		if r.Qty > 0 {
+			qty = strconv.FormatInt(r.Qty, 10)
+		}
+		fmt.Fprintf(&b, "<tr><td>%s</td><td>%s</td><td>%s</td><td><b>%d %%</b></td><td>%s</td></tr>\n",
+			html.EscapeString(r.Name), DatesText(r), qty, r.Percent, channelLabel(r))
+	}
+	b.WriteString("</table>\n")
+
+	return b.String()
+}
+
+// positionsWord — «1 позиция / 2 позиции / 5 позиций»: число в шапке сообщения
+// читают люди, а не машины.
+func positionsWord(n int) string {
+	mod100, mod10 := n%100, n%10
+	switch {
+	case mod100 >= 11 && mod100 <= 14:
+		return "позиций"
+	case mod10 == 1:
+		return "позиция"
+	case mod10 >= 2 && mod10 <= 4:
+		return "позиции"
+	default:
+		return "позиций"
+	}
 }
 
 // rowLine — строка позиции отчёта: номер, метка канала, название, количество и

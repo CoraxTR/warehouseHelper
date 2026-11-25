@@ -34,29 +34,14 @@ func (s *stubSurplus) SurplusLots(context.Context, time.Time) ([]discounts.Surpl
 }
 
 type stubNotifier struct {
-	texts  []string
-	photos [][]byte
+	texts []string
 }
 
-func (n *stubNotifier) NotifyWarehouseManagementHTML(text string) error {
-	n.texts = append(n.texts, text)
+func (n *stubNotifier) NotifyWarehouseManagementRich(markdown string) error {
+	n.texts = append(n.texts, markdown)
 
 	return nil
 }
-
-func (n *stubNotifier) NotifyWarehouseManagementHTMLButton(text, _, _ string) error {
-	n.texts = append(n.texts, text)
-
-	return nil
-}
-
-func (n *stubNotifier) NotifyWarehouseManagementPhoto(data []byte, _ string) error {
-	n.photos = append(n.photos, data)
-
-	return nil
-}
-
-func (n *stubNotifier) ManagementCallbackAck(string) error { return nil }
 
 func testNow() time.Time {
 	return time.Date(2026, time.November, 17, 16, 0, 0, 0, time.UTC)
@@ -69,8 +54,9 @@ func newReportUC(st *stubStock, sales *stubSales, surplus *stubSurplus) *UseCase
 	return uc
 }
 
-// Три блока: остатки двух первых считает отчёт, избыток приходит от модуля
-// скидок и печатается позицией со сроком, накопленным остатком и планом продаж.
+// Отчёт уходит ОДНИМ rich-сообщением: три блока под стрелкой (<details>),
+// «кончается» и «избыток» — таблицами. Нарезка на части по 3500 байт ушла
+// вместе с PNG-выгрузкой (решение владельца 25.11.2026).
 func TestBuildThreeBlocks(t *testing.T) {
 	st := &stubStock{products: []stock.Product{
 		{ID: "p1", Name: "Пусто"},
@@ -85,20 +71,25 @@ func TestBuildThreeBlocks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	if len(parts) != 3 {
-		t.Fatalf("частей = %d, want 3: %v", len(parts), parts)
+	if len(parts) != 1 {
+		t.Fatalf("частей = %d, want 1 (одно rich-сообщение): %v", len(parts), parts)
 	}
-	if !strings.Contains(parts[0].Text, "НЕТ В НАЛИЧИИ · 1") || !strings.Contains(parts[0].Text, "Пусто") {
-		t.Errorf("блок «нет в наличии» = %q", parts[0].Text)
+
+	md := parts[0].Text
+	for _, want := range []string{
+		"<summary>🟥 НЕТ В НАЛИЧИИ · 1</summary>",
+		"1. Пусто",
+		"<summary>🟨 КОНЧАЕТСЯ · 1</summary>",
+		"<tr><td>Кончается</td><td>3</td><td>5</td></tr>",
+		"<summary>🟦 ИЗБЫТОК · 1</summary>",
+		"<td>Кальби</td><td>21.11</td><td>120 / ~45</td><td>—</td>",
+	} {
+		if !strings.Contains(md, want) {
+			t.Errorf("в сообщении нет %q:\n%s", want, md)
+		}
 	}
-	if !strings.Contains(parts[1].Text, "КОНЧАЕТСЯ · 1") {
-		t.Errorf("блок «кончается» = %q", parts[1].Text)
-	}
-	if !strings.Contains(parts[2].Text, "ИЗБЫТОК · 1") {
-		t.Errorf("блок «избыток» = %q", parts[2].Text)
-	}
-	if !strings.Contains(parts[2].Text, "до 21.11") || !strings.Contains(parts[2].Text, "накоплено 120 шт · продадим ~45 шт") || !strings.Contains(parts[2].Text, "коэф до 2,7") {
-		t.Errorf("содержимое блока «избыток» = %q", parts[2].Text)
+	if strings.Contains(md, "коэф") {
+		t.Errorf("коэффициент избытка остался в таблице:\n%s", md)
 	}
 }
 
@@ -113,6 +104,9 @@ func TestBuildSurplusErrorKeepsOtherBlocks(t *testing.T) {
 		t.Fatalf("Build: %v", err)
 	}
 	if len(parts) != 1 || !strings.Contains(parts[0].Text, "НЕТ В НАЛИЧИИ") {
-		t.Fatalf("части = %v, want один блок «нет в наличии»", parts)
+		t.Fatalf("части = %v, want одно сообщение с блоком «нет в наличии»", parts)
+	}
+	if strings.Contains(parts[0].Text, "ИЗБЫТОК") {
+		t.Errorf("блок избытка напечатан при ошибке шва:\n%s", parts[0].Text)
 	}
 }
