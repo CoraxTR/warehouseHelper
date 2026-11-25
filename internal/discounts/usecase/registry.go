@@ -271,10 +271,7 @@ func (r *Registry) ActiveLots(capacity int) []discounts.LotKey {
 // activeLots — ключи пар активных позиций: обычная строка даёт один ключ, строка
 // группы — по ключу на каждый её срок.
 func activeLots(rows []discounts.Row, capacity int) []discounts.LotKey {
-	// WindowRows, а не BuildDigest: правило «одна карточка товара — одна позиция»
-	// относится к актуальным скидкам, а здесь вопрос «что в работе» — группа
-	// избытка раскрывается во все свои сроки (решение владельца 25.11.2026).
-	active := windowOf(discounts.WindowRows(rows), capacity)
+	active := windowRowsByProducts(rows, capacity)
 	keys := make([]discounts.LotKey, 0, len(active))
 	for _, row := range active {
 		if len(row.Dates) == 0 {
@@ -287,6 +284,35 @@ func activeLots(rows []discounts.Row, capacity int) []discounts.LotKey {
 	}
 
 	return keys
+}
+
+// windowRowsByProducts — строки окна, посчитанные ПО ТОВАРАМ: место в ёмкости
+// занимает карточка, а не пара (решение владельца 25.11.2026: 12 строк = 12
+// товаров). В окно входят все строки допущенных товаров, поэтому дальние лоты
+// не отнимают место у следующего товара и не выбивают друг друга. Постоянные
+// место не занимают и едут сверх окна (03.11.2026). capacity <= 0 — окно
+// вмещает всё.
+func windowRowsByProducts(rows []discounts.Row, capacity int) []discounts.Row {
+	rows = discounts.WindowRows(rows)
+	if capacity <= 0 {
+		return rows
+	}
+
+	admitted := make(map[string]struct{}, capacity)
+	out := make([]discounts.Row, 0, capacity)
+	for _, r := range rows {
+		if !r.Permanent {
+			if _, ok := admitted[r.ProductID]; !ok {
+				if len(admitted) >= capacity {
+					continue // товар за ёмкостью окна
+				}
+				admitted[r.ProductID] = struct{}{}
+			}
+		}
+		out = append(out, r)
+	}
+
+	return out
 }
 
 // Digest — отчёт по СТОЯЩИМ скидкам реестра (см. standingLocked). capacity —
