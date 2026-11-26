@@ -81,8 +81,8 @@ type fakeDiscountRepo struct {
 	prevShop *discounts.DigestState
 	// winKeys — «таблица» discount_window_state: окно прошлого прохода.
 	// winOK=false — строки нет (первый запуск после миграции).
-	winKeys []discounts.LotKey
-	winOK   bool
+	winKeys  []discounts.LotKey
+	winOK    bool
 	winSaves int
 }
 
