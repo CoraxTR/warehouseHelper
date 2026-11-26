@@ -206,11 +206,35 @@ func (p PairState) Row() discounts.Row {
 // она стоит в БД (ручная важнее plain).
 func (p PairState) AppliedRow() discounts.Row {
 	percent, src := p.appliedValue()
-	if p.telegramAboveSite() {
-		percent, src = p.telegramValue(), p.plainSource()
+	if p.telegramMailed() {
+		percent, src = p.telegramValue(), p.telegramSource()
 	}
 
 	return p.rowWith(percent, src)
+}
+
+// telegramMailed — значение рассылки уже у подписчиков: ТГ-колонку пишет план
+// 14:00 (slot.go, writeTelegram). Ручная ТГ, поставленная до рассылки, в отчёт
+// по факту не попадает: сайт её ещё не видел, он получит её подъёмом 16:00
+// (решение владельца 24.09.2026, доработка 26.11.2026 — раньше хватало одного
+// «выше сайта», и 40 % ручной ТГ светились в актуальных с утра).
+func (p PairState) telegramMailed() bool {
+	if !p.telegramAboveSite() {
+		return false
+	}
+
+	return p.TelegramPlain != nil && *p.TelegramPlain > 0
+}
+
+// telegramSource — откуда взято значение рассылки: ручная ТГ (её ввёл менеджер)
+// или plain-колонка ТГ. Метка сайта здесь не годится — она описывает другое
+// значение (26.11.2026: 40 % из ТГ печатались как «постоянная»).
+func (p PairState) telegramSource() discounts.Source {
+	if p.TelegramManual != nil && *p.TelegramManual > 0 {
+		return discounts.SourceTelegramManual
+	}
+
+	return p.plainSource()
 }
 
 // rowWith — строка отчёта из готовых значения и метки источника: подпись пары,
@@ -240,7 +264,14 @@ func (p PairState) rowWith(percent *int16, src discounts.Source) discounts.Row {
 		// дважды: ручная в актуальных, а избыток на дальнем сроке — в хвосте
 		// постоянных мимо правила «одна карточка товара» (Ти-Бон 07.12 30 % +
 		// 28.12 10 %, 25.11.2026).
-		Permanent: p.Permanent != nil && src != discounts.SourceManual && src != discounts.SourceSurplus,
+		// Ручная ТГ-скидка — тот же случай: значение её, сайт получит его
+		// подъёмом 16:00, пара слот занимает (26.11.2026: 40 % ручная ТГ на
+		// Ти-Боне считалась постоянной, слот не занимала, и товар печатался
+		// дважды — 07.12 в актуальных и 28.12 в хвосте постоянных).
+		Permanent: p.Permanent != nil &&
+			src != discounts.SourceManual &&
+			src != discounts.SourceTelegramManual &&
+			src != discounts.SourceSurplus,
 	}
 	if percent != nil {
 		row.Percent = *percent
