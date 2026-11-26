@@ -133,3 +133,26 @@ func telegramDayClock() func() time.Time {
 func weekdayClock() func() time.Time {
 	return func() time.Time { return time.Date(2026, time.November, 25, 10, 0, 0, 0, time.UTC) }
 }
+
+// После финальной сборки 14:45 ТГ-дня окно снова добирается: освободившееся
+// место занимает кандидат дня в пределах ёмкости (решение владельца 26.11.2026)
+// — сайт при этом рассылку уже не обгоняет, новый список применён.
+func TestWindowEntryWritesAfterExtrasOnTelegramDay(t *testing.T) {
+	sir := entryPair("sir", 12)
+	other := entryPair("other", 20)
+
+	now := telegramDayClock()
+	repo := newFakeDiscountRepo()
+	if err := repo.MarkDayFlag(context.Background(), beginningOfDay(now()), discounts.FlagExtras); err != nil {
+		t.Fatalf("маркер финальной сборки: %v", err)
+	}
+
+	uc := NewUseCase(repo, nil, nil, nil, nil, nil, now)
+	uc.SetWindowCap(12)
+	uc.windowedWrites(context.Background(), []PairState{other}, nil)
+	writes := uc.windowedWrites(context.Background(), []PairState{other, sir}, nil)
+
+	if len(writes) != 1 {
+		t.Fatalf("после финальной сборки правок входа %d, want 1", len(writes))
+	}
+}

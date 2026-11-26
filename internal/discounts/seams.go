@@ -48,6 +48,10 @@ const (
 	FlagDigestSent DayFlag = "digest_sent"
 	// FlagPlan — план ТГ-слота собран и отправлен в чат склада.
 	FlagPlan DayFlag = "tg_plan_done"
+	// FlagExtras — финальная сборка 14:45 сделана: скидки сайта применены по
+	// новому списку. До неё вход в окно на ТГ-дне сайт не пишет (иначе сайт
+	// обгоняет рассылку), после — окно добирается как в обычный день.
+	FlagExtras DayFlag = "tg_extras_done"
 	// FlagRaise — подъём general до telegram выполнен.
 	FlagRaise DayFlag = "tg_raise_done"
 	// FlagTurnoverWindow — полное окно оборотов обновлено из МС (возвраты

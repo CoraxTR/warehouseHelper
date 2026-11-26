@@ -381,6 +381,7 @@ var dayFlagColumns = map[discounts.DayFlag]string{
 	discounts.FlagExpiry:         "expiry_done",
 	discounts.FlagDigestSent:     "digest_sent",
 	discounts.FlagPlan:           "tg_plan_done",
+	discounts.FlagExtras:         "tg_extras_done",
 	discounts.FlagRaise:          "tg_raise_done",
 	discounts.FlagTurnoverWindow: "turnover_window_done",
 }
