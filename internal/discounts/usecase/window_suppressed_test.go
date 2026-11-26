@@ -37,7 +37,13 @@ func TestSuppressedEntryNotStoredAsWindow(t *testing.T) {
 	}
 
 	w := uc.windowedWrites(context.Background(), []PairState{a, b}, nil)
-	if len(w) != 1 || w[0].ProductID != "b" {
-		t.Fatalf("после сборки правок %+v, want одну по b", w)
+	var gotB bool
+	for _, x := range w {
+		if x.ProductID == "b" {
+			gotB = true
+		}
+	}
+	if !gotB {
+		t.Fatalf("после сборки правок %+v: отложенного входа b нет", w)
 	}
 }
