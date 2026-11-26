@@ -183,13 +183,13 @@ func (h *Handler) productInfoSchedules(r *http.Request, productID string) []Prod
 func (h *Handler) StockProductInfoSave(w http.ResponseWriter, r *http.Request) {
 	var req ProductInfoSaveRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "не разобрать запрос"})
+		writeJSONErrorMsg(w, http.StatusBadRequest, "не разобрать запрос")
 		return
 	}
 
 	productID := strings.TrimSpace(req.ProductID)
 	if productID == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "не выбран товар"})
+		writeJSONErrorMsg(w, http.StatusBadRequest, "не выбран товар")
 		return
 	}
 

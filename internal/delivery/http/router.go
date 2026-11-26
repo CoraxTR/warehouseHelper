@@ -160,6 +160,13 @@ func NewRouter(h *Handler) *http.ServeMux {
 	mux.HandleFunc("GET /ms/discounts/plan", h.DiscountsPlan)                  // предпросмотр плана 14:00 (JSON, для блока страницы)
 	mux.HandleFunc("GET /ms/discounts/active", h.DiscountsActive)              // активные пары окна (JSON, для страницы «Сроки»)
 	mux.HandleFunc("POST /ms/dates/update/save", h.StockUpdateSave)            // применить батч сканов
+	// Поиск удалений: аудит МойСклада по ручным удалениям позиции из заказа.
+	mux.HandleFunc("GET /ms/audit-search", h.AuditSearchPage)               // страница модуля
+	mux.HandleFunc("GET /ms/audit-search/products", h.AuditSearchProducts)  // JSON: подсказки товара из нашей базы
+	mux.HandleFunc("POST /ms/audit-search/start", h.AuditSearchStart)       // старт скана
+	mux.HandleFunc("GET /ms/audit-search/progress", h.AuditSearchProgress)  // JSON: прогресс, ETA, найденное
+	mux.HandleFunc("POST /ms/audit-search/stop", h.AuditSearchStop)         // остановить скан
+	mux.HandleFunc("GET /ms/audit-search/export.xlsx", h.AuditSearchExport) // выгрузка найденного
 
 	return mux
 }
