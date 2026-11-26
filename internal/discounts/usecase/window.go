@@ -82,7 +82,15 @@ func windowKeys(pairs []PairState, capacity int) map[discounts.LotKey]struct{} {
 func (uc *UseCase) windowedWrites(ctx context.Context, pairs []PairState, writes []discounts.DiscountWrite) []discounts.DiscountWrite {
 	win := windowKeys(pairs, uc.WindowCap())
 	prevWin, seeded := uc.windowState(ctx)
-	uc.storeWindow(ctx, win)
+	// Вход разрешён — запоминаем окно этого прохода как «прошлое». Вход подавлен
+	// (ТГ-день до финальной сборки 14:45) — НЕ запоминаем: иначе пары, которым
+	// скидку не выдали, станут «уже в окне» и значения не получат никогда
+	// (инцидент 26.11.2026: в плане 12 позиций, на сайте 9 значений — Фриголар
+	// и Кресуд попали в сохранённое окно в подавленном проходе).
+	entryOK := seeded && uc.entryAllowed(ctx)
+	if entryOK || !seeded {
+		uc.storeWindow(ctx, win)
+	}
 
 	seen := make(map[discounts.LotKey]struct{}, len(writes))
 	out := make([]discounts.DiscountWrite, 0, len(writes))
@@ -105,7 +113,7 @@ func (uc *UseCase) windowedWrites(ctx context.Context, pairs []PairState, writes
 	// четверга поднял сайт сразу — после перехода окна на счёт по товарам
 	// «входящих» пар стало намного больше, и в актуальных оказались ступени,
 	// которые должны были уйти подписчикам.
-	if seeded && uc.entryAllowed(ctx) {
+	if entryOK {
 		out = append(out, windowEntryWrites(pairs, win, prevWin, seen)...)
 	}
 
@@ -169,8 +177,9 @@ func windowEntryWrites(pairs []PairState, win, prevWin, seen map[discounts.LotKe
 		if _, ok := win[p.Key]; !ok {
 			continue
 		}
+		// В окне и в прошлом проходе — не вход.
 		if _, ok := prevWin[p.Key]; ok {
-			continue // пара в окне и в прошлом проходе: это не вход
+			continue
 		}
 		if _, ok := seen[p.Key]; ok {
 			continue
