@@ -37,15 +37,14 @@ func (uc *UseCase) Export(jobID string) (string, error) {
 		return "", ErrJobNotFound
 	}
 
-	productName := j.productName
-	productID := j.productID
+	productName := productLabel(j.targets)
 	from, to := j.from, j.to
 	results := make([]Result, len(j.results))
 	copy(results, j.results)
 	uc.mu.Unlock()
 
 	if productName == "" {
-		productName = productID
+		productName = "не выбран"
 	}
 
 	f := excelize.NewFile()
@@ -60,7 +59,7 @@ func (uc *UseCase) Export(jobID string) (string, error) {
 		"Окно: %s — %s (МСК), найдено: %d",
 		from.Format("02.01.2006"), to.Format("02.01.2006"), len(results)))
 
-	header := []string{"Момент (МСК)", "Заказ", "ID заказа", "Товар", "Кол-во", "Ед.", "Автор (uid)", "Событие аудита"}
+	header := []string{"Момент (МСК)", "Заказ", "ID заказа", "Товар", "Кол-во", "Ед.", "Автор (uid)", "Событие аудита", "Поиск"}
 	for i, title := range header {
 		axis, err := excelize.CoordinatesToCellName(i+1, 4)
 		if err != nil {
@@ -84,6 +83,7 @@ func (uc *UseCase) Export(jobID string) (string, error) {
 			r.UOM,
 			r.UID,
 			r.AuditID,
+			r.Query,
 		}
 		for ci, v := range values {
 			axis, err := excelize.CoordinatesToCellName(ci+1, row)
@@ -95,7 +95,7 @@ func (uc *UseCase) Export(jobID string) (string, error) {
 		}
 	}
 
-	widths := []float64{xlsxColMoment, xlsxColOrder, xlsxColID, xlsxColName, xlsxColQty, xlsxColUOM, xlsxColUID, xlsxColAudit}
+	widths := []float64{xlsxColMoment, xlsxColOrder, xlsxColID, xlsxColName, xlsxColQty, xlsxColUOM, xlsxColUID, xlsxColAudit, 30}
 	for i, width := range widths {
 		col, err := excelize.ColumnNumberToName(i + 1)
 		if err != nil {
