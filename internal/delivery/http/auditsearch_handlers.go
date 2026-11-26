@@ -35,7 +35,7 @@ func writeJSONErrorMsg(w http.ResponseWriter, status int, msg string) {
 // auditSearchService — шов страницы: юзкейс поиска удалений (в тестах —
 // фейковый сканер, без сети и МойСклада).
 type auditSearchService interface {
-	Start(ctx context.Context, productID string, from, to time.Time) (string, error)
+	Start(ctx context.Context, productIDs []string, from, to time.Time) (string, error)
 	Stop(jobID string) error
 	Progress(jobID string) (ausecase.Progress, error)
 	Export(jobID string) (string, error)
@@ -116,9 +116,9 @@ func (h *Handler) AuditSearchProducts(w http.ResponseWriter, r *http.Request) {
 
 // auditSearchStartRequest — тело POST /ms/audit-search/start (form).
 type auditSearchStartRequest struct {
-	ProductID string `json:"product_id"`
-	From      string `json:"from"`
-	To        string `json:"to"`
+	Products []string `json:"product_id"`
+	From     string   `json:"from"`
+	To       string   `json:"to"`
 }
 
 // AuditSearchStart — POST /ms/audit-search/start: создать задачу скана.
@@ -157,7 +157,7 @@ func (h *Handler) AuditSearchStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	jobID, err := h.auditSearchUC.Start(r.Context(), req.ProductID, from, to)
+	jobID, err := h.auditSearchUC.Start(r.Context(), req.Products, from, to)
 	if err != nil {
 		var invalid *ausecase.ValidationError
 		switch {
@@ -182,13 +182,14 @@ func parseAuditSearchStart(r *http.Request) (auditSearchStartRequest, error) {
 		return auditSearchStartRequest{}, fmt.Errorf("разбор формы: %w", err)
 	}
 
+	// product_id повторяется столько раз, сколько товаров добавили к поиску.
 	req := auditSearchStartRequest{
-		ProductID: strings.TrimSpace(r.PostFormValue("product_id")),
-		From:      strings.TrimSpace(r.PostFormValue("from")),
-		To:        strings.TrimSpace(r.PostFormValue("to")),
+		Products: r.PostForm["product_id"],
+		From:     strings.TrimSpace(r.PostFormValue("from")),
+		To:       strings.TrimSpace(r.PostFormValue("to")),
 	}
 
-	if req.ProductID == "" {
+	if len(req.Products) == 0 {
 		return req, errors.New("товар не выбран")
 	}
 
@@ -205,6 +206,7 @@ type auditSearchResultDTO struct {
 	Order    string  `json:"order"`
 	OrderID  string  `json:"order_id"`
 	Product  string  `json:"product"`
+	Query    string  `json:"query"`
 	Quantity float64 `json:"quantity"`
 	UOM      string  `json:"uom"`
 	UID      string  `json:"uid"`
@@ -283,6 +285,7 @@ func (h *Handler) AuditSearchProgress(w http.ResponseWriter, r *http.Request) {
 			Order:    res.OrderName,
 			OrderID:  res.OrderID,
 			Product:  res.ProductName,
+			Query:    res.Query,
 			Quantity: res.Quantity,
 			UOM:      uom,
 			UID:      res.UID,

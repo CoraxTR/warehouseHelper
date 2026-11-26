@@ -53,7 +53,7 @@ func TestDeletions(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := deletions(tt.events, testCanonical, "Стейк Портерхаус Праймбиф. Охл.")
+			got := deletions(tt.events, []target{{id: "p", canonical: testCanonical, name: "Стейк Портерхаус Праймбиф. Охл."}})
 			if len(got) != tt.want {
 				t.Fatalf("найдено %d, ждали %d", len(got), tt.want)
 			}

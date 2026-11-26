@@ -35,11 +35,11 @@
 
     <form id="audit-form">
         <p>
-            <label for="product-q">Товар</label><br>
-            <input type="text" id="product-q" name="q" placeholder="начните вводить название" autocomplete="off" size="60">
-            <input type="hidden" id="product-id" name="product_id">
+            <label for="product-q">Товары</label><br>
+            <input type="text" id="product-q" name="q" placeholder="начните вводить название и нажмите на подсказку" autocomplete="off" size="60">
             <span id="product-picked"></span>
         </p>
+        <div class="banner" id="picked-list" style="display:none"></div>
         <p>
             <label for="from">С</label>
             <input type="date" id="from" name="from" value="{{.From}}">
@@ -49,6 +49,7 @@
         <p>
             <button type="submit" id="start-btn">Начать поиск</button>
             <button type="button" id="stop-btn" disabled>Остановить</button>
+            <button type="button" id="clear-btn">Очистить список</button>
         </p>
     </form>
 
@@ -68,6 +69,7 @@
                 <th>Дата</th>
                 <th>Заказ</th>
                 <th>Товар</th>
+                <th>Поиск</th>
                 <th>Кол-во</th>
                 <th>Автор</th>
                 <th>Контекст</th>
@@ -81,8 +83,10 @@
         (function () {
             var form = document.getElementById('audit-form');
             var q = document.getElementById('product-q');
-            var pid = document.getElementById('product-id');
             var picked = document.getElementById('product-picked');
+            var pickedList = document.getElementById('picked-list');
+            var clearBtn = document.getElementById('clear-btn');
+            var items = [];
             var status = document.getElementById('status');
             var barWrap = document.getElementById('bar-wrap');
             var bar = document.getElementById('bar');
@@ -101,8 +105,6 @@
             box.style.display = 'none';
             q.parentNode.appendChild(box);
             q.addEventListener('input', function () {
-                pid.value = '';
-                picked.textContent = '';
                 var text = q.value.trim();
                 if (text.length < 2) {
                     box.style.display = 'none';
@@ -130,9 +132,9 @@
                         a.style.display = 'block';
                         a.addEventListener('click', function (ev) {
                             ev.preventDefault();
-                            pid.value = row.id;
-                            picked.textContent = ' id: ' + row.id;
-                            q.value = row.name;
+                            addItem(row.id, row.name);
+                            q.value = '';
+                            q.focus();
                             box.style.display = 'none';
                         });
                         box.appendChild(a);
@@ -140,6 +142,52 @@
                     box.style.display = 'block';
                 };
                 xhr.send();
+            });
+
+            // Список товаров задачи: добавление, удаление, перерисовка.
+            function renderList() {
+                pickedList.textContent = '';
+                if (!items.length) {
+                    pickedList.style.display = 'none';
+                    picked.textContent = '';
+
+                    return;
+                }
+                picked.textContent = ' товаров: ' + items.length;
+                items.forEach(function (it, idx) {
+                    var rowEl = document.createElement('div');
+                    var nameEl = document.createElement('span');
+                    nameEl.textContent = (idx + 1) + '. ' + it.name;
+                    var del = document.createElement('a');
+                    del.href = '#';
+                    del.textContent = ' \u2715';
+                    del.title = 'убрать из поиска';
+                    del.style.marginLeft = '8px';
+                    del.addEventListener('click', function (ev) {
+                        ev.preventDefault();
+                        items.splice(idx, 1);
+                        renderList();
+                    });
+                    rowEl.appendChild(nameEl);
+                    rowEl.appendChild(del);
+                    pickedList.appendChild(rowEl);
+                });
+                pickedList.style.display = 'block';
+            }
+
+            function addItem(id, name) {
+                for (var i = 0; i < items.length; i++) {
+                    if (items[i].id === id) {
+                        return;
+                    }
+                }
+                items.push({ id: id, name: name });
+                renderList();
+            }
+
+            clearBtn.addEventListener('click', function () {
+                items = [];
+                renderList();
             });
 
             function render(data) {
@@ -160,7 +208,7 @@
                 tbody.textContent = '';
                 (data.results || []).forEach(function (r) {
                     var tr = document.createElement('tr');
-                    [r.moment, r.order, r.product, r.quantity + (r.uom ? ' ' + r.uom : ''), r.uid, r.audit_id].forEach(function (v) {
+                    [r.moment, r.order, r.product, r.query, r.quantity + (r.uom ? ' ' + r.uom : ''), r.uid, r.audit_id].forEach(function (v) {
                         var td = document.createElement('td');
                         td.textContent = v == null ? '' : String(v);
                         tr.appendChild(td);
@@ -206,12 +254,14 @@
 
             form.addEventListener('submit', function (ev) {
                 ev.preventDefault();
-                if (!pid.value) {
-                    status.textContent = 'Выберите товар из подсказок: нужен id из нашего каталога.';
+                if (!items.length) {
+                    status.textContent = 'Добавьте хотя бы один товар: выберите его из подсказок.';
 
                     return;
                 }
-                var body = 'product_id=' + encodeURIComponent(pid.value) +
+                var body = items.map(function (it) {
+                    return 'product_id=' + encodeURIComponent(it.id);
+                }).join('&') +
                     '&from=' + encodeURIComponent(document.getElementById('from').value) +
                     '&to=' + encodeURIComponent(document.getElementById('to').value);
                 var xhr = new XMLHttpRequest();

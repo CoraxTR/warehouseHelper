@@ -86,6 +86,7 @@ type Result struct {
 	UOM         string    // «кг»/«шт» (может быть пусто)
 	UID         string    // автор правки (uid учётки)
 	AuditID     string    // id контекста аудита (audit/<id>)
+	Query       string    // имя искомого товара (при поиске по нескольким)
 }
 
 // UnknownUOM — подпись единицы, когда в диффе uom нет (старые события).
@@ -119,21 +120,20 @@ type Progress struct {
 
 // job — состояние одной задачи скана. Все поля под mu юзкейса.
 type job struct {
-	id          string
-	productID   string
-	productName string
-	canonicalID string
-	from, to    time.Time
-	total       int
-	done        int
-	found       int
-	truncated   bool
-	results     []Result
-	state       string
-	errMsg      string
-	startedAt   time.Time
-	finishedAt  time.Time
-	cancel      context.CancelFunc
+	id         string
+	productIDs []string
+	targets    []target
+	from, to   time.Time
+	total      int
+	done       int
+	found      int
+	truncated  bool
+	results    []Result
+	state      string
+	errMsg     string
+	startedAt  time.Time
+	finishedAt time.Time
+	cancel     context.CancelFunc
 }
 
 // UseCase — менеджер задач поиска удалений (одна активная, история — в
@@ -184,10 +184,10 @@ func New(api AuditAPI, opts ...Option) *UseCase {
 // Start — создать задачу и запустить скан в горутине. Возвращает id задачи.
 // from/to — календарные дни окна (время суток игнорируется): скан берёт
 // сутки «с» с 00:00:00.000 до суток «по» 23:59:59.999 по МСК.
-func (uc *UseCase) Start(ctx context.Context, productID string, from, to time.Time) (string, error) {
-	productID = strings.TrimSpace(productID)
-	if productID == "" {
-		return "", &ValidationError{Reason: "товар не выбран"}
+func (uc *UseCase) Start(ctx context.Context, productIDs []string, from, to time.Time) (string, error) {
+	ids, err := normalizeProducts(productIDs)
+	if err != nil {
+		return "", err
 	}
 
 	fromAt, toAt, err := normalizeWindow(from, to)
@@ -212,13 +212,13 @@ func (uc *UseCase) Start(ctx context.Context, productID string, from, to time.Ti
 	jobCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 
 	j := &job{
-		id:        id,
-		productID: productID,
-		from:      fromAt,
-		to:        toAt,
-		state:     StateRunning,
-		startedAt: uc.now(),
-		cancel:    cancel,
+		id:         id,
+		productIDs: ids,
+		from:       fromAt,
+		to:         toAt,
+		state:      StateRunning,
+		startedAt:  uc.now(),
+		cancel:     cancel,
 	}
 	uc.jobs[id] = j
 	uc.lastID = id
@@ -299,14 +299,18 @@ func (uc *UseCase) run(ctx context.Context, j *job) {
 // раскрытие только ручных контекстов. Контексты из JSON API в done
 // считаются (прогресс сходится с total), но не раскрываются.
 func (uc *UseCase) scan(ctx context.Context, j *job) error {
-	canonicalID, name, err := uc.api.GetProduct(ctx, j.productID)
-	if err != nil {
-		return fmt.Errorf("товар: %w", err)
+	targets := make([]target, 0, len(j.productIDs))
+	for _, id := range j.productIDs {
+		canonical, name, err := uc.api.GetProduct(ctx, id)
+		if err != nil {
+			return fmt.Errorf("товар %s: %w", id, err)
+		}
+
+		targets = append(targets, target{id: id, canonical: canonical, name: name})
 	}
 
 	uc.mu.Lock()
-	j.canonicalID = canonicalID
-	j.productName = name
+	j.targets = targets
 	uc.mu.Unlock()
 
 	for offset := 0; ; {
@@ -333,7 +337,7 @@ func (uc *UseCase) scan(ctx context.Context, j *job) error {
 			}
 
 			if isManualSource(row.Source) {
-				if err := uc.scanContext(ctx, j, row, canonicalID, name); err != nil {
+				if err := uc.scanContext(ctx, j, row, targets); err != nil {
 					return err
 				}
 			}
@@ -351,13 +355,13 @@ func (uc *UseCase) scan(ctx context.Context, j *job) error {
 }
 
 // scanContext — раскрытие одного контекста аудита и накопление удалений.
-func (uc *UseCase) scanContext(ctx context.Context, j *job, row client.AuditRow, canonicalID, name string) error {
+func (uc *UseCase) scanContext(ctx context.Context, j *job, row client.AuditRow, targets []target) error {
 	events, err := uc.api.FetchAuditDetail(ctx, row.ID)
 	if err != nil {
 		return fmt.Errorf("раскрытие события %s: %w", row.ID, err)
 	}
 
-	found := deletions(events, canonicalID, name)
+	found := deletions(events, targets)
 
 	uc.mu.Lock()
 	defer uc.mu.Unlock()
@@ -385,7 +389,7 @@ func (uc *UseCase) scanContext(ctx context.Context, j *job, row client.AuditRow,
 // контекста. Удаление: OldValue есть, NewValue nil. События из JSON API
 // отсеиваются повторно (листинг уже отфильтрован, но источник бывает
 // разным у строк одного контекста).
-func deletions(events []client.AuditEventRow, canonicalID, name string) []Result {
+func deletions(events []client.AuditEventRow, targets []target) []Result {
 	var out []Result
 
 	for _, ev := range events {
@@ -400,7 +404,8 @@ func deletions(events []client.AuditEventRow, canonicalID, name string) []Result
 			}
 
 			old := change.OldValue
-			if !matchesProduct(*old, canonicalID, name) {
+			query, ok := matchesTargets(*old, targets)
+			if !ok {
 				continue
 			}
 
@@ -422,6 +427,7 @@ func deletions(events []client.AuditEventRow, canonicalID, name string) []Result
 				Quantity:    old.Quantity,
 				UOM:         uom,
 				UID:         ev.UID,
+				Query:       query,
 			})
 		}
 	}
@@ -510,7 +516,7 @@ func (uc *UseCase) snapshotLocked(j *job) Progress {
 		State:      j.state,
 		Error:      j.errMsg,
 		Truncated:  j.truncated,
-		Product:    j.productName,
+		Product:    productLabel(j.targets),
 	}
 
 	// Страница показывает не больше 200 последних строк: весь список — в xlsx.
