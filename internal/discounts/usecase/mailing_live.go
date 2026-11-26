@@ -391,9 +391,12 @@ func (uc *UseCase) applyExtras(ctx context.Context, now time.Time, capacity int)
 	}
 
 	// Маркер финальной сборки: с этого момента на ТГ-дне окно снова добирается
-	// обычным проходом (entryAllowed), а не ждёт полуночи.
+	// обычным проходом (entryAllowed), а не ждёт полуночи. Ошибка маркера не
+	// валит шаг: скидки сайта уже записаны, а без маркера окно просто доберётся
+	// позже — терять из-за этого всю сборку нельзя (26.11.2026: колонки в живой
+	// БД не было, и шаг 14:45 падал целиком).
 	if err := uc.repo.MarkDayFlag(ctx, day, discounts.FlagExtras); err != nil {
-		return fmt.Errorf("маркер финальной сборки: %w", err)
+		slog.Warn(fmt.Sprintf("discounts: маркер финальной сборки не поставлен: %v", err))
 	}
 
 	return nil
