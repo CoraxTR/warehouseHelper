@@ -60,10 +60,10 @@ func entryCounts(t *testing.T, now func() time.Time, sir, other PairState) int {
 
 // telegramDayClock — вторник: ТГ-день (вт/чт).
 func telegramDayClock() func() time.Time {
-	return func() time.Time { return time.Date(2026, 11, 24, 10, 0, 0, 0, time.UTC) }
+	return func() time.Time { return time.Date(2026, time.November, 24, 10, 0, 0, 0, time.UTC) }
 }
 
 // weekdayClock — среда: ТГ-дня нет.
 func weekdayClock() func() time.Time {
-	return func() time.Time { return time.Date(2026, 11, 25, 10, 0, 0, 0, time.UTC) }
+	return func() time.Time { return time.Date(2026, time.November, 25, 10, 0, 0, 0, time.UTC) }
 }
