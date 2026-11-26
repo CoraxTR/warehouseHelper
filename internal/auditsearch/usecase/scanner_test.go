@@ -26,8 +26,6 @@ func orderEvent(orderName, orderID string, src *string, changes ...client.AuditP
 	return ev
 }
 
-func ptr(s string) *string { return &s }
-
 // Удаление позиции — только OldValue; изменение и чужой товар отбрасываются.
 func TestDeletions(t *testing.T) {
 	t.Parallel()
@@ -44,10 +42,10 @@ func TestDeletions(t *testing.T) {
 		events []client.AuditEventRow
 		want   int
 	}{
-		{"удаление найдено", []client.AuditEventRow{orderEvent("00001", "o-1", ptr("app"), del)}, 1},
-		{"изменение количества — не удаление", []client.AuditEventRow{orderEvent("00002", "o-2", ptr("app"), edit)}, 0},
-		{"чужой товар", []client.AuditEventRow{orderEvent("00003", "o-3", ptr("app"), other)}, 0},
-		{"наш движок — не ручное", []client.AuditEventRow{orderEvent("00004", "o-4", ptr("remap-1.2"), del)}, 0},
+		{"удаление найдено", []client.AuditEventRow{orderEvent("00001", "o-1", new("app"), del)}, 1},
+		{"изменение количества — не удаление", []client.AuditEventRow{orderEvent("00002", "o-2", new("app"), edit)}, 0},
+		{"чужой товар", []client.AuditEventRow{orderEvent("00003", "o-3", new("app"), other)}, 0},
+		{"наш движок — не ручное", []client.AuditEventRow{orderEvent("00004", "o-4", new("remap-1.2"), del)}, 0},
 		{"источник пуст — считаем ручным", []client.AuditEventRow{orderEvent("00005", "o-5", nil, del)}, 1},
 	}
 
@@ -83,9 +81,9 @@ func TestIsManualSource(t *testing.T) {
 
 	cases := map[*string]bool{
 		nil:              true,
-		ptr("app"):       true,
-		ptr("jsonapi"):   false,
-		ptr("remap-1.2"): false,
+		new("app"):       true,
+		new("jsonapi"):   false,
+		new("remap-1.2"): false,
 	}
 
 	for src, want := range cases {

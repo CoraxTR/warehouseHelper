@@ -22,6 +22,16 @@ var auditSearchTmpl = template.Must(
 	template.New("audit_search.html").
 		ParseFiles("../internal/delivery/web/templates/audit_search.html", "../internal/delivery/web/templates/_nav.html"))
 
+// jsonErrorField — ключ сообщения об ошибке в JSON-ответах пакета (одна строка,
+// а не литерал в каждом месте: иначе goconst).
+const jsonErrorField = "error"
+
+// writeJSONErrorMsg — короткий JSON с ошибкой для ручек, которым нужен текст,
+// а не голый статус.
+func writeJSONErrorMsg(w http.ResponseWriter, status int, msg string) {
+	writeJSON(w, status, map[string]string{jsonErrorField: msg})
+}
+
 // auditSearchService — шов страницы: юзкейс поиска удалений (в тестах —
 // фейковый сканер, без сети и МойСклада).
 type auditSearchService interface {
@@ -357,6 +367,7 @@ func (h *Handler) AuditSearchExport(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", "audit_deletions.xlsx"))
+	//nolint:gosec // путь собран юзкейсом в его tempdir (uuid.xlsx), из запроса не приходит
 	http.ServeFile(w, r, path)
 }
 
@@ -374,5 +385,5 @@ func writeAuditSearchJSON(w http.ResponseWriter, status int, v any) {
 // writeAuditSearchError — ошибка в JSON: страница показывает текст
 // оператору, а не голый статус.
 func writeAuditSearchError(w http.ResponseWriter, status int, msg string) {
-	writeAuditSearchJSON(w, status, map[string]string{"error": msg})
+	writeAuditSearchJSON(w, status, map[string]string{jsonErrorField: msg})
 }

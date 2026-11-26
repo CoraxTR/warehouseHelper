@@ -535,16 +535,7 @@ func percent(total, done int, state string) int {
 		return 0
 	}
 
-	p := done * 100 / total
-	if p > 100 {
-		p = 100
-	}
-
-	if p < 0 {
-		p = 0
-	}
-
-	return p
+	return max(0, min(done*100/total, 100))
 }
 
 // etaSec — оценка остатка по средней скорости done/elapsed. До ETAFromDone
