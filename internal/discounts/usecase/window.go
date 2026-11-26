@@ -105,7 +105,7 @@ func (uc *UseCase) windowedWrites(ctx context.Context, pairs []PairState, writes
 	// четверга поднял сайт сразу — после перехода окна на счёт по товарам
 	// «входящих» пар стало намного больше, и в актуальных оказались ступени,
 	// которые должны были уйти подписчикам.
-	if seeded && !isTelegramDay(uc.Now()) {
+	if seeded && uc.entryAllowed(ctx) {
 		out = append(out, windowEntryWrites(pairs, win, prevWin, seen)...)
 	}
 
@@ -206,4 +206,24 @@ func raisedWrites(writes []discounts.DiscountWrite, keys []discounts.LotKey) []d
 	}
 
 	return out
+}
+
+// entryAllowed — писать ли вход в окно на этом проходе. Не-ТГ-день — пишем
+// всегда. ТГ-день (вт/чт): до финальной сборки 14:45 сайт молчит — новый
+// список ещё не применён, и скидка сайта обогнала бы рассылку (решение
+// владельца 24.09.2026); после сборки список работает на дополнение окна в
+// пределах ёмкости, как и в остальные дни (решение владельца 26.11.2026).
+// Маркер дня, а не часы: шаг мог не выполниться, и тогда вход запрещён.
+func (uc *UseCase) entryAllowed(ctx context.Context) bool {
+	if !isTelegramDay(uc.Now()) {
+		return true
+	}
+
+	if uc.repo == nil {
+		return false // сказать нечего — молчим, как до сборки
+	}
+
+	done, err := uc.repo.DayFlagDone(ctx, beginningOfDay(uc.Now()), discounts.FlagExtras)
+
+	return err == nil && done
 }

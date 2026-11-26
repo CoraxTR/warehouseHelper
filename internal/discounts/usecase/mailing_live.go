@@ -390,6 +390,12 @@ func (uc *UseCase) applyExtras(ctx context.Context, now time.Time, capacity int)
 		uc.notifyChanges(ctx, changes)
 	}
 
+	// Маркер финальной сборки: с этого момента на ТГ-дне окно снова добирается
+	// обычным проходом (entryAllowed), а не ждёт полуночи.
+	if err := uc.repo.MarkDayFlag(ctx, day, discounts.FlagExtras); err != nil {
+		return fmt.Errorf("маркер финальной сборки: %w", err)
+	}
+
 	return nil
 }
 
