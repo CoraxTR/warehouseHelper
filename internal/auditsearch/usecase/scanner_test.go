@@ -138,7 +138,7 @@ func TestNormalizeWindow(t *testing.T) {
 		t.Error("перевёрнутое окно должно отвергаться")
 	}
 
-	wide := time.Date(2027, 11, 26, 0, 0, 0, 0, time.UTC)
+	wide := time.Date(2027, time.November, 26, 0, 0, 0, 0, time.UTC)
 	if _, _, err := normalizeWindow(from, wide); err == nil {
 		t.Error("окно больше 92 дней должно отвергаться")
 	}
