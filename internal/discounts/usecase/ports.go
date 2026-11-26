@@ -75,6 +75,13 @@ type Repository interface {
 	DayFlagDone(ctx context.Context, date time.Time, flag discounts.DayFlag) (bool, error)
 	// MarkDayFlag — отметить шаг дня сделанным.
 	MarkDayFlag(ctx context.Context, date time.Time, flag discounts.DayFlag) error
+	// LoadWindowState — окно ёмкости прошлого прохода (лоты, занимавшие место в
+	// окне на момент прошлого расчёта). ok=false — записи нет: первый запуск
+	// после миграции, «вход в окно» считается со следующего прохода.
+	LoadWindowState(ctx context.Context) ([]discounts.LotKey, bool, error)
+	// SaveWindowState — запомнить окно прохода (одна строка, перезапись целиком):
+	// после рестарта вход в окно считается честно, а не «всё уже стоит».
+	SaveWindowState(ctx context.Context, keys []discounts.LotKey) error
 }
 
 // Turnover — действующий средний оборот товара, шт за период (недельный ряд —

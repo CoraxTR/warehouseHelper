@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"warehouseHelper/internal/discounts"
@@ -414,6 +415,59 @@ func (pg *PGClient) DayFlagDone(ctx context.Context, date time.Time, flag discou
 		return false, fmt.Errorf("day flag %s %s: %w", date.Format(time.DateOnly), flag, err)
 	}
 	return done, nil
+}
+
+// windowKeyLayout — ключ пары в discount_window_state: «product_id|ГГГГ-ММ-ДД».
+const windowKeyLayout = time.DateOnly
+
+// LoadWindowState — окно ёмкости прошлого прохода. ok=false — строки нет
+// (первый запуск после миграции): «вход в окно» тогда считается со следующего
+// прохода, чтобы установка не проставила пачкой ступени дня.
+func (pg *PGClient) LoadWindowState(ctx context.Context) ([]discounts.LotKey, bool, error) {
+	var raw []string
+	err := pg.Pool.QueryRow(ctx,
+		`SELECT lot_keys FROM discount_window_state WHERE only_row`).Scan(&raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("window state: %w", err)
+	}
+
+	keys := make([]discounts.LotKey, 0, len(raw))
+	for _, item := range raw {
+		productID, date, ok := strings.Cut(item, "|")
+		if !ok {
+			continue
+		}
+		bestBefore, err := time.Parse(windowKeyLayout, date)
+		if err != nil {
+			continue
+		}
+		keys = append(keys, discounts.LotKey{ProductID: productID, BestBefore: bestBefore})
+	}
+
+	return keys, true, nil
+}
+
+// SaveWindowState — запомнить окно прохода: одна строка, перезапись целиком
+// (окно — снимок, история не нужна).
+func (pg *PGClient) SaveWindowState(ctx context.Context, keys []discounts.LotKey) error {
+	items := make([]string, 0, len(keys))
+	for _, k := range keys {
+		items = append(items, k.ProductID+"|"+k.BestBefore.Format(windowKeyLayout))
+	}
+
+	_, err := pg.Pool.Exec(ctx, `
+        INSERT INTO discount_window_state (only_row, lot_keys, updated_at)
+        VALUES (TRUE, $1::text[], now())
+        ON CONFLICT (only_row) DO UPDATE
+           SET lot_keys = EXCLUDED.lot_keys, updated_at = now()`, items)
+	if err != nil {
+		return fmt.Errorf("save window state: %w", err)
+	}
+
+	return nil
 }
 
 // MarkDayFlag — отметить шаг дня сделанным. Идемпотентно: строка дня создаётся

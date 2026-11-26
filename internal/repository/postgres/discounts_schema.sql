@@ -4,6 +4,7 @@
 --   discount_telegram_digest      — рассылка (слот) целиком: день плана, канал, факт отправки;
 --   discount_telegram_digest_item — позиции рассылки (лот + скидка + причина);
 --   discount_day_flags            — по дню: какие фоновые пересчёты уже сделаны.
+--   discount_window_state         — окно ёмкости прошлого прохода (вход в окно после рестарта).
 --
 -- Зачем: антидубль «не был в предыдущей рассылке» (по ЛОТУ, не по товару) и
 -- защита от повторной рассылки/повторного подъёма после рестарта («догон
@@ -19,6 +20,7 @@
 --   DROP TABLE IF EXISTS discount_telegram_digest_item;
 --   DROP TABLE IF EXISTS discount_telegram_digest;
 --   DROP TABLE IF EXISTS discount_day_flags;
+--   DROP TABLE IF EXISTS discount_window_state;
 -- created_at/updated_at не заводим (решение владельца, 14.09.2026).
 --
 -- ЖИВАЯ БД: таблица discount_day_flags могла быть создана раньше, до появления
@@ -119,3 +121,17 @@ CREATE TABLE IF NOT EXISTS discount_day_flags (
     tg_raise_done BOOLEAN NOT NULL DEFAULT false,   -- подъём general до telegram (16:00) выполнен
     turnover_window_done BOOLEAN NOT NULL DEFAULT false  -- полное окно оборотов обновлено (09:00)
     );
+
+-- Окно ёмкости прошлого прохода: лоты, занимавшие место в окне на момент
+-- последнего расчёта. Нужно, чтобы «вход в окно» (пустое место пары получает её
+-- ступень) считался честно после рестарта. Раньше окно прошлого прохода жило
+-- только в памяти процесса: после перезапуска первого прохода «прошлого» нет,
+-- вход по нему не считается, и пара, вошедшая в окно в момент выката, оставалась
+-- «уже стоящей» без значения до утреннего пересчёта (инцидент 26.11.2026:
+-- Сирлойн флэп без 10 %, 11 строк в актуальных при ёмкости 12).
+-- Ключ пары — product_id|YYYY-MM-DD; строка одна (перезапись целиком).
+CREATE TABLE IF NOT EXISTS discount_window_state (
+    only_row   BOOLEAN PRIMARY KEY DEFAULT TRUE CHECK (only_row),
+    lot_keys   TEXT[] NOT NULL DEFAULT '{}',
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
