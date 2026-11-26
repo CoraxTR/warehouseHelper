@@ -26,7 +26,7 @@ func normalizeProducts(ids []string) ([]string, error) {
 	out := make([]string, 0, len(ids))
 
 	for _, raw := range ids {
-		for _, part := range strings.Split(raw, ",") {
+		for part := range strings.SplitSeq(raw, ",") {
 			id := strings.TrimSpace(part)
 			if id == "" {
 				continue
