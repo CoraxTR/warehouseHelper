@@ -566,41 +566,11 @@ type MSConfig struct {
 func loadMSConfig() *MSConfig {
 	msrefs := loadMSRefs()
 
-	wrhsakeysStr := os.Getenv("MSAPI_KEYS_WAREHOUSE")
-	wrhsakeys := strings.Split(wrhsakeysStr, ",")
-	wrhworkers := make([]MSWorker, 0, len(wrhsakeys))
-
-	for _, key := range wrhsakeys {
-		parts := strings.Split(key, "-")
-		if len(parts) == 2 {
-			wrhworkers = append(wrhworkers, MSWorker{APIKey: parts[0], Name: parts[1]})
-		}
-	}
-
-	othrsakeysStr := os.Getenv("MSAPI_KEYS_OTHERS")
-	othrsakeys := strings.Split(othrsakeysStr, ",")
-
-	othrworkers := make([]MSWorker, 0, len(othrsakeys))
-	for _, key := range othrsakeys {
-		parts := strings.Split(key, "-")
-		if len(parts) == 2 {
-			othrworkers = append(othrworkers, MSWorker{APIKey: parts[0], Name: parts[1]})
-		}
-	}
-
-	// Ключи аудита — отдельная группа. Кавычки снимаем (как у id-переменных
-	// ниже): значение задаётся без них, а кавычка стала бы частью токена и
-	// дала бы 401. Пусто — не ошибка старта: аудит просто недоступен.
-	auditkeys := strings.Split(os.Getenv("MSAPI_KEYS_AUDIT"), ",")
-	auditworkers := make([]MSWorker, 0, len(auditkeys))
-
-	for _, key := range auditkeys {
-		key = strings.Trim(strings.TrimSpace(key), `"`)
-		parts := strings.Split(key, "-")
-		if len(parts) == 2 {
-			auditworkers = append(auditworkers, MSWorker{APIKey: parts[0], Name: parts[1]})
-		}
-	}
+	wrhworkers := parseMSKeys("MSAPI_KEYS_WAREHOUSE")
+	othrworkers := parseMSKeys("MSAPI_KEYS_OTHERS")
+	// Ключи аудита — отдельная группа: аудит МС закрыт для части общих и
+	// складских ключей. Пусто — не ошибка старта, аудит просто недоступен.
+	auditworkers := parseMSKeys("MSAPI_KEYS_AUDIT")
 
 	if len(wrhworkers) == 0 && len(othrworkers) == 0 {
 		os.Exit(1)

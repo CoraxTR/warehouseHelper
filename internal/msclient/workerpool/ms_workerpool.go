@@ -428,7 +428,7 @@ func (p *MSWorkerPool) auditWorkerLoop(worker *MSAuditWorker) {
 
 	// others = nil после закрытия канала: receive с закрытого канала всегда
 	// готов и в select «съедал» бы выбор у auditTasks (и крутил бы цикл).
-	var others chan task = p.otherTasks
+	others := p.otherTasks
 
 	for {
 		// Приоритет: неблокирующая попытка взять общую задачу. Пока в
