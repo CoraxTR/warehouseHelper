@@ -537,15 +537,20 @@ type MSConfig struct {
 
 	WarehouseAPIKEYS []MSWorker
 	OthersAPIKEYS    []MSWorker
-	TimeSpan         time.Duration
-	RequestCap       int
-	SellTypeID       string
-	RefGoNumberID    string
-	CourierID        string
-	TimeFormat       string
-	URLstart         string
-	AuthHeader       string
-	EncodeHeader     string
+	// AuditAPIKEYS — ключи группы аудита (MSAPI_KEYS_AUDIT). Отдельная
+	// группа: аудит МойСклада закрыт для части общих и складских ключей.
+	// Пусто — допустимо: пул поднимается, методы аудита получают
+	// ErrNoAuditWorkers.
+	AuditAPIKEYS  []MSWorker
+	TimeSpan      time.Duration
+	RequestCap    int
+	SellTypeID    string
+	RefGoNumberID string
+	CourierID     string
+	TimeFormat    string
+	URLstart      string
+	AuthHeader    string
+	EncodeHeader  string
 	// CancelledStateID — id статуса заказа «Отменён» (audit-наблюдатель,
 	// модуль returns). Пусто — перевод в «Отменён» не детектится.
 	CancelledStateID string
@@ -561,27 +566,11 @@ type MSConfig struct {
 func loadMSConfig() *MSConfig {
 	msrefs := loadMSRefs()
 
-	wrhsakeysStr := os.Getenv("MSAPI_KEYS_WAREHOUSE")
-	wrhsakeys := strings.Split(wrhsakeysStr, ",")
-	wrhworkers := make([]MSWorker, 0, len(wrhsakeys))
-
-	for _, key := range wrhsakeys {
-		parts := strings.Split(key, "-")
-		if len(parts) == 2 {
-			wrhworkers = append(wrhworkers, MSWorker{APIKey: parts[0], Name: parts[1]})
-		}
-	}
-
-	othrsakeysStr := os.Getenv("MSAPI_KEYS_OTHERS")
-	othrsakeys := strings.Split(othrsakeysStr, ",")
-
-	othrworkers := make([]MSWorker, 0, len(othrsakeys))
-	for _, key := range othrsakeys {
-		parts := strings.Split(key, "-")
-		if len(parts) == 2 {
-			othrworkers = append(othrworkers, MSWorker{APIKey: parts[0], Name: parts[1]})
-		}
-	}
+	wrhworkers := parseMSKeys("MSAPI_KEYS_WAREHOUSE")
+	othrworkers := parseMSKeys("MSAPI_KEYS_OTHERS")
+	// Ключи аудита — отдельная группа: аудит МС закрыт для части общих и
+	// складских ключей. Пусто — не ошибка старта, аудит просто недоступен.
+	auditworkers := parseMSKeys("MSAPI_KEYS_AUDIT")
 
 	if len(wrhworkers) == 0 && len(othrworkers) == 0 {
 		os.Exit(1)
@@ -661,6 +650,7 @@ func loadMSConfig() *MSConfig {
 
 		WarehouseAPIKEYS:   wrhworkers,
 		OthersAPIKEYS:      othrworkers,
+		AuditAPIKEYS:       auditworkers,
 		TimeSpan:           tspn,
 		RequestCap:         rqcap,
 		SellTypeID:         selltypeID,

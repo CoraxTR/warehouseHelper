@@ -17,9 +17,10 @@ import (
 // «заказы/update» и резолв товара по id из нашей базы в канонический id
 // remap (id каталога — legacy uuidHref, в аудите ссылки на remap-id).
 //
-// Аудит закрыт для части общих ключей, поэтому листинг и раскрытие идут
-// строго под ключами склада (SubmitWarehouse) — как у вотчера аудита;
-// рейт-лимит целиком на воркерпуле, своих лимитеров здесь нет.
+// Аудит закрыт для части общих и складских ключей, поэтому листинг и
+// раскрытие идут строго под ключами группы аудита (SubmitAudit,
+// MSAPI_KEYS_AUDIT) — как у вотчера аудита; рейт-лимит целиком на
+// воркерпуле, своих лимитеров здесь нет.
 
 // auditWindowDefaultLimit — размер страницы окна поиска удалений: листинг
 // читается пачками по 100 контекстов (у FetchAuditPage лимит 25 зашит —
@@ -88,7 +89,7 @@ func (msac *MSAPIClient) FetchAuditPageWindow(parentctx context.Context, from, t
 		return &list, nil
 	}
 
-	resultCh := msac.workerpool.SubmitWarehouse(job)
+	resultCh := msac.workerpool.SubmitAudit(job)
 
 	select {
 	case res := <-resultCh:
