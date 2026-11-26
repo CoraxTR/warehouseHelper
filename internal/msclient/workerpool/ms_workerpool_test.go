@@ -24,8 +24,10 @@ func newTestPool(warehouseCap, otherCap int) *MSWorkerPool {
 		// протокол Submit/Stop, а не отсутствие ключей.
 		WarehouseWorkers: []*MSWarehouseWorker{{}},
 		OtherWorkers:     []*MSOtherWorker{{}},
+		AuditWorkers:     []*MSAuditWorker{{}},
 		warehouseTasks:   make(chan task, warehouseCap),
 		otherTasks:       make(chan task, otherCap),
+		auditTasks:       make(chan task, otherCap),
 		ctx:              ctx,
 		cancel:           cancel,
 	}

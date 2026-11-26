@@ -537,15 +537,20 @@ type MSConfig struct {
 
 	WarehouseAPIKEYS []MSWorker
 	OthersAPIKEYS    []MSWorker
-	TimeSpan         time.Duration
-	RequestCap       int
-	SellTypeID       string
-	RefGoNumberID    string
-	CourierID        string
-	TimeFormat       string
-	URLstart         string
-	AuthHeader       string
-	EncodeHeader     string
+	// AuditAPIKEYS — ключи группы аудита (MSAPI_KEYS_AUDIT). Отдельная
+	// группа: аудит МойСклада закрыт для части общих и складских ключей.
+	// Пусто — допустимо: пул поднимается, методы аудита получают
+	// ErrNoAuditWorkers.
+	AuditAPIKEYS  []MSWorker
+	TimeSpan      time.Duration
+	RequestCap    int
+	SellTypeID    string
+	RefGoNumberID string
+	CourierID     string
+	TimeFormat    string
+	URLstart      string
+	AuthHeader    string
+	EncodeHeader  string
 	// CancelledStateID — id статуса заказа «Отменён» (audit-наблюдатель,
 	// модуль returns). Пусто — перевод в «Отменён» не детектится.
 	CancelledStateID string
@@ -580,6 +585,20 @@ func loadMSConfig() *MSConfig {
 		parts := strings.Split(key, "-")
 		if len(parts) == 2 {
 			othrworkers = append(othrworkers, MSWorker{APIKey: parts[0], Name: parts[1]})
+		}
+	}
+
+	// Ключи аудита — отдельная группа. Кавычки снимаем (как у id-переменных
+	// ниже): значение задаётся без них, а кавычка стала бы частью токена и
+	// дала бы 401. Пусто — не ошибка старта: аудит просто недоступен.
+	auditkeys := strings.Split(os.Getenv("MSAPI_KEYS_AUDIT"), ",")
+	auditworkers := make([]MSWorker, 0, len(auditkeys))
+
+	for _, key := range auditkeys {
+		key = strings.Trim(strings.TrimSpace(key), `"`)
+		parts := strings.Split(key, "-")
+		if len(parts) == 2 {
+			auditworkers = append(auditworkers, MSWorker{APIKey: parts[0], Name: parts[1]})
 		}
 	}
 
@@ -661,6 +680,7 @@ func loadMSConfig() *MSConfig {
 
 		WarehouseAPIKEYS:   wrhworkers,
 		OthersAPIKEYS:      othrworkers,
+		AuditAPIKEYS:       auditworkers,
 		TimeSpan:           tspn,
 		RequestCap:         rqcap,
 		SellTypeID:         selltypeID,

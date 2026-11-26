@@ -49,12 +49,17 @@ type task struct {
 type MSWorkerPool struct {
 	WarehouseWorkers []*MSWarehouseWorker
 	OtherWorkers     []*MSOtherWorker
+	AuditWorkers     []*MSAuditWorker
 	warehouseTasks   chan task
 	otherTasks       chan task
+	auditTasks       chan task
 	wg               sync.WaitGroup
 	ctx              context.Context //nolint:containedctx //we need to cancel all workers when stopping the pool
 	cancel           context.CancelFunc
 	once             sync.Once
+	// auditNoWorkersOnce — WARN про пустой MSAPI_KEYS_AUDIT печатается один
+	// раз, а не на каждый SubmitAudit поллера.
+	auditNoWorkersOnce sync.Once
 
 	// attempts — сколько попыток делать (0 = defaultAttempts), backoff — база
 	// пауз (0 = defaultBackoff). Поля, а не константы: тесты подменяют backoff
@@ -78,6 +83,15 @@ type MSWarehouseWorker struct {
 }
 
 type MSOtherWorker struct {
+	APIKey      string
+	Name        string
+	rateLimiter *MSOutRateLimiter
+}
+
+// MSAuditWorker — воркер отдельной группы ключей аудита (MSAPI_KEYS_AUDIT).
+// В отличие от остальных групп, обслуживает ДВА канала: сначала общий
+// otherTasks, и только когда тот пуст — auditTasks (см. auditWorkerLoop).
+type MSAuditWorker struct {
 	APIKey      string
 	Name        string
 	rateLimiter *MSOutRateLimiter
@@ -122,8 +136,10 @@ func NewMSWorkerPool(config *config.MSConfig) *MSWorkerPool {
 	pool := &MSWorkerPool{
 		WarehouseWorkers: make([]*MSWarehouseWorker, 0, len(config.WarehouseAPIKEYS)),
 		OtherWorkers:     make([]*MSOtherWorker, 0, len(config.OthersAPIKEYS)),
+		AuditWorkers:     make([]*MSAuditWorker, 0, len(config.AuditAPIKEYS)),
 		warehouseTasks:   make(chan task, len(config.WarehouseAPIKEYS)*2),
 		otherTasks:       make(chan task, len(config.OthersAPIKEYS)*2),
+		auditTasks:       make(chan task, len(config.AuditAPIKEYS)*2),
 		ctx:              ctx,
 		cancel:           cancel,
 		once:             sync.Once{},
@@ -167,6 +183,27 @@ func NewMSWorkerPool(config *config.MSConfig) *MSWorkerPool {
 		go pool.otherWorkerLoop(w)
 	}
 
+	// Ключи аудита — своя группа: аудит закрыт для части общих и складских
+	// ключей, а обычные задачи на этих ключах делать можно. Пустой список —
+	// не ошибка старта: пул поднимается, SubmitAudit вернёт ErrNoAuditWorkers.
+	for _, v := range config.AuditAPIKEYS {
+		w := &MSAuditWorker{APIKey: v.APIKey, Name: v.Name, rateLimiter: NewMSOutRateLimiter(config)}
+
+		ok := validateKey(ctx, config, v.APIKey)
+		if !ok {
+			slog.Info(fmt.Sprintf("%s: Мне дали неправильный API-ключ!", v.Name))
+
+			continue
+		}
+
+		slog.Info(fmt.Sprintf("%s: API-ключ аудита прошёл проверку, мне можно давать задачи", v.Name))
+
+		pool.AuditWorkers = append(pool.AuditWorkers, w)
+		pool.wg.Add(1)
+
+		go pool.auditWorkerLoop(w)
+	}
+
 	return pool
 }
 
@@ -202,6 +239,49 @@ func (p *MSWorkerPool) SubmitOtherNoRetry(job JobFunc) <-chan result {
 	return p.submit(p.otherTasks, len(p.OtherWorkers), job, true)
 }
 
+// SubmitAudit ставит задачу в очередь воркеров аудита (MSAPI_KEYS_AUDIT).
+//
+// Группа отдельная: аудит МойСклада закрыт для части общих и складских ключей,
+// зато её ключи годятся и для обычных задач — воркер аудита сначала разбирает
+// общий канал others, и только когда тот пуст, берёт задачи аудита.
+func (p *MSWorkerPool) SubmitAudit(job JobFunc) <-chan result {
+	return p.submitAudit(p.auditTasks, len(p.AuditWorkers), job, false)
+}
+
+// SubmitAuditNoRetry — аудитная задача БЕЗ повторов: нужна, если появится
+// неидемпотентный запрос (повтор создал бы дубль в учёте, см.
+// SubmitWarehouseNoRetry).
+func (p *MSWorkerPool) SubmitAuditNoRetry(job JobFunc) <-chan result {
+	return p.submitAudit(p.auditTasks, len(p.AuditWorkers), job, true)
+}
+
+// submitAudit — постановка аудитной задачи. Отличается от submit только
+// ошибкой «воркеров нет»: для аудита это не общая нехватка ключей, а пустой
+// или невалидный MSAPI_KEYS_AUDIT — сообщение должно вести прямо к причине.
+func (p *MSWorkerPool) submitAudit(tasks chan task, workers int, job JobFunc, noRetry bool) <-chan result {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+
+	if p.stopped {
+		return errResult(ErrPoolStopped)
+	}
+
+	if workers == 0 {
+		// WARN один раз: поллер аудита ходит регулярно, и повторять одну и
+		// ту же причину каждую минуту в логе незачем.
+		p.auditNoWorkersOnce.Do(func() {
+			slog.Warn("аудит МойСклада недоступен: MSAPI_KEYS_AUDIT пуст или ни один ключ не прошёл проверку")
+		})
+
+		return errResult(ErrNoAuditWorkers)
+	}
+
+	resCh := make(chan result, 1)
+	tasks <- task{job: job, resCh: resCh, noRetry: noRetry}
+
+	return resCh
+}
+
 // submit — общий путь постановки задачи: проверка остановки, проверка наличия
 // воркеров и отправка в очередь нужного пула.
 func (p *MSWorkerPool) submit(tasks chan task, workers int, job JobFunc, noRetry bool) <-chan result {
@@ -231,6 +311,11 @@ func (p *MSWorkerPool) submit(tasks chan task, workers int, job JobFunc, noRetry
 // выходит» и есть смысл graceful shutdown.
 var ErrNoWorkers = errors.New("нет воркеров МС: ни один ключ не прошёл проверку")
 
+// ErrNoAuditWorkers — задач аудита ставить некуда: MSAPI_KEYS_AUDIT не задан
+// или ни один его ключ не прошёл проверку. Пул при этом работает: остальные
+// группы ключей и их методы доступны.
+var ErrNoAuditWorkers = errors.New("нет воркеров аудита МС: MSAPI_KEYS_AUDIT пуст или ни один ключ не прошёл проверку")
+
 // errResult — ответ на задачу, которую пул не принял: одно значение и
 // закрытие, как у любой выполненной задачи. Иначе вызывающий либо прочитал бы
 // остановку как успех, либо ждал бы resCh вечно.
@@ -255,6 +340,7 @@ func (p *MSWorkerPool) Stop() {
 		p.stopped = true
 		close(p.warehouseTasks)
 		close(p.otherTasks)
+		close(p.auditTasks)
 		p.mu.Unlock()
 
 		// Отмена после закрытия: воркеры, сидящие в уже взятой задаче, выходят
@@ -273,6 +359,11 @@ func (p *MSWorkerPool) Stop() {
 		}
 
 		for t := range p.otherTasks {
+			t.resCh <- result{Err: ErrPoolStopped}
+			close(t.resCh)
+		}
+
+		for t := range p.auditTasks {
 			t.resCh <- result{Err: ErrPoolStopped}
 			close(t.resCh)
 		}
@@ -326,6 +417,64 @@ func (p *MSWorkerPool) otherWorkerLoop(worker *MSOtherWorker) {
 			close(task.resCh)
 		}
 	}
+}
+
+// auditWorkerLoop — воркер группы аудита. В отличие от остальных, обслуживает
+// ДВА канала с приоритетом: сначала общий otherTasks, и только когда он пуст —
+// auditTasks. Так аудит не отбирает ключи у обычных задач, но и ключи аудита не
+// простаивают: пока общая очередь пуста, они разбирают аудит.
+func (p *MSWorkerPool) auditWorkerLoop(worker *MSAuditWorker) {
+	defer p.wg.Done()
+
+	// others = nil после закрытия канала: receive с закрытого канала всегда
+	// готов и в select «съедал» бы выбор у auditTasks (и крутил бы цикл).
+	var others chan task = p.otherTasks
+
+	for {
+		// Приоритет: неблокирующая попытка взять общую задачу. Пока в
+		// otherTasks что-то есть, auditTasks не трогаем.
+		select {
+		case task, ok := <-others:
+			if !ok {
+				others = nil
+
+				continue
+			}
+
+			p.runAuditTask(worker, task)
+
+			continue
+		default:
+		}
+
+		select {
+		case <-p.ctx.Done():
+			return
+		case task, ok := <-others:
+			if !ok {
+				others = nil
+
+				continue
+			}
+
+			p.runAuditTask(worker, task)
+		case task, ok := <-p.auditTasks:
+			if !ok {
+				return
+			}
+
+			p.runAuditTask(worker, task)
+		}
+	}
+}
+
+// runAuditTask выполняет задачу на аудитном воркере (с его ключом и его
+// рейт-лимитером) и отвечает вызывающему ровно одним значением и закрытием.
+func (p *MSWorkerPool) runAuditTask(worker *MSAuditWorker, task task) {
+	res, err := p.runJob(worker.rateLimiter, worker.APIKey, task)
+	task.resCh <- result{Value: res, Err: err}
+
+	close(task.resCh)
 }
 
 // runJob выполняет задачу с повторами временных сбоев МойСклад.

@@ -46,6 +46,7 @@ func newRunningPool(t *testing.T) *MSWorkerPool {
 	p := &MSWorkerPool{
 		warehouseTasks: make(chan task, 16),
 		otherTasks:     make(chan task, 16),
+		auditTasks:     make(chan task, 16),
 		ctx:            ctx,
 		cancel:         cancel,
 		backoff:        testBackoff,
@@ -67,6 +68,16 @@ func newRunningPool(t *testing.T) *MSWorkerPool {
 		go p.otherWorkerLoop(w)
 	}
 
+	// Аудитная группа: тоже живая — иначе SubmitAudit вернёт ErrNoAuditWorkers,
+	// а тесты ретраев проверяют именно выполнение задачи в воркере.
+	for range 1 {
+		w := &MSAuditWorker{Name: "тест-аудит", APIKey: "key-aud", rateLimiter: testLimiter()}
+		p.AuditWorkers = append(p.AuditWorkers, w)
+		p.wg.Add(1)
+
+		go p.auditWorkerLoop(w)
+	}
+
 	t.Cleanup(p.Stop)
 
 	return p
@@ -82,19 +93,21 @@ func testLimiter() *MSOutRateLimiter {
 	return &MSOutRateLimiter{ch: ch}
 }
 
-// retrySubmitters — оба пути постановки задачи с повторами.
+// retrySubmitters — пути постановки задачи с повторами (все три группы).
 func retrySubmitters() map[string]func(*MSWorkerPool, JobFunc) <-chan result {
 	return map[string]func(*MSWorkerPool, JobFunc) <-chan result{
 		"SubmitWarehouse": (*MSWorkerPool).SubmitWarehouse,
 		"SubmitOther":     (*MSWorkerPool).SubmitOther,
+		"SubmitAudit":     (*MSWorkerPool).SubmitAudit,
 	}
 }
 
-// noRetrySubmitters — оба пути постановки задачи без повторов.
+// noRetrySubmitters — пути постановки задачи без повторов (все три группы).
 func noRetrySubmitters() map[string]func(*MSWorkerPool, JobFunc) <-chan result {
 	return map[string]func(*MSWorkerPool, JobFunc) <-chan result{
 		"SubmitWarehouseNoRetry": (*MSWorkerPool).SubmitWarehouseNoRetry,
 		"SubmitOtherNoRetry":     (*MSWorkerPool).SubmitOtherNoRetry,
+		"SubmitAuditNoRetry":     (*MSWorkerPool).SubmitAuditNoRetry,
 	}
 }
 

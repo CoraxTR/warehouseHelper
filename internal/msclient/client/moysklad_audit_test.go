@@ -65,9 +65,13 @@ func TestParseAuditMomentInvalid(t *testing.T) {
 	}
 }
 
-// newAuditTestClient — как newDetailTestClient, но с warehouse-ключом: audit
-// закрыт для части общих ключей, все audit-запросы идут строго под ключами
-// склада (SubmitWarehouse) — воркерпулу нужен warehouse-воркер.
+// auditAuthHeader — Authorization ключа группы аудита (MSAPI_KEYS_AUDIT):
+// audit-запросы обязаны идти строго под ним, а не под складским или общим.
+const auditAuthHeader = "Bearer key-aud"
+
+// newAuditTestClient — как newDetailTestClient, но с ключом группы аудита:
+// audit закрыт для части общих и складских ключей, все audit-запросы идут
+// строго под ключами аудита (SubmitAudit) — воркерпулу нужен audit-воркер.
 func newAuditTestClient(t *testing.T, handler http.HandlerFunc) *MSAPIClient {
 	t.Helper()
 
@@ -85,6 +89,7 @@ func newAuditTestClient(t *testing.T, handler http.HandlerFunc) *MSAPIClient {
 		URLstart:         server.URL + "/entity/",
 		AuthHeader:       "Bearer",
 		Refs:             &config.MSRefs{OrgID: "org-test"},
+		AuditAPIKEYS:     []config.MSWorker{{Name: "aud-worker", APIKey: "key-aud"}},
 		WarehouseAPIKEYS: []config.MSWorker{{Name: "wh-worker", APIKey: "key-wh"}},
 		OthersAPIKEYS:    []config.MSWorker{{Name: "oth-worker", APIKey: "key-oth"}},
 		TimeSpan:         time.Second,
@@ -127,9 +132,10 @@ func TestFetchAuditPage(t *testing.T) {
 	if size != 2 {
 		t.Errorf("size = %d, want 2", size)
 	}
-	// Audit закрыт для части общих ключей — запрос должен уйти под warehouse-ключом.
-	if gotAuth != whAuthHeader {
-		t.Errorf("Authorization = %q, want warehouse key (Bearer key-wh)", gotAuth)
+	// Audit закрыт для части общих и складских ключей — запрос должен уйти
+	// под ключом группы аудита (MSAPI_KEYS_AUDIT).
+	if gotAuth != auditAuthHeader {
+		t.Errorf("Authorization = %q, want audit key (%s)", gotAuth, auditAuthHeader)
 	}
 	if len(rows) != 2 {
 		t.Fatalf("len(rows) = %d, want 2", len(rows))
@@ -171,10 +177,63 @@ func TestFetchAuditPageURLEncoding(t *testing.T) {
 	}
 }
 
-func TestFetchAuditDetail(t *testing.T) {
-	var gotPath string
+// TestFetchAuditPageWindow — листинг окна поиска удалений: тоже audit, значит
+// только ключ группы аудита, и своя страница (limit по умолчанию 100).
+func TestFetchAuditPageWindow(t *testing.T) {
+	var gotAuth, gotFilter, gotLimit, gotOffset string
 
 	msac := newAuditTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/audit" {
+			t.Errorf("path = %s, want /audit", r.URL.Path)
+		}
+
+		gotAuth = r.Header.Get("Authorization")
+		gotFilter = r.URL.Query().Get("filter")
+		gotLimit = r.URL.Query().Get("limit")
+		gotOffset = r.URL.Query().Get("offset")
+
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(json.RawMessage(auditListFixture)); err != nil {
+			t.Errorf("failed to encode response: %v", err)
+		}
+	})
+
+	from := time.Date(2026, time.September, 1, 0, 0, 0, 0, time.UTC)
+	to := time.Date(2026, time.September, 8, 0, 0, 0, 0, time.UTC)
+
+	rows, size, err := msac.FetchAuditPageWindow(context.Background(), from, to, 200, 0)
+	if err != nil {
+		t.Fatalf("FetchAuditPageWindow() error: %v", err)
+	}
+
+	if gotAuth != auditAuthHeader {
+		t.Errorf("Authorization = %q, want audit key (%s)", gotAuth, auditAuthHeader)
+	}
+
+	if gotLimit != "100" {
+		t.Errorf("limit = %q, want 100 (страница окна, не auditPageLimit)", gotLimit)
+	}
+
+	if gotOffset != "200" {
+		t.Errorf("offset = %q, want 200", gotOffset)
+	}
+
+	if !strings.Contains(gotFilter, "entityType=customerorder") ||
+		!strings.Contains(gotFilter, "eventType=update") ||
+		!strings.Contains(gotFilter, "moment>=") {
+		t.Errorf("filter = %q, want entityType/eventType/moment>=", gotFilter)
+	}
+
+	if size != 2 || len(rows) != 2 {
+		t.Errorf("size/len(rows) = %d/%d, want 2/2", size, len(rows))
+	}
+}
+
+func TestFetchAuditDetail(t *testing.T) {
+	var gotAuth, gotPath string
+
+	msac := newAuditTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
 		gotPath = r.URL.Path
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(json.RawMessage(auditDetailFixture)); err != nil {
@@ -189,6 +248,10 @@ func TestFetchAuditDetail(t *testing.T) {
 
 	if gotPath != "/audit/884ff854-abc1-11f1-0a80-106a00019ed6/events" {
 		t.Errorf("path = %s, want /audit/<id>/events", gotPath)
+	}
+	// Раскрытие события — тоже audit: только ключ группы аудита.
+	if gotAuth != auditAuthHeader {
+		t.Errorf("Authorization = %q, want audit key (%s)", gotAuth, auditAuthHeader)
 	}
 	if len(rows) != 1 {
 		t.Fatalf("len(rows) = %d, want 1", len(rows))
