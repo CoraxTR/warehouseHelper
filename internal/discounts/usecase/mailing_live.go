@@ -761,10 +761,10 @@ func (uc *UseCase) HandlePhoto(ctx context.Context, _, replyToMessageID int64, f
 			continue
 		}
 		key := lotKey(it.ProductID, it.BestBefore)
-		name := uc.photoName(key)
-		if name == "" {
-			name = it.ProductID
-		}
+		// photoLotName, а не photoName: кэш имён живёт в памяти и после
+		// рестарта пуст — тогда название берём из снапшота остатков, иначе
+		// в чат уходил id товара вместо названия.
+		name := uc.photoLotName(ctx, day, key)
 
 		if uc.photoReady(it) {
 			return uc.warehouse.NotifyWarehouse(discounts.PhotoAlreadyAccepted(name, it.BestBefore))
