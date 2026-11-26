@@ -26,6 +26,7 @@
 -- ЖИВАЯ БД: таблица discount_day_flags могла быть создана раньше, до появления
 -- колонки turnover_window_done — поэтому ниже идёт идемпотентный ALTER:
 --   ALTER TABLE discount_day_flags ADD COLUMN IF NOT EXISTS turnover_window_done BOOLEAN NOT NULL DEFAULT false;
+--   ALTER TABLE discount_day_flags ADD COLUMN IF NOT EXISTS tg_extras_done BOOLEAN NOT NULL DEFAULT false;  -- 26.11.2026: вход в окно после сборки
 -- ЖИВАЯ БД: позиции рассылки могли быть созданы раньше, до появления колонок
 -- контроля вечернего подъёма (16:00) — идемпотентный ALTER:
 --   ALTER TABLE discount_telegram_digest_item ADD COLUMN IF NOT EXISTS initial_qty BIGINT;
@@ -118,6 +119,7 @@ CREATE TABLE IF NOT EXISTS discount_day_flags (
     expiry_done   BOOLEAN NOT NULL DEFAULT false,   -- утренний пересчёт по сроку сделан
     digest_sent   BOOLEAN NOT NULL DEFAULT false,   -- дайджест 09:00 отправлен
     tg_plan_done  BOOLEAN NOT NULL DEFAULT false,   -- план ТГ-слота (14:00) собран и отправлен
+    tg_extras_done BOOLEAN NOT NULL DEFAULT false,  -- финальная сборка (14:45): скидки сайта применены по новому списку
     tg_raise_done BOOLEAN NOT NULL DEFAULT false,   -- подъём general до telegram (16:00) выполнен
     turnover_window_done BOOLEAN NOT NULL DEFAULT false  -- полное окно оборотов обновлено (09:00)
     );
