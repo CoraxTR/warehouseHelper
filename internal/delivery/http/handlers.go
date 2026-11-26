@@ -71,9 +71,13 @@ type Handler struct {
 	discountsUC         *discucase.UseCase
 	discountWindowCap   int
 	discountTelegramCap int
+
+	// Модуль «Поиск удалений»: скан аудита МойСклада на ручные удаления
+	// позиций из заказов. Состояние задачи — только в памяти процесса.
+	auditSearchUC auditSearchService
 }
 
-func NewHandler(syncUC *msucase.SyncUseCase, ordersUC *msucase.OrdersUseCase, exportUC *rgucase.ExportToExcelUseCase, pdfUC *rgucase.ExportOrderPDFUseCase, barcodeUC *rgucase.ExportBarcodesToExcelUseCase, refGoUC *rgucase.RefGoCheckAgainstUseCase, wikiUC *wucase.WikiUseCase, goodsUC *gucase.GoodsUseCase, dayStateUC *ducecase.UseCase, qrUC *qucase.QRUseCase, msUC *msu.MSSuppliersUseCase, stockUC *sucase.StockUseCase, stockHub *stockws.Hub, receiveUC *rucase.BarcodeEditor, receivingUC *rucase.ReceivingUseCase, complaintsUC *cucase.UseCase, tasksUC *tusecase.UseCase, msOrdersUC *msordersuc.UseCase, msFormsUC *msordersuc.FormsUseCase, returnsUC *retucase.UseCase, collabUC *ccase.UseCase, inventoryUC *iucase.UseCase, discountsUC *discucase.UseCase, discountWindowCap, discountTelegramCap int) *Handler {
+func NewHandler(syncUC *msucase.SyncUseCase, ordersUC *msucase.OrdersUseCase, exportUC *rgucase.ExportToExcelUseCase, pdfUC *rgucase.ExportOrderPDFUseCase, barcodeUC *rgucase.ExportBarcodesToExcelUseCase, refGoUC *rgucase.RefGoCheckAgainstUseCase, wikiUC *wucase.WikiUseCase, goodsUC *gucase.GoodsUseCase, dayStateUC *ducecase.UseCase, qrUC *qucase.QRUseCase, msUC *msu.MSSuppliersUseCase, stockUC *sucase.StockUseCase, stockHub *stockws.Hub, receiveUC *rucase.BarcodeEditor, receivingUC *rucase.ReceivingUseCase, complaintsUC *cucase.UseCase, tasksUC *tusecase.UseCase, msOrdersUC *msordersuc.UseCase, msFormsUC *msordersuc.FormsUseCase, returnsUC *retucase.UseCase, collabUC *ccase.UseCase, inventoryUC *iucase.UseCase, discountsUC *discucase.UseCase, auditSearchUC auditSearchService, discountWindowCap, discountTelegramCap int) *Handler {
 	return &Handler{
 		syncUC:       syncUC,
 		ordersUC:     ordersUC,
@@ -101,6 +105,8 @@ func NewHandler(syncUC *msucase.SyncUseCase, ordersUC *msucase.OrdersUseCase, ex
 		discountsUC:         discountsUC,
 		discountWindowCap:   discountWindowCap,
 		discountTelegramCap: discountTelegramCap,
+
+		auditSearchUC: auditSearchUC,
 	}
 }
 

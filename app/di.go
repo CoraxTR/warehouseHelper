@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"time"
+	ausecase "warehouseHelper/internal/auditsearch/usecase"
 	asucase "warehouseHelper/internal/averagesales/usecase"
 	aucase "warehouseHelper/internal/avgweight/usecase"
 	"warehouseHelper/internal/collab"
@@ -90,6 +91,7 @@ type DIContainer struct {
 	stockUC         *sucase.StockUseCase
 	stockReportUC   *srucase.UseCase
 	discountsUC     *ducase.UseCase
+	auditSearchUC   *ausecase.UseCase
 	stockHub        *stockws.Hub
 	receiveBarcodes *rucase.BarcodeEditor
 	receivingUC     *rucase.ReceivingUseCase
@@ -517,6 +519,17 @@ func (d *DIContainer) DiscountsUC() *ducase.UseCase {
 	return d.discountsUC
 }
 
+// AuditSearchUC — модуль «Поиск удалений»: скан аудита МойСклада по ручным
+// удалениям позиции из заказа. Задачи и прогресс живут в памяти процесса,
+// рестарт их обнуляет.
+func (d *DIContainer) AuditSearchUC() *ausecase.UseCase {
+	if d.auditSearchUC == nil {
+		d.auditSearchUC = ausecase.New(d.MSClient())
+	}
+
+	return d.auditSearchUC
+}
+
 // DiscountSchedule — расписание фоновых шагов модуля скидок из env-настроек
 // (утро — как у снапшота состояний, ТГ-слот и подъём — свои времена).
 func (d *DIContainer) DiscountSchedule() ducase.Schedule {
@@ -748,7 +761,7 @@ func (d *DIContainer) SiteCheckUC() *scucase.UseCase {
 
 func (d *DIContainer) Handler() *myhttp.Handler {
 	if d.handlers == nil {
-		d.handlers = myhttp.NewHandler(d.SyncUC(), d.OrdersUC(), d.ExcelExportUC(), d.PdfExportUC(), d.BarcodeExportUC(), d.RefGoCheckAgainstUC(), d.WikiUC(), d.GoodsUC(), d.DayStateUC(), d.QRUC(), d.SuppliersUC(), d.StockUC(), d.StockHub(), d.ReceiveBarcodes(), d.ReceivingUC(), d.ComplaintsUC(), d.TasksUC(), d.MSOrdersUC(), d.MSFormsUC(), d.ReturnsUC(), d.CollabUC(), d.InventoryUC(), d.DiscountsUC(), d.Config().DiscountWindowCap, d.Config().DiscountTelegramCap)
+		d.handlers = myhttp.NewHandler(d.SyncUC(), d.OrdersUC(), d.ExcelExportUC(), d.PdfExportUC(), d.BarcodeExportUC(), d.RefGoCheckAgainstUC(), d.WikiUC(), d.GoodsUC(), d.DayStateUC(), d.QRUC(), d.SuppliersUC(), d.StockUC(), d.StockHub(), d.ReceiveBarcodes(), d.ReceivingUC(), d.ComplaintsUC(), d.TasksUC(), d.MSOrdersUC(), d.MSFormsUC(), d.ReturnsUC(), d.CollabUC(), d.InventoryUC(), d.DiscountsUC(), d.AuditSearchUC(), d.Config().DiscountWindowCap, d.Config().DiscountTelegramCap)
 	}
 
 	return d.handlers
