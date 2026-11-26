@@ -9,6 +9,8 @@
 package usecase
 
 import (
+	"context"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -42,6 +44,9 @@ type UseCase struct {
 	// (windowState/storeWindow).
 	winPrev   map[discounts.LotKey]struct{}
 	winSeeded bool
+	// winLoaded — окно прошлого прохода уже прочитано из БД (одна попытка за
+	// процесс): при пустой таблице читать её на каждом проходе незачем.
+	winLoaded bool
 	// reg — реестр активных пар: снапшот последнего расчёта (верх окна) и
 	// предыдущие эффективные значения для уведомлений (registry.go).
 	// Маркеры расписания в памяти процесса: чтобы не дёргать проверки каждую
@@ -157,19 +162,61 @@ func (uc *UseCase) WindowCap() int {
 }
 
 // windowState — окно ёмкости прошлого прохода и признак, что проход уже был.
-func (uc *UseCase) windowState() (map[discounts.LotKey]struct{}, bool) {
+//
+// Источник правды — БД: окно переживает рестарт, и пара, вошедшая в окно
+// во время выката, после перезапуска всё ещё считается входящей.
+func (uc *UseCase) windowState(ctx context.Context) (map[discounts.LotKey]struct{}, bool) {
 	uc.mu.Lock()
-	defer uc.mu.Unlock()
+	if uc.winLoaded {
+		prev, seeded := uc.winPrev, uc.winSeeded
+		uc.mu.Unlock()
 
-	return uc.winPrev, uc.winSeeded
+		return prev, seeded
+	}
+	uc.mu.Unlock()
+
+	prev := map[discounts.LotKey]struct{}{}
+	seeded := false
+	if uc.repo != nil {
+		keys, ok, err := uc.repo.LoadWindowState(ctx)
+		if err != nil {
+			slog.Warn("discounts: окно прошлого прохода не прочитано", "err", err)
+		}
+		seeded = ok
+		for _, k := range keys {
+			prev[k] = struct{}{}
+		}
+	}
+
+	uc.mu.Lock()
+	if !uc.winLoaded {
+		uc.winPrev, uc.winSeeded, uc.winLoaded = prev, seeded, true
+	}
+	prev, seeded = uc.winPrev, uc.winSeeded
+	uc.mu.Unlock()
+
+	return prev, seeded
 }
 
-// storeWindow — запомнить окно этого прохода как «прошлое» для следующего.
-func (uc *UseCase) storeWindow(win map[discounts.LotKey]struct{}) {
-	uc.mu.Lock()
-	defer uc.mu.Unlock()
+// storeWindow — запомнить окно этого прохода как «прошлое» для следующего:
+// в памяти и в БД (переживает рестарт). Ошибку записи не возвращаем наружу:
+// правки расчёта важнее, следующий проход перезапишет окно.
+func (uc *UseCase) storeWindow(ctx context.Context, win map[discounts.LotKey]struct{}) {
+	keys := make([]discounts.LotKey, 0, len(win))
+	for k := range win {
+		keys = append(keys, k)
+	}
 
-	uc.winPrev, uc.winSeeded = win, true
+	uc.mu.Lock()
+	uc.winPrev, uc.winSeeded, uc.winLoaded = win, true, true
+	uc.mu.Unlock()
+
+	if uc.repo == nil {
+		return
+	}
+	if err := uc.repo.SaveWindowState(ctx, keys); err != nil {
+		slog.Warn("discounts: окно прохода не сохранено", "err", err)
+	}
 }
 
 // MarkDirty отмечает товары, по которым нужен свежий оборот: шов стока

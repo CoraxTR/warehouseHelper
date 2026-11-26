@@ -22,6 +22,8 @@
 package usecase
 
 import (
+	"context"
+
 	"warehouseHelper/internal/discounts"
 )
 
@@ -77,10 +79,10 @@ func windowKeys(pairs []PairState, capacity int) map[discounts.LotKey]struct{} {
 //
 // Первая правка по паре в батче главнее: запись, уже сделанная шагом расчёта
 // (запрет менеджера, выход по владельцу, ступень по сроку), не переписывается.
-func (uc *UseCase) windowedWrites(pairs []PairState, writes []discounts.DiscountWrite) []discounts.DiscountWrite {
+func (uc *UseCase) windowedWrites(ctx context.Context, pairs []PairState, writes []discounts.DiscountWrite) []discounts.DiscountWrite {
 	win := windowKeys(pairs, uc.WindowCap())
-	prevWin, seeded := uc.windowState()
-	uc.storeWindow(win)
+	prevWin, seeded := uc.windowState(ctx)
+	uc.storeWindow(ctx, win)
 
 	seen := make(map[discounts.LotKey]struct{}, len(writes))
 	out := make([]discounts.DiscountWrite, 0, len(writes))

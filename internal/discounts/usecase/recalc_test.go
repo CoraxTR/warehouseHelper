@@ -79,6 +79,11 @@ type fakeDiscountRepo struct {
 	digest *discounts.DigestState
 	// prevShop — пост прошлого ТГ-дня: нужен подчистке перед новой рассылкой.
 	prevShop *discounts.DigestState
+	// winKeys — «таблица» discount_window_state: окно прошлого прохода.
+	// winOK=false — строки нет (первый запуск после миграции).
+	winKeys  []discounts.LotKey
+	winOK    bool
+	winSaves int
 }
 
 func newFakeDiscountRepo(inputs ...discounts.Input) *fakeDiscountRepo {
@@ -1328,6 +1333,19 @@ func (r *fakeDiscountRepo) UpdateDigestItemShop(_ context.Context, plannedAt tim
 			}
 		}
 	}
+
+	return nil
+}
+
+// LoadWindowState — окно прошлого прохода из «таблицы» фейка.
+func (r *fakeDiscountRepo) LoadWindowState(_ context.Context) ([]discounts.LotKey, bool, error) {
+	return r.winKeys, r.winOK, nil
+}
+
+// SaveWindowState — запомнить окно прохода (строка одна: перезапись целиком).
+func (r *fakeDiscountRepo) SaveWindowState(_ context.Context, keys []discounts.LotKey) error {
+	r.winKeys, r.winOK = keys, true
+	r.winSaves++
 
 	return nil
 }
