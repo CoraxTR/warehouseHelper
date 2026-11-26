@@ -88,6 +88,13 @@ func (uc *UseCase) windowedWrites(ctx context.Context, pairs []PairState, writes
 	// (инцидент 26.11.2026: в плане 12 позиций, на сайте 9 значений — Фриголар
 	// и Кресуд попали в сохранённое окно в подавленном проходе).
 	entryOK := seeded && uc.entryAllowed(ctx)
+	// Вход закрыт (ТГ-день до 14:45) или это первый проход после старта: пары
+	// окна без значения помечаем «ждёт места». Без метки они попадают в
+	// запомненное окно и навсегда остаются «уже в окне» — скидка не появится
+	// (26.11.2026: в плане 12 позиций, на сайте 9 значений).
+	if !entryOK && seeded {
+		uc.addPending(unvaluedInWindow(pairs, win))
+	}
 	if entryOK || !seeded {
 		uc.storeWindow(ctx, win)
 	}
@@ -114,7 +121,7 @@ func (uc *UseCase) windowedWrites(ctx context.Context, pairs []PairState, writes
 	// «входящих» пар стало намного больше, и в актуальных оказались ступени,
 	// которые должны были уйти подписчикам.
 	if entryOK {
-		out = append(out, windowEntryWrites(pairs, win, prevWin, seen)...)
+		out = append(out, windowEntryWrites(pairs, win, prevWin, uc.takePending(), seen)...)
 	}
 
 	return out
@@ -171,15 +178,18 @@ func ourOwner(owner discounts.Owner) bool {
 // остатка значения не имеют — скидка уже «зафиксирована» в день лесенки и ждала
 // места в окне; как только место появилось, сайт получает её, а человек —
 // уведомление из diff реестра.
-func windowEntryWrites(pairs []PairState, win, prevWin, seen map[discounts.LotKey]struct{}) []discounts.DiscountWrite {
+func windowEntryWrites(pairs []PairState, win, prevWin, pending, seen map[discounts.LotKey]struct{}) []discounts.DiscountWrite {
 	writes := make([]discounts.DiscountWrite, 0)
 	for _, p := range pairs {
 		if _, ok := win[p.Key]; !ok {
 			continue
 		}
-		// В окне и в прошлом проходе — не вход.
+		// В окне и в прошлом проходе — не вход. Исключение — пара, отложенная
+		// подавленным входом: значение ей так и не записали, она входит сейчас.
 		if _, ok := prevWin[p.Key]; ok {
-			continue
+			if _, forced := pending[p.Key]; !forced {
+				continue
+			}
 		}
 		if _, ok := seen[p.Key]; ok {
 			continue
@@ -235,4 +245,26 @@ func (uc *UseCase) entryAllowed(ctx context.Context) bool {
 	done, err := uc.repo.DayFlagDone(ctx, beginningOfDay(uc.Now()), discounts.FlagExtras)
 
 	return err == nil && done
+}
+
+// addPending и takePending — шов к набору отложенных входов (pending.go).
+func (uc *UseCase) addPending(keys map[discounts.LotKey]struct{}) { uc.pending.add(keys) }
+
+// takePending — забрать отложенные входы: они форсируют запись значения даже
+// если пара была в окне прошлого прохода.
+func (uc *UseCase) takePending() map[discounts.LotKey]struct{} { return uc.pending.take() }
+
+// unvaluedInWindow — пары окна без стоящего значения: именно они «ждут места».
+func unvaluedInWindow(pairs []PairState, win map[discounts.LotKey]struct{}) map[discounts.LotKey]struct{} {
+	out := make(map[discounts.LotKey]struct{}, len(win))
+	for _, p := range pairs {
+		if _, ok := win[p.Key]; !ok {
+			continue
+		}
+		if appliedTop(p) != 0 {
+			continue
+		}
+		out[p.Key] = struct{}{}
+	}
+	return out
 }
