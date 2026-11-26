@@ -62,8 +62,8 @@ func (h *Handler) AuditSearchPage(w http.ResponseWriter, _ *http.Request) {
 
 	today := time.Now().In(auditSearchMSK)
 	page := auditSearchPage{
-		From: today.AddDate(0, 0, -30).Format("2006-01-02"),
-		To:   today.Format("2006-01-02"),
+		From: today.AddDate(0, 0, -30).Format(time.DateOnly),
+		To:   today.Format(time.DateOnly),
 	}
 
 	if err := auditSearchTmpl.Execute(w, page); err != nil {
@@ -143,14 +143,14 @@ func (h *Handler) AuditSearchStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	from, err := time.ParseInLocation("2006-01-02", req.From, auditSearchMSK)
+	from, err := time.ParseInLocation(time.DateOnly, req.From, auditSearchMSK)
 	if err != nil {
 		writeAuditSearchError(w, http.StatusBadRequest, "дата «с» — не дата (ожидается ГГГГ-ММ-ДД)")
 
 		return
 	}
 
-	to, err := time.ParseInLocation("2006-01-02", req.To, auditSearchMSK)
+	to, err := time.ParseInLocation(time.DateOnly, req.To, auditSearchMSK)
 	if err != nil {
 		writeAuditSearchError(w, http.StatusBadRequest, "дата «по» — не дата (ожидается ГГГГ-ММ-ДД)")
 

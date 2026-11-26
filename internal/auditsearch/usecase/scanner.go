@@ -463,7 +463,7 @@ func hrefID(href string) string {
 
 // normalizeWindow — окно скана: сутки «с» 00:00:00.000 и сутки «по»
 // 23:59:59.999 по МСК (аудит и фильтр живут в TZ учётки).
-func normalizeWindow(from, to time.Time) (time.Time, time.Time, error) {
+func normalizeWindow(from, to time.Time) (start, end time.Time, err error) {
 	if from.IsZero() || to.IsZero() {
 		return time.Time{}, time.Time{}, &ValidationError{Reason: "не заданы даты окна"}
 	}

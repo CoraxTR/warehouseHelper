@@ -111,7 +111,7 @@ func (msac *MSAPIClient) FetchAuditPageWindow(parentctx context.Context, from, t
 // (GET /entity/product/<id>). Нужен поиску удалений: products.id — legacy
 // uuidHref, а аудит ссылается на remap-id, и МойСклад отдаёт в response.ID
 // уже канонический id (23c7c8f1-… → 23c7d1ba-…).
-func (msac *MSAPIClient) GetProduct(parentctx context.Context, id string) (string, string, error) {
+func (msac *MSAPIClient) GetProduct(parentctx context.Context, id string) (canonicalID, name string, err error) {
 	product, err := msac.FetchProductByID(parentctx, id)
 	if err != nil {
 		return "", "", fmt.Errorf("GetProduct %s: %w", id, err)

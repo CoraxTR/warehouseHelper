@@ -123,8 +123,8 @@ func TestPercentAndEta(t *testing.T) {
 func TestNormalizeWindow(t *testing.T) {
 	t.Parallel()
 
-	from := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
-	to := time.Date(2026, 11, 26, 0, 0, 0, 0, time.UTC)
+	from := time.Date(2026, time.November, 1, 0, 0, 0, 0, time.UTC)
+	to := time.Date(2026, time.November, 26, 0, 0, 0, 0, time.UTC)
 
 	gotFrom, gotTo, err := normalizeWindow(from, to)
 	if err != nil {

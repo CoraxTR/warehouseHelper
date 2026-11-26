@@ -3,7 +3,6 @@ package usecase
 import (
 	"fmt"
 	"path/filepath"
-	"time"
 
 	"warehouseHelper/internal/tempdir"
 
@@ -123,13 +122,4 @@ func (uc *UseCase) tempDir() string {
 	}
 
 	return tempdir.Dir
-}
-
-// momentText — момент для выгрузки/страницы (МСК), пусто для нулевого.
-func momentText(t time.Time) string {
-	if t.IsZero() {
-		return ""
-	}
-
-	return t.In(mskLoc).Format("02.01.2006 15:04")
 }
