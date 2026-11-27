@@ -29,32 +29,68 @@ func (uc *ReceivingUseCase) Save(ctx context.Context, req receiving.SaveRequest)
 		return nil, err
 	}
 
-	units := make([]receiving.Unit, 0, len(req.Scans))
+	units, boxes, err := uc.resolveScans(ctx, cache, req.Scans)
+	if err != nil {
+		return nil, err
+	}
+
+	return uc.apply(ctx, units, boxes)
+}
+
+// Preview считает отчёт приёмки, ничего не записывая: остатков, весов и
+// уведомлений на этом шаге нет — их пишет только завершение (FinishDraft).
+// Это отчёт черновика: страница показывает его до кнопки «Завершить».
+func (uc *ReceivingUseCase) Preview(ctx context.Context, supplierID string, scans []receiving.ScanEntry) (*receiving.SaveResult, error) {
+	done := metrics.Track(trackPkg, "Preview")
+	defer done()
+	cache, err := uc.GetCache(ctx, supplierID)
+	if err != nil {
+		return nil, err
+	}
+
+	units, boxes, err := uc.resolveScans(ctx, cache, scans)
+	if err != nil {
+		return nil, err
+	}
+
+	return &receiving.SaveResult{Rows: buildReport(units), Units: units, Boxes: boxes}, nil
+}
+
+// resolveScans резолвит сканы приёмки в куски и коробки без записи: общий
+// проход черновика и сохранения.
+func (uc *ReceivingUseCase) resolveScans(ctx context.Context, cache *receiving.Cache, scans []receiving.ScanEntry) ([]receiving.Unit, []receiving.Box, error) {
+	units := make([]receiving.Unit, 0, len(scans))
 	boxes := make([]receiving.Box, 0)
-	for _, e := range req.Scans {
+	for _, e := range scans {
 		scan, err := uc.Resolve(ctx, cache, e)
 		if err != nil {
-			return nil, fmt.Errorf("%q: %w", e.Raw, err)
+			return nil, nil, fmt.Errorf("%q: %w", e.Raw, err)
 		}
 		if scan.Kind == receiving.KindBox {
 			box, boxUnits, err := uc.resolveBox(ctx, cache, scan, e)
 			if err != nil {
-				return nil, fmt.Errorf("коробка %q: %w", e.Raw, err)
+				return nil, nil, fmt.Errorf("коробка %q: %w", e.Raw, err)
 			}
 			boxes = append(boxes, *box)
 			units = append(units, boxUnits...)
 			continue
 		}
 		if err := validateUnitScan(scan); err != nil {
-			return nil, fmt.Errorf("%q: %w", e.Raw, err)
+			return nil, nil, fmt.Errorf("%q: %w", e.Raw, err)
 		}
 		units = append(units, unitOf(scan, false, false))
 	}
 
 	if len(units) == 0 {
-		return nil, errors.New("нет принятых единиц")
+		return nil, nil, errors.New("нет принятых единиц")
 	}
 
+	return units, boxes, nil
+}
+
+// apply записывает приёмку: остатки (вместе с уведомлениями о наличии и
+// праве на скидку), веса и отчёт. Вызывается только на «Завершить».
+func (uc *ReceivingUseCase) apply(ctx context.Context, units []receiving.Unit, boxes []receiving.Box) (*receiving.SaveResult, error) {
 	// Остатки: лоты (товар, срок) с суммой количества — через модуль сроков.
 	if err := uc.stock.AcceptStock(ctx, buildLots(units)); err != nil {
 		return nil, fmt.Errorf("принять в остатки: %w", err)

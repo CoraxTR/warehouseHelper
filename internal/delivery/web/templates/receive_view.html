@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="initial-scale=1.0">
+<title>Приёмка — финал</title>
+<link rel="stylesheet" href="/static/raven-guard.css">
+<script src="/static/theme.js"></script>
+<style>
+    /* Финал приёмки: отчёт, наклейки, правки нет. Палитра — токены
+       raven-guard.css, своих цветов не заводим. */
+    .final-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+    .final-meta { color: #66645C; font-size: 13px; }
+    .final-table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+    .final-table th, .final-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #26262E; }
+    .final-table th { color: #8A8880; font-weight: 600; font-size: 13px; }
+    .final-actions { margin-top: 16px; display: flex; gap: 8px; flex-wrap: wrap; }
+/* ===== DAY-THEME-START ===== */
+html.day .final-meta { color: #6E7781; }
+html.day .final-table th, html.day .final-table td { border-bottom: 1px solid #D0D7DE; }
+html.day .final-table th { color: #57606A; }
+/* ===== DAY-THEME-END ===== */
+</style>
+</head>
+<body>
+    <header class="brandbar">
+        <a class="brandbar__brand" href="/"><svg class="brandbar__emblem" viewBox="0 0 64 64" aria-hidden="true"><circle class="em__shade" cx="35" cy="25" r="14"/><polygon class="em__shade" points="6,26 30,17 28,27"/><polygon class="em__shade" points="13,35 28,27 26,36"/><circle class="em__eye" cx="34" cy="23" r="3.6"/><circle class="em__glint" cx="33" cy="22" r="1.1"/></svg><span class="brandbar__name">ВОРОН&nbsp;&middot;&nbsp;СКЛАД</span></a>
+        <div class="brandbar__right">
+            <span class="brandbar__motto">Приёмка или смерть</span>
+            <span class="themeswitch" id="theme-switch">
+                <span class="themeswitch__label" id="theme-label"><span class="themeswitch__label-night">Нормальная тема</span><span class="themeswitch__label-day">Любитель щурится</span></span>
+                <button class="themeswitch__track" id="theme-toggle" type="button"
+                 role="switch" aria-checked="false" aria-label="Тема оформления"
+                 title="Переключить на «Любитель щурится»">
+                    <span class="themeswitch__knob"></span>
+                </button>
+            </span>
+        </div>
+    </header>
+    {{template "nav"}}
+
+    <div class="card">
+        <div class="final-head">
+            <h1>Приёмка завершена</h1>
+            <div class="final-meta">
+                <div>Поставщик: <b>{{.SupplierName}}</b></div>
+                {{if .FinishedAt}}<div>Завершена: {{.FinishedAt}}</div>{{end}}
+                {{if .EndsAt}}<div>Останется на странице приёмок до {{.EndsAt}}</div>{{end}}
+            </div>
+        </div>
+
+        {{if not .Rows}}
+        <div class="error">Ничего не принято</div>
+        {{else}}
+        <table class="final-table">
+            <tr><th>Товар</th><th>Срок</th><th>Принято</th></tr>
+            {{range .Rows}}
+            <tr><td>{{.Name}}</td><td>{{.BestBefore}}</td><td>{{.Amount}}</td></tr>
+            {{end}}
+        </table>
+        {{end}}
+
+        {{if .Mismatch}}
+        <div class="error" style="margin-top:10px;">Расхождение в {{.Mismatch}} коробке(ах): принято как есть, проверьте комплектацию.</div>
+        {{end}}
+
+        {{if .Warnings}}
+        <div class="hint" style="margin-top:10px;color:#856404;background:#fff3cd;border:1px solid #ffeeba;padding:8px 10px;">Приёмка сохранена, но не удалось обновить средний вес:<br>- {{range $i, $w := .Warnings}}{{if $i}}<br>- {{end}}{{$w}}{{end}}</div>
+        {{end}}
+
+        {{if .NoProducedOn}}
+        <div class="hint" style="margin-top:10px;color:#856404;background:#fff3cd;border:1px solid #ffeeba;padding:8px 10px;">Кусков без даты выработки: {{.NoProducedOn}} — для них этикетка не сформируется (без выработки не собрать полный внутренний код).</div>
+        {{end}}
+
+        {{if .NoBoxBB}}
+        <div class="hint" style="margin-top:10px;color:#856404;background:#fff3cd;border:1px solid #ffeeba;padding:8px 10px;">Коробок без срока годности: {{.NoBoxBB}} — наклейка из них не сформируется (без срока не собрать полный внутренний код).</div>
+        {{end}}
+
+        <div class="final-actions">
+            <button type="button" onclick="printFinal('labels')">Скачать этикетки (xlsx)</button>
+            <button type="button" onclick="printFinal('qr-labels')">Скачать QR-наклейки (xlsx)</button>
+            {{if .HasBoxes}}<button type="button" onclick="printFinal('box-labels')">Скачать наклейки на коробки (xlsx)</button>{{end}}
+        </div>
+
+        <p class="hint">Этикетка — на каждый принятый кусок (включая куски из коробок): QR-код с тем же 29-значным кодом «код + вес + выработка + срок», скан пойдёт в заказы и расформирования. Печать — по одной этикетке на страницу.</p>
+        <p class="hint">QR-наклейка — те же куски компактно, тем же 29-значным кодом в QR: две наклейки в ряд. Наклейка коробки — 33 цифры «код + вес + вложения + выработка + срок».</p>
+
+        <p style="margin-top:14px;">
+            <a href="/ms/receive">← Все приёмки</a>
+            &nbsp;·&nbsp;
+            <a href="/ms/receive?id={{.SupplierID}}">→ Новая приёмка</a>
+        </p>
+        <p class="hint">Правки после «Завершить» нет: остатки и сроки уже записаны. Ошиблись — правьте через страницу «Сроки» (или верните товар и примите заново).</p>
+    </div>
+
+    <script>
+        // Печать наклеек по завершённой приёмке: файл собирает сервер по самой
+        // приёмке (draft_id), страница ничего не пересчитывает — после F5
+        // наклейки печатаются те же.
+        var DRAFT_ID = '{{.ID}}';
+
+        function printFinal(kind) {
+            var xhr = new XMLHttpRequest();
+            xhr.open('POST', '/ms/receive/' + kind, true);
+            xhr.setRequestHeader('Content-Type', 'application/json');
+            xhr.responseType = 'blob';
+            xhr.onreadystatechange = function () {
+                if (xhr.readyState !== 4) { return; }
+                if (xhr.status !== 200) {
+                    var msg = 'Ошибка формирования файла (HTTP ' + xhr.status + ')';
+                    var errBlob = xhr.response;
+                    if (errBlob) {
+                        var rd = new FileReader();
+                        rd.onloadend = function () { alert(rd.result ? msg + ':\n' + rd.result : msg); };
+                        rd.readAsText(errBlob);
+                    } else {
+                        alert(msg);
+                    }
+                    return;
+                }
+                var name = kind === 'box-labels' ? 'nakleyki-korobok.xlsx'
+                    : (kind === 'qr-labels' ? 'qr-nakleyki.xlsx' : 'etiketki.xlsx');
+                var url = window.URL.createObjectURL(xhr.response);
+                var a = document.createElement('a');
+                a.href = url;
+                a.download = name;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                window.URL.revokeObjectURL(url);
+            };
+            xhr.send(JSON.stringify({draft_id: DRAFT_ID}));
+        }
+    </script>
+</body>
+</html>

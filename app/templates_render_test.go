@@ -79,6 +79,35 @@ func TestTemplatesRender(t *testing.T) {
 			},
 		},
 		{
+			// Финал приёмки: отчёт, предупреждения и наклейки — без правки.
+			name: "приёмка: финал (завершённая)",
+			file: "receive_view.html",
+			data: map[string]any{
+				"ID": "a1b2c3d4", "SupplierID": "1", "SupplierName": "ООО Тест",
+				"FinishedAt": "12:40", "EndsAt": "21:00",
+				"Rows": []any{
+					map[string]any{"Name": "Сыр", "BestBefore": "2026-09-29", "Amount": "1.24 кг"},
+					map[string]any{"Name": "Коробка сыра", "BestBefore": "2026-09-29", "Amount": "10 шт"},
+				},
+				"Warnings": []string{"средний вес: товар без истории"},
+				"Mismatch": 1, "NoProducedOn": 2, "NoBoxBB": 1, "HasBoxes": true,
+			},
+		},
+		{
+			// Страница приёмок: список живых приёмок (черновик и завершённая).
+			name: "приёмка: список живых приёмок",
+			file: "receive.html",
+			data: map[string]any{
+				"Supplier": nil, "Suppliers": []any{supplier}, "Error": "",
+				"Live": []any{
+					map[string]any{"ID": "d1", "SupplierID": "1", "SupplierName": "ООО Тест",
+						"Finished": false, "Positions": 12, "EndsAt": "21:00", "Editable": true},
+					map[string]any{"ID": "d2", "SupplierID": "2", "SupplierName": "ИП Второй",
+						"Finished": true, "FinishedAt": "12:40", "Positions": 4, "EndsAt": "21:00", "Editable": false},
+				},
+			},
+		},
+		{
 			// «Проверка цен»: строка с посчитанной наценкой и строка, где
 			// данных не хватает (пустые Markup/SBox) — шаблон обязан не упасть.
 			name: "проверка цен: наценка и неполные данные",

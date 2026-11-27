@@ -67,12 +67,14 @@ type ReceivingUseCase struct {
 	repo    ReceiveRepository
 	stock   StockAccepter
 	weights WeightRecorder
+	// drafts — приёмки в памяти процесса (черновики и завершённые до 21:00).
+	drafts *draftStore
 }
 
 // NewReceivingUseCase создаёт сценарий с хранилищем, адаптером сроков
 // и модулем среднего веса.
 func NewReceivingUseCase(repo ReceiveRepository, stock StockAccepter, weights WeightRecorder) *ReceivingUseCase {
-	return &ReceivingUseCase{repo: repo, stock: stock, weights: weights}
+	return &ReceivingUseCase{repo: repo, stock: stock, weights: weights, drafts: newDraftStore(nil)}
 }
 
 // GetCache собирает кеш приёмки поставщика: правила вычитки (куски и

@@ -133,6 +133,9 @@ func NewRouter(h *Handler) *http.ServeMux {
 	mux.HandleFunc("GET /ms/receive", h.ReceivePage)                        // страница приёмки (выбор поставщика / сканирование)
 	mux.HandleFunc("GET /ms/receive/cache", h.ReceiveCache)                 // кеш приёмки (JSON для резолва на клиенте)
 	mux.HandleFunc("POST /ms/receive/save", h.ReceiveSave)                  // сохранить приёмку (JSON) → отчёт
+	mux.HandleFunc("GET /ms/receive/draft", h.ReceiveDraft)                 // сканы черновика (JSON) — восстановить строки для правки
+	mux.HandleFunc("POST /ms/receive/finish", h.ReceiveFinish)              // «Завершить»: остатки, уведомления, закрыть для правки
+	mux.HandleFunc("GET /ms/receive/view", h.ReceiveDraftView)              // финал приёмки: отчёт и наклейки, без правки
 	mux.HandleFunc("POST /ms/receive/labels", h.ReceiveLabels)              // этикетки принятых кусков (xlsx)
 	mux.HandleFunc("POST /ms/receive/box-labels", h.ReceiveBoxLabels)       // наклейки принятых коробок (xlsx)
 	mux.HandleFunc("POST /ms/receive/qr-labels", h.ReceiveQRLabels)         // QR-наклейки принятых кусков (xlsx)
