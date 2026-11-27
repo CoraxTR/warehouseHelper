@@ -2,6 +2,7 @@ package http
 
 import (
 	"encoding/json"
+	"errors"
 	"html/template"
 	"net/http"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	ccase "warehouseHelper/internal/collab/usecase"
 	"warehouseHelper/internal/domain"
 	"warehouseHelper/internal/receiving"
+	rucase "warehouseHelper/internal/receiving/usecase"
 )
 
 var receiveTmpl = template.Must(template.ParseFiles("../internal/delivery/web/templates/receive.html", "../internal/delivery/web/templates/_nav.html"))
@@ -36,6 +38,14 @@ type receivePageData struct {
 	// Others — живые приёмки того же поставщика на других машинах: подсказка
 	// хозяину, иначе один поставщик примут дважды, каждый в своей приёмке.
 	Others []collab.Session
+
+	// Live — живые приёмки процесса: черновики (правка — только у хозяина) и
+	// завершённые до 21:00 МСК (отчёт и наклейки всем, правки нет).
+	Live []liveReceive
+
+	// DraftID — страница открыта на правку сохранённого черновика: сканы
+	// подтягиваются отдельным JSON-запросом и строки восстанавливаются.
+	DraftID string
 }
 
 // ReceivePage — GET /ms/receive[?id=...]: выбор поставщика или страница
@@ -62,6 +72,7 @@ func (h *Handler) ReceivePage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data.Suppliers = suppliers
+	data.Live = h.liveReceives(r)
 
 	query := r.URL.Query()
 
@@ -111,6 +122,15 @@ func (h *Handler) ReceivePage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data.Supplier = supplier
+
+	// Продолжение сохранённого черновика (?d=<приёмка>): приёмка уже на
+	// сервере, строки восстанавливаются из её сканов. Комнату не открываем —
+	// она закрыта сохранением, дальше правит только хозяин этой машины.
+	if draftID := strings.TrimSpace(query.Get("d")); draftID != "" {
+		h.continueDraft(w, r, data, supplier.ID, draftID)
+
+		return
+	}
 
 	// Комната открывается прямо при отрисовке: гости видят приёмку в списке
 	// сразу. Своя приёмка — по ключу хозяина в cookie (перезагрузка страницы
@@ -289,11 +309,20 @@ type receiveSaveRequest struct {
 	// строкам хоста, и вся работа сохраняется одним вызовом. Пусто — обычная
 	// приёмка одной машины.
 	SessionID string `json:"session_id"`
+
+	// DraftID — приёмка уже сохранена раньше: правим её же, новую не заводим.
+	// Пусто — первое сохранение.
+	DraftID string `json:"draft_id"`
+
+	// SupplierName — имя поставщика для списка приёмок: страница его знает, а
+	// список показывает приёмки из памяти без похода в МойСклад.
+	SupplierName string `json:"supplier_name"`
 }
 
-// ReceiveSave — POST /ms/receive/save: принять приёмку (JSON), вернуть
-// отчёт и данные для печати. Ошибка резолва — 400 с текстом: клиент
-// подсвечивает проблемную карточку и не теряет введённое.
+// ReceiveSave — POST /ms/receive/save: сохранить приёмку ЧЕРНОВИКОМ (JSON),
+// вернуть отчёт и данные для печати. Остатки, веса и уведомления на этом шаге
+// не пишутся — их пишет «Завершить» (ReceiveFinish). Ошибка резолва — 400 с
+// текстом: клиент подсвечивает проблемную карточку и не теряет введённое.
 //
 // Совместная приёмка: пока не все гости прислали сканы, сохранение отвергается
 // (409) — кнопка на странице хоста заблокирована, но устаревшая страница не
@@ -308,10 +337,13 @@ func (h *Handler) ReceiveSave(w http.ResponseWriter, r *http.Request) {
 
 	sessionID := strings.TrimSpace(req.SessionID)
 	supplierID := strings.TrimSpace(req.SupplierID)
+	draftID := strings.TrimSpace(req.DraftID)
 	scans := req.Scans
 	claimed := false
 
-	if sessionID != "" {
+	// Правка уже сохранённого черновика: гости своего добавили при первом
+	// сохранении, комната закрыта — их строки лежат внутри черновика.
+	if sessionID != "" && draftID == "" {
 		// Сохранить приёмку может только машина, начавшая её: у гостя ключа
 		// хозяина нет (его кнопка и не активна). Комната могла уже исчезнуть
 		// (рестарт приложения, TTL, «Отменить») — тогда роль доказывает
@@ -346,18 +378,26 @@ func (h *Handler) ReceiveSave(w http.ResponseWriter, r *http.Request) {
 		Scans:      toScanEntries(scans),
 	}
 
-	result, err := h.receivingUC.Save(r.Context(), saveReq)
+	result, draft, err := h.receivingUC.SaveDraft(r.Context(), saveReq, draftID, draftHostToken(r, draftID), strings.TrimSpace(req.SupplierName))
 	if err != nil {
-		// Приёмка не прошла — комнату освобождаем: строки гостей на месте, хост
-		// может повторить (в том числе сохранить без гостей).
+		// Черновик не сохранился — комнату освобождаем: строки гостей на месте,
+		// хост может повторить (в том числе сохранить без гостей).
 		if claimed {
 			h.releaseRoom(sessionID)
 		}
 
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		status := http.StatusBadRequest
+		if errors.Is(err, rucase.ErrDraftHost) || errors.Is(err, rucase.ErrDraftFinished) {
+			status = http.StatusConflict
+		}
+
+		http.Error(w, err.Error(), status)
 
 		return
 	}
+
+	// Ключ хозяина приёмки: править и завершать её будет эта машина.
+	setDraftHostCookie(w, draft)
 
 	// Приёмка сохранена — комнату закрываем: гости увидят это опросом и получат
 	// «приёмка сохранена». Отказ закрытия работу не отменяет.
@@ -369,7 +409,13 @@ func (h *Handler) ReceiveSave(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 
-	if err := json.NewEncoder(w).Encode(result); err != nil {
+	resp := struct {
+		*receiving.SaveResult
+
+		DraftID string `json:"draft_id"`
+	}{SaveResult: result, DraftID: draft.ID}
+
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		slog.Info(fmt.Sprintf("receive save encode: %v", err))
 	}
 }

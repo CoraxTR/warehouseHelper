@@ -85,6 +85,30 @@ html.day .date-echo.temp.bad { color: #B42318; }
         <p class="hint">Перед приёмкой убедитесь, что у поставщика заведены правила вычитки и внешние коды
             (карточка поставщика → «Внешние коды»).</p>
 
+        {{if .Live}}
+        <div class="collab-open">
+            <h2>Приёмки</h2>
+            <p class="hint">Черновик ещё не принят: остатки и сроки не обновлены — правку продолжает машина-хозяин.
+                Завершённая приёмка видна до 21:00 МСК: отчёт и наклейки, без правки.</p>
+            <table>
+                <tr><th>Поставщик</th><th>Состояние</th><th>Позиций</th><th>До</th><th></th></tr>
+                {{range .Live}}
+                <tr>
+                    <td>{{.SupplierName}}</td>
+                    <td>{{if .Finished}}<b>завершена</b> {{.FinishedAt}}{{else}}черновик{{end}}</td>
+                    <td>{{.Positions}}</td>
+                    <td>{{.EndsAt}}</td>
+                    <td>
+                        {{if .Finished}}<a href="/ms/receive/view?id={{.ID}}">Открыть финал</a>
+                        {{else if .Editable}}<a href="/ms/receive?id={{.SupplierID}}&amp;d={{.ID}}">Продолжить правку</a>
+                        {{else}}<span class="hint">правит машина-хозяин</span>{{end}}
+                    </td>
+                </tr>
+                {{end}}
+            </table>
+        </div>
+        {{end}}
+
         {{if .Open}}
         <div class="collab-open">
             <h2>Идущие приёмки</h2>
@@ -184,6 +208,11 @@ html.day .date-echo.temp.bad { color: #B42318; }
     <script>
         var CACHE = null;         // кеш приёмки: грузится JSON-запросом ниже
         var SUPPLIER_ID = {{if .Supplier}}'{{.Supplier.ID}}'{{else}}''{{end}};
+        // Черновик приёмки на сервере: после «Сохранить приёмку» работа уже
+        // сохранена (остатки ещё НЕ записаны) — можно вернуться к правке или
+        // нажать «Завершить». Пусто — приёмка ещё не сохранялась.
+        var DRAFT_ID = {{if .DraftID}}'{{.DraftID}}'{{else}}''{{end}};
+        var draftScans = null;    // сканы сохранённого черновика: ждут кеш для резолва
         var items = [];           // элементы страницы по порядку: партии (в партии — россыпь и коробки)
         var activeParty = null;   // партия, в которую идут сканы (Партия 1 создаётся при инициализации)
         var openBoxRef = null;    // открытая карточка коробки (сбор вложений); null — коробки не открыто
@@ -2115,8 +2144,12 @@ html.day .date-echo.temp.bad { color: #B42318; }
             collabSendGuard(true);
             var payload = JSON.stringify({
                 supplier_id: '{{.Supplier.ID}}',
+                supplier_name: '{{.Supplier.Name}}',
                 scans: scans,
-                session_id: ROOM_ID
+                // Правка сохранённого черновика: комнату повторно не трогаем —
+                // строки гостей уже внутри приёмки, комната закрыта.
+                session_id: DRAFT_ID ? '' : ROOM_ID,
+                draft_id: DRAFT_ID
             });
             var xhr = new XMLHttpRequest();
             xhr.open('POST', '/ms/receive/save', true);
@@ -2136,6 +2169,7 @@ html.day .date-echo.temp.bad { color: #B42318; }
                         return;
                     }
                     if (ROOM_ID) { collabClosed('Приёмка сохранена'); }
+                    if (resp && resp.draft_id) { DRAFT_ID = resp.draft_id; }
                     showReport(resp);
                     return;
                 }
@@ -2159,7 +2193,9 @@ html.day .date-echo.temp.bad { color: #B42318; }
         function showReport(resp) {
             lastUnits = resp.units || [];
             lastBoxes = resp.boxes || [];
-            var html = '<h1 style="margin-top:20px;">Принято</h1>';
+            var html = '<h1 style="margin-top:20px;">Приёмка сохранена</h1>';
+            html += '<p class="hint">Это ещё не приёмка: остатки и сроки не обновлены, уведомления не ушли. ' +
+                'Проверьте позиции, при необходимости вернитесь к правке — и нажмите «Завершить».</p>';
             if (!resp.rows || !resp.rows.length) {
                 html += '<div class="error">Ничего не принято</div>';
             } else {
@@ -2216,9 +2252,132 @@ html.day .date-echo.temp.bad { color: #B42318; }
             if (lastBoxes.length) {
                 html += '<p class="hint">Наклейка коробки — на каждую принятую коробку: штрих-код 33 цифры «код + вес + вложения + выработка + срок».</p>';
             }
-            html += '<p><a href="/ms/receive?id={{.Supplier.ID}}">→ Новая приёмка у этого поставщика</a></p>';
+            html += '<div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap;">' +
+                '<button type="button" onclick="backToEdit()">← Вернуться к правке</button>' +
+                '<button type="button" onclick="finishReceive()">Завершить</button>' +
+                '</div>';
+            html += '<p class="hint">«Завершить» обновит остатки и сроки, отправит уведомления (наличие и скидки) и закроет приёмку для правки. ' +
+                'Завершённая приёмка остаётся на странице приёмок до 21:00 — отчёт и наклейки без правки.</p>';
+            html += '<p><a href="/ms/receive?id={{.Supplier.ID}}">→ Новая приёмка у этого поставщика</a> ' +
+                '<span class="hint">(текущая останется в списке приёмок)</span></p>';
             reportBox.innerHTML = html;
             document.getElementById('scanner').style.display = 'none';
+        }
+
+        // backToEdit — возвращает к правке сохранённого черновика: строки лежат в
+        // памяти страницы как были, отчёт прячем и показываем сканер снова.
+        function backToEdit() {
+            reportBox.innerHTML = '';
+            scannerEl.style.display = '';
+            lastUnits = [];
+            lastBoxes = [];
+            scanInput.disabled = false;
+            statusLine.textContent = 'Правка приёмки: уберите лишние строки, добавьте новые — и сохраните';
+            scanInput.focus();
+        }
+
+        // finishReceive — «Завершить»: остатки, сроки, уведомления, приёмка
+        // закрывается для правки. Дальше — страница финала с наклейками.
+        function finishReceive() {
+            if (!DRAFT_ID) { alert('Сначала сохраните приёмку'); return; }
+            if (SENDING) { return; }
+            if (!confirm('Завершить приёмку? Остатки и сроки будут обновлены, уведомления уйдут, править станет нельзя.')) { return; }
+            SENDING = true;
+
+            var xhr = new XMLHttpRequest();
+            xhr.open('POST', '/ms/receive/finish', true);
+            xhr.setRequestHeader('Content-Type', 'application/json');
+            xhr.timeout = 30000;
+            xhr.ontimeout = function () {
+                SENDING = false;
+                alert('Сервер не ответил за 30 секунд. Проверьте приёмку на странице «Приёмки»: возможно, она уже завершена.');
+            };
+            xhr.onreadystatechange = function () {
+                if (xhr.readyState !== 4) { return; }
+                if (xhr.status === 200) {
+                    var resp = null;
+                    try { resp = JSON.parse(xhr.responseText); } catch (e) { resp = null; }
+                    window.location.href = (resp && resp.url) ? resp.url : ('/ms/receive/view?id=' + encodeURIComponent(DRAFT_ID));
+                    return;
+                }
+                SENDING = false;
+                alert('Приёмка не завершилась:\n' + xhr.responseText);
+            };
+            xhr.send(JSON.stringify({draft_id: DRAFT_ID}));
+        }
+
+        // restoreDraft — поднимает сохранённую приёмку: сканы тянем JSON-запросом,
+        // строки восстанавливаем после кеша (резолв кодов идёт по нему).
+        function restoreDraft() {
+            var xhr = new XMLHttpRequest();
+            xhr.open('GET', '/ms/receive/draft?id=' + encodeURIComponent(DRAFT_ID), true);
+            xhr.onreadystatechange = function () {
+                if (xhr.readyState !== 4) { return; }
+                if (xhr.status !== 200) {
+                    statusLine.textContent = 'Приёмка не восстановилась: ' + xhr.responseText;
+                    return;
+                }
+                try {
+                    draftScans = JSON.parse(xhr.responseText).scans || [];
+                } catch (e) {
+                    statusLine.textContent = 'Ответ сервера по приёмке не разобран';
+                    return;
+                }
+                if (CACHE) { restoreRows(); } else { loadCache(); }
+            };
+            xhr.send();
+        }
+
+        // manualOfScan — ручные дополнения скана в том виде, в каком их ждут поля
+        // строки: оператор их выбирал руками, при восстановлении они не теряются.
+        function manualOfScan(e) {
+            var m = {};
+            if (e.manual_product_id) { m.product_id = e.manual_product_id; }
+            if (e.manual_weight_g) { m.weight_g = e.manual_weight_g; }
+            if (e.manual_produced_on) { m.produced_on = e.manual_produced_on; }
+            if (e.manual_best_before) { m.best_before = e.manual_best_before; }
+            return m;
+        }
+
+        // restoreRows — раскладывает сканы черновика обратно в партию: россыпь —
+        // строками, коробки — карточками с вложениями.
+        function restoreRows() {
+            var i, j, e, scan, box, c, cs, isBox;
+
+            items = [];
+            partySeq = 0;
+            openBoxRef = null;
+            boxMode = false;
+
+            var party = {id: ++partySeq, pd: '', bb: '', product_id: '', rows: [], boxes: []};
+            items.push(party);
+            activeParty = party;
+
+            for (i = 0; i < draftScans.length; i++) {
+                e = draftScans[i];
+                isBox = !!(e.children && e.children.length);
+                scan = isBox ? resolveBoxScan(e.raw) : resolveScan(e.raw);
+                if (!scan) { scan = {raw: e.raw}; }
+
+                if (isBox) {
+                    box = {scan: scan, manual: manualOfScan(e), children: []};
+                    for (j = 0; j < e.children.length; j++) {
+                        c = e.children[j];
+                        cs = resolveScan(c.raw);
+                        if (!cs) { cs = {raw: c.raw}; }
+                        box.children.push({scan: cs, manual: manualOfScan(c)});
+                    }
+                    party.boxes.push(box);
+                    continue;
+                }
+
+                party.rows.push({scan: scan, manual: manualOfScan(e)});
+            }
+
+            render();
+            scanInput.disabled = false;
+            statusLine.textContent = 'Приёмка восстановлена: позиций ' + draftScans.length + ' — правьте и сохраните';
+            scanInput.focus();
         }
 
         // Скачивание xlsx-этикеток: куски шлём из ответа Save (сервер их уже
@@ -2429,6 +2588,9 @@ html.day .date-echo.temp.bad { color: #B42318; }
                     statusLine.textContent = 'Кеш готов: ' + (CACHE.by_external ? Object.keys(CACHE.by_external).length : 0) + ' внешних кодов, ' +
                         (CACHE.by_code ? Object.keys(CACHE.by_code).length : 0) + ' товаров каталога';
                     render();
+                    // Продолжение сохранённой приёмки: строки раскладываем после
+                    // кеша — резолв кодов идёт по нему.
+                    if (draftScans) { restoreRows(); }
                 } else {
                     statusLine.textContent = 'Не удалось загрузить кеш приёмки (HTTP ' + xhr.status + ')';
                 }
@@ -2443,11 +2605,13 @@ html.day .date-echo.temp.bad { color: #B42318; }
         if (SUPPLIER_ID) {
             scanInput.disabled = true;
             statusLine.textContent = 'Загружаю кеш приёмки…';
-            loadCache();
+            if (DRAFT_ID) { restoreDraft(); } else { loadCache(); }
         }
 
         render();
-        collabStart();
+        // Правка сохранённого черновика — без комнаты: сохранение её закрыло,
+        // дальше правит только эта машина.
+        if (!DRAFT_ID) { collabStart(); }
     </script>
 {{end}}
 </body>
