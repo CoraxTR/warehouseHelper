@@ -1871,6 +1871,11 @@ html.day .date-echo.temp.bad { color: #B42318; }
             if (btn) { btn.disabled = true; }
             scanInput.disabled = true;
             scanInput.placeholder = 'Приёмка сохранена хостом';
+            // Гость работу закончил: приёмку завершают на хосте, ему остаётся
+            // список приёмок (отчёт и наклейки — там же).
+            if (ROOM_GUEST) {
+                window.setTimeout(leaveToReceiveList, 900);
+            }
         }
 
         // collabDrop — хост отключает гостя с оборвавшейся связью: его строки в
@@ -1901,8 +1906,11 @@ html.day .date-echo.temp.bad { color: #B42318; }
                 sentRows = mine ? mine.rows : sentRows + scans.length;
                 if (mine) { roomLastSeq = Math.max(roomLastSeq, mine.last_seq || 0); }
                 collabClear();
+                // Гость приёмку не завершает: его заход ушёл хосту. Дальше —
+                // список приёмок; новые сканы — переподключением к комнате.
                 collabGuestState('Отправлено хосту, всего строк: ' + sentRows +
-                    '. Можно сканировать следующий заход.', true);
+                    '. Возврат к списку приёмок…', true);
+                window.setTimeout(leaveToReceiveList, 900);
             }, function (status, text) {
                 // Не доехало: строки на странице остаются, кнопка снова доступна —
                 // повтор уйдёт с тем же номером захода, и сервер его не задвоит.
@@ -1992,6 +2000,12 @@ html.day .date-echo.temp.bad { color: #B42318; }
             partySeq = 0;
             addParty();
             render();
+        }
+
+        // leaveToReceiveList — гость возвращается к списку приёмок: его заход
+        // отправлен или хост сохранил приёмку, дальше работа идёт на хосте.
+        function leaveToReceiveList() {
+            window.location.href = '/ms/receive';
         }
 
         // collabStart — подключение страницы к комнате при загрузке.
@@ -2141,6 +2155,7 @@ html.day .date-echo.temp.bad { color: #B42318; }
         // закрыла приёмку без чужих сканов.
         function hostSave(scans) {
             if (SENDING) { return; }   // второй клик, пока запрос в пути, не сохраняем повторно
+            var firstSave = !DRAFT_ID; // правка черновика комнату не закрывает: она уже закрыта
             collabSendGuard(true);
             var payload = JSON.stringify({
                 supplier_id: '{{.Supplier.ID}}',
@@ -2168,7 +2183,7 @@ html.day .date-echo.temp.bad { color: #B42318; }
                         alert('Приёмка сохранена, но ответ сервера не разобран — обновите страницу (F5).');
                         return;
                     }
-                    if (ROOM_ID) { collabClosed('Приёмка сохранена'); }
+                    if (ROOM_ID && firstSave) { collabClosed('Приёмка сохранена'); }
                     if (resp && resp.draft_id) { DRAFT_ID = resp.draft_id; }
                     showReport(resp);
                     return;
@@ -2271,9 +2286,21 @@ html.day .date-echo.temp.bad { color: #B42318; }
             scannerEl.style.display = '';
             lastUnits = [];
             lastBoxes = [];
-            scanInput.disabled = false;
-            statusLine.textContent = 'Правка приёмки: уберите лишние строки, добавьте новые — и сохраните';
-            scanInput.focus();
+            // Сохранение закрыло комнату и погасило кнопки — правка черновика
+            // живёт дальше без комнаты: опрос гасим, кнопку и скан возвращаем.
+            ROOM_CLOSED = false;
+            if (collabTimer) {
+                window.clearInterval(collabTimer);
+                collabTimer = null;
+            }
+            var btn = document.getElementById('save-btn');
+            if (btn) { btn.disabled = false; btn.textContent = 'Сохранить приёмку'; }
+            scanInput.disabled = true;
+            statusLine.textContent = 'Обновляю строки приёмки…';
+            scanInput.placeholder = 'штрих-код товара или коробки...';
+            // Строки берём из самой приёмки: своих строк у страницы может не
+            // быть (F5, приход из списка), а строки гостей в черновике уже есть.
+            restoreDraft();
         }
 
         // finishReceive — «Завершить»: остатки, сроки, уведомления, приёмка
@@ -2349,8 +2376,9 @@ html.day .date-echo.temp.bad { color: #B42318; }
             openBoxRef = null;
             boxMode = false;
 
-            var party = {id: ++partySeq, pd: '', bb: '', product_id: '', rows: [], boxes: []};
-            items.push(party);
+            // Партия — той же формы, что у живой страницы (addParty): collectAll
+            // ходит по items и берёт только карточки с kind === 'party'.
+            var party = addParty();
             activeParty = party;
 
             for (i = 0; i < draftScans.length; i++) {
